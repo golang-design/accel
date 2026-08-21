@@ -898,7 +898,7 @@ put a lie in the numeric contract.
 | NaN sign and payload | **not guaranteed**; a conversion may quiet a signalling NaN and may discard the payload |
 | Comparison with NaN is false, except `!=` | **guaranteed**: Go, IEEE-754, and every target agree |
 | `Min` and `Max` with a NaN operand | **implementation-defined.** GLSL leaves it undefined, MSL follows IEEE `minNum`, and SPIR-V's `FMin`/`FMax` are undefined for NaN unless the device declares NaN preservation. The portable pattern is an explicit `IsNaN` test. |
-| Overflow produces an infinity | **capability-reported.** Required by accel, and GLSL ES 3.1 does not require an implementation to produce Inf, so this starts as an unmeasured row. |
+| Overflow produces an infinity | **capability-reported.** Required by accel, and GLSL ES 3.1 does not require an implementation to produce Inf, so this starts as an unmeasured row. On Metal it is also a property of how accel compiles rather than of the device: the default floating-point mode assumes no infinities and no NaNs, so the backend must compile in the safe mode ([008](008-numerics.md) §4.2). |
 | f32 subnormals preserved | **capability-reported.** Many mobile GPUs flush to zero. |
 | f16 subnormals preserved | **capability-reported**, and more often absent than the f32 case. |
 

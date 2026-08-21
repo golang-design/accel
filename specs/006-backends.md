@@ -650,8 +650,11 @@ Floating point is not, and promising it would be a lie. FMA contraction, sqrt an
 transcendental implementations, and reduction order all legitimately differ
 between an emitted shader and a Go function. So the contract is:
 
-- **Exact**: integer kernels, and f32 kernels restricted to `+`, `-`, `*`, `/`
-  with contraction forbidden and a fixed reduction order.
+- **Exact**: integer kernels, and f32 kernels restricted to `+`, `-` and `*` with
+  contraction forbidden and a fixed reduction order. **Division is not in this
+  list**, and leaving it out is deliberate: SPIR-V specifies `OpFDiv` at 2.5 ULP
+  rather than correctly rounded, and Metal's default floating-point mode may
+  compute `x/y` as `x * (1/y)`. See [008](008-numerics.md) §2.
 - **ULP-bounded**: everything else, with the bound stated per operation class
   (transcendentals, `rsqrt`, `fma`-permitted paths), and the bound is part of the
   conformance suite rather than a per-test constant someone tuned until it
@@ -659,7 +662,13 @@ between an emitted shader and a Go function. So the contract is:
 
 Forbidding contraction is a **requirement on the emitter**, and its feasibility
 is not uniform: SPIR-V has the `NoContraction` decoration, HLSL has `precise`,
-MSL has `-ffp-contract`, and GLSL ES 3.1 and WGSL are unresolved.
+Metal has a compiler floating-point mode whose default is the wrong one, and GLSL
+ES 3.1 and WGSL have no equivalent at all. The Metal case is wider than
+contraction and is [008](008-numerics.md) §4.2's finding: the default fast mode
+also permits reassociation and assumes no NaNs or infinities, so this backend must
+compile in the safe mode to deliver what [002](002-compute-model.md) §6.3 already
+promises. That makes `InfNaNProduced` on Metal a property of accel's compile
+options rather than of the device.
 [004](004-kernel-authoring.md) carries this as an open question from the emitter
 side and puts `a*b+c` in its class B; this is the same question seen from the
 device side, and it is why FP contraction control is a matrix row with `?` cells

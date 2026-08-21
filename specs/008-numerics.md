@@ -59,12 +59,27 @@ They are promoted here to normative, with their tiers and their bounds.
 | Class | Contents | Tier | Bound |
 | --- | --- | --- | --- |
 | **A** | Integer arithmetic; loads, stores, indexing; bit operations; comparisons | Exact | none needed |
-| **B** | f32 `+`, `-`, `*`, `/` with contraction forbidden and evaluation order fixed | Exact | none needed, **conditional on §4** |
+| **B** | f32 `+`, `-`, `*` with contraction forbidden and evaluation order fixed | Exact | none needed, **conditional on §4** |
 | **C** | f32 `a*b+c` where a target may contract to an FMA | Bounded | §4.3, and it is **not** a small ULP |
 | **D** | Conversions between f32 and the narrow types | Exact, given §5's pinned rounding | none needed |
-| **E** | Transcendentals: `exp`, `log`, `sin`, `cos`, `pow`, `rsqrt`, `tanh`, … | Bounded | §6, per function, per backend, measured |
+| **E** | Division, `sqrt`, and the transcendentals: `exp`, `log`, `sin`, `cos`, `pow`, `rsqrt`, `tanh`, … | Bounded | §6, per operation, per backend, measured |
 | **F** | Atomic float add | Bounded, **and not reproducible against itself** | §7 |
 | **G** | Reductions and dot products over many terms, where the summation order differs | Bounded | §3, derived from the length |
+
+**Division is in class E and not class B, which is a correction to
+[004](004-kernel-authoring.md)'s original table.** It is tempting to group `/`
+with the other three arithmetic operators, and it is wrong: the SPIR-V
+environment specification requires `OpFAdd`, `OpFSub` and `OpFMul` to be
+correctly rounded and requires `OpFDiv` only to be within **2.5 ULP**, and Metal
+under its default floating-point mode is permitted to compute `x/y` as
+`x * (1/y)`, which is a different function. A GPU divide is an approximation
+instruction with a Newton step, not an IEEE operation.
+
+This is not academic for v0. The GEMM does not divide, but `RMSNorm`, `Softmax`
+and `Recip` are all in [007](007-tensor-layer.md)'s v0 operator set and all of
+them do, so the first three normalization tests written would have asserted a bit
+equality no GPU owes them. The cost of finding this after those tests exist is
+that somebody widens a tolerance; the cost of finding it now is one table row.
 
 Class B is the load-bearing one and it is the one at risk. If §4 fails on a
 backend, that backend's class B collapses into class C and the exact tier there
@@ -147,11 +162,29 @@ obligation on the emitter rather than a hope about the compiler.**
 | Target | Mechanism | Status |
 | --- | --- | --- |
 | Go (CPU backend) | an explicit `float32(...)` conversion at each rounding point, emitted by the compiler's Go target, never left to how a human wrote the source | available, and required |
-| MSL | `-ffp-contract=off` at compile, or `fma` used only where asked | believed available, **unmeasured** |
+| MSL | the compiler's floating-point mode set away from its default: `mathMode` safe on current Metal, `fastMathEnabled = false` on older | available, and **the default is the wrong one** |
 | SPIR-V | the `NoContraction` decoration on the arithmetic instruction | available by specification |
 | HLSL | the `precise` qualifier | available by specification |
 | GLSL ES 3.1 | **nothing.** The `precise` qualifier postdates it | absent |
 | WGSL | nothing equivalent | absent |
+
+**The Metal row is the one that changes what the backend must do, and it is wider
+than contraction.** Metal's default floating-point optimization is *fast*, which
+does not merely permit fusing a multiply and an add: it permits reassociation, it
+permits computing a division as a multiplication by a reciprocal, and it assumes
+no NaNs, no infinities, and no signed zeros. Two of accel's stated guarantees die
+under it. Class B's fixed evaluation order dies to reassociation, and
+[002](002-compute-model.md) §6.3's requirement that overflow produces an infinity
+and that NaN propagates dies to the no-NaN assumption, which would make the
+`InfNaNProduced` row in [006](006-backends.md)'s matrix `no` on Metal for a reason
+that is a compiler flag rather than a device.
+
+So: **the Metal backend compiles kernels with the safe floating-point mode, and
+that is a correctness requirement rather than a tuning decision.** It costs
+performance and the cost is accepted, because a backend that is faster by
+assuming values accel promises to produce is not implementing this design. A
+future opt-in relaxed mode is a capability, and it would have to say which of
+these guarantees it drops.
 
 The Go row deserves emphasis because it is counter-intuitive: the CPU backend's
 exactness is not a property of running Go, it is a property of the *generated* Go
@@ -222,14 +255,28 @@ every shading language specifies its own and they are not the same. Following
 is worse than an unknown, this table is a shape to be filled by measurement, not
 a set of remembered constants:
 
-| Function | accel requirement | CPU | Metal | Vulkan | D3D12 | GLES | WebGPU |
+Two columns can be filled from specifications rather than measurement, because
+the target specifies them normatively. The SPIR-V environment specification's
+precision table is the source for the Vulkan column, and it is included here even
+though Vulkan is not a v0 backend, because it is evidence about what GPU hardware
+does generally and it is what put division in this class:
+
+| Operation | accel requirement | CPU | Metal | Vulkan (specified) | D3D12 | GLES | WebGPU |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `sqrt` | correctly rounded where the target promises it, otherwise measured | ? | ? | ? | ? | ? | ? |
-| `rsqrt` | measured; it is an approximation instruction on most hardware | ? | ? | ? | ? | ? | ? |
-| `exp`, `log` | measured | ? | ? | ? | ? | ? | ? |
-| `sin`, `cos` | measured, and stated as an **absolute** bound over a stated argument range rather than a ULP bound, because argument reduction dominates for large arguments | ? | ? | ? | ? | ? | ? |
-| `pow` | measured; it is usually `exp(y*log(x))` and inherits both errors | ? | ? | ? | ? | ? | ? |
-| `tanh` | measured | ? | ? | ? | ? | ? | ? |
+| `/` | measured | ? | ? | **2.5 ULP** | ? | ? | ? |
+| `sqrt` | measured | ? | ? | inherited from `1.0 / inversesqrt` | ? | ? | ? |
+| `rsqrt` | measured; it is an approximation instruction on most hardware | ? | ? | **2 ULP** | ? | ? | ? |
+| `exp`, `exp2` | measured | ? | ? | **3 ULP** | ? | ? | ? |
+| `log`, `log2` | measured | ? | ? | **3 ULP** outside `[0.5, 2.0]` | ? | ? | ? |
+| `sin`, `cos` | measured, and stated as an **absolute** bound over a stated argument range rather than a ULP bound, because argument reduction dominates for large arguments | ? | ? | absolute bound, not ULP | ? | ? | ? |
+| `pow` | measured; it is usually `exp2(y*log2(x))` and inherits both errors | ? | ? | inherited from `exp2(y*log2(x))` | ? | ? | ? |
+| `tanh` | measured | ? | ? | inherited | ? | ? | ? |
+
+Note what the Vulkan column shows about the shape of the problem: `sqrt` is not
+specified directly at all, it is specified as a composition of two other
+approximations, so its error is inherited and larger than either. An accel
+requirement of "correctly rounded `sqrt`" would exclude conformant devices, which
+is why the requirement column says measured rather than naming a number now.
 
 **How a cell is filled.** One probe kernel per function, evaluated over a fixed
 input set (dense over the exponent range, plus the arguments where the function is
@@ -278,13 +325,16 @@ Rules, all three of which exist to stop a flaky test entering the suite:
 The enforcement mechanism, because a rule with no mechanism is a preference.
 
 ```go
-// A comparison names its class and its problem size. The harness derives the
+// Package numeq. The name avoids shadowing the standard library's cmp, which a
+// test file comparing numbers is otherwise very likely to want.
+//
+// A comparison names its class and its problem size and the harness derives the
 // bound. There is no entry point that takes a tolerance.
-cmp.Exact(t, got, want)                       // classes A, B, D
-cmp.Reduction(t, got, want, cmp.Sequential(K)) // class G, gamma_K
-cmp.Reduction(t, got, want, cmp.Tree(K))       // class G, gamma_log2(K)
-cmp.Transcendental(t, got, want, cmp.Exp)      // class E, the measured ULP for this device
-cmp.Contracted(t, got, want, terms)            // class C, section 4.3
+numeq.Exact(t, got, want)                         // classes A, B, D
+numeq.Reduction(t, got, want, numeq.Sequential(K)) // class G, gamma_K
+numeq.Reduction(t, got, want, numeq.Tree(K))       // class G, gamma_log2(K)
+numeq.Approx(t, got, want, numeq.Div)              // class E, the measured bound for this device
+numeq.Contracted(t, got, want, terms)              // class C, section 4.3
 ```
 
 Three rules follow from there being no tolerance parameter:
@@ -292,7 +342,7 @@ Three rules follow from there being no tolerance parameter:
 - **A test may not contain a float literal as a tolerance.** Enforced by a
   vet-style check over the test corpus, because this is the rule most likely to be
   broken by someone in a hurry, and it is invisible in review once it is in.
-- **`cmp.Exact` on a class that is not exact on this device fails loudly**, rather
+- **`numeq.Exact` on a class that is not exact on this device fails loudly**, rather
   than falling back to a bound. If a backend's class B collapsed under §4, every
   test that assumed otherwise must fail, so the collapse is visible once rather
   than absorbed everywhere.
@@ -367,7 +417,7 @@ The tests of this spec are the tests that make the other specs' tests meaningful
   notices, which is the failure this spec exists to prevent.
 - **Conversion tables from 002 are asserted bit-exact**, including the bf16
   halfway case where truncation and round-to-nearest-even differ.
-- **`cmp.Exact` on a device whose class B collapsed fails**, tested by forcing the
+- **`numeq.Exact` on a device whose class B collapsed fails**, tested by forcing the
   collapse on the CPU backend through its configuration rather than by waiting for
   a backend that has the problem.
 - **No test in the corpus contains a hardcoded tolerance**, checked mechanically.

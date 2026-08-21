@@ -437,9 +437,9 @@ what the emitter produces, and 008 is where a test finds out what to assert.
 
 | Class | Contents | Contract |
 | --- | --- | --- |
-| A | Integer ops; f32 add, sub, mul, div; loads, stores, indexing | Bit-exact |
+| A | Integer ops; f32 add, sub, mul; loads, stores, indexing | Bit-exact |
 | B | `a*b+c` where a target may contract to FMA | Bit-exact where contraction is controllable, tolerance otherwise. Explicit `accel.FMA` is always exact. |
-| C | Transcendentals (`sin`, `exp`, `pow`, …) | Stated ULP per function. Implementation-defined on every backend. |
+| C | Division, `sqrt`, and transcendentals (`sin`, `exp`, `pow`, …) | Stated bound per operation. Implementation-defined on every backend: SPIR-V specifies `OpFDiv` at 2.5 ULP rather than correctly rounded, and Metal's default floating-point mode may compute a division as a multiplication by a reciprocal. See [008](008-numerics.md) §6. |
 | D | f16 and bf16 conversion | Rounding mode must be pinned and stated; tolerance otherwise. |
 | E | Atomic float add | **Tolerance only.** The hardware picks the accumulation order and it varies between runs, so no CPU implementation can reproduce it. |
 
