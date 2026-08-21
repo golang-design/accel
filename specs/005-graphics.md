@@ -358,28 +358,15 @@ and back every frame.
 
 The graph, in full:
 
-```
-[ upload transforms ]          (transfer node, Upload pool -> Device buffer)
-          |
-          v
-[ geometry pass ]              (render pass node)
-   attachments:
-     0  albedo    RGBA8     Clear   -> Store
-     1  normal    RGBA16F   Clear   -> Store
-     2  worldpos  RGBA32F   Clear   -> Store
-     D  depth     Depth32F  Clear   -> DontCare
-   draws: N objects, each at its recorded uniform offset
-          |
-          v                    (edge inferred: attachment write -> texture read)
-[ lighting pass ]              (compute dispatch node, spec 002)
-   reads:  albedo, normal, worldpos as textures
-   reads:  lights, as a storage buffer
-   writes: hdr, a storage texture
-          |
-          v
-[ tonemap pass ]               (compute or full-screen render pass)
-   reads:  hdr
-   writes: the swapchain image bound in the acquire slot
+```mermaid
+flowchart TD
+    UP["<b>upload transforms</b><br/>transfer node: Upload pool to Device buffer"]
+    GEO["<b>geometry pass</b> (render pass node)<br/>0 albedo RGBA8Unorm, Clear to Store<br/>1 normal RGBA16Float, Clear to Store<br/>2 worldpos RGBA32Float, Clear to Store<br/>D depth Depth32Float, Clear to DontCare<br/>N draws, each at its recorded uniform offset"]
+    LIT["<b>lighting pass</b> (compute dispatch, 002)<br/>reads albedo, normal, worldpos as textures<br/>reads lights as a storage buffer<br/>writes hdr, a storage texture"]
+    TONE["<b>tonemap pass</b><br/>reads hdr<br/>writes the swapchain image in its graph slot"]
+    UP --> GEO
+    GEO -- "edge inferred from declared access:<br/>attachment write, then texture read" --> LIT
+    LIT --> TONE
 ```
 
 Nothing in that graph touches the host between the upload and the present. The
@@ -414,6 +401,17 @@ must agree:
 2. a compute kernel's texel index or sample coordinate on that texture, entirely
    on device, with no host involved,
 3. host readback of that texture.
+
+```mermaid
+flowchart LR
+    F["1. fragment stage<br/>writes at pixel (x, y)"]
+    T[("render target texture")]
+    C["2. compute kernel<br/>reads texel (x, y), on device"]
+    H["3. host readback<br/>byte (y*w + x) * bpp"]
+    F --> T
+    T --> C
+    T --> H
+```
 
 **Guarantee: row 0 is the top row in all three.** The correction is the backend's
 responsibility and its mechanism is the backend's choice (transforming the

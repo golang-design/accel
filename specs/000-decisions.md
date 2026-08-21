@@ -32,6 +32,31 @@ rest are expensive but survivable.
 
 The library is two layers with a hard boundary between them.
 
+```mermaid
+flowchart TD
+    subgraph L2["<b>Layer 2: the tensor</b> — dtypes, shapes, views, operators, plans"]
+        T["no backend-specific code, ever"]
+    end
+    subgraph L1["<b>Layer 1: the device</b> — buffers, textures, workgroups, barriers"]
+        D["knows nothing about tensors, networks, or meshes"]
+    end
+    subgraph BE["<b>Backends</b> — an unexported interface, no public type"]
+        CPU["CPU<br/><i>v0, and the oracle</i>"]
+        MTL["Metal<br/><i>v0</i>"]
+        VK["Vulkan"]
+        DX["D3D12"]
+        GL["GLES 3.1"]
+        WG["WebGPU"]
+    end
+    L2 --> L1 --> BE
+    R["a renderer<br/>uses layer 1 directly"] --> L1
+    E["an inference engine<br/>never touches a bind group"] --> L2
+```
+
+The arrows only point one way, which is the whole content of the layering rules
+below: layer 2 imports layer 1 and never the reverse, and adding a backend is a
+layer 1 concern only.
+
 **Layer 1, the device.** Memory, kernels, pipelines, command recording,
 submission, and presentation. It knows nothing about tensors, neural networks,
 or meshes. Its vocabulary is buffers, textures, workgroups, and barriers.

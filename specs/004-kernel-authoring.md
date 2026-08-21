@@ -302,6 +302,42 @@ In-process compilation from source in a deployed binary is out of scope for v0.
 
 ## Targets and the IR
 
+The shape of the compiler, which is what the rest of this section argues about:
+
+```mermaid
+flowchart TD
+    SRC["kernel.go<br/>ordinary, importable Go<br/>//accel:kernel workgroup=16,8"]
+    TC["go/types<br/>scopes, object identity, untyped constant values"]
+    IR["typed IR<br/>structured statement tree, not a CFG"]
+    AN["analyses, run once for every target<br/>uniformity (002 3.3), recursion,<br/>helper storage rules, capability inference"]
+    GO["Go target<br/>registration plus a typed adapter,<br/>explicit float32() at each rounding point"]
+    MSL["MSL text"]
+    SPV["SPIR-V binary"]
+    GLSL["GLSL ES 3.1 text"]
+    HLSL["HLSL SM 6 text"]
+    GEN["generated_kernels.go<br/>shader text per target, binding layout,<br/>workgroup size, std140 codec, SrcHash"]
+
+    SRC --> TC --> IR --> AN
+    AN --> GO
+    AN --> MSL
+    AN --> SPV
+    AN --> GLSL
+    AN --> HLSL
+    GO --> GEN
+    MSL --> GEN
+    SPV --> GEN
+    GLSL --> GEN
+    HLSL --> GEN
+    SRC -. "the CPU backend calls this function directly" .-> GEN
+```
+
+Two things the picture is making an argument about. The analyses sit on the IR
+and are shared by every target, which is why an IR exists at all when v0 has one
+text target ([`000-decisions.md`](000-decisions.md)'s v0 milestone). And the
+kernel source appears twice, once as input to the compiler and once as the thing
+the CPU backend calls, which is decision 5: one text, not two.
+
+
 | Target | Artifact | Source level |
 | --- | --- | --- |
 | Go (CPU backend) | none, the source already is Go | n/a |

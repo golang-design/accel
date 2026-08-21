@@ -89,6 +89,30 @@ change.
 
 ---
 
+```mermaid
+flowchart LR
+    START{{"what does this<br/>operation do?"}}
+    INT["integers, loads, stores, indexing"]
+    ARITH["f32 + - *"]
+    CONV["f32 to and from f16 or bf16"]
+    FMA["a*b+c on a target that may contract"]
+    DIV["/ sqrt exp log sin cos pow rsqrt"]
+    RED["a reduction over K terms"]
+    ATOM["atomic float add"]
+    EX["<b>Exact</b><br/>numeq.Exact, bit patterns"]
+    BD["<b>Bounded</b><br/>the harness derives the number"]
+
+    START --> INT --> EX
+    START --> ARITH -- "contraction forbidden, section 4" --> EX
+    START --> CONV -- "rounding pinned by 002 section 6.2" --> EX
+    START --> FMA -- "section 4.3, and not a small ULP" --> BD
+    START --> DIV -- "section 6, measured per device" --> BD
+    START --> RED -- "section 3, gamma_K from the order" --> BD
+    START --> ATOM -- "section 7, and not reproducible against itself" --> BD
+```
+
+---
+
 ## 3. Reduction order, and the bound that comes out of it
 
 The most common bounded comparison in the project is "this kernel summed `K`
@@ -98,9 +122,12 @@ using it removes the temptation to guess.
 For summation of `x_1 … x_K` in f32 with unit roundoff `u = 2^-24`, any
 evaluation order satisfies
 
-```
-| computed - exact |  <=  gamma_K * sum |x_i|,   where gamma_K = K*u / (1 - K*u)
-```
+$$
+\big|\,\mathrm{fl}(\textstyle\sum_i x_i) - \textstyle\sum_i x_i \,\big|
+\ \le\ \gamma_K \sum_{i=1}^{K} |x_i|,
+\qquad
+\gamma_K = \frac{K u}{1 - K u}
+$$
 
 Two consequences the harness relies on:
 
@@ -114,8 +141,8 @@ Two consequences the harness relies on:
    evaluation orders; neither is the truth. The f64 reference is the truth, and
    both must lie within `gamma_K` of it.
 
-For a tree reduction of depth `d = ceil(log2 K)` the bound tightens to
-`gamma_d`, which is why a workgroup tree reduction is *more* accurate than a
+For a tree reduction of depth $d = \lceil \log_2 K \rceil$ the bound tightens to
+$\gamma_d$, which is why a workgroup tree reduction is *more* accurate than a
 sequential loop, not less. The harness uses the bound for the order the kernel
 actually implements, not a single number for all reductions, because using the
 loose bound everywhere would hide a genuine error in the tree kernels.
@@ -123,14 +150,23 @@ loose bound everywhere would hide a genuine error in the tree kernels.
 **Accumulation is f32 even when the data is f16**, per
 [002](002-compute-model.md) §6.4, and the bound above is then in f32 with the
 inputs' conversion error from §5 added once per element. A bound derived as if
-accumulation were f16 would be roughly `2^13` times looser and would accept
-almost anything.
+accumulation were f16 would use $u = 2^{-11}$, and at $K = 4096$ that gives
+$Ku = 2 > 1$: the denominator goes negative and the bound is not merely looser but
+**vacuous**, which is the arithmetic behind 002's rule that accumulation is f32.
 
-**Worked, so the numbers are checkable.** A dot product of length 4096 whose terms
-are all near 1.0: `gamma_4096 = 4096 * 2^-24 / (1 - 4096 * 2^-24)` is about
-`2.44e-4`, and `sum|x_i|` is about 4096, so the absolute bound is about `1.0`
-against a result near 4096, a relative bound near `2.4e-4`. A tree reduction of
-the same data has `d = 12` and a bound about 341 times tighter. Those are the
+**Worked, so the numbers are checkable.** A dot product of length $K = 4096$ whose
+terms are all near 1.0:
+
+$$
+\gamma_{4096} = \frac{4096 \cdot 2^{-24}}{1 - 4096 \cdot 2^{-24}} \approx 2.44 \times 10^{-4},
+\qquad
+\sum_i |x_i| \approx 4096
+$$
+
+so the absolute bound is about $1.0$ against a result near $4096$, a relative
+bound near $2.4 \times 10^{-4}$. A tree reduction of the same data has
+$d = \lceil \log_2 4096 \rceil = 12$, and $\gamma_{12} / \gamma_{4096} \approx 1/341$,
+so its bound is about 341 times tighter. Those are the
 numbers a GEMM test asserts, and neither of them was chosen by running anything.
 
 ---

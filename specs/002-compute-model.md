@@ -46,11 +46,13 @@ which is why they are specified before anything is built.
 Four levels, each with a different guarantee attached to it. Confusing two of
 them is how most GPU bugs start.
 
-```
-Dispatch          one graph node: a 3D grid of workgroups
-  Workgroup       the unit of cooperation: shared memory, barriers
-    Subgroup      the unit of scheduling: lanes that step together
-      Invocation  one execution of the kernel body
+```mermaid
+flowchart TD
+    D["<b>Dispatch</b><br/>one graph node: a 3D grid of workgroups<br/>no synchronisation between workgroups"]
+    W["<b>Workgroup</b><br/>the unit of cooperation<br/>shared memory, barriers"]
+    S["<b>Subgroup</b><br/>the unit of scheduling<br/>lanes that step together, size reported by the device"]
+    I["<b>Invocation</b><br/>one execution of the kernel body<br/>private storage only"]
+    D --> W --> S --> I
 ```
 
 | Level | Size fixed at | Can synchronise with peers | Shares memory with peers |
@@ -136,7 +138,19 @@ exists for, so it is stated rather than assumed.
 ### 1.4 Linearization is x-fastest, and it is guaranteed
 
 **`X` varies fastest, then `Y`, then `Z`.** Not implementation-defined, not
-advisory. Index arithmetic is not portable otherwise: a kernel flattening a 2D
+advisory. With workgroup size $S$ and local id $l$:
+
+$$
+\mathrm{LocalIndex} = l_z S_y S_x + l_y S_x + l_x
+$$
+
+and with workgroup count $G$ and workgroup id $g$:
+
+$$
+\mathrm{GroupIndex} = g_z G_y G_x + g_y G_x + g_x,
+\qquad
+\mathrm{GlobalIndex} = \mathrm{GroupIndex} \cdot S_x S_y S_z + \mathrm{LocalIndex}
+$$ Index arithmetic is not portable otherwise: a kernel flattening a 2D
 tile index computes a different address on a device that disagrees, and the
 result is a plausible wrong number rather than a crash.
 
@@ -925,10 +939,21 @@ storage formats that convert on load and store by default, which is what most
 inference kernels want: read f16, accumulate f32, write f16. A kernel that wants
 native narrow arithmetic asks for it and requires the corresponding capability.
 
-That default is a correctness choice, not a convenience. A 4096-element dot
-product of values around 1.0 accumulated in f16 loses roughly a decimal digit,
-because once the running sum passes 2048 an addend of 1.0 rounds to the nearest
-multiple of 2 and small terms vanish. Making f32 accumulation the default means
+That default is a correctness choice, not a convenience. Sequential summation of
+$K$ terms carries a forward error bounded by $\gamma_K \sum_i |x_i|$ with
+$\gamma_K = K u / (1 - K u)$ and $u$ the unit roundoff
+([008](008-numerics.md) §3). For $K = 4096$:
+
+$$
+u_{f32} = 2^{-24} \Rightarrow \gamma_K \approx 2.4 \times 10^{-4},
+\qquad
+u_{f16} = 2^{-11} \Rightarrow K u > 1
+$$
+
+The f16 bound is not merely worse, it is **vacuous**: $Ku > 1$ makes the
+denominator non-positive and the bound says nothing at all. The mechanism behind
+that is concrete: once the running sum passes 2048 an addend of 1.0 rounds to the
+nearest multiple of 2 and small terms vanish entirely. Making f32 accumulation the default means
 the naive kernel is the numerically sound one.
 
 It is enforced by the type system rather than by convention:
@@ -1037,12 +1062,42 @@ Dispatch: `WorkgroupCount{X: (N + 15) / 16, Y: (M + 15) / 16, Z: 1}`.
 
 ### 7.3 Walkthrough
 
-**Why it is tiled at all.** Per k-tile a workgroup produces 16*16*16*2 = 8192
-flops. Tiled, it loads 256 elements of A and 256 of B, so 512 loads. Untiled,
-each of the 256 outputs would load two values for each of 16 k steps, so 8192
-loads. The ratio is 16, exactly the tile width, and it is the entire argument for
-shared memory existing: without it the kernel is memory-bound by a factor of 16
-and no amount of arithmetic throughput helps. This is what
+**What the kernel is doing, per k-tile.** One workgroup owns one 16x16 block of
+`C` and walks `A` rightwards and `B` downwards, staging a 16x16 block of each into
+shared memory before every pass of the inner loop:
+
+```
+            B  [K, N]                      one k-tile of the loop:
+         +------------------+
+         |   |kb |          |              1. every invocation loads 2 elements
+   k0 -> |   |###|          |                 of A and 2 of B into shared
+         |   |###|          |              2. BarrierShared
+         +------------------+              3. 16 multiply-adds per accumulator,
+                 |                            reading only shared memory
+   A  [M, K]     v          C  [M, N]      4. BarrierShared, so nobody
+ +---------+  +------------------+            overwrites a tile still being read
+ | ...|###|  |   | 16x16 block   |
+ | ...|###|  |   | this workgroup|          tileA, tileB: 256 f32 each = 2 KiB,
+ +---------+  +------------------+          against a 16 KiB portable floor
+       ^k0            ^ owned
+```
+
+**Why it is tiled at all**, as a ratio. Per k-tile a workgroup performs
+$16 \cdot 16 \cdot 16 \cdot 2 = 8192$ flops. Tiled, it loads $256 + 256 = 512$
+elements. Untiled, each of the 256 outputs loads two values for each of 16 k
+steps, so $256 \cdot 16 \cdot 2 = 8192$ loads. The arithmetic intensity, in flops
+per element loaded, is therefore
+
+$$
+I_{\text{tiled}} = \frac{8192}{512} = 16,
+\qquad
+I_{\text{untiled}} = \frac{8192}{8192} = 1
+$$
+
+and the ratio is exactly the tile width $T = 16$, because a $T \times T$ tile
+reuses each loaded element $T$ times. That is the entire argument for shared
+memory existing: without it the kernel is memory-bound by a factor of $T$ and no
+amount of arithmetic throughput helps. This is what
 [`000-decisions.md`](000-decisions.md) decision 4 means when it says the absence
 of shared memory makes a tiled GEMM impossible.
 

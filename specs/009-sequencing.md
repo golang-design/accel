@@ -49,6 +49,26 @@ The spec's full scope is a destination, not a prerequisite.
 
 ## 2. The milestones
 
+```mermaid
+flowchart TD
+    M0["<b>M0</b> the bet, enforced<br/>CGO_ENABLED=0, no import C<br/><i>done: a commit adding cgo fails CI</i>"]
+    M1["<b>M1</b> memory on CPU<br/>pools, TLSF, buffers, views, lifetime<br/><i>done: 001 round trips and fragmentation tests</i>"]
+    M2["<b>M2</b> kernel compiler, minimal<br/>go/types, IR, Go target, generator, std140<br/><i>done: a kernel with all three parameter kinds runs</i>"]
+    M3["<b>M3</b> the graph on CPU<br/>edges, interference, packing, barriers<br/><i>done: worked example goldens, whole-plan oracle fuzz</i>"]
+    M4["<b>M4</b> compute model, and the GEMM<br/>barriers, atomics, subgroups, uniformity<br/><i>done: tiled GEMM vs an independent reference</i>"]
+    M5["<b>M5</b> Metal<br/>purego objc shim, MSL target, capabilities<br/><i>done: 006 entry gate, plus the contraction probe</i>"]
+    M6["<b>M6</b> tensor layer, to one token<br/>Builder, Plan, plan cache, decode operators<br/><i>done: incremental decode equals prefill</i>"]
+    M7["<b>M7+</b> quantization, textures, Vulkan,<br/>graphics, the remaining backends"]
+
+    M0 --> M1 --> M2 --> M3 --> M4 --> M5 --> M6 --> M7
+    M2 -. "the GEMM's uniform needs a generated codec,<br/>so M4 is behind M2 and not merely after it" .-> M4
+    M4 -. "the GEMM is every backend's entry gate (006 §7)" .-> M5
+```
+
+The dotted edges are the ones that are not obvious from the numbering and are the
+reason §1 exists.
+
+
 Each names what it builds, which specs it implements, and **what makes it done**,
 where done is a test that exists rather than a judgement.
 

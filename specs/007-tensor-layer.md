@@ -354,11 +354,34 @@ and has no kernel of its own.
 | `Softmax` | primitive (fused) | with optional scale, additive mask, and causal flag, because a separate mask add costs a full read-modify-write of the score matrix |
 | `Attention` | primitive (fused) where reported, composed otherwise | the fused kernel avoids materializing the full score matrix; the composed form is `MatMul`, `Softmax`, `MatMul` and is the oracle for the fused one |
 
-A transformer decode step uses exactly: `Rows`, `RMSNorm`, `MatMul` (or `MatVec`)
-for Q, K, V, `RoPE`, `ScatterRows`, `Attention`, `MatMul` for the output
-projection, `Add` for the residual, `RMSNorm`, `MatMul` and `SwiGLU` and `MatMul`
-for the feed-forward, `Add`, a final `RMSNorm`, and `MatMul` for the head. That
-list is the acceptance criterion for this section.
+A transformer decode step uses exactly this, and the list is the acceptance
+criterion for this section:
+
+```mermaid
+flowchart TD
+    ids["token ids"] --> rows["Rows<br/>embedding lookup"]
+    rows --> n1["RMSNorm"]
+    n1 --> qkv["MatVec x3<br/>Q, K, V projections"]
+    qkv --> rope["RoPE<br/>positions as buffer contents"]
+    rope --> scat["ScatterRows<br/>the KV cache write"]
+    scat --> attn["Attention<br/>fused where reported,<br/>MatMul-Softmax-MatMul otherwise"]
+    attn --> proj["MatVec<br/>output projection"]
+    proj --> add1["Add<br/>residual"]
+    rows --> add1
+    add1 --> n2["RMSNorm"]
+    n2 --> ff["MatVec, SwiGLU, MatVec<br/>feed-forward"]
+    ff --> add2["Add<br/>residual"]
+    add1 --> add2
+    add2 --> nf["final RMSNorm"]
+    nf --> head["MatVec<br/>output head"]
+    head --> logits["logits"]
+```
+
+Everything between `Rows` and the final norm repeats once per layer, which is
+where the node count that motivates
+[`000-decisions.md`](000-decisions.md) decision 1 comes from: a hundred or so
+operations per layer, dozens of layers, rebuilt per token under a one-shot
+encoder and built once here.
 
 ## Building and running
 
@@ -368,11 +391,17 @@ compile step and a cache.
 
 ### The pipeline
 
-```
-Builder --Compile--> Plan ------Submit--> Fence
-  ^                    |
-  |                    +-- inputs vary through bindings and buffer contents
-  +-- host-side DAG, no device work
+```mermaid
+flowchart LR
+    B["<b>Builder</b><br/>host-side tensor DAG<br/>no device work, no allocation"]
+    C{{"<b>Compile</b><br/>shape and dtype inference, validation,<br/>layout resolution, kernel selection,<br/>pipeline creation, lowering to a 003 recorder"}}
+    P["<b>Plan</b><br/>one device Graph<br/>bound to one shape signature"]
+    F["Fence"]
+    K[("plan cache<br/>keyed by shape signature<br/>plus instance id")]
+    B --> C --> P -- "Submit" --> F
+    P -. "inputs vary through bindings,<br/>buffer contents, and dispatch counts" .-> P
+    C -.-> K
+    K -. "decode hits every step after the first" .-> P
 ```
 
 `Compile` does, in order: shape and dtype inference, validation, layout
@@ -486,14 +515,24 @@ The cache is allocated up front at full capacity and never grows. Capacity is a
 caller decision, running past it is a caller error reported clearly, and this
 follows 001's lean toward fixed pools with the requirement reported in advance.
 
-```
-bytes = 2 * layers * kvHeads * headDim * maxSeq * sizeof(dtype)
-```
+$$
+\text{bytes} = 2 \cdot L \cdot H_{kv} \cdot d_{head} \cdot S_{max} \cdot \text{sizeof}(\text{dtype})
+$$
+
+where $L$ is the layer count, $H_{kv}$ the number of key-value heads, $d_{head}$
+the head dimension, $S_{max}$ the context capacity, and the leading factor of two
+is keys and values.
 
 A 32-layer model with 8 key-value heads, head dimension 128, 4096 tokens of
-context, in f16: `2 * 32 * 8 * 128 * 4096 * 2 = 536,870,912` bytes, exactly 512
-MiB. The factor of two at the front is keys and values; the trailing two is
-`sizeof(f16)`. The library exposes this as a function of a cache configuration so
+context, in f16:
+
+$$
+2 \cdot 32 \cdot 8 \cdot 128 \cdot 4096 \cdot 2 = 536{,}870{,}912 \ \text{bytes} = 512 \ \text{MiB}
+$$
+
+Note that it is linear in context length, so the same model at 32k context needs
+4 GiB of cache, which is why the quantized-cache question below is worth more than
+any activation optimization. The library exposes this as a function of a cache configuration so
 the caller gets the number without transcribing the formula.
 
 Layout: two buffers, keys and values, each shaped `[layers, maxSeq, kvHeads,

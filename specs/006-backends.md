@@ -470,6 +470,20 @@ Replay saves three separable things:
    pre-built object. Real on some drivers, unmeasured, and never the reason to
    choose the model.
 
+```mermaid
+flowchart TD
+    REC["one recording"]
+    P1["<b>1. plan-once</b><br/>validate, infer edges, compute reachability,<br/>plan memory, compute barriers, allocate"]
+    P2["<b>2. encode-once</b><br/>turn planned nodes into driver commands"]
+    P3["<b>3. driver-side</b><br/>state pre-resolution inside the driver"]
+    ALL["<b>every backend</b><br/>CPU, Metal, Vulkan, D3D12, GLES, WebGPU"]
+    SOME["<b>Vulkan, D3D12</b><br/>and Metal only with an ICB"]
+    UNK["real on some drivers,<br/>unmeasured, never the reason to choose"]
+    REC --> P1 --> ALL
+    REC --> P2 --> SOME
+    REC --> P3 --> UNK
+```
+
 **The conclusion**: (1) is backend-independent and is most of the value, so the
 recording model is justified even where lowering is software replay. That is the
 sentence 003 was waiting for. (2) is a bonus on two backends out of six. A design

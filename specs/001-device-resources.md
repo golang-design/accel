@@ -338,8 +338,16 @@ view, and 007 measures the alternative at 128 binding updates per token for a
 the design already routes around, and the tax lands on per-layer slabs, which are
 megabytes each.
 
-**Suballocation aligns by intended use.** A buffer's requirement is derived from
-its declared `BufferUsage`:
+**Suballocation aligns by intended use.** A buffer's requirement is the strictest
+alignment any declared usage implies,
+
+$$
+\mathrm{align}(u) = \max\Big(4,\ \max_{f \in u} \mathrm{align}_f\Big),
+\qquad
+\mathrm{offset} = \left\lceil \frac{p}{\mathrm{align}(u)} \right\rceil \cdot \mathrm{align}(u)
+$$
+
+for a cursor at $p$, which in code is:
 
 ```
 required = 4                                             // dtype floor, always
@@ -681,6 +689,30 @@ length is not a multiple of 4. The two D3D12 constants are the only per-backend
 numbers stated as literals anywhere in this spec, because they are fixed by the
 API rather than queried per device; everything else is a `Limits` query.
 
+What the two layouts look like, for a 100-pixel-wide `RGBA8Unorm` target whose
+tight row is 400 bytes and whose D3D12-aligned row is 512:
+
+```
+what the caller sees, tight              what the device requires, padded
++--------------------+                   +--------------------+--------+
+| row 0   400 bytes  |                   | row 0   400 bytes  | pad 112|
+| row 1   400 bytes  |                   | row 1   400 bytes  | pad 112|
+| row 2   400 bytes  |                   | row 2   400 bytes  | pad 112|
++--------------------+                   +--------------------+--------+
+ stride = width*bpp = 400                 stride = 512, a multiple of 256
+```
+
+$$
+\text{tight} = w \cdot \text{bpp}
+\qquad
+\text{device} = \left\lceil \frac{w \cdot \text{bpp}}{A} \right\rceil \cdot A
+\qquad
+\text{repack needed} \iff \text{device} \neq \text{tight}
+$$
+
+with $A$ the backend's row pitch alignment. A 1024-wide target has a 4096-byte
+row, already a multiple of 256, and repacks nowhere.
+
 **Where the padding happens: inside the backend, in an intermediate buffer the
 caller never sees.** When the caller's tight pitch does not satisfy the backend's
 requirement, the backend allocates scratch with the padded pitch, does the device
@@ -737,6 +769,21 @@ So the order is normative:
 > fuse the two passes provided the observable result is identical to doing them
 > in that order.
 
+```mermaid
+flowchart LR
+    A["device memory<br/>padded rows, backend origin"]
+    B["tight rows, backend origin"]
+    C["tight rows, top origin<br/>what the caller sees"]
+    A -- "1. depad: drop the pad bytes per row" --> B
+    B -- "2. flip: reverse row order,<br/>only where the native origin is bottom" --> C
+```
+
+Do them in the other order and the flip operates on rows whose stride is still the
+padded one, so the result is correct in neither axis. The flip fingerprint in
+[`conventions.md`](../docs/conventions.md), equal pixel counts with roughly half
+overlap, will **not** identify that, because a pitch error changes the pixel
+count.
+
 As an invariant a test can check: after `Texture.Read` returns, byte
 `(r*width + x) * bpp` holds the pixel the fragment stage wrote at window
 coordinate `(x, r)` with `r = 0` the top row, on every backend, for every width,
@@ -767,6 +814,23 @@ a tensor workload that would otherwise be destroyed by it.
 ## 5. Suballocation
 
 A pool is a single device allocation. This section is how it is carved up.
+
+```mermaid
+flowchart TD
+    DEV["Device"]
+    P1["Pool: Device kind, PoolGeneral<br/>TLSF, arbitrary free order<br/><i>weights</i>"]
+    P2["Pool: Device kind, PoolLinear<br/>bump a cursor, reset as a whole<br/><i>a Graph's transients, offsets from 003</i>"]
+    P3["Pool: Upload kind<br/><i>the staging ring</i>"]
+    P4["Pool: Textures=true<br/>coarse placement alignment,<br/>never mixed with buffers"]
+    B1["Buffer<br/>dtype plus count, usage declared at creation"]
+    V1["BufferView<br/>offset and count in elements<br/>owns nothing, retains nothing"]
+    DEV --> P1 & P2 & P3 & P4
+    P1 --> B1 --> V1
+```
+
+Three properties of that picture are load-bearing and are argued below: pools are
+separated by **lifetime class** rather than by content (§5.3), a pool never grows
+(§5.5), and a view is an address expression rather than an owner (§7.3).
 
 Note the division of labour with [003](003-command-graph.md), because both
 documents place memory. **003 owns transient placement within one graph**: it

@@ -17,11 +17,16 @@ of layer 1 is shaped around, so read it before the others.
 Work is **recorded** into a `Graph`, which is then **submitted** to a queue, any
 number of times.
 
-```
-Recorder  --build-->  Graph  --submit-->  Queue  -->  Fence
-   ^                    |
-   |                    +-- rebind inputs between submissions
-   +-- records nodes, never executes
+```mermaid
+flowchart LR
+    R["Recorder<br/>records nodes, executes nothing"]
+    G["Graph<br/>immutable: validated, planned,<br/>barriers computed, lowered"]
+    Q["Queue"]
+    F["Fence"]
+    R -- "Build" --> G
+    G -- "Submit" --> Q
+    Q --> F
+    G -. "rebind inputs, write buffer contents,<br/>vary dynamic counts" .-> G
 ```
 
 A `Graph` is immutable once built. Everything that varies between submissions
@@ -625,6 +630,20 @@ the executor to overlap independent work. So:
 
 **Two transients may share memory if and only if every node touching one is
 ordered, by the inferred DAG, before every node touching the other.**
+
+Writing $u \prec v$ for "$v$ is reachable from $u$ in the inferred DAG" and
+$U(t)$ for the set of nodes that read or write transient $t$:
+
+$$
+\mathrm{compatible}(t, u) \iff
+\big(\forall\, x \in U(t),\ y \in U(u):\ x \prec y\big)
+\ \lor\
+\big(\forall\, x \in U(u),\ y \in U(t):\ x \prec y\big)
+$$
+
+Note that $x \prec x$ is false, which is the case that matters most: a node
+reading $t$ and writing $u$ in one dispatch, which is every fused elementwise
+kernel, keeps the two apart.
 
 ```go
 // reach[i] is the set of nodes reachable from i, transitively, as a bitset.
@@ -1235,7 +1254,34 @@ n7 := r.Dispatch(pAdd,   bind(t5, x, y),         wg(1024))   // y  = x + t5
 g, err := r.Build()
 ```
 
-The diamond is `n1 -> {n2, n3} -> n5`, with `n4` extending one arm.
+The diamond is `n1 -> {n2, n3} -> n5`, with `n4` extending one arm:
+
+```mermaid
+flowchart TD
+    n0["n0 CopyToBuffer<br/>params"]
+    n1["n1 norm<br/>writes t0"]
+    n2["n2 GEMM Wq<br/>writes t1"]
+    n3["n3 GEMM Wk<br/>writes t2"]
+    n4["n4 rope<br/>writes t3"]
+    n5["n5 scores<br/>writes t4"]
+    n6["n6 attend<br/>writes t5"]
+    n7["n7 add<br/>writes y"]
+    n0 -- "RAW params" --> n1
+    n0 -- "RAW params" --> n4
+    n1 -- "RAW t0" --> n2
+    n1 -- "RAW t0" --> n3
+    n2 -- "RAW t1" --> n4
+    n4 -- "RAW t3" --> n5
+    n3 -- "RAW t2" --> n5
+    n5 -- "RAW t4" --> n6
+    n6 -- "RAW t5" --> n7
+```
+
+**Read `n3` and `n4` off that picture: no path joins them in either direction.**
+They are unordered, the backend may overlap them, and that is the whole reason the
+planner cannot use record-order intervals. In record order `t0` (used by `n1`,
+`n2`, `n3`) appears to die before `t3` (written by `n4`) is born, so an interval
+planner aliases them and `n4` overwrites a value `n3` is still reading.
 
 ### Inferred edges
 
@@ -1324,7 +1370,19 @@ Size descending, ties by first-writer node id: `t0`(n1), `t1`(n2), `t2`(n3),
 | 5 | t5, 4 MiB | none of the placed (compatible with t0, t1, t2, t3) | `[0, 4)`, aliasing t0 |
 | 6 | t4, 2 MiB | t2 `[8,12)`, t3 `[12,16)`, t5 `[0,4)` | `[4, 6)`, aliasing part of t1 |
 
-Offsets in MiB. Result:
+Offsets in MiB. The pool that comes out, drawn to scale in 2 MiB cells:
+
+```
+byte offset   0        4        8       12       16 MiB
+              |--------|--------|--------|--------|
+first user    |   t0   |   t1   |   t2   |   t3   |
+reuse         |   t5   | t4 |   |        |        |
+              |--------|----|---|--------|--------|
+                        ^^^^
+                        t4 is 2 MiB and takes the low half of t1's bytes
+```
+
+Result:
 
 | Measure | Bytes | Note |
 | --- | --- | --- |
