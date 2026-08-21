@@ -135,6 +135,11 @@ type Limits struct {
 	MaxTextureExtent2D    int
 	MaxTextureExtent3D    int
 	MaxTextureArrayLayers int
+
+	// MaxUniformBlockBytes is the largest std140 block a uniform binding may
+	// carry. Section 3.3 bakes an encoded block size into the pipeline, so this is
+	// the number that size is validated against.
+	MaxUniformBlockBytes int
 }
 
 // Limits reports this device's numeric constraints.
@@ -468,6 +473,14 @@ const ParamsBlockSize = 96
 func encodeParams(dst []byte, p Params) { /* generated */ }
 func decodeParams(src []byte) Params    { /* generated */ }
 ```
+
+**The block has a maximum**, `Limits.MaxUniformBlockBytes`, and a struct whose
+encoded size exceeds it is a pipeline creation error naming the struct, the
+encoded size, and the device's limit. Without the limit there would be nothing to
+check a baked-in block size against, and the failure would land on whichever
+machine happened to have the smaller number. The padding in the table above is
+what makes this reachable: an array of 64 floats occupies 1024 bytes, not 256,
+which is also why arrays belong in storage buffers.
 
 **Forbidden in a uniform struct, each for a reason that is not taste:**
 

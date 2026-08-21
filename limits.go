@@ -50,6 +50,13 @@ type Limits struct {
 	MaxTextureExtent2D    int
 	MaxTextureExtent3D    int
 	MaxTextureArrayLayers int
+
+	// MaxUniformBlockBytes is the largest std140 block a uniform binding may
+	// carry. A kernel's uniform struct is encoded to a block whose size the
+	// generator bakes into the pipeline, so without this there is no device number
+	// to validate that size against, and a struct that is too large for the device
+	// would be discovered at pipeline creation on somebody else's machine.
+	MaxUniformBlockBytes int
 }
 
 // Limits reports the device's numeric bounds.
