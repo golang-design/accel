@@ -16,6 +16,12 @@ it is wrong.
 Nothing here is implemented yet. The repository is a design at this stage, plus
 an API surface that compiles and does nothing.
 
+**What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
+narrower than this directory: compute only, on the CPU backend and Metal.
+[005](005-graphics.md) is normative and frozen rather than scheduled, and the
+four remaining backends in [006](006-backends.md) are specified and unbuilt. A
+spec being here means its decisions are settled, not that its code is next.
+
 ## Reading order
 
 Start with [000](000-decisions.md), then [003](003-command-graph.md). Decision 1 of the
@@ -37,7 +43,7 @@ around, and the other specs are hard to evaluate without it.
 | [002-compute-model.md](002-compute-model.md) | Drafted | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
 | [003-command-graph.md](003-command-graph.md) | Drafted | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | Drafted | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
-| [005-graphics.md](005-graphics.md) | Drafted | Render pipelines, render passes as graph nodes, draws, the render-to-compute handoff, surfaces and present |
+| [005-graphics.md](005-graphics.md) | Drafted, frozen | Render pipelines, render passes as graph nodes, draws, the render-to-compute handoff, surfaces and present. Normative, not built at v0 |
 | [006-backends.md](006-backends.md) | Drafted | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 
 ## Layer 2: the tensor

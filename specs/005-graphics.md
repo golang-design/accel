@@ -14,6 +14,19 @@ render pass becomes a node in the graph of [003](003-command-graph.md), how draw
 are issued, how a rasterized G-buffer is handed to a compute pass without leaving
 the device, and how a frame reaches a screen.
 
+**Status: normative and frozen, not built at v0.**
+[`000-decisions.md`](000-decisions.md)'s v0 milestone is compute only. This spec
+is written now, and its API shape is settled now, because attachment formats,
+blend state, and stencil operations are compile-time pipeline inputs on every
+backend: adding them after callers have written pipeline descriptors is a
+breaking change, which is the same argument [002](002-compute-model.md) makes for
+designing the compute model in rather than retrofitting it. What v0 defers is the
+implementation, and with it the CPU reference rasterizer, the surface and present
+path, and the Metal drawable path. [004](004-kernel-authoring.md) correspondingly
+keeps the vertex and fragment directives reserved and unimplemented, which
+removes the contradiction between the two specs: this one describes a stage
+language 004 does not yet compile, and says so.
+
 The design target is a deferred renderer: a geometry pass writing several colour
 attachments plus depth, then compute doing the shading. That target is chosen
 because it is the case the predecessor project could not complete, and because it
@@ -587,14 +600,14 @@ Each of these is excluded for a reason, not by omission.
   `[0, 1]`, is a breaking change to every authored vertex kernel and to
   `conventions.md`. Unresolved, and worth resolving before the first caller
   writes a projection matrix.
-- **Rebindable slots versus concurrent submission.** 003 says a built graph may be
-  submitted from several goroutines at once, and separately that a slot can be
-  pointed at a different resource between submissions. The swapchain-image slot
-  makes those collide: per-frame rebinding is per-submission mutable state, so two
-  concurrent submissions of the same graph race on it. Either bindings are
-  snapshotted at submit (and a submission carries its own binding set), or a graph
-  with rebindable slots is single-submitter. Graphics is what surfaces this, but
-  the answer belongs in 003.
+- ~~**Rebindable slots versus concurrent submission.**~~ **Resolved in
+  [003](003-command-graph.md)**, which took the second of the two options this
+  spec offered: a graph has one submission in flight at a time, and that holds for
+  every graph rather than only those with rebindable slots, because transient
+  aliasing has the same race from the other direction. Snapshotting bindings at
+  submit was rejected as fixing half the race for the price of a per-submission
+  copy of the binding set. The frame loop above is unaffected: one graph per
+  surface, one frame in flight per graph.
 - **Whether the vertex input layout should be derived from the Go vertex kernel
   signature.** Declaring it twice, once in the kernel and once in the descriptor,
   is a mismatch waiting to happen, and the compiler already knows the types.

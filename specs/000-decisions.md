@@ -263,6 +263,58 @@ Stated plainly so the scope is not read as a promise:
 | **A WebGPU implementation** | Decision 1 makes the submission model deliberately different, so matching `wgpu`'s API is not a goal and never becomes one without reversing decision 1. WebGPU as a *backend* is a separate question and is live; see [006](006-backends.md). |
 | **A rendering engine** | No scene graph, no material system, no asset pipeline. Layer 1 is what an engine is built on. The predecessor is the engine. |
 
+## The v0 milestone
+
+The decisions above are permanent. This section is not: it is what v0 builds, and
+it moves as milestones land. It is here rather than in a sibling spec because a
+spec that contradicts it is wrong in the same way as one that contradicts a
+decision, and because two of the specs disagreed about it before it was written.
+
+**v0 is compute only.** [005](005-graphics.md) stays normative and is not
+implemented. Its API shape is settled now because it has to be: attachment
+formats, blend state, and stencil operations are compile-time pipeline inputs on
+every backend, so adding them later is a breaking change to every caller who
+wrote a pipeline descriptor. What is deferred is the code: the CPU reference
+rasterizer, the surface and present path, and the Metal drawable path.
+[004](004-kernel-authoring.md) correspondingly keeps `//accel:vertex` and
+`//accel:fragment` reserved and unimplemented, which is what it already said.
+
+The cost, stated: **the graphics half of
+[`conventions.md`](../docs/conventions.md) is unverified at v0.** Clip-space
+depth range, face winding, and the readback origin are exactly the entries that
+cost the predecessor hours, and nothing in v0 exercises them. The predecessor's
+known gap, a Metal present path that was never written, also stays open. This is
+a deferral with a bill attached, not a simplification.
+
+**v0 backends are the CPU backend and Metal.** Vulkan, D3D12, OpenGL ES, and
+WebGPU stay specified in [006](006-backends.md) and unbuilt. Three consequences
+follow and are load-bearing:
+
+1. **SPIR-V emission is post-v0**, so [004](004-kernel-authoring.md)'s IR is not
+   justified by SPIR-V at v0. It is justified by the analyses that sit on it, and
+   004 says so where it makes the argument.
+2. **006's open question 4, how D3D12 reaches shader model 6, is post-v0** and
+   stays open. Nothing at v0 depends on the answer.
+3. **CI is thinner than 006's tier table describes.** Tier 1 (the CPU backend on
+   linux, macOS, and windows; a `CGO_ENABLED=0` build for every `GOOS`; the
+   `import "C"` grep) is the whole blocking set, plus Metal on a macOS runner.
+   The lavapipe, llvmpipe, and WARP jobs arrive with their backends.
+
+The cost of a two-backend set is that **the oracle has no second opinion.** 006's
+rule is that the CPU backend enforces the intersection of what every backend
+allows; at v0 it is enforcing an intersection nothing else in the room can
+contradict, against one GPU backend whose shading language is the most permissive
+of the six and whose hardware is one vendor's. Strict portable mode is therefore
+doing *more* work at v0 than it will later, not less: it is the only thing
+standing between a kernel and a portability bug that no v0 device can produce.
+
+**What v0 must prove**, in the order the sequencing spec builds it: a buffer
+round trip on both backends, [002](002-compute-model.md)'s tiled GEMM running
+under the kernel compiler on both backends and agreeing with an independently
+written reference, and [007](007-tensor-layer.md)'s decode step reaching a token.
+The GEMM is the gate [006](006-backends.md) §7 already names; the token is the
+one that proves the layering.
+
 ## Layering rules
 
 1. Layer 2 imports layer 1. Layer 1 never imports layer 2.

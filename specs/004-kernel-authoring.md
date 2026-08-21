@@ -310,7 +310,23 @@ In-process compilation from source in a deployed binary is out of scope for v0.
 | HLSL SM 6 | text | yes, but see below |
 | SPIR-V | **binary** | no |
 
-**There is an IR.** The argument is SPIR-V. SPIR-V is a binary SSA format with
+**There is an IR**, and at v0 it is not SPIR-V that pays for it.
+[`000-decisions.md`](000-decisions.md)'s v0 milestone builds the CPU backend and
+Metal only, so the emitter has exactly one text target and the "quadratic in
+targets" argument below is a forecast rather than a present cost. What justifies
+the IR at v0 is the set of analyses that have already been specified onto it and
+have nowhere else to live: the uniformity analysis
+([002](002-compute-model.md) §3.3), recursion detection, the helper storage
+restrictions, and the capability requirement inference
+([002](002-compute-model.md) §8.2). Every one of those is a whole-kernel dataflow
+or call-graph question that an emitter cannot answer while printing.
+
+Being honest about the risk in the other direction: an IR for one text target is
+the shape most likely to be over-built. The guard is that the IR is a typed
+statement tree, not a general CFG (below), so it is close to the AST the front
+end already has, and the analyses are what give it its node set.
+
+**SPIR-V is why it must stay a real IR**, and it arrives with Vulkan. SPIR-V is a binary SSA format with
 explicit result ids, typed instructions, and structured control flow declared
 through `OpSelectionMerge` and `OpLoopMerge`. You do not print that by walking
 an AST. And there is no cgo-free path from GLSL text to SPIR-V, because glslang
