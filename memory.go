@@ -134,12 +134,19 @@ func (b *Buffer) ViewAs(d DType, offset, count int) (BufferView, error) {
 	panic(ErrNotImplemented)
 }
 
-// Write copies host data into the buffer. It is recorded, not immediate: for a
-// transfer that participates in graph dependency tracking, record it with
-// [Recorder.CopyToBuffer] instead.
+// Write copies host data into the buffer. It is immediate from the caller's point
+// of view and asynchronous with respect to the device: it returns once the data
+// has been staged, not once the device can see it.
+//
+// It takes part in no graph dependency tracking. For a transfer that must be
+// ordered against other work, record it with [Recorder.CopyToBuffer] instead.
 func (b *Buffer) Write(offset int, data any) error { panic(ErrNotImplemented) }
 
 // Read copies buffer contents back to the host, blocking until the data is ready.
+//
+// Unlike [Buffer.Write] this is synchronous, because there is nothing useful to
+// return early with. It therefore drains outstanding work touching this buffer,
+// which makes it the wrong call in a hot loop.
 func (b *Buffer) Read(offset int, into any) error { panic(ErrNotImplemented) }
 
 // Close releases the buffer.

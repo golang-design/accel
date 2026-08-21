@@ -737,3 +737,21 @@ When a comparison does fail, the diagnostic order from
 between competing interpretations first, mathematics last. Equal pixel counts with
 roughly half overlap is the flip fingerprint, and it identifies an origin bug in
 one measurement.
+
+## Amendment: the worked G-buffer is not portable as written
+
+[001](001-device-resources.md) caught that this spec's deferred example uses
+`RGBA32Float` as a colour attachment, and colour-renderable 32-bit float is a
+capability on GLES 3.1 rather than a guarantee (it needs an extension there). So
+the example as written is not guaranteed to run on the GL backend, which is the
+CI oracle for graphics.
+
+The example stands, because it illustrates the handoff and not a portable
+G-buffer layout, but it needs the caveat and the workaround beside it:
+reconstruct world position from depth rather than storing it, which drops the
+widest attachment and is what a production deferred renderer does anyway for
+bandwidth reasons.
+
+The general rule this is an instance of: an attachment format has to be checked
+against `Device.FormatInfo` rather than assumed, and a spec example that assumes
+one is a portability claim it has not earned.

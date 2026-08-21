@@ -277,7 +277,7 @@ The generator knows the signature because `go/types` told it, so it writes the
 unpacking once per kernel.
 
 **Uniform structs are decoded, not cast.** A by-value struct parameter is
-`constant T&` on the GPU under std140 or std430 layout, and Go's struct layout is
+`constant T&` on the GPU under std140 (narrowed from 'std140 or std430' by [001](001-device-resources.md), because GLSL ES 3.1 permits std140 on uniform blocks and not std430) layout, and Go's struct layout is
 not std140: std140 pads a three-float member to sixteen bytes and aligns a nested
 struct to sixteen, and Go does neither. So the generator emits a per-kernel
 decoder that reads the std-layout bytes into the Go struct field by field, and

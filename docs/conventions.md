@@ -140,6 +140,12 @@ is an out-of-range panic during readback rather than a wrong image.
 | RGBA32F | 16 |
 | Depth32F | 4 |
 
+`Depth24PlusStencil8` is deliberately absent from that table: it has no single
+defined bytes-per-pixel, because backends are free to store it as 24-plus-8
+packed or as 32-plus-8 padded. `accel` therefore makes it non-host-copyable.
+Reading one back reports an error naming `Depth32Float` as the format to use
+instead, rather than inventing a stride that is wrong somewhere.
+
 ---
 
 ## Execution and lifetime
