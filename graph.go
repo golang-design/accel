@@ -25,13 +25,26 @@ func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, count WorkgroupCoun
 // DispatchIndirect records a dispatch whose workgroup count is read from a buffer
 // written on the device.
 //
-// This is how anything data-dependent is expressed, and it sits awkwardly with an
-// immutable graph. See specs/003-command-graph.md, which lists it as unresolved.
-func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, count BufferView) NodeID {
+// This is how anything data-dependent is expressed, and a wholly device-decided
+// count would leave an immutable graph with nothing to validate and nothing to
+// size transients against. So the node also records max, a build-time upper bound
+// checked against the device's workgroup count limit. The device supplies the
+// actual count and it is clamped to max: on device in strict mode, and as a
+// documented caller obligation otherwise.
+func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, count BufferView, max WorkgroupCount) NodeID {
 	panic(ErrNotImplemented)
 }
 
-// CopyToBuffer records a host-to-device transfer.
+// CopyToBuffer records a host-to-device transfer, copying src at record time.
+//
+// The copy happens here rather than at submit because a Graph is immutable, and
+// holding the caller's slice would make the bytes a submission writes depend on
+// when the caller last touched them. The graph therefore owns those bytes, its
+// build-time footprint includes them, and every submission rewrites the same
+// values. That makes this the wrong entry point for bulk upload, which wants a
+// staging buffer and [Recorder.CopyBuffer], and for anything varying per
+// submission, which wants an Upload buffer written between submissions. It is
+// here for small constants baked into a graph.
 func (r *Recorder) CopyToBuffer(dst BufferView, src any) NodeID { panic(ErrNotImplemented) }
 
 // CopyBuffer records a device-to-device buffer copy.
@@ -59,6 +72,40 @@ func (r *Recorder) CopyBufferToTexture(dst *Texture, src BufferView) NodeID {
 // without allocating per operation.
 func (r *Recorder) Transient(desc BufferDescriptor) BufferView { panic(ErrNotImplemented) }
 
+// Slot declares a binding point whose resource is supplied before submission
+// rather than at record time.
+//
+// Slots are what the three-kinds-of-variation rule means by a bound resource
+// changing: a swapchain image that does not exist until it is acquired, one
+// sequence's KV cache selected per submission, an adapter swapped between runs.
+// The descriptor carries everything the builder needs in order to validate and to
+// infer hazards without a resource in hand, which is why MinCount and Access are
+// there rather than being discovered at bind.
+func (r *Recorder) Slot(desc SlotDescriptor) Slot { panic(ErrNotImplemented) }
+
+// SlotDescriptor declares a rebindable binding point.
+type SlotDescriptor struct {
+	Name   string // appears in every error about this slot
+	Kind   BindingKind
+	DType  DType // for buffer kinds; a bound view must match exactly
+	Access Access
+
+	// MinCount is the smallest bound range the recorded nodes can be given, in
+	// elements of DType. It is the size check moved from build to bind, because at
+	// build there is no buffer to measure.
+	MinCount int
+
+	// Format constrains a texture slot. The zero value accepts any format the
+	// recorded nodes accept.
+	Format Format
+}
+
+// Slot names a rebindable binding point within one graph.
+//
+// The zero value is not a slot: ids start at one, so a [Binding] that forgot to
+// set Slot is a validation error rather than a silent reference to the first one.
+type Slot int
+
 // Build validates the recorded nodes, plans transient memory, computes barriers,
 // and lowers the result for the target device.
 //
@@ -71,6 +118,12 @@ func (r *Recorder) Transient(desc BufferDescriptor) BufferView { panic(ErrNotImp
 // binding slot, and the source position of the recording call. An error that says
 // only "type mismatch" is a defect.
 func (r *Recorder) Build() (*Graph, error) { panic(ErrNotImplemented) }
+
+// CollectRunStats makes the graph carry back the counters only the device knows:
+// an indirect node's actual count and whether it was clamped. It is off by
+// default because it adds a readback buffer, a transfer, and a barrier to every
+// submission.
+func (r *Recorder) CollectRunStats(on bool) { panic(ErrNotImplemented) }
 
 // NodeID identifies a recorded node, for referring to it in errors.
 type NodeID int
@@ -97,9 +150,47 @@ type NodeID int
 // the transient pool is duplicated. Wait on a [Fence] if you need ordering.
 type Graph struct{ _ noCopy }
 
-// Rebind points a declared binding slot at a different resource. The new resource
-// must match the slot's type, dtype, and access.
+// Bind points one slot at a resource. Rebind does several at once and is the
+// hot-path form.
+//
+// Both validate kind, dtype, access, size, device ownership and liveness, and
+// then check that no two slots have been bound to overlapping ranges unless both
+// are read-only. That last check cannot happen at build, because hazards are
+// inferred against the slot rather than against whatever will occupy it: bind one
+// buffer to two slots the builder treated as independent and the inferred edge set
+// is wrong, which is a missing barrier and therefore a race. A batch is rejected
+// as a batch rather than half applied.
+//
+// Binding while a submission is in flight reports ErrGraphInFlight, for the same
+// reason submitting twice does.
+func (g *Graph) Bind(b Binding) error     { panic(ErrNotImplemented) }
 func (g *Graph) Rebind(b []Binding) error { panic(ErrNotImplemented) }
+
+// Slots reports what a graph expects, so a caller holding a graph they did not
+// record can discover its inputs.
+func (g *Graph) Slots() []SlotDescriptor { panic(ErrNotImplemented) }
+
+// NodeStats reports what the builder decided about one node, and Nodes reports
+// all of them. Both are valid as soon as Build returns and are identical for
+// every submission: these are the plan, not a measurement, so they cost nothing.
+func (g *Graph) NodeStats(id NodeID) NodeStats { panic(ErrNotImplemented) }
+func (g *Graph) Nodes() []NodeStats            { panic(ErrNotImplemented) }
+
+// NodeStats is one node's plan-time facts.
+type NodeStats struct {
+	Node  NodeID
+	Label string
+
+	// Copy is non-nil for copy nodes. Whether a texture copy repacks is decided at
+	// build, not observed at run time, because the backend knows its own pitch
+	// rules before anything executes.
+	Copy *CopyStats
+
+	// BarriersBefore is how many barriers the builder emits immediately before this
+	// node. It is here so a caller can ask why a graph does not overlap, and so the
+	// builder's own tests can assert on the plan rather than on results.
+	BarriersBefore int
+}
 
 // Memory reports what the graph needs to run: its transient pool size and its
 // peak usage.
@@ -140,6 +231,19 @@ func (q *Queue) SubmitAfter(g *Graph, after ...*Fence) *Fence { panic(ErrNotImpl
 // a graph every call, so it is the wrong choice in a hot loop.
 func (q *Queue) Run(record func(*Recorder)) error { panic(ErrNotImplemented) }
 
+// Stats reports cumulative queue counters since device open. They are counters,
+// not a profiler: nothing here is per node and nothing here costs a readback.
+func (q *Queue) Stats() QueueStats { panic(ErrNotImplemented) }
+
+// QueueStats are cumulative since device open.
+type QueueStats struct {
+	Submissions    int64
+	BytesStaged    int64
+	StagingWaits   int64 // times a Buffer.Write blocked waiting for a recycled block
+	ImmediateReads int64
+	Repacks        int64 // immediate-path texture copies that needed a padded pitch
+}
+
 // Fence reports the completion of a submission.
 type Fence struct{ _ noCopy }
 
@@ -151,3 +255,27 @@ func (f *Fence) Done() bool { panic(ErrNotImplemented) }
 
 // C returns a channel closed when the submission completes, for selecting on it.
 func (f *Fence) C() <-chan struct{} { panic(ErrNotImplemented) }
+
+// Stats reports what the device counted during this submission. It is valid only
+// after the fence has signalled, and calling it earlier is an error rather than a
+// stale read.
+//
+// Collection is off unless the graph asked for it with [Recorder.CollectRunStats],
+// because the numbers are written by the device and reading them back costs a
+// transfer, a barrier, and a Readback allocation. A graph that did not ask still
+// clamps an indirect count against its recorded maximum; what it loses is being
+// told that it did.
+func (f *Fence) Stats() (SubmissionStats, error) { panic(ErrNotImplemented) }
+
+// SubmissionStats is what one submission's device-written counters reported.
+type SubmissionStats struct {
+	Indirect []IndirectStats
+}
+
+// IndirectStats is one indirect node's actual count and whether it was clamped.
+type IndirectStats struct {
+	Node    NodeID
+	Actual  [3]uint32
+	Max     [3]uint32
+	Clamped bool
+}

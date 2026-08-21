@@ -84,9 +84,25 @@ func Enumerate() ([]DeviceInfo, error) { panic(ErrNotImplemented) }
 // explicitly.
 func Open(b Backend) (*Device, error) { panic(ErrNotImplemented) }
 
-// OpenBest opens the most capable available device, preferring GPU backends over
-// [BackendCPU]. Unlike [Open] this is an explicit request to choose.
-func OpenBest() (*Device, error) { panic(ErrNotImplemented) }
+// OpenBest opens the best available device under an explicit policy. Unlike
+// [Open] this is a request to choose, and the policy is what it chooses by: it
+// fails rather than descending into something the caller did not sanction.
+func OpenBest(p Policy) (*Device, error) { panic(ErrNotImplemented) }
+
+// Policy is what OpenBest is allowed to select.
+//
+// Two defaults are deliberate. The CPU backend is never selected unless
+// AllowCPU says so: it is a first-class backend and it is not a fast path, and a
+// caller who wanted a GPU and got it should hear about that as an error. Software
+// GPU devices are their own class rather than being lumped in with hardware,
+// because lavapipe and WARP are real devices that may well be slower than the CPU
+// backend, and automatic selection has to be able to see the difference.
+type Policy struct {
+	Prefer        []Backend // tried in order; empty means every compiled-in backend
+	AllowCPU      bool
+	AllowSoftware bool
+	Require       Capability // a device lacking any of these is not a candidate
+}
 
 // Device is an opened accelerator.
 //
@@ -97,13 +113,58 @@ type Device struct{ _ noCopy }
 // Info reports what this device is and what it can do.
 func (d *Device) Info() DeviceInfo { panic(ErrNotImplemented) }
 
-// Queue returns the device's default queue for submitting work.
+// Queue returns the device's default queue, which is always [QueueUniversal].
 func (d *Device) Queue() *Queue { panic(ErrNotImplemented) }
+
+// Queues reports every queue this device exposes, in a stable order whose first
+// entry is what [Device.Queue] returns.
+//
+// Queue topology is reported rather than inferred from the platform, because the
+// backends disagree completely: Vulkan exposes queue families with capability
+// bits, D3D12 has typed command queues, and Metal, GL and the CPU backend have
+// exactly one. Ordering between submissions depends on which queue they went to,
+// so a caller who cannot enumerate them cannot use that rule.
+func (d *Device) Queues() []QueueInfo { panic(ErrNotImplemented) }
+
+// QueueFor returns a queue able to run kind.
+//
+// It never fails and never invents a queue: on a device with one universal queue
+// it returns that queue, and the caller sees which one they got through
+// [Device.Queues]. That is not the silent substitution [Open] refuses, because
+// nothing about the result is weaker than what was asked for, only less parallel.
+func (d *Device) QueueFor(kind QueueKind) *Queue { panic(ErrNotImplemented) }
+
+// QueueKind is what a queue accepts.
+type QueueKind int
+
+const (
+	// QueueUniversal accepts everything: compute, graphics, and transfer.
+	QueueUniversal QueueKind = iota
+	QueueCompute             // compute and transfer, no rasterization
+	QueueTransfer            // transfer only
+)
+
+// QueueInfo describes one queue a device exposes.
+type QueueInfo struct {
+	Kind  QueueKind
+	Index int
+	Label string // the backend's own name for it, for logs
+}
 
 // NewPool allocates a memory pool of the given kind and size, from which buffers
 // are suballocated. See specs/001-device-resources.md for why allocation is
 // pooled rather than per resource.
+//
+// It is [Device.NewPoolWith] with the general-purpose policy. A pool never grows:
+// a pool is one device allocation, no backend can resize one in place, and moving
+// it would invalidate every address already handed out.
 func (d *Device) NewPool(kind MemoryKind, bytes int) (*Pool, error) {
+	panic(ErrNotImplemented)
+}
+
+// NewPoolWith allocates a pool with an explicit policy, which is how a caller
+// asks for a linear pool or reserves one for textures.
+func (d *Device) NewPoolWith(desc PoolDescriptor) (*Pool, error) {
 	panic(ErrNotImplemented)
 }
 

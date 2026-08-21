@@ -94,6 +94,20 @@ type FormatInfo struct {
 // failure.
 func (d *Device) FormatInfo(f Format) FormatInfo { panic(ErrNotImplemented) }
 
+// CopyStats reports what a transfer does.
+//
+// It is a plan-time fact rather than a measurement: a backend knows its own pitch
+// rules before anything executes, so a recorded copy carries this from
+// [Graph.NodeStats] as soon as the graph is built. The immediate transfer path has
+// no node, so its repacks are counted in [QueueStats] instead of returned per
+// call, which keeps an observability concern out of two signatures every caller
+// touches.
+type CopyStats struct {
+	Bytes    int
+	Repacked bool // an intermediate padded-pitch buffer is used
+	RowPitch int  // the pitch the backend uses on the device side
+}
+
 // AlignedRowPitch returns the row pitch a texture-to-buffer copy of the given
 // format and width will use on this device, in bytes.
 //
