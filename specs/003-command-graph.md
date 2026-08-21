@@ -113,8 +113,17 @@ func (g *Graph) Rebind(b []Binding) error
 func (g *Graph) Slots() []SlotDescriptor
 ```
 
-A `Binding` therefore names either a concrete resource or a slot, and a node
-records whichever it was given. Three rules make the rest fall out:
+**Two vocabularies meet here and the specs use one word for both, so it is fixed
+once**: a *binding slot* is an entry in a pipeline's binding layout, declared by
+[002](002-compute-model.md)'s `BindingSlot` and fixed at pipeline creation. A
+*graph slot* is a rebindable input of a graph, declared by `Recorder.Slot` and
+bound per submission. A pipeline's binding slot is where a resource is *used*; a
+graph's slot is where it *comes from*. Checks V21 and V23 are about the former
+(two bindings of one node reaching the same bytes) even though what makes V21
+undecidable at build is the latter.
+
+A `Binding` therefore names either a concrete resource or a graph slot, and a
+node records whichever it was given. Three rules make the rest fall out:
 
 1. **A slot with no resource bound is check V1 at submit**, not at build. The
    graph builds fine with every slot empty, which is what lets a frame graph be
@@ -949,9 +958,9 @@ point at its own structure.
 | V18 | Copy extents and offsets are within both resources | extents, sizes | 001 |
 | V19 | Every resource belongs to the recorder's device and is open | resource label | 001 lifetime |
 | V20 | The planned transient pool fits the device's reported budget | pool size, budget | 001 pools |
-| V21 | (at submit, not build) No two slots are bound to overlapping ranges unless both are read-only | both slots, both resources, the overlap | this spec, below |
+| V21 | (at submit, not build) No two **bindings of one node** whose resources arrive through graph slots cover overlapping ranges, unless both are read-only | both bindings, both resources, the overlap | this spec, below |
 | V22 | (internal assertion) The inferred edge set is acyclic | node ids on the cycle | builder defect only |
-| V23 | No two **statically bound** views at one node overlap unless both are read-only | both slots, both view ranges, the overlap | [001](001-device-resources.md) 6.1, the build-time half of V21 |
+| V23 | No two **statically bound** views at one node overlap unless both are read-only | both bindings, both view ranges, the overlap | [001](001-device-resources.md) 6.1, the build-time half of V21 |
 
 **V21 is the one check that cannot happen at build**, and that is a genuine hole
 in the validate-once story. Hazards are tracked against `resourceID`, and a
@@ -1197,10 +1206,15 @@ numbers are for a 1024 by 1024 f32 activation: 4 MiB per tensor.
 ```go
 r := dev.NewRecorder()
 
-params := r.Slot("params") // rebindable, 256 B uniform
-x      := r.Slot("x")      // rebindable, 4 MiB, caller owned
-kv     := r.Slot("kv")     // rebindable, caller owned KV slab
-y      := r.Slot("y")      // rebindable, 4 MiB, caller owned output
+// Graph slots: the resources arrive before submission, not at record time.
+params := r.Slot(SlotDescriptor{Name: "params", Kind: BindingUniformBuffer,
+	DType: U8, Access: AccessRead, MinCount: 256})
+x := r.Slot(SlotDescriptor{Name: "x", Kind: BindingStorageBuffer,
+	DType: F32, Access: AccessRead, MinCount: 1 << 20})
+kv := r.Slot(SlotDescriptor{Name: "kv", Kind: BindingStorageBuffer,
+	DType: F32, Access: AccessRead, MinCount: kvElems})
+y := r.Slot(SlotDescriptor{Name: "y", Kind: BindingStorageBuffer,
+	DType: F32, Access: AccessWrite, MinCount: 1 << 20})
 
 t0 := r.Transient(f32Buf(1 << 20)) // normed        4 MiB
 t1 := r.Transient(f32Buf(1 << 20)) // q             4 MiB

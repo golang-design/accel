@@ -1136,8 +1136,7 @@ three change sibling specs:
 Queried before use, never discovered by failure:
 
 - max workgroup size per dimension, and max invocations per workgroup
-- max workgroup count per dimension (**missing from `compute.go`**; a large
-  dispatch hits it)
+- max workgroup count per dimension (a large dispatch hits it)
 - shared memory bytes per workgroup
 - subgroup support, subgroup size, and the **set of subgroup operation classes**
 - f16 and bf16 arithmetic support, separately from storage
@@ -1147,13 +1146,15 @@ Queried before use, never discovered by failure:
   produced (6.3)
 - floating-point contraction control, whether the emitter can forbid an FMA
 
-Three of those are refinements of what `compute.go` declares today, and each
-comes from a disagreement this spec found:
+Three of those were refinements of what `compute.go` declared when this spec was
+written. Each came from a disagreement this spec found, and all three are now on
+the surface; they are kept here because the reasoning is what stops them being
+collapsed back into something simpler:
 
-| `compute.go` today | Required | Why |
+| Was | Is | Why |
 | --- | --- | --- |
-| `AtomicFloatAdd bool` | two fields, storage and shared | [006](006-backends.md)'s matrix already has two rows, `cap` for storage and `?` for shared on Metal. One bool cannot express that. |
-| `Subgroups bool` plus `SubgroupSize int` | plus a class set, plus min and max size | Vulkan reports subgroup features as a flag set (basic, vote, arithmetic, ballot, shuffle, relative shuffle, clustered, quad) and a device may have ballot without arithmetic. D3D12 reports `WaveLaneCountMin` and `WaveLaneCountMax`, which can differ. "Subgroups: yes" is not an answer a kernel can act on. |
+| `AtomicFloatAdd bool` | `AtomicFloatAddStorage` and `AtomicFloatAddShared` | [006](006-backends.md)'s matrix has two rows, `cap` for storage and `?` for shared on Metal. One bool cannot express that. |
+| `Subgroups bool` plus `SubgroupSize int` | plus `SubgroupOps`, `MinSubgroupSize` and `MaxSubgroupSize` | Vulkan reports subgroup features as a flag set (basic, vote, arithmetic, ballot, shuffle, relative shuffle, clustered, quad) and a device may have ballot without arithmetic. D3D12 reports `WaveLaneCountMin` and `WaveLaneCountMax`, which can differ. "Subgroups: yes" is not an answer a kernel can act on. |
 | no workgroup count limit | `MaxWorkgroupCount [3]int` | 65535 per axis is a real floor and a real failure |
 
 ### 8.2 How a kernel declares what it needs

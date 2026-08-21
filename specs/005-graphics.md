@@ -445,11 +445,18 @@ it means a frame graph is built once and replayed for the life of the window.
 
 Frame loop:
 
-```
-frame, err := surface.Acquire(timeout)   // texture + acquire fence
-graph.Bind(swapchainSlot, frame.Texture)
-fence := queue.Submit(graph, WaitOn(frame.Acquired))
-surface.Present(frame, After(fence))
+```go
+// Recorded once, when the frame graph is built:
+swap := rec.Slot(accel.SlotDescriptor{
+	Name: "swapchain", Kind: accel.BindingColourAttachment,
+	Access: accel.AccessWrite, Format: surface.Format(),
+})
+
+// Per frame, for the life of the window:
+frame, err := surface.Acquire(timeout) // texture plus an acquire fence
+graph.Bind(accel.Binding{Slot: swap, Texture: frame.Texture})
+fence := queue.SubmitAfter(graph, frame.Acquired)
+surface.Present(frame, fence)
 ```
 
 `Acquire` can block (the swapchain is full, the compositor has not released an

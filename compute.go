@@ -239,14 +239,34 @@ type BindingSlot struct {
 	Name string
 }
 
-// Binding binds one resource to one slot.
+// Binding binds one resource to one entry of a pipeline's binding layout.
 //
-// A binding is what varies between submissions of the same [Graph]: rebinding a
-// slot to a different resource of the same type, dtype, and access is allowed,
-// and anything more than that is a different graph.
+// A binding is what varies between submissions of the same [Graph]: pointing it
+// at a different resource of the same type, dtype, and access is allowed, and
+// anything more than that is a different graph.
+//
+// Exactly one of Buffer, Texture, Sampler and Slot is set, and setting none or
+// several is a validation error naming the binding. Slot is the indirection that
+// makes a graph replayable: naming a [Slot] instead of a resource says the
+// resource arrives before submission rather than at record time, which is how a
+// swapchain image that does not exist yet, or one sequence's cache out of many,
+// reaches a recorded node.
+//
+// Two vocabularies meet in this struct and they are not the same thing. Index is
+// an entry in the *pipeline's* binding layout, declared by [BindingSlot] and
+// fixed when the pipeline is created. Slot is a *graph's* rebindable input,
+// declared by [Recorder.Slot] and bound per submission. A pipeline's binding is
+// where a resource is used; a graph's slot is where it comes from.
 type Binding struct {
-	Index   int
+	// Index is the entry in the pipeline's binding layout this binds to.
+	Index int
+
 	Buffer  BufferView
 	Texture *Texture
 	Sampler *Sampler
+
+	// Slot supplies the resource before submission instead of at record time. Its
+	// zero value is not a slot, so a Binding that set none of the four is rejected
+	// rather than silently referring to the first one.
+	Slot Slot
 }
