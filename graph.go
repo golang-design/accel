@@ -6,8 +6,9 @@ package accel
 
 // Recorder accumulates nodes for a [Graph]. It executes nothing.
 //
-// A Recorder belongs to one goroutine. The [Graph] it builds is immutable and may
-// be submitted from several goroutines at once.
+// A Recorder belongs to one goroutine. The [Graph] it builds is immutable, but
+// immutability does not make it concurrently submittable: see [Graph] for the
+// one-submission-in-flight rule and why its transient pool requires it.
 //
 // Each recorded node declares the resources it reads and writes. Dependency edges
 // are inferred from those declarations rather than from the order calls were
