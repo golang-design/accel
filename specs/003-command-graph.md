@@ -996,6 +996,117 @@ building a graph, so it is documented as inappropriate in a hot loop.
 
 ---
 
+## Statistics
+
+Two sibling specs promise numbers this one has to produce.
+[005](005-graphics.md) says an indirect draw count exceeding its build-time
+maximum "is clamped, and the clamp is reported through the node's statistics".
+[001](001-device-resources.md) §4.2 defines `CopyStats` so a caller can see a
+texture copy's repack cost. Neither named a way to read either back, and a
+promise with no retrieval path is a promise that will be quietly dropped.
+
+**The split is plan-time versus run-time, and it is not cosmetic: one is free and
+one costs a device round trip.**
+
+### Plan-time facts, free, always available
+
+Whether a texture copy repacks, the row pitch the backend chose, a transient's
+pool offset, the inferred edges, and the barrier positions are all decided at
+build. They cost nothing to expose because the builder computed them anyway.
+
+```go
+// NodeStats reports what the builder decided about one node. Valid as soon as
+// Build returns, identical for every submission, and free: these are the plan,
+// not a measurement.
+type NodeStats struct {
+    Node  NodeID
+    Kind  NodeKind
+    Label string
+
+    Copy *CopyStats // non-nil for copy nodes: see 001 section 4.2
+
+    // Barriers emitted immediately before this node, for the assertions in
+    // Testing below and for anyone asking why a graph does not overlap.
+    BarriersBefore int
+}
+
+func (g *Graph) NodeStats(id NodeID) NodeStats
+func (g *Graph) Nodes() []NodeStats
+```
+
+This is also what makes 003's own barrier and planner tests assertable on the
+plan rather than on results, which several of them already assume.
+
+### Run-time counters, opt-in, because they cost a readback
+
+An indirect dispatch's actual workgroup count, an indirect draw's actual draw
+count, and whether either was clamped against its build-time maximum are decided
+by the **device**, during execution. Reporting them means the graph writes them
+into a buffer and the host reads that buffer back, which is a transfer node, a
+barrier, and a `Readback` allocation that a caller who does not want the numbers
+should not pay for.
+
+So they are **off by default** and enabled per graph at record time. When
+enabled, the builder appends the counters to the graph's own readback block and
+`Fence.Stats` reports them once the fence has signalled:
+
+```go
+func (r *Recorder) CollectRunStats(bool) // default false
+
+// SubmissionStats is valid only after the submission's fence has signalled.
+// Calling it before is an error, not a stale read.
+type SubmissionStats struct {
+    Indirect []IndirectStats
+}
+
+type IndirectStats struct {
+    Node    NodeID
+    Actual  [3]uint32 // what the device supplied
+    Max     [3]uint32 // the recorded build-time maximum
+    Clamped bool      // Actual exceeded Max and was reduced
+}
+
+func (f *Fence) Stats() (SubmissionStats, error)
+```
+
+**A graph with `CollectRunStats` off still clamps**, per the `maxCount` rule
+above; what it loses is being told. That is the honest reading of 005's sentence:
+the clamp is reported when the caller asked for reporting, and is silent
+otherwise, which is why the maximum is a documented caller obligation in release
+mode rather than a checked one.
+
+### Queue counters, cumulative
+
+[001](001-device-resources.md) §8.2 says a full staging ring makes `Buffer.Write`
+block and that this "is reported through queue statistics". That record lives
+here, because the queue owns the staging ring:
+
+```go
+// QueueStats are cumulative since device open. They are counters, not a
+// profiler: nothing here is per node and nothing here needs a readback.
+type QueueStats struct {
+    Submissions   int64
+    BytesStaged   int64
+    StagingWaits  int64 // times a Write blocked waiting for a recycled block
+    ImmediateReads int64
+    Repacks       int64 // immediate-path texture copies that repacked (001 4.2)
+}
+
+func (q *Queue) Stats() QueueStats
+```
+
+The immediate transfer path reports here rather than returning a `CopyStats` per
+call, because widening `Buffer.Read` and `Texture.Read` to a second return value
+would put an observability concern in two signatures every caller touches. A
+caller who needs per-copy detail records the copy, which is the path 001 §8.1
+already directs them to for anything that is not setup or debugging.
+
+**What none of this is.** There are no per-node timings and no GPU timestamps.
+[005](005-graphics.md) defers queries deliberately, and a fence guarantees
+nothing about partial progress, so a timing API here would be inventing an
+observable the model does not have. That gap is real and is named in the open
+questions.
+
 ## A worked example
 
 Eight nodes, one genuine diamond, six transients, and aliasing that a
@@ -1260,6 +1371,16 @@ passes on one device and fails on the next.
   Vulkan events, and D3D12 enhanced barriers all exist and none are used. The
   current design drains the pipeline where a range-scoped barrier would not. This
   is the largest known performance gap in the barrier design.
+- **There is no timing observability at all.** The statistics section reports
+  what the plan decided and what the device counted, and nothing about how long
+  anything took. A fence guarantees nothing about partial progress, so per-node
+  timing needs GPU timestamp queries, which [005](005-graphics.md) defers as a
+  profiling concern. The consequence is worth stating plainly: at v0 a caller
+  asking "which node is slow" has no answer from this library, on a library whose
+  reason to exist is throughput. The shape when it arrives is a timestamp pool
+  written at node boundaries, opt-in for the same reason the run-time counters
+  are, and it should not be designed out by the barrier batching, which currently
+  merges the boundaries a timestamp would sit on.
 - **Cross-queue ownership transfer.** Vulkan requires a release plus acquire pair
   when a resource moves between queue families; concurrent sharing mode avoids it
   and is slower on some hardware. Neither chosen. It bites only with two queue

@@ -334,8 +334,11 @@ a property of the graph. The resolution: a multi-draw-indirect node records a
 **build-time maximum draw count** and reads the actual count from a device-written
 buffer, clamped to that maximum. The graph's structure stays bounded and
 plannable, validation still has numbers to check, and the device still decides.
-A count exceeding the maximum is clamped, and the clamp is reported through the
-node's statistics rather than silently truncating.
+A count exceeding the maximum is clamped rather than silently truncating, and the
+clamp is reported through [003](003-command-graph.md)'s run-time statistics.
+Reporting is opt-in there, because reading a device-written count back costs a
+transfer and a `Readback` allocation: a graph that did not ask still clamps, and
+does so silently, which makes the maximum a caller obligation in release mode.
 
 This is a capability, not a guarantee. D3D12 `ExecuteIndirect` and Vulkan
 `vkCmdDrawIndirectCount` provide it directly, Metal has indirect command buffers,

@@ -594,8 +594,11 @@ otherwise silent, which is the wrong kind of silent on a performance path, so it
 is reported:
 
 ```go
-// CopyStats reports what a transfer actually did. A caller who cares about the
-// repack cost in section 4.2 reads Repacked; a caller who does not is unaffected.
+// CopyStats reports what a transfer does. It is a plan-time fact, not a
+// measurement: the backend knows at build whether a copy's pitch needs padding,
+// so a recorded copy carries this from Graph.NodeStats as soon as Build returns
+// (spec 003, Statistics). The immediate path has no node, so its repacks are
+// counted in Queue.Stats instead of returned per call.
 type CopyStats struct {
 	Bytes    int
 	Repacked bool // an intermediate padded-pitch buffer was used
