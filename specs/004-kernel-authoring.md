@@ -99,7 +99,7 @@ real Go meaning:
 
 | Go parameter | Resource | Why this spelling |
 | --- | --- | --- |
-| `t accel.Thread` (first) | ids and intrinsics | Carries the CPU backend's rendezvous state. `GlobalID`, `LocalID`, and `GroupID` return `uint32`. |
+| `t accel.Thread` (first) | ids and intrinsics | Carries the CPU backend's rendezvous state. `GlobalID`, `LocalID`, and `GroupID` return `accel.ID3`; `GlobalIndex`, `LocalIndex`, and `GroupIndex` return `uint32`. |
 | `[]T` | storage buffer | A slice is the Go type that already means "sized region I index into". |
 | `T` (struct, by value) | uniform | Immutable per dispatch, which is what by-value means in Go. |
 | `*[N]T` | workgroup shared memory | Pointer to a **fixed-size array**: `go/types` reads `N` off the type, so the extent is static without inventing const generics. Pointer, so all invocations in the group share one. |
@@ -108,7 +108,15 @@ real Go meaning:
 `accel.BF16`. Pointer-to-array is the only pointer the subset admits, and only
 as a parameter.
 
-The ids being `uint32` is load-bearing rather than incidental. It is what makes
+The **ids are three-dimensional** (`accel.ID3`, with `.X`, `.Y`, `.Z` of type
+`uint32`) with linear forms alongside. An earlier draft made them scalar
+`uint32`, and writing the tiled GEMM in [002](002-compute-model.md) proved that
+wrong: a 2D shared-memory tile cannot be addressed from a scalar id without index
+math the compiler then cannot prove uniform. `workgroup=` correspondingly takes
+up to three extents (`workgroup=16,8`), with `workgroup=256` still meaning
+`256,1,1`.
+
+The id components being `uint32` is load-bearing rather than incidental. It is what makes
 `l < s` and `tile[l+s]` in the example above typecheck without a conversion, and
 it is where the GLSL integer-literal divergence in
 [`conventions.md`](../docs/conventions.md) is settled: `go/types` reports the
@@ -183,10 +191,14 @@ primitive and is compare-and-swap over `math.Float32bits`.
 
 **Subgroups** are methods on `accel.Thread` over a contiguous lane range within
 the workgroup, using the same rendezvous machinery as `Barrier`. The CPU
-backend reports a **configurable** subgroup size, defaulting to 32. Size 1 was
-rejected: it makes every cross-lane operation the identity and hides exactly the
-bugs subgroup tests exist to find. Configurable, because a kernel that silently
-assumes 32 must fail when the harness runs it at 4 and at 64.
+backend reports a **configurable** subgroup size, defaulting to 4, per
+[006](006-backends.md), which owns the CPU backend. Size 1 was rejected: it makes
+every cross-lane operation the identity and hides exactly the bugs subgroup tests
+exist to find. The default is 4 rather than 32 because 4 is small enough that a
+normal workgroup spans several subgroups, which exercises cross-subgroup errors
+and tail handling that a size equal to the workgroup would hide. Configurable,
+because a kernel that silently assumes a size must fail when the harness runs it
+at 1, 4, 32, and 64.
 
 **Non-uniform barrier arrival is detected, not timed out**, because a timeout is
 flaky and this is an oracle. The rendezvous holds the number of invocations
@@ -480,3 +492,35 @@ Plus:
   CI, so the Go function and the shader text can never be different programs.
 - **The tiled GEMM from [002](002-compute-model.md)** is written in this
   language, or this spec has failed alongside that one.
+
+## Amendments from writing the GEMM
+
+[002](002-compute-model.md) wrote a tiled GEMM against this subset, which is the
+only real test a kernel language gets before it has users. Four changes came out
+of it, recorded here because each one narrows or widens the subset:
+
+1. **Three-dimensional ids and multi-extent `workgroup=`.** Covered above. The
+   scalar form could not address a 2D tile.
+
+2. **Bare `int32(f)` and friends leave the subset.** Go's float to integer
+   conversion is *implementation-defined* when the value is out of range, which
+   collides directly with [006](006-backends.md)'s requirement that the CPU
+   backend produce bit-identical results on arm64 and amd64. The subset provides
+   saturating `accel.ToI32`, `ToU32`, `ToI8`, `ToU8` instead, and rejects the bare
+   conversion with an error naming the reason. This is a case where valid Go is
+   deliberately not valid kernel Go.
+
+3. **A uniform buffer binding is load-bearing, not a convenience.** The GEMM's
+   `K` has to come from a uniform, because if it comes from a storage buffer the
+   k-loop's trip count is not provably uniform and this spec's own divergence rule
+   rejects the loop that contains the barrier. Uniform bindings are therefore part
+   of the minimum viable subset rather than an optimization.
+
+4. **Shared-memory atomics need a slice expression.** `tile[:]` is admitted, but
+   only as a direct argument to an atomic intrinsic, which keeps the general
+   slicing rules out of the subset while allowing the one construct that needs it.
+
+The "helpers take values, never storage" rule held under pressure: it forced the
+GEMM's guarded tile loads to be written inline in the entry point. That is a
+visible cost in the kernel and it is the right trade, but it is a cost, not a
+free constraint.

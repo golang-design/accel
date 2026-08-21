@@ -326,6 +326,9 @@ than an unknown: it gets built on.
 | f16 storage | yes | yes | yes | emul | emul | emul |
 | f16 arithmetic | yes | yes | cap | gated | no | cap |
 | bf16 storage | yes | emul | emul | emul | emul | emul |
+| Denormals preserved f32 | yes | ? | ? | ? | ? | ? |
+| Denormals preserved f16 | yes | ? | ? | ? | ? | ? |
+| Inf/NaN produced | yes | ? | ? | ? | ? | ? |
 | bf16 arithmetic | yes | ? | cap | ? | no | no |
 | i8/u8 storage | yes | yes | yes | emul | emul | emul |
 | i8 packed dot product | yes | ? | cap | gated | no | no |
@@ -910,3 +913,21 @@ Consolidated, since sections 5 and 7 carry the detail:
 - `ACCEL_BACKEND` cannot change the result of an explicit open.
 - The module contains no `import "C"`, verified by a CI grep over all files
   including tests, and every `GOOS` builds with `CGO_ENABLED=0`.
+
+## Amendment: numeric behaviour rows
+
+[002](002-compute-model.md) added denormal preservation (f32 and f16) and
+Inf/NaN production to the matrix. All three vary by backend, all three change
+results, and none of them can be discovered except by asking, so they are
+capabilities rather than assumptions.
+
+Every GPU cell starts `?`. That is deliberate and follows this spec's own rule
+about confidently wrong numbers: flush-to-zero behaviour is exactly the kind of
+detail that is easy to state from memory and wrong on the device in front of you.
+The CPU backend is `yes` for all three because Go's float32 arithmetic preserves
+denormals and produces infinities and NaNs, which is also what makes it the
+strictest oracle of the set: a kernel that relies on a denormal surviving will
+pass there and may not elsewhere.
+
+Filling these in is a measurement task, one small kernel per cell, and it should
+happen before any kernel is written that depends on the answer.
