@@ -3,9 +3,13 @@
 `accel` is a backend-selectable, cgo-free foundation for running compute and
 graphics work on a GPU from Go.
 
-This document holds the decisions everything else is built on. It is normative:
-if a spec in `specs/` contradicts it, the spec is wrong. Bounded designs live in
-`specs/`; empirical backend behaviour lives in [`conventions.md`](conventions.md).
+This is an internal design record, not user documentation: it holds the decisions
+everything else is built on, and it is normative. If another spec contradicts it,
+that spec is wrong. Bounded designs live alongside it in `specs/`; empirical
+backend behaviour lives in [`conventions.md`](../docs/conventions.md).
+
+Readers looking for an explanation rather than a decision record want
+[`docs/architecture.md`](../docs/architecture.md).
 
 ## Two layers, not one
 
