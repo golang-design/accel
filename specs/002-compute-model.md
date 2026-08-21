@@ -153,8 +153,12 @@ capability and the device.
   GEMM throughput is on modern hardware. Exposing them portably is hard and the
   abstraction is not obvious. Deferred, but the workgroup and subgroup design
   must not foreclose it.
-- **Whether f16 arithmetic is worth a separate capability from f16 storage.**
-  Several backends store but do not compute. Probably yes, unresolved.
+- ~~Whether f16 arithmetic is worth a separate capability from f16 storage.~~
+  **Resolved in [006](006-backends.md): yes, they are two capabilities.** Storage
+  is universal, because bit packing reaches it on every backend
+  (`packHalf2x16`, `f32tof16`, `pack2x16float`), while arithmetic is not
+  emulable. The practical consequence is worth stating: a quantized model *runs*
+  everywhere and is *fast* only where f16 arithmetic is present.
 - **Indirect dispatch**, a device-written workgroup count. Needed for anything
   data-dependent and interacts with the graph model's immutability. See
   [003](003-command-graph.md).

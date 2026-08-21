@@ -43,7 +43,15 @@ Three things, and nothing else:
 2. **Bound resources.** A binding slot declared at record time can be pointed at
    a different resource before submission, provided the new resource matches the
    slot's declared type, dtype, and access.
-3. **Dispatch counts**, where a node was recorded with a dynamic count.
+3. **Dispatch and draw counts**, where a node was recorded with a dynamic count.
+
+**A per-step *address* is not on this list, and that is a real gap.** A KV cache
+write offset, for instance, is none of the three: it is neither the contents of a
+buffer by nature, nor a different resource, nor a count. The tensor layer routes
+it through buffer contents, passing the offset as a single `u32` a kernel reads,
+rather than rebinding a view, because rebinding costs a binding update per layer
+per step. That works, but the list above reads as exhaustive and this case has
+already been hit twice, so it is recorded here rather than rediscovered.
 
 Anything else, a different pipeline, a different node order, a different set of
 nodes, is a different graph. Building a graph is cheap enough to build several,
@@ -64,12 +72,22 @@ order, is what lets the builder compute barriers correctly and reorder or
 overlap independent work. It also means a missing dependency is a validation
 error rather than a race.
 
-### Recording is not thread-safe; graphs are
+### Recording is not thread-safe, and a graph has one submission in flight
 
-One recorder belongs to one goroutine. A built `Graph` is immutable and may be
-submitted from several goroutines at once. Submissions of the same graph are not
-implicitly ordered with respect to each other; a caller that needs ordering
-waits on the fence.
+One recorder belongs to one goroutine.
+
+A built `Graph` is immutable, but **it may have only one submission in flight at
+a time**. This is narrower than immutability suggests, and the reason is memory
+planning: a graph's transients are aliased into a single pool, so two overlapping
+submissions would write each other's intermediates. Rebindable slots have the
+same problem from the other direction, since a rebind between two in-flight
+submissions is a race on which one sees it.
+
+Both the graphics and tensor layers hit this independently, so the rule is set
+here rather than worked around in each. To run the same work concurrently, build
+a graph per concurrent user: they share pipelines and caller-owned buffers, and
+only the transient pool is duplicated. A caller that needs ordering rather than
+concurrency waits on the fence.
 
 ## Validation happens at build time
 
@@ -128,10 +146,16 @@ is documented as inappropriate in a hot loop.
 - **Cross-graph aliasing.** Two graphs alive at once each plan their own pool.
   Whether they can share is unresolved and matters for memory-constrained
   inference.
-- **Graph lowering per backend.** Which backends lower to a native replayable
-  object (Vulkan secondary command buffers, D3D12 bundles, Metal indirect
-  command buffers) and which replay a recorded list in software. Belongs in the
-  backend spec, but the answer constrains how much replay actually saves.
+- ~~Graph lowering per backend, and how much replay actually saves.~~
+  **Resolved in [006](006-backends.md).** Replay saves three separable things,
+  and only one of them, encode-once, needs a native replayable object, which is
+  two backends of six. Plan-once, validating, memory planning, and barrier
+  computation, is most of the value and every backend gets it, including those
+  that replay a recorded list in software. So the model is justified even where
+  lowering is not native. Two corrections to the framing above came out of it:
+  Vulkan's replayable object is a reusable *primary* command buffer rather than a
+  secondary, and a D3D12 bundle cannot contain resource barriers, so any graph
+  with a dependency cannot be one bundle.
 
 ## Testing
 
