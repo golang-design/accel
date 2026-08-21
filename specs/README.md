@@ -29,6 +29,10 @@ design, that the unit of submission is a recordable and replayable command graph
 rather than a one-shot encoder, is the choice the rest of layer 1 is shaped
 around, and the other specs are hard to evaluate without it.
 
+If you are here to build rather than to review, read
+[009](009-sequencing.md) third. It is where the order of work lives, and it is
+not the order these files are numbered in.
+
 ## Decisions
 
 | Spec | Status | Covers |
@@ -69,6 +73,8 @@ the order things can actually be demonstrated in is different.
   once assigned; a retired spec keeps its number.
 - **Frontmatter** carries `title`, `status`, `layer`, and `depends_on`.
 - **Status** is one of drafted, in progress, implemented, or superseded.
+  *Frozen* qualifies drafted: the decisions are settled and normative, and the
+  code is deliberately not scheduled.
 - Every spec ends with **open questions** and a **testing strategy**. A spec with
   no open questions is usually a spec that has not been thought about hard
   enough.
