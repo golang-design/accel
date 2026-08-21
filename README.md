@@ -101,8 +101,16 @@ bindings are the better choice.
 | Tensor layer spec | Drafted |
 | Device layer API surface | Compiles, unimplemented |
 | CPU backend | Not started |
-| Metal, Vulkan, D3D12, OpenGL backends | Not started |
+| Metal backend | Not started |
+| Kernel compiler | Not started |
 | Tensor layer | Not started |
+| Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
+| Graphics | Specified and frozen, not built at v0 |
+
+**v0 is compute only, on the CPU backend and Metal.** The other backends and the
+graphics half are designed and normative so their shape cannot break callers
+later, and neither is scheduled. What gets built in what order, and what counts as
+done for each step, is [`specs/009-sequencing.md`](specs/009-sequencing.md).
 
 ## Contributing
 
