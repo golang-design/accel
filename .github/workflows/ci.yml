@@ -1,0 +1,82 @@
+name: ci
+
+# The API surface is design-stage and compiles to nothing, so this guards exactly
+# two things: that it keeps compiling, and that it stays cgo-free. Both are cheap
+# and both rot silently without a check.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and vet
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # CGO_ENABLED=0 is the point, not an optimization: design.md decision 2 makes
+    # cgo-free a hard requirement, so the build that must pass is the one without it.
+    - name: Build
+      env:
+        CGO_ENABLED: '0'
+      run: go build ./...
+
+    - name: Vet
+      env:
+        CGO_ENABLED: '0'
+      run: go vet ./...
+
+    - name: Test
+      env:
+        CGO_ENABLED: '0'
+      run: go test ./...
+
+  cgo-free:
+    name: no cgo anywhere
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    # Greps rather than relying on the build: a file can import "C" behind a build
+    # tag that this platform does not select, and still be a violation.
+    - name: Reject import "C"
+      run: |
+        if grep -rn --include='*.go' '^import "C"\|^\s*"C"$' . ; then
+          echo "::error::found cgo usage; design.md decision 2 makes cgo-free a hard requirement"
+          exit 1
+        fi
+        echo "no cgo found"
+
+  gofmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+    - name: Check formatting
+      run: |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "::error::these files are not gofmt'd:"
+          echo "$unformatted"
+          exit 1
+        fi
+        echo "all files formatted"
