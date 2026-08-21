@@ -39,8 +39,10 @@ not go in.
 
 ### The CPU backend is the oracle
 
-Anything a GPU backend does, the CPU backend does too, and identically. A GPU
-path with no CPU equivalent has no way to be verified, so it does not merge.
+Anything a GPU backend does, the CPU backend does too. Exact domains compare
+bits; other floating-point domains compare against a higher-precision reference
+under the derived bounds in `specs/008-numerics.md`. A GPU path with no CPU
+equivalent has no way to be verified, so it does not merge.
 
 ### Capabilities are explicit
 

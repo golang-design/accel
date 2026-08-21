@@ -39,12 +39,16 @@ everything else.
         built at v0     designed, not yet built
 ```
 
-Two of those five are what v0 builds. The others are designed in
-[`../specs/006-backends.md`](../specs/006-backends.md) so that adding one stays a
-device-layer job, and none of them is on the path to a first release. Which is
+Two of those five synchronous backends are what v0 builds. The others are
+designed in [`../specs/006-backends.md`](../specs/006-backends.md) so that adding
+one stays a device-layer job, and none is on the path to a first release. This is
 also why the CPU backend below matters more than it looks: at v0 it is not one
 oracle among several, it is the only thing standing between a kernel and a
 portability bug that no available device can produce.
+
+WebGPU is a sixth, later backend shape. Browser promises cannot be waited on by
+the synchronous surface without deadlocking the event loop, so it is deferred
+with an explicit asynchronous API rather than squeezed into this diagram.
 
 The **device layer** is the foundation. It deals in buffers, textures,
 workgroups, and barriers. If you are writing a renderer or a simulation, this is
@@ -106,11 +110,10 @@ buffers, D3D12 has bundles, Metal has indirect command buffers: the hardware
 APIs already want you to record and replay.
 
 Worth being plain about the state of it, though: **graphics is designed and not
-built.** [`../specs/005-graphics.md`](../specs/005-graphics.md) is normative, so
-render pipelines, passes, draws, and present have their shape settled, and v0
-implements none of it. The shape is settled early because attachment formats,
-blend, and stencil are compile-time pipeline inputs on every backend, so adding
-them later breaks every caller who wrote a pipeline descriptor.
+built.** [`../specs/005-graphics.md`](../specs/005-graphics.md) is the drafted
+parent design. It records the constraints already known and names four child
+specs still required before implementation: the stage ABI, render API,
+surfaces/present, and CPU reference rasterizer. v0 implements none of it.
 
 ### What it costs
 
@@ -145,12 +148,14 @@ that early.
 You do not write MSL, or GLSL, or HLSL. You write a restricted subset of Go, and
 it compiles to whichever of those the target device speaks.
 
-The subtle part is that the *same source* also runs as ordinary Go on the CPU
-backend. When a GPU result disagrees with the CPU result, one of them is wrong,
-and you have a reproducible case rather than a mystery.
+The subtle part is that the same authored source becomes both targets through one
+typed IR. The CPU backend runs generated Go instrumented with explicit rounding,
+shared-memory initialization tracking, and barrier checks; the GPU runs emitted
+shader code. When their results disagree, one lowering is wrong, and you have a
+reproducible case rather than a mystery.
 
 It is worth being precise about what that catches, because it is easy to
-overclaim. Sharing the source proves the *lowering* is right: the compiler, the
+overclaim. Sharing the source and typed IR proves the *lowerings agree*: the compiler, the
 bindings, the dispatch, the backend's conventions. It says nothing about whether
 the kernel computes the right thing, since a wrong formula is wrong identically
 everywhere and every parity check still passes. Checking the mathematics needs a

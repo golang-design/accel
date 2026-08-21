@@ -28,7 +28,7 @@ One Go API for running work on a GPU, over whichever backend the machine
 actually has, with no cgo anywhere.
 
 ```go
-dev, err := accel.Open(accel.BackendMetal)
+dev, err := accel.OpenBest(accel.Policy{Prefer: []accel.Backend{accel.BackendMetal}})
 if err != nil {
     log.Fatal(err)
 }
@@ -51,9 +51,9 @@ graphs, for renderers and simulations. The **tensor layer** gives you dtypes,
 shapes, operators, and a computation graph, for inference, and never asks you to
 think about a bind group.
 
-Kernels are written in a subset of Go. The same source runs as ordinary Go on the
-CPU backend and compiles to the GPU's shading language: MSL at v0, with GLSL,
-SPIR-V, and HLSL designed and following their backends.
+Kernels are written once in a subset of Go. One typed IR produces an instrumented
+Go runner for the CPU backend and the GPU's shading language: MSL at v0, with
+GLSL, SPIR-V, and HLSL designed and following their backends.
 
 ## Why you might want it
 
@@ -80,9 +80,9 @@ We would rather you knew this from the README than found out in a month.
   throughput for a long time, possibly ever.
 - **It is not a WebGPU implementation.** The submission model is deliberately
   different and the API does not aim to match `wgpu`.
-- **Graphics is designed, not built.** The render half has a settled, normative
-  spec and no implementation at v0. If you need rasterization today, this is not
-  it yet.
+- **Graphics is designed, not built.** Its parent design identifies the child
+  specs still needed for the stage ABI, render API, surfaces, and CPU rasterizer.
+  If you need rasterization today, this is not it yet.
 
 The bet is that a pure-Go stack which cross-compiles and tests without a GPU is
 worth more to some people than peak throughput. If that is not you, existing
@@ -101,16 +101,16 @@ bindings are the better choice.
 
 | Component | State |
 | --- | --- |
-| Architecture and decisions | Drafted |
+| Architecture and decisions | Decision record locked; bounded specs drafted |
 | Device layer specs | Drafted |
-| Tensor layer spec | Drafted |
+| Tensor layer and kernel-corpus specs | Drafted |
 | Device layer API surface | Compiles, unimplemented |
 | CPU backend | Not started |
 | Metal backend | Not started |
 | Kernel compiler | Not started |
 | Tensor layer | Not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
-| Graphics | Specified and frozen, not built at v0 |
+| Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 **v0 is compute only, on the CPU backend and Metal.** The other backends and the
 graphics half are designed and normative so their shape cannot break callers
