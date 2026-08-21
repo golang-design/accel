@@ -150,6 +150,48 @@ is a division by zero or a silent alignment of 1. **A backend that cannot query 
 limit reports the portable floor, never zero**, and a zero-valued limit on an
 opened device is a test failure (section 11.2).
 
+### 1.2 Concurrency: what is safe to call from several goroutines
+
+Scattered rules existed before this section: a recorder belongs to one goroutine
+([003](003-command-graph.md)), a graph has one submission in flight, the GL
+backend owns a `runtime.LockOSThread` context goroutine
+([006](006-backends.md)), and a `CAMetalLayer` must be created on the main thread
+([005](005-graphics.md)). What was missing is the ordinary case, and it is the
+one that decides the locking strategy inside every backend, so it is stated once
+here rather than inferred per type.
+
+| Type | Contract |
+| --- | --- |
+| `Device` | **Safe.** Creating pools, buffers, textures, pipelines, recorders and queues may all happen concurrently. |
+| `Pool` | **Safe.** `Alloc`, `Stats` and `Close` are internally synchronised. §5.2's allocator is O(1) in both directions, so one lock per pool is not a contention problem; a caller who measures one has too few pools, and §5.3 already wants pools split by lifetime class. |
+| `Buffer`, `Texture`, `Sampler` | **Safe** for `View`, `Close`, and the accessors. `Write` and `Read` are safe to call concurrently on *different* ranges; concurrent writes to one range are a caller race with the same meaning as racing on a slice, and accel does not detect it. |
+| `Queue` | **Safe.** `Submit`, `SubmitAfter`, `Flush` and `Stats` may be called from any goroutine. |
+| `Recorder` | **Not safe.** One recorder, one goroutine. |
+| `Graph` | `Memory`, `Slots`, `NodeStats` and `Nodes` are **safe**: a built graph is immutable. `Bind`, `Rebind` and `Submit` are **not** safe against each other, and the one-in-flight rule is what a caller synchronises with. |
+
+Three consequences are not obvious from the table:
+
+**Concurrent submissions to one queue have no defined submission order.**
+[003](003-command-graph.md) guarantees that two submissions to one queue are
+fully ordered, and that guarantee is about the order they were *submitted in*.
+Two goroutines calling `Submit` concurrently have no agreed order between them,
+so they get *some* total order and not a chosen one. A caller who needs a
+specific order submits from one goroutine, or uses `SubmitAfter`.
+
+**`Buffer.Write`'s batch is per queue, and the flush rule is about program
+order.** §8.2 has pending writes flushed as the next submission's prologue. The
+batch therefore belongs to a queue rather than to the device, and the promise is
+exactly: a `Write` that returned before a `Submit` was called is in that
+submission. A `Write` racing a `Submit` from another goroutine may land in that
+submission or the next, and no ordering was requested, so none is given.
+
+**Thread affinity is the backend's problem, with one exception.** A backend
+needing a particular OS thread owns a goroutine locked to it and marshals, so
+nothing in this table changes per backend. The exception is surface creation on
+macOS, where a `CAMetalLayer` must be created and resized on the main thread:
+that is a caller obligation because accel cannot take over the caller's main
+thread, and [005](005-graphics.md) states it at the call that needs it.
+
 ---
 
 ## 2. Memory is allocated from pools, not per resource
@@ -1221,8 +1263,8 @@ slice the moment `Write` returns. This matches
 For that to be safe it needs a mechanism, not a hope:
 
 > **Pending writes form a batch that the next submission flushes as its
-> prologue.** `Write` appends a staged copy to the device's pending transfer
-> batch. `Queue.Submit` and `Queue.SubmitAfter` emit the pending batch ahead of
+> prologue.** `Write` appends a staged copy to the queue's pending transfer batch
+> (per queue, not per device: see §1.2). `Queue.Submit` and `Queue.SubmitAfter` emit the pending batch ahead of
 > the graph's own work on the same queue, so every `Write` issued before a
 > `Submit` is visible to that submission, and `Fence.Wait` on that submission
 > also proves the writes landed.
@@ -1626,6 +1668,14 @@ descriptor and why its doc comment already says it is worth setting.
 
 - Usage validation rejects a buffer used in a way it did not declare, and the
   error names the node, the slot and the recording call site.
+- **The concurrency contract in §1.2 is exercised under `-race`**: many goroutines
+  allocating from one pool, writing disjoint ranges of one buffer, and submitting
+  distinct graphs to one queue, all concurrently, with no reported race and no
+  lost allocation. This is a test that only fails when it matters, which is why it
+  runs in the ordinary suite rather than as a stress target.
+- A `Write` that returned before a `Submit` is visible to that submission when
+  both happen on one goroutine; the racing case asserts only that the write lands
+  in *some* submission and is never lost.
 - Requesting `MemoryShared` on a device reporting it absent errors naming the
   kind and the device, and never silently returns an `Upload` pool.
 - Opening an unavailable backend errors naming it and never returns a different
