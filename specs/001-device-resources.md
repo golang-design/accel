@@ -1204,6 +1204,44 @@ buffer's memory is reallocated to something else. The closed flag is monotonic
 and a `Buffer` object is never reused for a different allocation, so a stale view
 stays an error forever rather than aliasing whatever landed at that address.
 
+### 7.4 Device loss is terminal
+
+[003](003-command-graph.md) delivers `ErrDeviceLost` on every outstanding fence
+and says nothing about what the device is afterwards. It is this:
+
+**A lost device stays lost.** There is no reset, no recovery, and no partial
+survival. Every subsequent call on the `Device` and on every resource descending
+from it returns `ErrDeviceLost`: allocation, `Write`, `Read`, pipeline creation,
+graph build, and submit. Every outstanding fence is signalled with that error, so
+nothing waits forever.
+
+The reason is that nothing survives at the backend. A `VK_ERROR_DEVICE_LOST`
+invalidates the logical device and every object created from it; D3D12 device
+removal is the same; Metal's equivalents (GPU restart, an eGPU unplugged) take
+the `MTLDevice` with them. There is no state to salvage, so an API that offered
+recovery would be offering to rebuild everything on the caller's behalf, silently,
+at a moment the caller has not been told about.
+
+**`Close` still works and is still required.** It releases host-side state, the
+retain sets, the staging rings, and the Go objects. §7.2's in-flight rule does not
+apply, because there is no in-flight work any more: every fence has already been
+signalled with the error, so every retain has already been released.
+
+**Recovery is the caller's, and it is a full rebuild.** `Enumerate` and `Open`
+work afterwards and may well return a working device, which is what a caller who
+wants to survive a driver restart does. What they get is a new `Device` with
+nothing carried over: pools, buffers, pipelines and graphs are all recreated,
+because §5.3 has already established that device addresses are baked into
+descriptors and recorded commands and cannot be moved, let alone moved across
+devices.
+
+**Honest gap: this path is close to untestable at v0.** The CPU backend cannot
+lose a device and Metal rarely does. So the CPU backend gets a fault-injection
+mode that marks the device lost at a chosen submission, which is the same
+reasoning as every other oracle behaviour in [006](006-backends.md): a rule no
+device enforces on a laptop is a rule discovered in production. Without it, the
+error paths above are code nobody runs.
+
 ---
 
 ## 8. Transfers
@@ -1647,6 +1685,10 @@ descriptor and why its doc comment already says it is worth setting.
 
 ### 11.6 Lifetime
 
+- **Device loss is exercised through the CPU backend's fault injection**: a
+  device marked lost mid-submission signals every outstanding fence with
+  `ErrDeviceLost`, fails every subsequent call on every descendant resource,
+  still closes cleanly, and a fresh `Open` afterwards yields a working device.
 - Closing a resource with work in flight does not crash and is reported: the
   submission completes with correct results, the error names the in-flight count,
   and the memory returns to the pool after the fence, verified through
