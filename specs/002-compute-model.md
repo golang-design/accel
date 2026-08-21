@@ -1067,20 +1067,32 @@ Dispatch: `WorkgroupCount{X: (N + 15) / 16, Y: (M + 15) / 16, Z: 1}`.
 shared memory before every pass of the inner loop:
 
 ```
-            B  [K, N]                      one k-tile of the loop:
-         +------------------+
-         |   |kb |          |              1. every invocation loads 2 elements
-   k0 -> |   |###|          |                 of A and 2 of B into shared
-         |   |###|          |              2. BarrierShared
-         +------------------+              3. 16 multiply-adds per accumulator,
-                 |                            reading only shared memory
-   A  [M, K]     v          C  [M, N]      4. BarrierShared, so nobody
- +---------+  +------------------+            overwrites a tile still being read
- | ...|###|  |   | 16x16 block   |
- | ...|###|  |   | this workgroup|          tileA, tileB: 256 f32 each = 2 KiB,
- +---------+  +------------------+          against a 16 KiB portable floor
-       ^k0            ^ owned
+                  B  [K, N]                    one k-tile of the loop:
+                  rows are k, columns are n
+                +---------------------+        1. every invocation loads 2
+                |        |#####|      |           elements of A and 2 of B
+   rows k0..k0+15 -----> |#####|      |           into shared memory
+                |        |#####|      |        2. BarrierShared
+                +---------------------+        3. 16 multiply-adds per
+                          |                       accumulator, reading only
+                          |  cols owned by         shared memory
+                          v  this workgroup    4. BarrierShared, so nobody
+   A  [M, K]                 C  [M, N]            overwrites a tile still
+   rows are m, cols are k                         being read
+ +--------------+          +---------------------+
+ |      |#####| |          |        |16x16|      |   tileA, tileB: 256 f32
+ |      |#####| |  ----->  |        |block|      |   each = 2 KiB, against a
+ |      |#####| |          |        |     |      |   16 KiB portable floor
+ +--------------+          +---------------------+
+         ^ cols k0..k0+15,          ^ owned by this workgroup
+           rows are this
+           workgroup's 16
 ```
+
+The two index expressions in the kernel read straight off that picture:
+`ka := k0 + lx` walks A's **columns** within the tile, and `kb0 := k0 + ly` walks
+B's **rows** within it. Both are the k axis; they differ because k is A's second
+index and B's first.
 
 **Why it is tiled at all**, as a ratio. Per k-tile a workgroup performs
 $16 \cdot 16 \cdot 16 \cdot 2 = 8192$ flops. Tiled, it loads $256 + 256 = 512$

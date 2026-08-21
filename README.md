@@ -52,14 +52,16 @@ shapes, operators, and a computation graph, for inference, and never asks you to
 think about a bind group.
 
 Kernels are written in a subset of Go. The same source runs as ordinary Go on the
-CPU backend and compiles to MSL, GLSL, SPIR-V, or HLSL on the GPU.
+CPU backend and compiles to the GPU's shading language: MSL at v0, with GLSL,
+SPIR-V, and HLSL designed and following their backends.
 
 ## Why you might want it
 
 - **`CGO_ENABLED=0` and still on the GPU.** Cross-compile freely. No toolchain on
   the build machine. Fast builds.
-- **Write once, run on Metal, Vulkan, D3D12, OpenGL, or the CPU.** Backends are
-  selected explicitly, never silently swapped underneath you.
+- **Write once, run on the CPU or the GPU.** Backends are selected explicitly and
+  never silently swapped underneath you. v0 is the CPU backend and Metal; Vulkan,
+  D3D12, OpenGL, and WebGPU are designed in the specs and not yet built.
 - **Test without a GPU.** The CPU backend is a first-class implementation and the
   correctness oracle, so `go test ./...` works on any machine.
 - **Kernels in Go**, type-checked by the Go compiler, not strings handed to a
@@ -78,6 +80,9 @@ We would rather you knew this from the README than found out in a month.
   throughput for a long time, possibly ever.
 - **It is not a WebGPU implementation.** The submission model is deliberately
   different and the API does not aim to match `wgpu`.
+- **Graphics is designed, not built.** The render half has a settled, normative
+  spec and no implementation at v0. If you need rasterization today, this is not
+  it yet.
 
 The bet is that a pure-Go stack which cross-compiles and tests without a GPU is
 worth more to some people than peak throughput. If that is not you, existing

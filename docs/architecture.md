@@ -35,7 +35,16 @@ everything else.
    +------+------+------+------+------+--------+
           |      |      |      |      |
         CPU   Metal  Vulkan  D3D12   GL
+        ^^^^^^^^^^^  \____________________/
+        built at v0     designed, not yet built
 ```
+
+Two of those five are what v0 builds. The others are designed in
+[`../specs/006-backends.md`](../specs/006-backends.md) so that adding one stays a
+device-layer job, and none of them is on the path to a first release. Which is
+also why the CPU backend below matters more than it looks: at v0 it is not one
+oracle among several, it is the only thing standing between a kernel and a
+portability bug that no available device can produce.
 
 The **device layer** is the foundation. It deals in buffers, textures,
 workgroups, and barriers. If you are writing a renderer or a simulation, this is
@@ -95,6 +104,13 @@ No, and that surprised us too. A render pass is already recorded into a command
 buffer on every backend, so nothing is lost. Vulkan has secondary command
 buffers, D3D12 has bundles, Metal has indirect command buffers: the hardware
 APIs already want you to record and replay.
+
+Worth being plain about the state of it, though: **graphics is designed and not
+built.** [`../specs/005-graphics.md`](../specs/005-graphics.md) is normative, so
+render pipelines, passes, draws, and present have their shape settled, and v0
+implements none of it. The shape is settled early because attachment formats,
+blend, and stencil are compile-time pipeline inputs on every backend, so adding
+them later breaks every caller who wrote a pipeline descriptor.
 
 ### What it costs
 

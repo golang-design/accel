@@ -224,6 +224,13 @@ const (
 	BindingSampledTexture
 	BindingStorageTexture
 	BindingSampler
+
+	// BindingAttachment is a texture a render pass writes as a colour or depth
+	// attachment. An attachment is not bound to a pipeline slot the way the kinds
+	// above are, and it is in this enum for one reason: a graph slot has to be able
+	// to name one, which is how the swapchain image reaches a recorded pass
+	// (specs/005-graphics.md).
+	BindingAttachment
 )
 
 // BindingSlot declares one entry of a pipeline's binding layout.

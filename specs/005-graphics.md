@@ -446,7 +446,7 @@ Frame loop:
 ```go
 // Recorded once, when the frame graph is built:
 swap := rec.Slot(accel.SlotDescriptor{
-	Name: "swapchain", Kind: accel.BindingColourAttachment,
+	Name: "swapchain", Kind: accel.BindingAttachment,
 	Access: accel.AccessWrite, Format: surface.Format(),
 })
 
