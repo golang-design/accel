@@ -9,7 +9,7 @@ depends_on:
 
 # Command graph
 
-Implements [`design.md`](../docs/design.md) decision 1. This is the spec the rest
+Implements [`000-decisions.md`](000-decisions.md) decision 1. This is the spec the rest
 of layer 1 is shaped around, so read it before the others.
 
 ## The model
@@ -78,7 +78,7 @@ workgroup sizes within device limits, resource sizes sufficient for declared
 access, capability requirements met by the target device, no read-write hazard
 the barrier pass cannot resolve, no cycle.
 
-This is the tradeoff [`design.md`](../docs/design.md) decision 1 accepts: errors
+This is the tradeoff [`000-decisions.md`](000-decisions.md) decision 1 accepts: errors
 arrive at build rather than at the call that caused them. To keep that
 diagnosable, a build error must name the node, the binding slot, and the
 originating call site. A recorder captures enough source context per node to do

@@ -4,20 +4,30 @@ Design specs, written before implementation. Each is bounded, states its
 decisions with the reasoning behind them, and is honest about what it does not
 resolve.
 
-The decisions these are all built on live in [`../docs/design.md`](../docs/design.md).
-It is normative: a spec that contradicts it is wrong. Empirical backend
-behaviour, the places where GPU backends genuinely disagree, lives in
-[`../docs/conventions.md`](../docs/conventions.md).
+These are **internal design documents**: decisions, tradeoffs, and the reasoning
+behind them, written for whoever is building or reviewing the thing. Documentation
+written for people *using* or *contributing to* accel lives in
+[`../docs/`](../docs/).
+
+The decisions everything here is built on live in
+[`000-decisions.md`](000-decisions.md). It is normative: a spec that contradicts
+it is wrong.
 
 Nothing here is implemented yet. The repository is a design at this stage, plus
 an API surface that compiles and does nothing.
 
 ## Reading order
 
-Start with `design.md`, then [003](003-command-graph.md). Decision 1 of the
+Start with [000](000-decisions.md), then [003](003-command-graph.md). Decision 1 of the
 design, that the unit of submission is a recordable and replayable command graph
 rather than a one-shot encoder, is the choice the rest of layer 1 is shaped
 around, and the other specs are hard to evaluate without it.
+
+## Decisions
+
+| Spec | Status | Covers |
+| --- | --- | --- |
+| [000-decisions.md](000-decisions.md) | Locked | The two-layer split, the graph submission model, cgo-free, the CPU oracle, the compute model, kernels in Go, queryable capabilities |
 
 ## Layer 1: the device
 

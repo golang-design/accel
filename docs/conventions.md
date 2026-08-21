@@ -151,7 +151,7 @@ context, with no native command buffer.
 
 **Guarantee.** The GL backend owns a goroutine locked to an OS thread that holds
 the context, and replays a recorded command list on it. This is invisible to the
-caller, and is why [`design.md`](design.md) decision 1's recording model costs GL
+caller, and is why the recording model costs GL
 nothing: it was going to record anyway.
 
 ### Objective-C object lifetime across completion handlers
@@ -173,7 +173,7 @@ Three rules follow from the table and are worth stating separately, because each
 was learned by getting it wrong.
 
 1. **The CPU backend is the oracle.** Every convention above is a way for a GPU
-   backend to disagree with it. See [`design.md`](design.md) decision 3.
+   backend to disagree with it.
 
 2. **A parity test proves only the path it exercises.** The readback-origin entry
    is the case in point: a compute-path test passes while the texture path is

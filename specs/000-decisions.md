@@ -86,7 +86,19 @@ a device-free reference oracle that runs under `go test ./...` on every platform
 with no provisioning, and it is what makes the tensor layer testable before any
 GPU backend is finished.
 
-It is also the correctness oracle. Every GPU backend is verified against it.
+It is also the cross-backend oracle. Every GPU backend is verified against it.
+
+**Be precise about what that proves.** Decision 5 has the CPU backend run the
+*same kernel source* as every GPU backend, so agreement between them proves the
+lowering is correct: the compiler, the bindings, the dispatch, and the backend's
+conventions. It does not prove the kernel computes the right thing. A wrong
+formula is wrong identically everywhere and every parity test passes.
+
+Algorithm correctness therefore needs a second, independent implementation:
+a naive reference written separately, in the test, not derived from the kernel
+source. Both checks are required and they catch different failures. Treating
+cross-backend agreement as sufficient is the trap this decision is most likely
+to lead someone into.
 
 ### 4. The compute model is designed in, not retrofitted
 
@@ -111,6 +123,9 @@ The predecessor proved this works, including helper functions that compile
 correctly on both Metal and GLSL and match a Go run bit for bit. It also showed
 the compiler must be built on `go/types` rather than a bare AST walk; skipping
 that is a debt that surfaces later as confusing failures.
+
+Note the limit this places on decision 3: sharing the source is what makes the
+oracle exact, and equally what stops it from being independent. See decision 3.
 
 ### 6. Capabilities are queryable, and absence is explicit
 

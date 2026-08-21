@@ -8,7 +8,7 @@ depends_on:
 
 # Compute model
 
-Implements [`design.md`](../docs/design.md) decision 4. This spec exists because
+Implements [`000-decisions.md`](000-decisions.md) decision 4. This spec exists because
 its subject was the predecessor project's central mistake, and the mistake is
 worth stating precisely so the design is judged against it.
 
