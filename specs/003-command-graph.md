@@ -924,7 +924,7 @@ implicitly.
 | Relationship | Guarantee |
 | --- | --- |
 | Two submissions to the **same queue** | The second begins no earlier than the first ends, and every write by the first is visible to the second with no caller action. |
-| Two submissions to **different queues** | None. They may run in any order or fully overlapped. Ordering comes only from `SubmitAfter`. |
+| Two submissions to **different queues** | None. They may run in any order or fully overlapped. Ordering comes only from `SubmitAfter`. Which queues exist is reported by `Device.Queues` ([001](001-device-resources.md) §1); at v0 every device reports one, so this row is unexercised. |
 | A submission and the **host** | The host sees writes to `Readback` or `Shared` memory only after that submission's fence has signalled and been waited on. |
 
 **Same-queue submissions are fully ordered, and that is a deliberate cost.** The

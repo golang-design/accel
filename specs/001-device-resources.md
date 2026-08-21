@@ -44,6 +44,52 @@ the target backends disagree completely: Vulkan exposes queue families with
 capability bits, D3D12 has typed command queues, Metal has one general queue, and
 GL and the CPU backend have exactly one.
 
+Reported means there is something to read. [003](003-command-graph.md) makes
+ordering depend on which queue a submission went to, and `SubmitAfter` exists to
+order across queues, so a caller who cannot enumerate them cannot use either
+rule:
+
+```go
+type QueueKind int
+
+const (
+	// QueueUniversal accepts everything: compute, graphics, and transfer.
+	QueueUniversal QueueKind = iota
+	QueueCompute             // compute and transfer, no rasterization
+	QueueTransfer            // transfer only
+)
+
+// QueueInfo describes one queue this device exposes.
+type QueueInfo struct {
+	Kind  QueueKind
+	Index int
+	Label string // the backend's own name for it, for logs
+}
+
+// Queues reports every queue this device exposes, in a stable order. The first
+// entry is always the one Queue returns.
+func (d *Device) Queues() []QueueInfo
+
+// Queue returns the device's default queue, which is always QueueUniversal.
+func (d *Device) Queue() *Queue
+
+// QueueFor returns a queue able to run kind. It never fails and never invents a
+// queue: on a device with one universal queue it returns that queue, and the
+// caller sees which one they got through Queues. A universal queue running a
+// compute submission is correct, merely less parallel, so this is not the silent
+// substitution section 1 forbids for backends: nothing about the result is
+// weaker than what was asked for.
+func (d *Device) QueueFor(kind QueueKind) *Queue
+```
+
+**At v0 both backends report exactly one queue.** Metal has one general queue and
+the CPU backend has one by construction, so every multi-queue path in this design,
+`SubmitAfter` across queues, cross-queue ownership transfer, and the
+no-ordering-between-queues rule, is **specified and unexercised** until Vulkan or
+D3D12 lands. That is a stated risk rather than a gap: the rules are written so the
+first multi-queue backend does not have to invent them, and they will be wrong in
+some detail nobody can find without a device that has two.
+
 ### 1.1 Limits are a separate record from capabilities
 
 `Capabilities` (in `compute.go`) answers "can this device do X". Allocation needs
