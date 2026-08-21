@@ -11,6 +11,23 @@ backend behaviour lives in [`conventions.md`](../docs/conventions.md).
 Readers looking for an explanation rather than a decision record want
 [`docs/architecture.md`](../docs/architecture.md).
 
+## The decisions at a glance
+
+Blast radius is what reversing a decision would cost today. It is the number to
+look at before arguing with one.
+
+| # | Decision | Blast radius if reversed | Depended on by |
+| --- | --- | --- | --- |
+| 1 | Submission is a recordable, replayable graph | **Total.** Layer 1 and layer 2 are both shaped around it | [003](003-command-graph.md), [005](005-graphics.md), [006](006-backends.md), [007](007-tensor-layer.md) |
+| 2 | cgo-free is a hard requirement | **Total.** Every backend, and the reason the project exists | [004](004-kernel-authoring.md), [006](006-backends.md) |
+| 3 | A pure-Go CPU backend is first-class | **High.** Every test strategy and the whole verification story | [002](002-compute-model.md), [004](004-kernel-authoring.md), [005](005-graphics.md), [006](006-backends.md) |
+| 4 | The compute model is designed in | **High.** Kernel signatures change, so every kernel is rewritten | [002](002-compute-model.md), [004](004-kernel-authoring.md), [007](007-tensor-layer.md) |
+| 5 | Kernels are authored in Go | **High.** Removes decision 3's exactness and the author-once property | [004](004-kernel-authoring.md), [006](006-backends.md) |
+| 6 | Capabilities are queryable, absence explicit | **Moderate.** Contained to error paths and the capability struct | [002](002-compute-model.md), [006](006-backends.md) |
+
+Decisions 1 and 2 are the two that cannot be revisited without restarting. The
+rest are expensive but survivable.
+
 ## Two layers, not one
 
 The library is two layers with a hard boundary between them.
@@ -27,6 +44,20 @@ The boundary matters because the two layers have genuinely different users. A
 renderer wants layer 1 directly. An inference engine wants layer 2 and should
 never touch a bind group. Keeping the tensor layer free of backend code is what
 makes adding a backend a layer 1 concern only.
+
+**Rejected: one layer.** A single API where tensors are the only vocabulary
+would be smaller and easier to learn. It also makes the library useless for
+graphics, and it forces every backend to know about tensors, which is the
+coupling that makes adding a backend a project rather than a task. Ollama's `ml`
+is a one-layer design and can afford to be, because its backend is GGML and GGML
+is somebody else's problem. Here the backend is ours.
+
+**Rejected: three layers**, with a portability shim between the device layer and
+the backends. It is what you reach for when backends diverge badly, and
+[`conventions.md`](../docs/conventions.md) shows they do. We rejected it because
+the shim becomes the place where every divergence is half-hidden and half-leaked,
+and because the device layer already *is* that shim: hiding backend divergence is
+its job description. A separate layer for it would only mean two places to look.
 
 ## Locked decisions
 
@@ -64,6 +95,20 @@ debug than a straight-line encoder, and validation moves from "when you call it"
 to "when you build it". The alternative is a layer 1 that cannot carry layer 2,
 discovered only after layer 1 has users.
 
+**Alternatives rejected.**
+
+| Alternative | Why not |
+| --- | --- |
+| One-shot encoder (WebGPU, wgpu) | Familiar, and every backend supports it directly. But it forecloses memory planning, barrier computation, and fusion, which is precisely what layer 2 needs. Rejecting it is the whole decision. |
+| Encoder plus an optional "bundle" for hot paths | Two models to implement, document, and test, with the fast one always second-class. The predecessor's experience is that an optional fast path is the one that rots. |
+| Immediate mode with a driver-side cache keyed on the command stream | Shifts the burden to detecting that this frame matches the last, which is fragile and invisible when it misses. A cache miss becomes a silent performance cliff. |
+| A full tracing JIT over Go code | Most ergonomic of all, and by far the largest project. Requires either runtime code generation or a reliable escape analysis over user code. Out of proportion to the rest of the design. |
+
+**What would change our mind.** If the worked example in
+[003](003-command-graph.md) showed the build cost dominating for realistic graph
+sizes, or if plan-once turned out to save little on the backends that matter
+(measured, not assumed, see [006](006-backends.md)), the calculus changes.
+
 ### 2. cgo-free is a hard requirement
 
 Every backend reaches its driver through `purego` or raw syscalls. No `import "C"`
@@ -76,6 +121,18 @@ The cost, stated honestly: the ML ecosystem is C and CUDA all the way down, so
 this rules out linking cuBLAS, cuDNN, or GGML. Everything layer 2 needs must be
 written as kernels in this repo. That is a large amount of work, and it will not
 beat vendor libraries on raw throughput for a long time, if ever.
+
+**Alternatives rejected.**
+
+| Alternative | Why not |
+| --- | --- |
+| cgo, like every other Go GPU binding | Gives the whole C ecosystem immediately, including cuBLAS and GGML, which is a genuinely strong argument. It also gives up cross-compilation, fast builds, and `CGO_ENABLED=0`, which is the only thing this project offers that existing bindings do not. Taking cgo makes the project redundant. |
+| cgo-free by default, cgo behind a build tag for vendor libraries | Superficially the best of both. In practice it forks the test matrix, and the cgo path inevitably becomes the one that works and the pure path the one that lags. It also means the honest README says "cgo-free unless you want it to be fast". |
+| Bind to a C library through a subprocess or IPC | Keeps the module cgo-free in the letter. Per-call latency makes it unusable for kernel dispatch, and shipping a helper binary is worse than shipping a cgo dependency. |
+
+**What would change our mind.** Nothing short of the project's purpose changing.
+This is the decision the library exists to embody; if it goes, use `wgpu` or
+GGML bindings instead.
 
 ### 3. A pure-Go CPU backend is a first-class backend
 
@@ -104,6 +161,19 @@ source. Both checks are required and they catch different failures. Treating
 cross-backend agreement as sufficient is the trap this decision is most likely
 to lead someone into.
 
+**Alternatives rejected.**
+
+| Alternative | Why not |
+| --- | --- |
+| A software GPU (Mesa llvmpipe, lavapipe, WARP) as the reference | Real drivers with real conventions, so parity means more. But they must be provisioned, they differ per platform, and the predecessor's ANGLE job broke when a runner image changed. They also cannot report a missing barrier as a Go race. Kept as CI backends, not as the reference. |
+| A mock backend that records calls without computing | Cheap, and enough to test the graph builder. It cannot verify a single numeric result, so every kernel would need a device to test at all. |
+| No CPU backend; require a GPU for all tests | Simplest to build, and honest about being a GPU library. It also blocks all of layer 2 until a GPU backend is finished, which is the wrong dependency order for a project whose hardest work is the tensor layer. |
+
+**What would change our mind.** If the CPU backend's maintenance burden came to
+exceed the GPU backends it verifies, the trade would be worth re-examining. Note
+that [006](006-backends.md) has already increased its cost by deciding it also
+rasterizes.
+
 ### 4. The compute model is designed in, not retrofitted
 
 Workgroup size is part of the pipeline descriptor. Shared memory, barriers,
@@ -116,6 +186,18 @@ and supported only `[]float32`. Each of those alone makes a tiled GEMM
 impossible, and without a tiled GEMM there is no attention, no softmax, no
 reduction, and so no transformer. Adding them afterwards is not an extension but
 a rewrite, because they change what a kernel signature means.
+
+**Alternatives rejected.**
+
+| Alternative | Why not |
+| --- | --- |
+| Ship a simple model first, extend when needed | Exactly what the predecessor did, and the reason this decision exists. Shared memory changes a kernel's signature, so "extend later" means rewriting every kernel and every pipeline descriptor written in the meantime. |
+| Expose the union of what all backends support | Larger surface, and each addition serves one backend. Callers then write per-backend code, which defeats the point of a portable layer. |
+| Expose the intersection only | Portable by construction, and the most tempting. It also drops subgroups, f16 arithmetic, and atomic float add, which is most of the achievable throughput. Decision 6 exists precisely so the intersection does not have to be the ceiling. |
+
+**What would change our mind.** If the worked GEMM in
+[002](002-compute-model.md) turned out not to need one of these primitives, that
+primitive could move to a capability. The GEMM is the arbiter.
 
 ### 5. Kernels are authored in Go
 
@@ -131,6 +213,20 @@ that is a debt that surfaces later as confusing failures.
 Note the limit this places on decision 3: sharing the source is what makes the
 oracle exact, and equally what stops it from being independent. See decision 3.
 
+**Alternatives rejected.**
+
+| Alternative | Why not |
+| --- | --- |
+| Callers write native shader source per backend | No compiler to build, and full access to each language. It also means writing every kernel four times, and it makes decision 3's oracle impossible, since the CPU backend would have nothing to run. |
+| A new DSL, not Go | Free to design for GPUs, with no Go semantics to honour. But it cannot run as Go on the CPU, so the oracle goes; it needs its own parser, type checker, and tooling; and the predecessor's DSL overloaded operators, which is exactly what made `go/types` unusable there. |
+| Go, but transpiled from an AST walk rather than `go/types` | Simpler to start, which is why the predecessor did it. It resolves identifiers by name instead of by object identity, cannot disambiguate a conversion from a call, and cannot resolve untyped constants, each of which surfaces later as a confusing miscompile. |
+| WGSL as the source language | Already portable, already specified, with tooling. It is not Go, so the oracle goes, and it drags in a WGSL front end for no gain over emitting to it. |
+
+**What would change our mind.** If the Go subset turned out too small to express
+a competitive kernel, the choice would be between growing the subset and admitting
+inline native source for hot kernels. The second forfeits the oracle for those
+kernels and should be a last resort.
+
 ### 6. Capabilities are queryable, and absence is explicit
 
 Backends differ in what they support, and the API says so rather than failing at
@@ -138,20 +234,34 @@ dispatch time. A caller asks what a device can do and gets a typed answer. An
 operation a backend cannot perform returns a clear error naming the missing
 capability, never a silent wrong result.
 
+The rule has a corollary that matters more than it sounds: a capability is either
+present, or absent and reported. There is no third state where the library
+quietly substitutes something slower or less precise. A caller who wanted the
+fallback can write it; a caller who did not needs to know.
+
+**Alternatives rejected.**
+
+| Alternative | Why not |
+| --- | --- |
+| Silent emulation of missing capabilities | Everything runs everywhere, which reads as a feature. It also means a kernel can be fifty times slower on one backend with nothing in the API to say why, and numerics can differ with nothing to say that either. |
+| Fail at dispatch, when the operation actually runs | No capability struct to maintain, and the error is precise. It arrives after the caller has built pipelines and graphs, and on a machine they may not own. |
+| Version tiers, a feature level per backend | Familiar from D3D, and easy to reason about. Real backends do not fall into tiers: [006](006-backends.md)'s matrix has genuinely orthogonal rows, and a tier would either overclaim or exclude. |
+
+**What would change our mind.** If the capability set grew past what a caller can
+reasonably branch on, a curated set of named profiles over the top would be worth
+adding. Note that this adds profiles, it does not remove capabilities.
+
 ## What this is not
 
 Stated plainly so the scope is not read as a promise:
 
-- **Not a training framework.** There is no autodiff and none is designed. The
-  tensor layer targets inference first. Training becomes a real conversation only
-  after a competitive GEMM exists.
-- **No CUDA backend at v0.** CUDA's driver API is reachable without cgo in
-  principle, but it is not in the first milestone. This is the largest single gap
-  for anyone whose workload is training.
-- **Not a portable performance guarantee.** A cgo-free kernel written here will
-  not match a vendor library at v0.
-- **Not a WebGPU implementation.** The model is deliberately different (decision
-  1) and the API does not aim to match `wgpu`.
+| Not | Why not, and what it would take |
+| --- | --- |
+| **A training framework** | There is no autodiff and none is designed. It would need a differentiable operator set (every op carrying its adjoint), gradient accumulation, an optimizer set, and a backward graph, which is roughly the size of the tensor layer again. It is also pointless before a competitive GEMM exists, since a slow forward pass makes a slow backward pass. |
+| **A CUDA backend at v0** | CUDA's driver API is a C ABI reachable through `purego` in principle, so decision 2 does not forbid it. It is out of the first milestone on effort, not principle: PTX or cubin generation is a target [004](004-kernel-authoring.md) does not have. This is the largest single gap for anyone training on NVIDIA hardware, and it is the most likely v1 addition. |
+| **A portable performance guarantee** | A cgo-free kernel will not match a vendor library at v0. Closing that needs cooperative matrix primitives (deferred in [002](002-compute-model.md)), per-backend kernel specialization, and an autotuner. Each is a project. |
+| **A WebGPU implementation** | Decision 1 makes the submission model deliberately different, so matching `wgpu`'s API is not a goal and never becomes one without reversing decision 1. WebGPU as a *backend* is a separate question and is live; see [006](006-backends.md). |
+| **A rendering engine** | No scene graph, no material system, no asset pipeline. Layer 1 is what an engine is built on. The predecessor is the engine. |
 
 ## Layering rules
 
@@ -160,3 +270,29 @@ Stated plainly so the scope is not read as a promise:
 3. No backend-specific type appears in a public signature.
 4. The CPU backend is always buildable on every platform and is never build-tagged
    away.
+
+## Revising a decision
+
+These are locked, not permanent. Locked means the burden is on the change, and
+that the cost in the blast radius table is paid deliberately rather than
+discovered.
+
+To revise one:
+
+1. **State which decision, and which of its rejected alternatives you are
+   promoting.** Each decision above lists what it beat and why. If your proposal
+   is not on that list, say why it was not considered; if it is, say what was
+   wrong with the reasoning that rejected it.
+2. **Check the blast radius table**, and name every spec that has to change. A
+   revision that does not enumerate its dependents is not yet a proposal.
+3. **Bring evidence, not preference.** Every decision here cites something
+   concrete: a predecessor failure, a measured cost, another project's design
+   under the same pressure. Match that standard. "This would be cleaner" is not
+   evidence; "here is the GEMM that cannot be written" is.
+4. **Check the "what would change our mind" note.** Most decisions name the
+   observation that would overturn them. If yours is that observation, the case
+   is already half made.
+
+When a decision is revised, it keeps its number, and the old text stays with a
+note saying when and why it changed. A decision record that quietly rewrites
+itself is worth nothing to whoever inherits it.
