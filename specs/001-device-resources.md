@@ -947,13 +947,23 @@ actually keep:
 | Case | Legality |
 | --- | --- |
 | two overlapping views bound, both `AccessRead` | legal, always |
-| two overlapping views bound, at least one writing | **rejected at graph build**, naming both slots and the overlapping byte range |
+| two overlapping views bound statically, at least one writing | **rejected at graph build**, naming both slots and the overlapping byte range |
+| two overlapping views reaching one node through **rebindable slots**, at least one writing | **rejected at `Rebind` and at `Submit`**: at build there is no view to compare. This is [003](003-command-graph.md)'s check V21 |
 | views into different buffers of the same pool | cannot overlap: suballocation is disjoint by construction |
 | views into transients 003 aliased | cannot overlap in one dispatch: 003 aliases only transients that do not interfere, so two aliased transients are never both live at one node |
 
-The rejection is possible because the builder knows every bound view's buffer,
-offset and length at build time, so overlap is a decidable comparison rather than
-an analysis. It is a rejection rather than undefined behaviour because
+**The first two rows are the same rule checked at two different times, and the
+split is not a choice.** Where a view is bound at record time the builder knows
+its buffer, offset and length, so overlap is a decidable comparison and the error
+lands at build with the recording call site attached. Where the slot is
+rebindable there is nothing to compare until something is bound: 003 tracks
+hazards against the *slot*, not against whatever will occupy it, so binding one
+buffer to two slots the builder treated as independent invalidates the inferred
+edge set. That case is caught at `Rebind` and again at `Submit`, in release
+builds too, and 003 §V21 owns it. Neither spec's check subsumes the other and a
+backend or builder implementing only one leaves the other case as a race.
+
+The rejection is a rejection rather than undefined behaviour because
 [002](002-compute-model.md) gives no way to order two writes to one address from
 different bindings, so the result would be a nondeterministic winner, which is
 precisely the failure mode [`conventions.md`](../docs/conventions.md) documents

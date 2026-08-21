@@ -872,6 +872,7 @@ point at its own structure.
 | V20 | The planned transient pool fits the device's reported budget | pool size, budget | 001 pools |
 | V21 | (at submit, not build) No two slots are bound to overlapping ranges unless both are read-only | both slots, both resources, the overlap | this spec, below |
 | V22 | (internal assertion) The inferred edge set is acyclic | node ids on the cycle | builder defect only |
+| V23 | No two **statically bound** views at one node overlap unless both are read-only | both slots, both view ranges, the overlap | [001](001-device-resources.md) 6.1, the build-time half of V21 |
 
 **V21 is the one check that cannot happen at build**, and that is a genuine hole
 in the validate-once story. Hazards are tracked against `resourceID`, and a
@@ -882,6 +883,16 @@ the inferred edge set is wrong, so the missing barrier is a race. `Rebind` and
 count of **rebindable** slots (single digits in every design seen so far), in
 release builds too: a race that reproduces only under load is worth more than the
 microsecond.
+
+**V21 covers only the rebindable case.** Two views bound *statically* at record
+time are compared at build, where the buffer, offset and length are all known and
+the error can carry the recording call site;
+[001](001-device-resources.md) §6.1 states that half and this spec states this
+one. They are the same rule at two times, and implementing either alone leaves
+the other case as a race. The static half is check V23 above; it is
+separated from V21 rather than folded into it because the two fire at different
+times, carry different diagnostics, and a builder can implement one and believe
+it has implemented both.
 
 ---
 
@@ -1336,6 +1347,10 @@ passes on one device and fails on the next.
 - V21: binding one buffer to two slots the builder treated as independent fails
   at submit with `ErrRebindOverlap`, and binding it to two read-only slots
   succeeds.
+- V23: the same overlap expressed with two *statically* bound views fails at
+  build instead, with the recording call site in the message. Both halves are
+  tested, because a builder that implements one and not the other passes whichever
+  test it has.
 
 ### Submission and fences
 
