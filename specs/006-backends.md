@@ -847,13 +847,17 @@ finished, whatever else it can do.
    most valuable property the backend has. Unresolved whether both can be kept,
    perhaps as two modes.
 
-3. **What exactly is the numeric contract, per operation class?** Section 5
-   states two tiers and defers the ULP bounds. The bounds must be derived from
-   what the backends actually guarantee, not chosen to make tests pass, and the
-   exact tier depends on contraction control that three backends in the matrix
-   have not been shown to offer. If contraction cannot be forbidden on Metal,
-   GLSL ES, and WGSL, the exact tier shrinks to integers only, which is a
-   materially weaker oracle.
+3. ~~**What exactly is the numeric contract, per operation class?**~~
+   **Answered by [008](008-numerics.md)**, which owns the two tiers this section
+   names, derives reduction bounds from a stated error model rather than choosing
+   them, and forbids a test from carrying a hardcoded tolerance at all. The part
+   that is not answered is the part that was never a design question: whether
+   contraction can actually be forbidden on Metal is a measurement, it is 008's
+   first open question, and until it is taken this backend's exact tier is a
+   hypothesis. If it fails, the exact tier here shrinks to integers and
+   conversions, which is a materially weaker oracle and would be visible
+   immediately, because 008 makes the collapse fail loudly rather than widen a
+   tolerance.
 
 4. **How does D3D12 get a shader model 6 shader?** `D3DCompile` reaches SM 5.1,
    which costs the column its subgroups, native f16, and packed 8-bit dot

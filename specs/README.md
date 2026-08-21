@@ -45,6 +45,7 @@ around, and the other specs are hard to evaluate without it.
 | [004-kernel-authoring.md](004-kernel-authoring.md) | Drafted | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
 | [005-graphics.md](005-graphics.md) | Drafted, frozen | Render pipelines, render passes as graph nodes, draws, the render-to-compute handoff, surfaces and present. Normative, not built at v0 |
 | [006-backends.md](006-backends.md) | Drafted | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
+| [008-numerics.md](008-numerics.md) | Drafted | Exactness classes, the two tiers, derived tolerances, contraction control, transcendental bounds |
 
 ## Layer 2: the tensor
 

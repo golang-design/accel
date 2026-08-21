@@ -635,10 +635,15 @@ Also out of scope at v0, with the reason:
   informative as an immediate error would have been. If in practice the first
   error's site is not enough to locate the mistake, this decision is wrong and
   operators should return errors.
-- **The numerics contract across backends.** Bitwise f32 equality is not
-  achievable when reduction order differs, and a tiled GEMM does not sum in the
-  same order as a naive loop. Tolerances have to be stated per operator class and
-  the numbers have not been chosen.
+- ~~**The numerics contract across backends.**~~ **Answered by
+  [008](008-numerics.md).** Bitwise f32 equality is indeed not achievable when the
+  reduction order differs, and the resolution is that no per-operator tolerance is
+  chosen at all: a reduction of length K is compared against the error bound its
+  evaluation order implies, computed by the harness from K, against an f64
+  reference. A tiled GEMM and a naive loop are then two orders both required to
+  lie within their own bound, rather than being compared to each other. What
+  remains open there and matters here is whether an f64 host reference is tight
+  enough at very large K, which transformer shapes do not reach.
 
 ## Testing
 

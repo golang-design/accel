@@ -431,6 +431,10 @@ sides execute the same algorithm in the same order: a barrier-based tree
 reduction reduces in the same tree on the CPU, since the CPU is running that
 kernel. What survives that argument is hardware divergence, and it is bounded:
 
+These classes are normative in [008](008-numerics.md), which derives the bounds
+the tolerance columns refer to. They are kept here because they are a property of
+what the emitter produces, and 008 is where a test finds out what to assert.
+
 | Class | Contents | Contract |
 | --- | --- | --- |
 | A | Integer ops; f32 add, sub, mul, div; loads, stores, indexing | Bit-exact |
@@ -455,12 +459,16 @@ it as if it could is how a flaky test enters a suite.
   (`workgroup=128,256`), use SPIR-V specialization constants where available and
   regenerate elsewhere, or accept one size per source. Undecided, and it is the
   question a tuned GEMM will ask first.
-- **f32 contraction control across targets.** Bit-exact parity requires
-  `a*b+c` to contract the same way on both sides, and the control is uneven:
-  MSL has `-ffp-contract`, HLSL has `precise`, and GLSL ES 3.1 predates the
-  `precise` qualifier entirely. If a target cannot be controlled, class A below
-  degrades to a tolerance on that target, and the class A row above stops being
-  a promise there. Needs measuring per driver before it is published.
+- ~~**f32 contraction control across targets.**~~ **Moved to
+  [008](008-numerics.md)**, which owns the contract this question was really
+  about and states the decision: contraction is forbidden in the exact tier and
+  forbidding it is an obligation on the emitter, including on the Go target, which
+  emits an explicit `float32(...)` at each rounding point rather than trusting how
+  the source was written. Where a target cannot be controlled (GLSL ES 3.1 and
+  WGSL have no equivalent of `precise`), that target's `a*b+c` drops to class C
+  with the bound in 008 §4.3. What remains unmeasured, and is 008's own first
+  open question, is whether MSL can be made to stop contracting: if it cannot, the
+  largest exact class on the only v0 GPU backend collapses.
 - **Whether the intrinsic set is a package or a table.** Intrinsics resolved by
   object identity must be *some* Go function with a real body for the CPU path.
   An `accel/kmath` package is the obvious home, but then the Go body and the
