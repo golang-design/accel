@@ -1143,6 +1143,16 @@ the composition order fixed by 4.3.
 The recorded path is what a hot loop uses. It is a node, so 003 infers its edges,
 computes its barriers, and orders it against everything else.
 
+One asymmetry inside the recorded path is worth stating here, because it is where
+a caller would guess wrong. `Recorder.CopyBuffer` names two device buffers and
+copies nothing at record time. `Recorder.CopyToBuffer` names a host slice, and
+**copies it at record time**, because a graph is immutable and holding the
+caller's slice until submit would make the bytes it writes depend on when the
+caller last touched them (003, payload notes). So a per-step value does not go
+through a recorded host write: it goes into an `Upload` buffer through
+`Buffer.Write`, or into a device buffer through a recorded `CopyBuffer` from
+staging, both of which vary by contents rather than by structure.
+
 The immediate path is a convenience for setup, teardown and debugging. It exists
 because writing initial weights and reading final logits should not require
 building a graph.

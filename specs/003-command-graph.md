@@ -205,7 +205,7 @@ type copyTexBufPayload struct {
 
 type hostWritePayload struct {
     dst resourceRef
-    src []byte // copied into the graph's staging buffer at submit
+    src []byte // owned by the graph: copied out of the caller's slice at record
 }
 ```
 
@@ -227,6 +227,23 @@ Notes on the payloads, each of which is a decision:
   bytes per pixel comes from the format
   ([`conventions.md`](../docs/conventions.md)). A caller who computes stride gets
   it wrong on one backend, so the caller does not compute it.
+- **A recorded host write copies at record, and the graph owns the bytes.** The
+  alternative, holding the caller's slice until submit, makes an immutable graph
+  mutable through a back door: the bytes a submission writes would be whatever the
+  slice held at that moment, and there is no submission the caller could point at
+  to say when it stopped being safe to touch. It also contradicts what
+  [001](001-device-resources.md) §8.2 teaches, that a slice is reusable the moment
+  a write call returns. So the copy happens at `CopyToBuffer`, and the payload's
+  `src` is the graph's.
+
+  The cost is that a graph's build-time footprint includes every byte recorded
+  this way, and a graph submitted many times rewrites the same bytes every time.
+  Both make this the wrong entry point for bulk upload and for anything that
+  varies per submission. Bulk upload is 001 §8.4's shape, a staging buffer plus
+  `CopyBuffer` nodes; per-submission variance is a mapped `Upload` buffer written
+  between submissions, which is [007](007-tensor-layer.md)'s parameter buffer.
+  This node exists for small constants baked into a graph, and its doc comment
+  says so.
 - **A draw is not a node, and present is not a node.**
   [005](005-graphics.md) settles both. The render pass is the finest granularity
   at which synchronisation is expressible on tile-based hardware, so it is the
