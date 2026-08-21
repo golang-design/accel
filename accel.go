@@ -19,8 +19,8 @@
 //
 // Work is recorded into a [Graph], which is immutable once built and can be
 // submitted many times with its inputs rebound between submissions. This is
-// deliberately not a one-shot command encoder; see docs/design.md decision 1 for
-// why, and specs/003-command-graph.md for the details.
+// deliberately not a one-shot command encoder; see specs/000-decisions.md
+// decision 1 for why, and specs/003-command-graph.md for the details.
 //
 //	rec := dev.NewRecorder()
 //	rec.Dispatch(pipeline, bindings, WorkgroupCount{X: n})
@@ -42,7 +42,8 @@ var ErrNotImplemented = errors.New("accel: not implemented (design stage)")
 
 // ErrUnsupported reports that a device cannot perform an operation because it
 // lacks a capability. The error names the capability and the device: absence is
-// always explicit, never a silent wrong result. See docs/design.md decision 6.
+// always explicit, never a silent wrong result. See specs/000-decisions.md
+// decision 6.
 var ErrUnsupported = errors.New("accel: unsupported by this device")
 
 // Backend identifies a device implementation.
@@ -51,7 +52,8 @@ type Backend int
 const (
 	// BackendCPU is a pure-Go implementation. It is a first-class backend and the
 	// correctness oracle every other backend is verified against, not a fallback.
-	// It is always available on every platform. See docs/design.md decision 3.
+	// It is always available on every platform. See specs/000-decisions.md
+	// decision 3.
 	BackendCPU Backend = iota
 
 	BackendMetal
@@ -63,31 +65,75 @@ const (
 // String returns the backend's name.
 func (b Backend) String() string { panic(ErrNotImplemented) }
 
-// DeviceInfo describes a device that could be opened, without opening it. Callers
-// choose on reported capability rather than by trying and catching failures.
+// AdapterID identifies one enumerated adapter for this process. It is opaque,
+// comparable, stable across repeated enumerations while the adapter is present,
+// and intentionally not serializable.
+type AdapterID struct{ token [16]byte }
+
+// DeviceInfo describes a device that could be opened, without opening it.
+// Callers choose on reported capabilities and limits rather than by trying and
+// catching failures.
 type DeviceInfo struct {
-	Backend Backend
-	Name    string
+	ID           AdapterID
+	Backend      Backend
+	Name, Vendor string
+	Software     bool
 
 	// Capabilities is what this device can actually do. Queried before use.
 	Capabilities Capabilities
+	Limits       Limits
 }
 
-// Enumerate reports every device present on this machine.
-func Enumerate() ([]DeviceInfo, error) { panic(ErrNotImplemented) }
+// ProbeStage identifies the native-probe phase that failed.
+type ProbeStage int
 
-// Open opens a device on the named backend.
+const (
+	ProbeLoadLibrary ProbeStage = iota
+	ProbeCreateInstance
+	ProbeEnumerateAdapters
+	ProbeQueryDevice
+)
+
+// ProbeDiagnostic explains why a backend or adapter did not produce an openable
+// device without hiding healthy adapters from other backends.
+type ProbeDiagnostic struct {
+	Backend Backend
+	Stage   ProbeStage
+	Err     error
+}
+
+// Enumeration separates openable adapters from probe failures.
+type Enumeration struct {
+	Devices     []DeviceInfo
+	Diagnostics []ProbeDiagnostic
+}
+
+// Enumerate reports every openable synchronous adapter and all probe failures.
+func Enumerate() Enumeration { panic(ErrNotImplemented) }
+
+// OpenDevice opens exactly the enumerated adapter id names.
 //
-// It never falls back to another backend. A caller asking for something
-// unavailable gets an error saying so, because silent fallback turns "my GPU code
-// is slow" into a mystery. Use [OpenBest] to ask for automatic selection
-// explicitly.
-func Open(b Backend) (*Device, error) { panic(ErrNotImplemented) }
+// It never falls back to another adapter or backend. Use [OpenBest] to ask for
+// automatic selection explicitly.
+func OpenDevice(id AdapterID) (*Device, error) { panic(ErrNotImplemented) }
 
 // OpenBest opens the best available device under an explicit policy. Unlike
-// [Open] this is a request to choose, and the policy is what it chooses by: it
+// [OpenDevice] this is a request to choose, and the policy is what it chooses by: it
 // fails rather than descending into something the caller did not sanction.
 func OpenBest(p Policy) (*Device, error) { panic(ErrNotImplemented) }
+
+// AdapterRejection explains why automatic selection skipped one adapter.
+type AdapterRejection struct {
+	ID     AdapterID
+	Reason string
+}
+
+// SelectionReport makes automatic selection reproducible in logs.
+type SelectionReport struct {
+	Selected           AdapterID
+	EnvironmentBackend string
+	Rejected           []AdapterRejection
+}
 
 // Policy is what OpenBest is allowed to select.
 //
@@ -102,7 +148,43 @@ type Policy struct {
 	AllowCPU      bool
 	AllowSoftware bool
 	Require       Capability // a device lacking any of these is not a candidate
+	Limits        LimitConstraints
 }
+
+// LimitConstraints filters automatic selection. Zero fields are unconstrained;
+// array components are compared independently.
+type LimitConstraints struct {
+	AtLeast Limits
+	AtMost  Limits
+}
+
+// CPUMode selects the CPU backend's reported capability and limit profile.
+type CPUMode int
+
+const (
+	CPUDeveloper CPUMode = iota
+	CPUStrict
+	CPUMimic
+)
+
+// DeviceProfile is a captured device contract used to reproduce another
+// adapter's capability and numeric-limit behavior on the CPU backend.
+type DeviceProfile struct {
+	Info DeviceInfo
+}
+
+// CPUOptions configures the CPU oracle. StrictTargets is required in strict
+// mode; Mimic is required in mimic mode.
+type CPUOptions struct {
+	Mode          CPUMode
+	StrictTargets []Backend
+	Mimic         *DeviceProfile
+	SubgroupSize  int
+	ShuffleSeed   uint64
+}
+
+// OpenCPU opens the CPU backend with an explicit oracle profile.
+func OpenCPU(opts CPUOptions) (*Device, error) { panic(ErrNotImplemented) }
 
 // Device is an opened accelerator.
 //
@@ -112,6 +194,10 @@ type Device struct{ _ noCopy }
 
 // Info reports what this device is and what it can do.
 func (d *Device) Info() DeviceInfo { panic(ErrNotImplemented) }
+
+// SelectionReport reports how OpenBest selected this device. The bool is false
+// for a device opened explicitly with OpenDevice or OpenCPU.
+func (d *Device) SelectionReport() (SelectionReport, bool) { panic(ErrNotImplemented) }
 
 // Queue returns the device's default queue, which is always [QueueUniversal].
 func (d *Device) Queue() *Queue { panic(ErrNotImplemented) }
@@ -130,7 +216,7 @@ func (d *Device) Queues() []QueueInfo { panic(ErrNotImplemented) }
 //
 // It never fails and never invents a queue: on a device with one universal queue
 // it returns that queue, and the caller sees which one they got through
-// [Device.Queues]. That is not the silent substitution [Open] refuses, because
+// [Device.Queues]. That is not the silent substitution [OpenDevice] refuses, because
 // nothing about the result is weaker than what was asked for, only less parallel.
 func (d *Device) QueueFor(kind QueueKind) *Queue { panic(ErrNotImplemented) }
 
@@ -193,8 +279,8 @@ func (d *Device) NewComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 
 // NewRecorder returns a recorder for building a [Graph].
 //
-// A Recorder belongs to one goroutine. The [Graph] it produces is immutable and
-// may be submitted from several goroutines at once.
+// A Recorder belongs to one goroutine. The [Graph] it produces is immutable but
+// permits only one in-flight submission; build one graph per concurrent user.
 func (d *Device) NewRecorder() *Recorder { panic(ErrNotImplemented) }
 
 // Close releases the device. Resources created from it must be closed first.

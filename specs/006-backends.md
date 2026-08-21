@@ -6,6 +6,7 @@ depends_on:
   - 001-device-resources.md
   - 002-compute-model.md
   - 003-command-graph.md
+  - 004-kernel-authoring.md
 ---
 
 # Backends
@@ -22,7 +23,7 @@ It answers both concretely enough that the answers can be wrong and be caught.
 The CPU backend enforces the **intersection** of what every backend allows, and
 computes the **exact** semantics every backend is required to produce.
 
-This generalises [002](002-compute-model.md)'s shared-memory poison pattern into
+This generalises [002](002-compute-model.md)'s shared-memory definition checks into
 a principle. A rule that only one backend enforces is a rule callers discover by
 shipping. So: `Device` memory is not mappable on the CPU backend even though it
 trivially could be, non-uniform barrier arrival fails there even though it would
@@ -42,16 +43,22 @@ A backend implements an unexported interface. Adding one touches no public API
 ([`000-decisions.md`](000-decisions.md) layering rule 2), and no backend-specific type
 appears in a public signature (rule 3). Restated as responsibilities:
 
-**R1. Existence and identity.** Report whether the backend can run on this
-machine without opening a device, and enumerate the devices it sees with a name,
-a vendor, and whether the device is hardware or a software rasterizer. Probing
-must not panic when the driver library is absent, stale, or broken, because
-enumeration runs on machines that have none of it.
+**R1. Existence, identity, and diagnostics.** Probe each compiled-in backend and
+return two separate collections: openable adapters and per-backend probe
+diagnostics. Every adapter has an opaque `AdapterID`, backend, name, vendor, and
+hardware-or-software identity. A missing library, driver initialization failure,
+or backend with no compute-capable adapter is a diagnostic, never a fake device.
+Probing must not panic when the driver is absent, stale, or broken; native-driver
+probes run in an isolated helper process so an abort becomes a diagnostic rather
+than taking down enumeration. Section 6 defines identity lifetime and the API.
 
-**R2. Capabilities.** Fill in the capability record from
-[002](002-compute-model.md) by **querying the device**, never by assuming from
-the platform. Every `cap` and every `?` in section 3's matrix is resolved here. A
-backend that cannot determine a capability reports it absent, not present.
+**R2. Capabilities and limits.** Fill `Capabilities` with boolean/finite-set
+support and `Limits` with numeric bounds by **querying the device**, never by
+assuming from the platform. Every `cap` and every `?` in section 3's matrix is
+resolved here. A backend that cannot determine a capability reports it absent.
+An unknown required limit is an adapter-open failure, not zero and not a guessed
+portable minimum. Numeric maxima, sizes, counts, and alignments never live in
+`Capabilities`.
 
 **R3. Memory.** Allocate pools of the four memory kinds in
 [001](001-device-resources.md), suballocate buffers from them, and map the kinds
@@ -71,17 +78,18 @@ consumer of whatever 004 produces for its target:
 
 | Backend | Consumes |
 | --- | --- |
-| CPU | the Go function itself |
+| CPU | generated, instrumented Go lowering from the typed IR |
 | Metal | MSL source text |
 | Vulkan | SPIR-V binary |
 | D3D12 | DXBC or DXIL binary (see 2.4) |
 | OpenGL ES | GLSL ES source text |
 | WebGPU | WGSL source text |
 
-**R6. Pipelines.** Bake the static parts of the compute model into the pipeline:
-workgroup size, shared memory size, binding layout. All three are needed at
-compile time by at least one backend, which is why 002 puts them in the pipeline
-descriptor rather than at dispatch.
+**R6. Pipelines.** Consume the generated `Kernel`'s static metadata: workgroup
+size, shared-memory layout, binding layout and inferred access, requirements, and
+target artifact. The kernel owns those facts; a public pipeline descriptor does
+not repeat them. Pipeline creation checks `Capabilities` and `Limits`, then bakes
+the metadata into the backend object.
 
 **R7. Graph lowering.** Turn a built, validated `Graph` into whatever this
 backend can resubmit cheaply, and expose the rebinding points that
@@ -103,8 +111,10 @@ clip-space depth range, face winding, readback row order, GLSL reserved words an
 integer literal rules, Objective-C pool discipline. A backend that leaks one of
 these to the caller is broken, not merely different.
 
-**R10. Teardown.** Release everything, on the thread that is allowed to release
-it, and survive being closed while work is in flight.
+**R10. Teardown.** Release everything on the thread allowed to release it and
+implement the ordered close contract in section 6.5. Closing a resource in flight
+retires the caller handle and defers physical release to its last fence; closing
+a device with live children or submissions fails without half-closing it.
 
 ### Required core, optional interfaces
 
@@ -144,8 +154,10 @@ including the CPU.
 
 **Can**: everything in the compute model, exactly, including the parts real
 hardware treats as undefined. Every dtype, every atomic including float add,
-subgroups at a fixed configurable size, shared memory with poison, barriers with
-non-uniform-arrival detection.
+subgroups at a configurable size, shared memory with per-element definition
+tracking, and deterministic non-uniform-barrier diagnostics. It executes the
+generated CPU lowering from [004](004-kernel-authoring.md), never the authored
+function directly.
 
 **Cannot**: be fast in the way a GPU is fast (section 5), and cannot validate
 anything about a driver. A backend bug that is a driver quirk is invisible here
@@ -267,9 +279,16 @@ indirect dispatch.
 **Cannot**: float atomics (WGSL atomics are i32 and u32 only, architecturally),
 bf16 arithmetic, or `Shared` memory in [001](001-device-resources.md)'s sense.
 Two more problems are structural rather than featural. First, WebGPU is
-asynchronous where `accel` is synchronous: adapter request, device request, and
-buffer mapping are all promises, and reconciling that with a blocking Go API on a
-single-threaded JS event loop is the actual design problem, not the API surface.
+asynchronous where v0 `accel` is synchronous: adapter request, device request,
+buffer mapping, and error delivery are promises, and blocking the single-threaded
+JS event loop waiting for one deadlocks it. Therefore WebGPU is deferred together
+with an explicit pending-operation API; it will not implement synchronous
+`Enumerate`, `OpenDevice`, or mapping by spinning the event loop. The reserved
+shape is a typed `Pending[T]` with completion channel/poll and
+`Await(context.Context)`, used by `EnumerateAsync`, `OpenDeviceAsync`, and
+`MapAsync`. Exact names belong to the WebGPU child spec, but asynchronous
+completion is a constraint, not an open choice.
+
 Second, every `syscall/js` call crosses a boundary that costs orders of magnitude
 more than a Go call, so a software-replayed graph of a thousand nodes pays a
 thousand crossings per submission. The mitigation, encoding the node list into a
@@ -277,8 +296,9 @@ typed array and replaying it with a loop on the JS side in one crossing, is
 plausible and unproven (open question 5).
 
 **Difficulty**: unknown, and the honest estimate is large for reasons unrelated
-to graphics. Deferred past v0, but the graph model should not be shaped in a way
-that forecloses the batched-crossing trick.
+to graphics. Deferred past v0 until the pending-operation child spec is
+validated; the synchronous API does not claim browser support in the meantime,
+and the graph model must not foreclose the batched-crossing trick.
 
 ### 2.7 Not in the set
 
@@ -304,8 +324,9 @@ Metal on iOS, OpenCL, and WebGL are not planned.
 
 A `?` here is a completed cell, not a gap: it names something that must be
 measured rather than remembered. Every `cap` and `?` is resolved by the query
-listed under the table, at device open, and once measured on real hardware the
-result belongs in [`conventions.md`](../docs/conventions.md), which is what that
+listed under the table during adapter probing and confirmed at device open. Once
+measured on real hardware the result belongs in
+[`conventions.md`](../docs/conventions.md), which is what that
 document is for. Version-pinned extension claims are deliberately absent from
 this table, because a confidently wrong version pin in a normative spec is worse
 than an unknown: it gets built on.
@@ -314,7 +335,6 @@ than an unknown: it gets built on.
 
 | Capability | CPU | Metal | Vulkan | D3D12 | GLES 3.1 | WebGPU |
 | --- | --- | --- | --- | --- | --- | --- |
-| Max workgroup size, max invocations | yes | yes | yes | yes | yes | yes |
 | Shared (workgroup) memory | yes | yes | yes | yes | yes | yes |
 | Execution + memory barriers | yes | yes | yes | yes | yes | yes |
 | Atomics i32/u32, storage | yes | yes | yes | yes | yes | yes |
@@ -322,7 +342,6 @@ than an unknown: it gets built on.
 | Atomic float add, storage | yes | cap | cap | no | no | no |
 | Atomic float add, shared | yes | ? | cap | no | no | no |
 | Subgroup ops (shuffle, ballot, reduce) | yes | cap | cap | gated | no | cap |
-| Subgroup size reported | yes | yes | yes | gated | n/a | cap |
 | f16 storage | yes | yes | yes | emul | emul | emul |
 | f16 arithmetic | yes | yes | cap | gated | no | cap |
 | bf16 storage | yes | emul | emul | emul | emul | emul |
@@ -333,11 +352,7 @@ than an unknown: it gets built on.
 | i8/u8 storage | yes | yes | yes | emul | emul | emul |
 | i8 packed dot product | yes | ? | cap | gated | no | no |
 | Indirect dispatch | yes | yes | yes | yes | yes | yes |
-| Max storage binding size | yes | yes | yes | yes | yes | yes |
-| Max bindings per kind | yes | yes | yes | yes | yes | yes |
 | FP contraction control | yes | ? | yes | yes | ? | ? |
-| Reports hardware vs software device | yes | yes | yes | yes | yes | yes |
-| Reports queue topology | yes | yes | yes | yes | yes | yes |
 
 `gated` means the capability exists in the hardware and the API but is
 unreachable through the shader compiler that ships with the OS; see 2.4. It is
@@ -348,14 +363,48 @@ not `cap`, because no query resolves it: a distribution decision does.
 one.** Storage is universally available because a 16-bit float is reachable by
 bit packing on every backend in the table (`packHalf2x16` in GLSL ES,
 `f32tof16` in HLSL, `pack2x16float` in WGSL), at the cost of a shift and a
-convert per access. bf16 is easier still, being the top half of an f32.
+convert per access. bf16 uses the upper f32 bits plus the explicit
+round-to-nearest-even adjustment required by 008; truncating to the upper half
+does not satisfy the conversion contract.
 Arithmetic is not emulable at any acceptable cost and is a real capability.
 
 The design consequence is the one 002 already wanted: narrow dtypes are storage
 formats that convert to f32 on load and back on store, that default works
 everywhere, and native narrow arithmetic is an opt-in that requires a capability.
-A quantized model runs on every backend in this table. It runs *fast* only where
-the arithmetic capability is present.
+This makes the storage mechanisms needed by a future quantized design available
+on every backend in the table. Quantized tensor representation, kernels, and
+numeric contracts remain post-v0 work; this matrix does not claim a model path
+before that separate spec exists.
+
+**Packed emulation preserves logical-element independence.** Backends that pack
+two 16-bit or four 8-bit elements into one `u32` must not lower a narrow store to
+an ordinary word read-modify-write: two invocations writing different logical
+elements in the same word would lose one update even though the source accesses
+do not overlap. Every emulated packed write uses a word-sized compare-exchange
+loop, and accesses that can race with such a write use the matching atomic word
+load. Writes to the same logical element remain a caller/kernel race unless the
+API exposes a narrow atomic, which v0 does not. A conformance test concurrently
+writes every lane of one packed word and requires all lane values to survive.
+
+### Numeric limits and reported properties
+
+Numeric values are not capabilities. `DeviceInfo.Limits` and `Device.Limits()`
+carry, at minimum:
+
+- maximum workgroup size per axis, invocations per workgroup, workgroup count per
+  axis, and workgroup-shared bytes;
+- minimum and maximum subgroup size when subgroups exist;
+- maximum storage binding bytes, uniform block bytes, bindings per kind, buffer
+  bytes, pool bytes, pool count, and texture extents/layers;
+- every buffer, uniform, copy, row-pitch, and texture-placement alignment from
+  [001](001-device-resources.md).
+
+Backend, hardware/software identity, and queue topology are reported properties,
+not capabilities. The distinction is enforced structurally: `Capabilities` has
+only booleans and finite feature sets; `Limits` has only numeric bounds. Kernel
+requirements compare feature sets to the first and numeric requirements to the
+second. The CPU strict mode computes its `Limits` from an explicit target set
+rather than burying a portable floor in feature flags.
 
 ### Graph lowering (see section 4)
 
@@ -390,7 +439,7 @@ Intel Mac does not, and both are darwin.
 | Render passes, rasterization | yes (reference) | yes | yes (unbuilt) | yes (unbuilt) | yes | yes |
 | Presentation to a window | no | cap | cap | cap | cap | n/a |
 | Multisampling | no | cap | cap | cap | cap | cap |
-| Rasterizer-ordered access | yes | cap | cap | cap | cap | no |
+| Rasterizer-ordered access | emul | cap | cap | cap | cap | no |
 
 [005](005-graphics.md) decides that the CPU backend rasterizes, so the graphics
 half has an oracle too, and the reasoning there is the reasoning here: half the
@@ -406,11 +455,11 @@ precisely where MSAA is used.
 this spec owns the matrix. It is `ARB_fragment_shader_interlock` or
 `GL_EXT_fragment_shader_interlock` on GL, raster order groups on Metal,
 `VK_EXT_fragment_shader_interlock` on Vulkan, and rasterizer ordered views on
-D3D12. WGSL has no equivalent, so WebGPU is `no`. The CPU backend has it for free
-by rasterizing in primitive order, which is another instance of the oracle
-holding the guarantee that hardware makes optional. It is absent by default
-everywhere, per conventions.md: unordered fragment writes are not offered as a
-way to produce a deterministic buffer.
+D3D12. WGSL has no equivalent, so WebGPU is `no`. The CPU backend can emulate it
+by rasterizing in primitive order, but reports it only after the stage-ABI and
+reference-rasterizer child specs implement and test that ordering. It is absent
+from the baseline fragment API, per [005](005-graphics.md): unordered fragment
+writes are not offered as a way to produce a deterministic buffer.
 
 The predecessor's Vulkan and D3D12 backends never grew a render path at all, so
 `unbuilt` is a statement about evidence: the API supports it, nobody in this
@@ -418,7 +467,8 @@ lineage has done it cgo-free, and the estimate is unproven.
 
 ### Where the answers come from
 
-Each backend resolves its `cap` and `?` cells at device open:
+Each backend resolves its `cap` and `?` cells while producing `DeviceInfo` and
+confirms them at device open:
 
 - **Metal**: `supportsFamily:` for feature sets,
   `maxTotalThreadsPerThreadgroup` on the pipeline state,
@@ -583,20 +633,19 @@ on any backend with a native object. Unproven (open question 5).
 
 ## 5. The CPU backend in depth
 
-### Two execution strategies, chosen from what the pipeline declares
+### Two generated execution strategies
 
 **Cooperative kernels** (any use of shared memory, barriers, or subgroup
-operations) run as **one goroutine per invocation**, with the workgroup's
-invocations sharing a shared-memory slice. Go has no coroutines, and a barrier
-requires every invocation to be suspendable mid-kernel, so goroutines are the
-only construct with the right shape. Workgroups are distributed across a bounded
-worker pool sized from `GOMAXPROCS`, since a large dispatch would otherwise
-create an unbounded number of goroutines.
+operations) use [004](004-kernel-authoring.md)'s generated resumable lowering.
+Each invocation has explicit locals and a program counter, and the workgroup
+scheduler advances it to a barrier or subgroup suspension point. Workgroups are
+distributed across a bounded worker pool sized from `GOMAXPROCS`; invocation
+state does not require one goroutine per lane.
 
 **Flat kernels** (no shared memory, no barriers, no subgroups) run as a **plain
-loop over invocations** on one goroutine per workgroup. There is nothing to
-suspend, so there is nothing to pay a scheduler for. This is ordinary Go code
-over ordinary slices, and it runs at the speed of ordinary Go code.
+generated loop over invocations** on one worker per workgroup. There is nothing
+to suspend, so there is nothing to pay a scheduler for. This is ordinary Go code
+over ordinary slices, with explicit typed-IR rounding operations.
 
 The strategies must agree. A conformance test runs a set of flat kernels under
 both strategies and requires identical results, which keeps the fast path from
@@ -607,26 +656,25 @@ drifting into a second implementation.
 A barrier is a reusable counting barrier over the workgroup's invocations. Three
 behaviours make it an oracle rather than an implementation:
 
-- **Non-uniform arrival is detected.** An invocation that returns from the kernel
-  while others are waiting at a barrier is a failure with the workgroup id and
-  the invocation ids that did not arrive, not a hang and not a silently different
-  result. [002](002-compute-model.md) calls this out as a large part of why the
-  CPU backend is worth having, and it is: on real hardware this is undefined
+- **Non-uniform arrival is detected.** At one dynamic rendezvous epoch every
+  active invocation must reach the same generated barrier ID. Returning or
+  reaching another ID reports both source positions and the invocation IDs, not
+  a hang or timeout. [002](002-compute-model.md) calls this out as a large part
+  of why the CPU backend is worth having: on real hardware this is undefined
   behaviour that usually appears to work.
-- **Shared memory is poisoned**, not zeroed, at workgroup start, so a kernel that
-  reads before writing fails loudly here instead of working on whichever backend
-  happens to zero.
-- **`go test -race` finds missing barriers.** This is unique to this backend and
-  it is the strongest argument for the goroutine model over anything cleverer.
-  Shared memory is a Go slice and the invocations are real goroutines, so a
-  missing barrier around a shared-memory read-after-write is a genuine Go data
-  race that the race detector reports with both stacks. No GPU backend can offer
-  that at any price. It is worth a slower oracle.
+- **Shared memory carries a definition bitmap.** Loads and atomic read-modify-
+  writes check the element's bit; stores set it. A poison byte pattern may aid
+  debugging but cannot prove initialization because every integer bit pattern is
+  valid and floating poison can propagate.
+- **Missing barriers are diagnosed by explicit access tracking.** The generated
+  CPU operations retain source locations and report overlapping unordered
+  accesses deterministically. `go test -race` validates concurrency inside the
+  runtime implementation; it is not the semantic mechanism for kernel races.
 
-Deliberate nondeterminism follows from the same design: for a *correct* kernel
-the CPU backend is deterministic, and for a racy one it is not, which is the
-right direction. A shuffle mode that permutes invocation scheduling order under a
-fixed seed makes ordering assumptions fail reproducibly rather than occasionally.
+A shuffle mode permutes invocation advancement under a fixed seed to exercise
+ordering assumptions reproducibly. Correct kernels remain deterministic; a race
+is reported with the conflicting source accesses rather than inferred from a
+different final value.
 
 ### Subgroups
 
@@ -636,25 +684,53 @@ emulation exists to find. Small enough that a normal workgroup spans several
 subgroups, so cross-subgroup errors and tail handling are exercised.
 
 The size is configurable because a kernel that assumes a subgroup size is wrong
-on the next device, and the way to prove a kernel does not assume one is to run
-it at 1, 4, 32, and 64 and require the same answer. That is a test the oracle can
-run and no single piece of hardware can.
+on the next device. A kernel whose semantic result is subgroup-size independent
+runs at 1, 4, 32, and 64 and matches its no-subgroup fallback. Individual
+shuffle, ballot, or subgroup-reduction results may legitimately differ with lane
+count; the invariant belongs to the complete algorithm, not each intrinsic.
 
-### Strict mode
+### CPU options and an explicit portability target
 
-The oracle enforces the intersection, and how tight the intersection is depends on
-what the caller is targeting. So the CPU device is configurable between:
+The oracle enforces an intersection, but there is no timeless meaning of
+"portable": v0 targets CPU and Metal, a server may target Vulkan only, and a
+browser build eventually includes WebGPU. Strict mode therefore requires a
+target set instead of silently intersecting every row in this document.
 
-- **Permissive** (default): limits generous enough to run anything, for
-  development.
-- **Strict portable**: workgroup and shared-memory limits set to the floor
-  guaranteed across the backends in section 3, `Shared` memory absent, subgroups
-  absent, float atomics absent, narrow arithmetic absent. A kernel that runs
-  under strict portable runs on every backend in the matrix. A kernel that does
-  not is telling you which capability it needs, at build time, on a laptop.
-- **Mimic**: limits and capabilities loaded from a capability record captured
-  from a real device, so a failure reported from a machine nobody has can be
-  reproduced on one that is available.
+```go
+type CPUMode int
+const (
+	CPUDeveloper CPUMode = iota
+	CPUStrict
+	CPUMimic
+)
+
+type CPUOptions struct {
+	Mode         CPUMode
+	StrictTargets []Backend      // required and non-empty for CPUStrict
+	Mimic        *DeviceProfile  // required for CPUMimic
+	SubgroupSize int             // 0 selects the mode/profile default
+	ShuffleSeed  uint64          // 0 disables shuffled advancement
+}
+
+func OpenCPU(opts CPUOptions) (*Device, error)
+```
+
+- **Developer** (the zero value): generous limits and every CPU-emulatable
+  feature, for development. Its default subgroup size is 4.
+- **Strict**: `Capabilities` are the intersection and `Limits` are the minimum
+  guaranteed bounds of exactly `StrictTargets`. The list rejects duplicates,
+  `BackendCPU`, and a backend without a published baseline profile. Order does
+  not affect the result and is normalized in `DeviceInfo`. A kernel that builds
+  here is portable to that stated set, not to an implied future backend.
+- **Mimic**: loads both capabilities and limits from a captured `DeviceProfile`,
+  including backend/compiler policy, so a remote-device failure can be
+  reproduced locally.
+
+`SubgroupSize` must be 1 or a power of two within the selected mode/profile's
+subgroup bounds. It controls CPU emulation only and never changes the reported
+target intersection. `OpenDevice` on the enumerated CPU adapter is equivalent to
+`OpenCPU(CPUOptions{})`; automatic selection never fabricates non-default CPU
+options.
 
 ### Exactness, and the one thing that threatens it
 
@@ -662,7 +738,7 @@ Integer results are bit-exact everywhere and that is a hard requirement.
 
 Floating point is not, and promising it would be a lie. FMA contraction, sqrt and
 transcendental implementations, and reduction order all legitimately differ
-between an emitted shader and a Go function. So the contract is:
+between a GPU artifact and the generated CPU lowering. So the contract is:
 
 - **Exact**: integer kernels, and f32 kernels restricted to `+`, `-` and `*` with
   contraction forbidden and a fixed reduction order. **Division is not in this
@@ -707,11 +783,12 @@ whether it is usable for real work:
   parallel across workgroups. This is genuinely usable for small real work: a
   modest tensor operation, a test fixture, a unit-test-sized model. It will not
   compete with a BLAS.
-- **Cooperative kernels**: dominated by goroutine scheduling and barrier
-  synchronisation, roughly a scheduler operation per invocation per barrier
-  interval. Usable for correctness at thousands to low millions of invocations,
-  not for production work. A tiled GEMM will run and will be slow, and that is
-  the correct tradeoff for the thing whose job is to be right.
+- **Cooperative kernels**: dominated by state save/restore, access
+  instrumentation, and barrier scheduling, roughly one scheduler step per
+  invocation per barrier interval. Usable for correctness at thousands to low
+  millions of invocations, not for production work. A tiled GEMM will run and
+  will be slow, and that is the correct tradeoff for the thing whose job is to be
+  right.
 
 The disclosed goal: the CPU backend must be fast enough that the full conformance
 suite runs in the time a Go test suite is allowed to take, and fast enough that
@@ -721,26 +798,110 @@ at the cost of exactness or of the checks in this section.
 
 ---
 
-## 6. Selection and enumeration
+## 6. Selection, enumeration, and lifetime
 
-Three operations, deliberately distinct, per [001](001-device-resources.md)'s
-no-silent-fallback rule:
+### 6.1 Enumeration result
 
-**Enumerate** reports every device every compiled-in backend can see, before
-anything is opened, with its backend, name, hardware-or-software flag, and full
-capability record. Enumeration never opens a device and never panics: a backend
-whose library is missing, stale, or broken contributes an entry explaining why it
-found nothing, because "Vulkan is not installed" and "Vulkan is installed and
-reports no compute queue" are different problems for the caller.
+Enumeration returns adapters and diagnostics separately:
 
-**Open a named backend** succeeds or returns an error naming the backend and the
-reason. It never returns a different backend. This is the rule the predecessor
-violated by convenience, and it turned "my GPU code is slow" into a mystery.
+```go
+type AdapterID struct { /* opaque and comparable */ }
+
+type DeviceInfo struct {
+	ID           AdapterID
+	Backend      Backend
+	Name, Vendor string
+	Software     bool
+	Capabilities Capabilities
+	Limits       Limits
+}
+
+type ProbeStage int // LoadLibrary, CreateInstance, EnumerateAdapters, QueryDevice
+type ProbeDiagnostic struct {
+	Backend Backend
+	Stage   ProbeStage
+	Err     error
+}
+
+type Enumeration struct {
+	Devices     []DeviceInfo
+	Diagnostics []ProbeDiagnostic
+}
+
+func Enumerate() Enumeration
+func OpenDevice(id AdapterID) (*Device, error)
+```
+
+`AdapterID` is minted by accel, embeds a backend namespace internally, and is
+stable for the process lifetime and across repeated enumerations while the
+adapter remains present. Callers may compare and retain it in memory but may not
+serialize or parse it; cross-process stable identifiers are not available on all
+backends. `OpenDevice` rejects an ID from an earlier process or a removed adapter
+with an error containing the last known identity. The opened device's
+`Info().ID` is the same value.
+
+Enumeration discovers adapters without creating logical devices. Query-only
+handles needed to read features and limits are allowed and released before
+return. A backend whose library is missing, whose instance creation fails, or
+which reports no compute queue contributes a `ProbeDiagnostic`, not a synthetic
+`DeviceInfo`. Multiple diagnostics may coexist with valid adapters from the same
+backend. Native probes run through a small helper subprocess with a versioned
+wire record; abnormal exit, signal, malformed output, and timeout become probe
+diagnostics. CPU probing is in-process. WebGPU does not participate in this
+synchronous API and will use the pending API from section 2.6.
+
+### 6.2 Explicit open
+
+`OpenDevice` is the unambiguous explicit operation. The old `Open(Backend)` shape
+is removed: enumeration may report two discrete GPUs and a software adapter for
+one backend, so a backend name cannot select one without an undocumented policy.
+Callers that only care about a backend filter `Enumeration.Devices`, choose an
+ID, and open it. No explicit open ever falls back to another adapter or backend.
 
 **Open the best available** is a separate call that takes an explicit policy: a
 preference order, whether software devices are acceptable, whether the CPU
-backend is a candidate, and required capabilities. It fails rather than
-descending into something the caller did not sanction.
+backend is a candidate, required capabilities, and numeric minimum limits. It
+selects from one enumeration snapshot and opens that adapter ID; it fails rather
+than descending into something the caller did not sanction.
+
+```go
+type Policy struct {
+    Prefer        []Backend
+    AllowCPU      bool
+    AllowSoftware bool
+    Require       Capability
+    Limits        LimitConstraints
+}
+
+type LimitConstraints struct {
+    AtLeast Limits
+    AtMost  Limits
+}
+
+func OpenBest(p Policy) (*Device, error)
+
+type AdapterRejection struct {
+    ID     AdapterID
+    Reason string
+}
+
+type SelectionReport struct {
+    Selected           AdapterID
+    EnvironmentBackend string
+    Rejected           []AdapterRejection
+}
+
+func (d *Device) SelectionReport() (SelectionReport, bool)
+```
+
+Both constraint records are partial: zero fields mean unconstrained, unlike the
+fully populated positive `Limits` on `DeviceInfo`, and array components are
+checked independently. Capacity maxima normally go in `AtLeast`; required-small
+alignment or other lower-is-better values go in `AtMost`. This avoids pretending
+that every numeric limit has the same comparison direction. `OpenBest` reports
+every rejected candidate and constraint when no candidate remains. A
+successfully selected device exposes the same decisions through
+`SelectionReport`; explicit opens return `false` because no selection occurred.
 
 Two constraints on the defaults:
 
@@ -752,11 +913,44 @@ Two constraints on the defaults:
   backend. Automatic selection must be able to see that distinction, which is why
   it is a matrix row.
 
-**Environment override**, narrowly. `ACCEL_BACKEND` may **restrict the candidate
+### 6.3 Automatic selection and environment override
+
+`ACCEL_BACKEND` may **restrict the candidate
 set for automatic selection only**. It never redirects an explicit request, since
-that would reintroduce the exact mystery decision 3 exists to prevent, and
-whatever it did appears in the opened device's identity string, so a surprising
-device is self-explaining in a log.
+that would reintroduce the exact mystery decision 3 exists to prevent. The
+selected adapter ID and the applied environment restriction appear in the
+selection report, so a surprising device is self-explaining in a log.
+
+### 6.4 Probe diagnostics are not open errors
+
+Probe diagnostics explain why candidates are absent; they do not make
+`Enumerate` itself fail and do not prevent healthy backends from being used.
+`OpenBest` includes relevant diagnostics in its error only when no candidate
+satisfies the policy. `OpenDevice` reports the open failure for that adapter
+directly. This separation prevents "Vulkan missing" from hiding a valid Metal
+adapter while still distinguishing it from "Vulkan present, no compute queue".
+
+### 6.5 Close semantics
+
+Close follows [001](001-device-resources.md)'s ordered lifetime model:
+
+- Resource `Close` atomically retires that caller handle. If submissions or a
+  pending immediate-transfer batch retain it, physical destruction is deferred
+  until their fences signal and `Close` returns a `LifetimeError` describing the
+  retain. A second `Close` and every later use report that the handle is closed.
+- `Device.Close` succeeds only when no pending immediate-transfer batch, live
+  pool, resource, pipeline, graph, frame, mapping, or submission remains.
+  Otherwise it returns one stable `LifetimeError` summary, leaves the device
+  fully open, and closes no children. It neither starts hidden asynchronous work,
+  waits indefinitely, nor recursively destroys caller-owned objects. The caller
+  flushes and waits each queue explicitly before teardown.
+- After successful `Device.Close`, every device and queue entry point reports a
+  closed-device error without entering backend code. Backend destruction occurs
+  on the required context/main thread before success is returned.
+
+These rules make a close attempted during in-flight work recoverable: wait the
+reported fences, close children, and retry. No backend may turn it into a
+use-after-free or a partially closed device.
 
 ---
 
@@ -775,9 +969,10 @@ discipline of this spec:
   case is the one that regresses, because it is the code nobody runs on their
   own machine. The CPU backend's strict mode makes both cases runnable on any
   machine.
-- **Every capability the matrix marks `cap` or `?` is measured and recorded** at
-  device open, and the run reports the record, so the matrix in section 3 is
-  corrected by evidence rather than by memory.
+- **Every capability the matrix marks `cap` or `?` and every required numeric
+  limit is measured and recorded** in `DeviceInfo`, confirmed at device open,
+  and reported by the run, so section 3 is corrected by evidence rather than by
+  memory.
 - **Each path with its own convention is covered separately.** Readback origin is
   the standing example: a compute-buffer test passes while the texture path is
   mirrored. See [`conventions.md`](../docs/conventions.md).
@@ -862,13 +1057,13 @@ finished, whatever else it can do.
    still pays through plan-once, but 003's framing of native replay as the
    payoff needs softening.
 
-2. **Can the CPU backend's cooperative path be made faster without losing what
-   makes it an oracle?** Goroutine-per-invocation is what buys suspendable
-   barriers and `go test -race`. Anything faster (an interpreter with explicit
-   continuations, a compile-time transform that splits kernels at barriers into
-   sequentially executed phases) gives up the race detector, which is the single
-   most valuable property the backend has. Unresolved whether both can be kept,
-   perhaps as two modes.
+2. **Can the generated cooperative path be optimized without weakening its
+   instrumentation?** The selected design is explicit resumable state plus
+   definition and access tracking. Removing source-position tracking, merging
+   epochs, or bypassing shadow state may make it faster and would weaken the
+   oracle. Measurement should identify optimizations that preserve identical
+   diagnostics; a goroutine-per-invocation fallback is not a separate semantic
+   mode.
 
 3. ~~**What exactly is the numeric contract, per operation class?**~~
    **Answered by [008](008-numerics.md)**, which owns the two tiers this section
@@ -892,25 +1087,15 @@ finished, whatever else it can do.
    two. Until it is taken, four cells in the D3D12 column read `gated` and the
    backend is a compute baseline only.
 
-5. **Is WebGPU worth v0, and does the batched crossing work?** Section 2.6's
+5. **Does the WebGPU batched crossing work?** WebGPU is deferred past v0 and its
+   pending-operation shape is required, so neither is open. Section 2.6's
    mitigation for `syscall/js` overhead, encoding a graph's node list into a
    typed array and replaying it in one crossing, is plausible and unmeasured. If
    it works, WebGPU is a good fit for the recording model and browsers become a
    target. If it does not, WebGPU is a per-node crossing cost that no amount of
    planning recovers, and `GOOS=js` runs the CPU backend.
 
-6. **How does enumeration survive a broken driver?** R1 says probing must not
-   panic, and a Go `recover` does not cover the case that actually happens:
-   `dlopen` of a mismatched or corrupt driver, or a driver that aborts the
-   process during instance creation, kills the process outright with no Go frame
-   to recover in. The predecessor never hit this because it opened one backend
-   per platform. Enumerating four means loading four drivers on a machine that
-   was never tested with them. Options are probing in a subprocess (robust,
-   slow, and awkward on `GOOS=js`), caching a probe result on disk, or accepting
-   the risk and documenting that enumeration can take the process down. None is
-   obviously right, and this decides how safe `Enumerate` really is.
-
-7. **Where does cooperative matrix support land?** [002](002-compute-model.md)
+6. **Where does cooperative matrix support land?** [002](002-compute-model.md)
    defers it and notes it is where most GEMM throughput lives. It is a Vulkan
    extension, a Metal simdgroup matrix type, and a D3D wave matrix, with no
    portable shape and no emulation that is worth writing on the CPU backend
@@ -925,19 +1110,30 @@ Consolidated, since sections 5 and 7 carry the detail:
   the CPU oracle under the two-tier numeric contract.
 - The CPU backend's flat and cooperative execution strategies produce identical
   results on kernels eligible for both.
-- The same f32 kernel is bit-identical on arm64 and amd64.
+- The same class-A f32 kernel within 008's proved exact domain is bit-identical on
+  arm64 and amd64; other kernels use their derived bounds.
 - A subgroup-using kernel produces the same result at emulated subgroup sizes
   1, 4, 32, and 64, and matches its no-subgroup fallback.
-- Non-uniform barrier arrival, and a read of unwritten shared memory, both fail
-  on the CPU backend with the workgroup and invocation identified.
-- A missing barrier in a shared-memory read-after-write is reported by
-  `go test -race` on the CPU backend.
-- A kernel that passes under strict portable mode runs on every enumerated
-  device; a kernel needing an absent capability fails at graph build with the
-  capability and the device named.
-- Opening a named unavailable backend returns an error naming it, and never
-  returns a different backend.
+- Non-uniform barrier arrival, a read of unwritten shared memory, and unordered
+  overlapping accesses fail deterministically on the CPU backend with source
+  positions, workgroup, and invocation IDs.
+- A packed-emulation test concurrently writes every 8-bit and 16-bit lane of one
+  backing word and observes every value; a non-atomic word update fails it.
+- A kernel that passes under `CPUStrict` runs on every enumerated device in the
+  exact `StrictTargets` set; changing the set changes the reported intersection.
+  A kernel needing an absent capability or exceeding a limit fails at graph
+  build with the feature/limit and adapter named.
+- Two adapters on one backend receive distinct IDs; `OpenDevice` opens exactly
+  the chosen ID. A stale or removed ID fails and never selects a sibling.
+- A missing, broken, crashed, and no-compute-queue backend each produces a
+  stage-specific probe diagnostic without suppressing healthy adapters.
 - `ACCEL_BACKEND` cannot change the result of an explicit open.
+- Closing a resource in flight defers destruction and reports it. Device close
+  with any live child or submission leaves the device usable; after ordered
+  teardown a retry succeeds and every later entry point reports closed.
+- Under `GOOS=js`, no synchronous path waits for a WebGPU promise; pending
+  adapter, device, and mapping operations complete or cancel through their
+  explicit asynchronous API.
 - The module contains no `import "C"`, verified by a CI grep over all files
   including tests, and every `GOOS` builds with `CGO_ENABLED=0`.
 
@@ -951,10 +1147,10 @@ capabilities rather than assumptions.
 Every GPU cell starts `?`. That is deliberate and follows this spec's own rule
 about confidently wrong numbers: flush-to-zero behaviour is exactly the kind of
 detail that is easy to state from memory and wrong on the device in front of you.
-The CPU backend is `yes` for all three because Go's float32 arithmetic preserves
-denormals and produces infinities and NaNs, which is also what makes it the
-strictest oracle of the set: a kernel that relies on a denormal surviving will
-pass there and may not elsewhere.
+The CPU backend is `yes` for all three because its generated float32 operations
+preserve denormals and produce infinities and NaNs explicitly, which also makes
+it the strictest oracle of the set: a kernel that relies on a denormal surviving
+will pass there and may not elsewhere.
 
 Filling these in is a measurement task, one small kernel per cell, and it should
 happen before any kernel is written that depends on the answer.

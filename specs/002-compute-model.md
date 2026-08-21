@@ -74,12 +74,14 @@ outright. See 2.7.
 is wrong on the next device. Workgroup size is the caller's, subgroup size is the
 device's.
 
-### 1.2 Workgroup size is in the pipeline descriptor
+### 1.2 Workgroup size is generated metadata fixed at pipeline creation
 
-Workgroup size is part of the **pipeline descriptor**, fixed at pipeline
-creation, not at dispatch. Backends need it at compile time: it appears in the
-GLSL layout qualifier, in `[numthreads(...)]` in HLSL, and in Metal's
-threads-per-threadgroup.
+Workgroup size is part of the generated `Kernel` metadata consumed at pipeline
+creation, not a caller-written pipeline field and not a dispatch argument.
+Backends need it at compile time: it appears in the GLSL layout qualifier, in
+`[numthreads(...)]` in HLSL, and in Metal's threads-per-threadgroup. The author
+writes it once in 004's kernel directive; the public pipeline descriptor carries
+only the generated kernel and an optional label.
 
 A dispatch specifies a count of **workgroups**, not a count of threads. This is
 the opposite of the predecessor's `Dispatch(x, y, z)` thread count, and the
@@ -108,7 +110,7 @@ workgroup id, `l` for the local id.
 
 | Accessor | Type | Derivation | Range | Uniform across |
 | --- | --- | --- | --- | --- |
-| `t.WorkgroupSize()` | `ID3` | pipeline descriptor | `S` | dispatch |
+| `t.WorkgroupSize()` | `ID3` | generated kernel metadata | `S` | dispatch |
 | `t.NumGroups()` | `ID3` | dispatch parameter | `G` | dispatch |
 | `t.GlobalSize()` | `ID3` | `S.i * G.i` per axis | | dispatch |
 | `t.GroupID()` | `ID3` | scheduler-assigned | `[0, G.i)` | workgroup |
@@ -171,6 +173,12 @@ invocation count per workgroup, a maximum workgroup count per axis, and a shared
 memory budget. Exceeding any of them is a **graph build error, not a dispatch
 failure**.
 
+All of these numbers live in `Device.Limits()` as
+`MaxWorkgroupSize`, `MaxWorkgroupInvocations`, `MaxWorkgroupCount`, and
+`MaxSharedMemoryBytes`. `Capabilities` contains only support flags and operation
+sets. A number used in validation or arithmetic is a limit even when zero has a
+special meaning on hardware.
+
 The guaranteed minimums differ enough that portability is not obvious, so the
 floor is written down rather than remembered:
 
@@ -188,6 +196,15 @@ backend and recorded in [`conventions.md`](../docs/conventions.md), per
 is worse than an unknown. The floors are what [006](006-backends.md)'s strict
 portable mode enforces, and they are why section 7's GEMM uses a 128-invocation
 workgroup rather than the 256 a 16x16 tile suggests: 256 does not fit the floor.
+
+`WorkgroupCount` uses zero only to omit trailing axes on the **host-authored
+direct** form: `X` must be positive, while `Y == 0` and `Z == 0` normalise to 1.
+After normalisation every direct-dispatch axis is positive; callers omit a
+direct node rather than recording a zero-sized one. An indirect count is three
+device-written `u32` values and is not normalised: if any actual axis is zero,
+the node performs no invocations. This is the bounded conditional-execution
+form. The host-authored `maxCount` follows the direct normalization rule and is
+positive after normalization.
 
 ---
 
@@ -210,7 +227,7 @@ The simplifications, each with what it costs:
 | Vulkan has | accel has | Why | Cost |
 | --- | --- | --- | --- |
 | Scopes up to `Device` and `QueueFamily` | Scopes up to `Workgroup` | No target below Vulkan can express a device-scope kernel barrier, and none can guarantee the forward progress that would make one useful (2.7) | Cross-workgroup handoff inside a kernel is not expressible. It is a graph edge instead. |
-| Per-instruction memory semantics on every atomic and barrier | One barrier primitive per storage-class mask; atomics are relaxed (4.2) | GLSL ES 3.1 and WGSL have no per-instruction semantics operands at all | A flag handoff needs an explicit barrier next to the atomic. Stated, not implied. |
+| Per-instruction memory semantics on every atomic and barrier | One collective barrier primitive per storage-class mask; atomics are relaxed (4.2) | GLSL ES 3.1 and WGSL have no portable acquire/release atomic surface | Atomic flag handoff is not expressible in v0. Cooperation uses a collective barrier; cross-workgroup handoff uses a graph edge. |
 | Availability and visibility as separate operations with memory domains | One operation: a memory barrier makes prior writes both available and visible to the whole workgroup | The split pays for itself only with non-coherent host mappings and device scope, neither of which is inside a kernel | Slightly stronger, therefore slower, than the minimum on some hardware. Accepted. |
 | Non-privately-buffered versus privately-buffered variables | Every storage-class access is treated as non-privately-buffered | The distinction exists to permit aggressive caching of variables no other thread can see, which is exactly accel's `Private` class, and that class has no aliases | None material. |
 | Pointer aliasing rules | No pointer casts exist in the subset | [004](004-kernel-authoring.md)'s subset admits exactly one pointer type, `*[N]T` as a parameter | None. |
@@ -282,7 +299,7 @@ Let a memory operation be a read or write of one location in one storage class.
   invocation and `a` precedes `b` in the kernel's execution.
 - **Synchronises-with.** `a ->sw b` when there is a dynamic barrier instance `B`
   whose storage-class mask covers the class of `a` and `b`, those are issued by
-  invocations `i` and `j` in the same workgroup, `a ->po (i's arrival at B)`, and
+  invocations `i` and `j` in the same barrier scope, `a ->po (i's arrival at B)`, and
   `(j's departure from B) ->po b`. The barrier's execution component is what
   makes arrival and departure separable events, and its memory component is what
   makes the edge carry data.
@@ -305,10 +322,10 @@ Two consequences that people get wrong in exactly this order:
   shared mask does not order storage-buffer accesses. `t.BarrierShared()` between
   a storage write and a peer's storage read is a race, and it is a race that
   works on every desktop GPU because their caches are coherent enough to hide it.
-- **`->hb` is not transitive through a non-barrier.** A flag written by
-  invocation 0, spun on by invocation 1, then a payload read by invocation 1, is
-  not ordered by anything. See 4.2 for the spelling that is ordered, and 2.7 for
-  why the spin itself is illegal across workgroups.
+- **`->hb` is not created by a relaxed atomic flag.** A payload written by
+  invocation 0, followed by a flag observed by invocation 1, does not order the
+  payload. v0 deliberately has no acquire/release spelling for that handoff; use
+  a collective workgroup barrier or a graph edge (4.2 and 2.7).
 
 ### 2.5 What a barrier orders, and what it makes visible
 
@@ -328,31 +345,28 @@ easy path is the correct one:
 | `t.Barrier()` | yes | shared and storage | workgroup |
 | `t.BarrierShared()` | yes | shared | workgroup |
 | `t.BarrierStorage()` | yes | storage | workgroup |
-| `t.MemoryBarrierShared()` | no | shared | workgroup |
-| `t.MemoryBarrierStorage()` | no | storage | workgroup |
 | `t.SubgroupBarrier()` | yes | shared and storage | subgroup, capability-gated |
 
 `t.Barrier()` is the one to reach for. The masked variants exist because a
 storage memory barrier is materially more expensive than a shared one on tiled
 mobile hardware, and a tiled GEMM executes two barriers per k-tile in its
-innermost structure, so the difference is not academic. The barrier-free memory
-variants exist for the flag-publish pattern in 4.2 and nothing else; they are
-documented as the sharp tool.
+innermost structure, so the difference is not academic. v0 exposes no
+memory-only fence: without acquire/release atomics it would invite a flag
+handoff the portable model cannot make correct.
 
 Lowering, so the claim is checkable rather than asserted:
 
 | Call | GLSL ES 3.1 | MSL | SPIR-V | HLSL | WGSL |
 | --- | --- | --- | --- | --- | --- |
-| `Barrier` | `barrier(); memoryBarrierShared(); memoryBarrierBuffer()` | `threadgroup_barrier(mem_threadgroup\|mem_device)` | `OpControlBarrier Workgroup Workgroup (AcquireRelease\|WorkgroupMemory\|UniformMemory)` | `AllMemoryBarrierWithGroupSync()` | `workgroupBarrier(); storageBarrier()` |
-| `BarrierShared` | `barrier(); memoryBarrierShared()` | `threadgroup_barrier(mem_threadgroup)` | same, `WorkgroupMemory` only | `GroupMemoryBarrierWithGroupSync()` | `workgroupBarrier()` |
-| `BarrierStorage` | `barrier(); memoryBarrierBuffer()` | `threadgroup_barrier(mem_device)` | same, `UniformMemory` only | `DeviceMemoryBarrierWithGroupSync()` | `storageBarrier()` |
-| `MemoryBarrierShared` | `memoryBarrierShared()` | `threadgroup_fence(mem_threadgroup)` | `OpMemoryBarrier Workgroup WorkgroupMemory` | `GroupMemoryBarrier()` | not expressible, lowers to `workgroupBarrier()` |
+| `Barrier` | `memoryBarrierShared(); memoryBarrierBuffer(); barrier()` | `threadgroup_barrier(mem_threadgroup\|mem_device)` | `OpControlBarrier Workgroup Workgroup (AcquireRelease\|WorkgroupMemory\|UniformMemory)` | `AllMemoryBarrierWithGroupSync()` | `workgroupBarrier(); storageBarrier()` |
+| `BarrierShared` | `memoryBarrierShared(); barrier()` | `threadgroup_barrier(mem_threadgroup)` | same, `WorkgroupMemory` only | `GroupMemoryBarrierWithGroupSync()` | `workgroupBarrier()` |
+| `BarrierStorage` | `memoryBarrierBuffer(); barrier()` | `threadgroup_barrier(mem_device)` | same, `UniformMemory` only | `DeviceMemoryBarrierWithGroupSync()` | `storageBarrier()` |
 | `SubgroupBarrier` | not available | `simdgroup_barrier(...)` | `OpControlBarrier Subgroup Subgroup ...` | SM 6 wave intrinsics | `subgroupBarrier()` where present |
 
-The WGSL row is the honest one: WGSL has no fence without execution, so a memory
-barrier alone lowers to a full workgroup barrier there. That is stronger than
-asked for and therefore correct, and it is slower. It is recorded here rather
-than left as a surprise.
+The GLSL memory barrier precedes `barrier()`: writes must be made available
+before invocations are released from the rendezvous. Reversing those calls lets
+a peer leave the execution barrier before the publishing invocation has issued
+its memory barrier, which does not establish the edge this section promises.
 
 ### 2.6 Without a barrier, nothing is guaranteed
 
@@ -397,13 +411,16 @@ graph builder and is not the caller's concern.
 
 ## 3. Barrier semantics, precisely
 
-### 3.1 Uniform control flow is required
+### 3.1 Uniform control flow is required at the barrier's scope
 
-**Rule.** Every invocation of a workgroup must execute the same sequence of
-barrier instances. Formally, for a barrier statement `B` and any two invocations
-`i` and `j` of the same workgroup, the number of times `i` executes `B` equals
-the number of times `j` executes `B`, and the interleaving of `B` with every
-other barrier statement is the same for both.
+**Rule.** Every invocation in a barrier's scope must execute the same sequence of
+barrier instances. The scope is the workgroup for `Barrier`, `BarrierShared`, and
+`BarrierStorage`, and one subgroup for `SubgroupBarrier`. Formally, for a barrier
+statement `B` and any two invocations `i` and `j` in the same dynamic scope, the
+number of times `i` executes `B` equals the number of times `j` executes `B`, and
+the interleaving of `B` with every other barrier at that scope is the same for
+both. A subgroup barrier need not be reached by other subgroups in the
+workgroup; a workgroup barrier must be reached by all of them.
 
 A barrier reached by some invocations of a workgroup and not others is undefined
 behaviour on real hardware, and **it will appear to work in testing.** On most
@@ -486,36 +503,40 @@ predicate.
 ### 3.3 How the compiler decides
 
 Uniformity is a forward dataflow analysis over [004](004-kernel-authoring.md)'s
-typed IR. It computes, for every value, whether that value is provably equal
-across all invocations of a workgroup.
+typed IR. It computes a three-level lattice for every value:
+`WorkgroupUniform` (equal across the whole workgroup), `SubgroupUniform` (equal
+within each subgroup), or `NonUniform`. Workgroup-uniform values are also
+subgroup-uniform. Workgroup barriers require `WorkgroupUniform` control;
+subgroup barriers require `SubgroupUniform` control.
 
 **Seeds.**
 
-| Uniform | Non-uniform |
-| --- | --- |
-| Literals and constants | `t.LocalID()`, `t.LocalIndex()` |
-| Fields of the uniform-struct parameter | `t.GlobalID()`, `t.GlobalIndex()` |
-| `t.GroupID()`, `t.GroupIndex()` | `t.SubgroupID()`, `t.SubgroupInvocationID()` |
-| `t.WorkgroupSize()`, `t.NumGroups()`, `t.GlobalSize()` | any load from a storage buffer |
-| `t.SubgroupSize()` | any load from shared memory |
-| | any atomic's return value |
-| | any subgroup operation's result |
+| Workgroup-uniform | Subgroup-uniform only | Non-uniform |
+| --- | --- | --- |
+| Literals and constants | `t.SubgroupID()` | `t.LocalID()`, `t.LocalIndex()` |
+| Fields of the uniform-struct parameter | | `t.GlobalID()`, `t.GlobalIndex()` |
+| `t.GroupID()`, `t.GroupIndex()` | | `t.SubgroupInvocationID()` |
+| `t.WorkgroupSize()`, `t.NumGroups()`, `t.GlobalSize()` | | any load from a storage buffer |
+| `t.SubgroupSize()` | | any load from shared memory |
+| | | any atomic's return value |
+| | | any subgroup operation's result (conservative even when one operation broadcasts) |
 
 Loads are non-uniform even when the index is uniform, because another invocation
 may have written the location. A uniform-indexed load *after* a barrier is still
 non-uniform under this analysis, which is conservative and known to be so: see
 below.
 
-**Propagation.** A value is uniform iff every operand is uniform. A variable's
-value at a program point is uniform iff every reaching definition is uniform and
-every one of those definitions is control-dependent only on uniform predicates.
+**Propagation.** A value's uniformity is the least-uniform operand. A variable's
+value at a program point has a scope only if every reaching definition has at
+least that scope and every definition is control-dependent only on predicates
+uniform at that scope.
 The second clause is what stops `if l < 4 { x = 1 } else { x = 2 }` from being
 called uniform because both `1` and `2` are literals.
 
 **The rule.** A barrier `B` is accepted iff every predicate in `B`'s control
-dependence set is uniform, and every loop enclosing `B` has a uniform trip count
-(a uniform condition, and no `break` or `continue` control-dependent on a
-non-uniform predicate).
+dependence set is uniform at `B`'s scope, and every loop enclosing `B` has a trip
+count uniform at that scope (and no `break` or `continue` controlled by a less
+uniform predicate).
 
 **When the analysis cannot decide, it rejects.** This is a choice, and the
 alternative is worse. An admitted invalid barrier is undefined behaviour that
@@ -592,8 +613,9 @@ acquire-release atomic is one instruction there. GLSL ES 3.1's and WGSL's
 `atomicAdd` have no semantics operand at all, so acquire-release would lower to a
 full memory barrier before and after **every atomic** on those backends. A
 histogram or a reduction executes millions of atomics and needs none of that
-ordering, so the cost would be paid entirely by the kernels that do not want it,
-to serve the flag handoff 2.7 has already made mostly illegal.
+ordering, so the cost would be paid entirely by kernels that do not want it.
+Rather than hide that cost, v0 leaves acquire/release atomics and flag handoff
+out of the model.
 
 What is still guaranteed, and is enough for the actual uses:
 
@@ -614,13 +636,21 @@ if accel.AddU32(flag, 0, 0) == 1 { x := payload[i] }   // may read a stale paylo
 ```
 
 ```go
-// Right, within one workgroup.
+// RIGHT: all invocations cooperate in phases.
 payload[i] = v
-t.BarrierStorage()              // this is what publishes the write
-accel.ExchangeU32(flag, 0, 1)
+t.BarrierStorage()
+x := payload[peer]
 ```
 
-Across workgroups there is no right spelling, per 2.7. Use a graph edge.
+There is **no v0 flag-handoff spelling**, even within one workgroup. Putting a
+collective barrier before the flag does not order a later payload read after the
+flag observation, while putting it after the observation can deadlock because
+not every invocation necessarily takes that branch. Memory-only fences do not
+supply acquire/release semantics for the relaxed atomic. Across workgroups there
+is no right spelling either, per 2.7. Use unconditional collective phases within
+a workgroup and a graph edge between dispatches. A future flag handoff requires
+an explicit acquire/release atomic model and backend lowering before it may enter
+the surface.
 
 **Mixing an atomic and a non-atomic access to the same location without a barrier
 between them is a data race**, with the ordinary consequence in 2.4. Atomics do
@@ -796,8 +826,10 @@ One size is rejected as a *default*: **1**. There every cross-lane operation is
 the identity, every ballot is one bit, and every shuffle returns the lane's own
 value, so a kernel with a subgroup bug passes. It stays a *test case*, because a
 kernel that breaks at size 1 is a kernel that assumes lanes cooperate. The size
-is configurable because the only way to prove a kernel assumes no size is to run
-it at several and require the same answer; the sweep is 1, 4, 32, and 64.
+is configurable so a kernel whose declared semantic result is subgroup-size
+independent can be compared at 1, 4, 32, and 64. Individual subgroup intrinsic
+results are not expected to match across sizes; the complete kernel and its
+no-subgroup fallback are.
 
 ### 5.5 Every subgroup kernel needs a fallback
 
@@ -1190,9 +1222,10 @@ three change sibling specs:
 2. **The workgroup directive must take up to three extents.**
    `//accel:kernel workgroup=16,8`, with `workgroup=256` continuing to mean
    `256,1,1`.
-3. **`Capabilities` needs fields it does not have**: a workgroup count limit, a
-   split of atomic float add into storage and shared, a subgroup operation class
-   set, and the denormal rows from 6.3. See section 8.
+3. **The device query needs facts it did not have**: numeric workgroup and
+   subgroup constraints in `Limits`, plus separate feature flags for storage and
+   shared float atomics, subgroup operation classes, and the denormal rows from
+   6.3. See section 8.
 
 ---
 
@@ -1200,15 +1233,15 @@ three change sibling specs:
 
 ### 8.1 What is queried
 
-Queried before use, never discovered by failure:
+Queried before use, never discovered by failure. Numeric constraints are in
+`Limits`; feature availability is in `Capabilities`:
 
-- max workgroup size per dimension, and max invocations per workgroup
-- max workgroup count per dimension (a large dispatch hits it)
-- shared memory bytes per workgroup
-- subgroup support, subgroup size, and the **set of subgroup operation classes**
+- `Limits`: max workgroup size and count per dimension, max invocations per
+  workgroup, shared-memory bytes, storage-binding bytes, bindings per kind, and
+  minimum/maximum subgroup size
+- `Capabilities`: subgroup support and the **set of subgroup operation classes**
 - f16 and bf16 arithmetic support, separately from storage
 - atomic float add support, **separately for storage and shared memory**
-- max storage buffer binding size, and max bindings per kind
 - denormal preservation for f32 and f16, and whether infinities and NaNs are
   produced (6.3)
 - floating-point contraction control, whether the emitter can forbid an FMA
@@ -1221,8 +1254,8 @@ collapsed back into something simpler:
 | Was | Is | Why |
 | --- | --- | --- |
 | `AtomicFloatAdd bool` | `AtomicFloatAddStorage` and `AtomicFloatAddShared` | [006](006-backends.md)'s matrix has two rows, `cap` for storage and `?` for shared on Metal. One bool cannot express that. |
-| `Subgroups bool` plus `SubgroupSize int` | plus `SubgroupOps`, `MinSubgroupSize` and `MaxSubgroupSize` | Vulkan reports subgroup features as a flag set (basic, vote, arithmetic, ballot, shuffle, relative shuffle, clustered, quad) and a device may have ballot without arithmetic. D3D12 reports `WaveLaneCountMin` and `WaveLaneCountMax`, which can differ. "Subgroups: yes" is not an answer a kernel can act on. |
-| no workgroup count limit | `MaxWorkgroupCount [3]int` | 65535 per axis is a real floor and a real failure |
+| `Subgroups bool` plus `SubgroupSize int` in capabilities | `Capabilities.SubgroupOps` plus `Limits.MinSubgroupSize` and `Limits.MaxSubgroupSize` | Vulkan reports subgroup features as a flag set and a device may have ballot without arithmetic. D3D12's numeric lane bounds are limits, not feature flags. |
+| no workgroup count limit | `Limits.MaxWorkgroupCount [3]int` | 65535 per axis is a real floor and a real failure. |
 
 ### 8.2 How a kernel declares what it needs
 
@@ -1252,9 +1285,9 @@ type Requirements struct {
 	SharedBytes          uint32
 }
 
-// Missing reports every requirement this device does not meet, in a stable
-// order. Empty means the kernel can run here.
-func (c Capabilities) Missing(r Requirements) []Unmet
+// Missing reports every feature or numeric requirement this device does not
+// meet, in a stable order. Empty means the kernel can run here.
+func (d *Device) Missing(r Requirements) []Unmet
 ```
 
 Inference rather than declaration, because a declaration can be forgotten and an
@@ -1311,23 +1344,6 @@ because it is the code nobody runs on their own machine.
   unspecified, and supported shapes differ per device. Deferred, but the
   workgroup and subgroup design must not foreclose it, and section 7's
   shared-memory tile is the right staging point for one.
-- ~~Whether f16 arithmetic is worth a separate capability from f16 storage.~~
-  **Resolved in [006](006-backends.md): yes, they are two capabilities.** Storage
-  is universal, because bit packing reaches it on every backend
-  (`packHalf2x16`, `f32tof16`, `pack2x16float`), while arithmetic is not
-  emulable. The practical consequence is worth stating: a quantized model *runs*
-  everywhere and is *fast* only where f16 arithmetic is present.
-- ~~**Indirect dispatch**, a device-written workgroup count.~~ **Resolved in
-  [003](003-command-graph.md)**: the node records a build-time `maxCount`, the
-  device supplies the actual count, and the builder validates the maximum against
-  this spec's limits. That gives validation something to check and transients
-  something to be sized against, which a wholly device-decided count does not.
-  Two consequences of this spec's own remain and are not open questions but
-  obligations: the count is still uniform within a workgroup, so 3.3's barrier
-  rule is untouched, and a kernel computing a tail must read `NumGroups()` rather
-  than derive it from a uniform the host filled in, because at build the host does
-  not know it. The clamp against `maxCount` is enforced on device only in strict
-  mode; in release it is a documented caller obligation.
 - **An escape hatch for the conservative uniformity analysis.** 3.3 rejects what
   it cannot prove, and two families of correct kernel are rejected with it. A
   `t.AssumeUniform(x)` intrinsic that the CPU backend *checks* at runtime (every
@@ -1401,6 +1417,9 @@ x-fastest, verified as an identity permutation over a 3D workgroup.
 `GlobalIndex` is workgroup-contiguous, checked against 1.3's counterexample
 explicitly so the definition cannot drift. A pipeline exceeding any limit in 1.5
 fails at creation naming the limit, the requested value, and the device.
+Direct counts `{X:n}` and `{X:n,Y:1,Z:1}` execute identically; direct `X == 0`
+is rejected. An indirect count with any zero axis executes no invocations, while
+its omitted host-authored maximum axes normalise to one.
 
 **Memory model and barriers.**
 
@@ -1418,6 +1437,10 @@ fails at creation naming the limit, the requested value, and the device.
 - Non-uniform arrival is reported with the workgroup, the invocations, and the
   position; two invocations reaching *different* barriers is a reported mismatch,
   not a silent pairing.
+- Generated GLSL places `memoryBarrierShared` and `memoryBarrierBuffer` before
+  `barrier`; a golden lowering test rejects the reversed sequence.
+- A compile-time negative test rejects memory-only fence intrinsics: v0 has no
+  API with which to spell a relaxed-atomic payload handoff.
 
 **The uniformity analysis.** One negative test per illegal shape in 3.2 (barrier
 under a non-uniform `if`, in a loop with a non-uniform trip count, after a
@@ -1426,6 +1449,10 @@ message and position. One positive test per legal shape, so the analysis cannot
 be made "correct" by rejecting everything. Every kernel rejected by the analysis
 but hand-verified as correct is recorded as a known false positive with its
 workaround, so 3.3's cost stays visible rather than becoming folklore.
+A `SubgroupBarrier` controlled by `SubgroupID` is accepted while the same
+control around a workgroup barrier is rejected. A predicate involving
+`SubgroupInvocationID` rejects both. CPU execution sweeps subgroup sizes so the
+accepted case proves only peers in each subgroup rendezvous.
 
 **Atomics.** Contention produces the exact expected total for `u32` and `i32`, in
 storage and in shared memory. `n` invocations each doing `AddU32(counter, 0, 1)`

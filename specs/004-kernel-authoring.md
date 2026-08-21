@@ -1,5 +1,5 @@
 ---
-title: "Kernel authoring: a Go subset that runs on the CPU and compiles to shaders"
+title: "Kernel authoring: a Go subset lowered to CPU code and shaders"
 status: drafted
 layer: device
 depends_on:
@@ -8,10 +8,12 @@ depends_on:
 
 # Kernel authoring
 
-Implements [`000-decisions.md`](000-decisions.md) decision 5. A kernel is written once,
-in Go. On the CPU backend that Go function is called. On every GPU backend the
-same source is compiled to the backend's shading language. Nothing is written
-twice, so the oracle of decision 3 is exact rather than approximate.
+Implements [`000-decisions.md`](000-decisions.md) decision 5. A kernel is written
+once, in Go, type-checked once, and lowered from one typed IR to every backend.
+The CPU backend consumes a generated, instrumented Go lowering from that IR; it
+does **not** invoke the authored function directly. GPU backends consume shader
+artifacts from the same IR. Nothing is hand-translated, so the oracle of decision
+3 compares one program rather than two implementations that can drift.
 
 ## The mistake being corrected
 
@@ -20,18 +22,19 @@ operators on vector and matrix types, so `m * v` with `m` a `Mat4` was legal
 kernel text and illegal Go. Two consequences followed, and they were the same
 consequence:
 
-1. The kernel could not run as ordinary Go, so every parity test compared the
-   GPU against a **hand-written second implementation** of the same math. Two
-   sources, drifting.
+1. The kernel could not be type-checked as ordinary Go, so every parity test
+   compared the GPU against a **hand-written second implementation** of the same
+   math. Two sources, drifting.
 2. `go/types` rejects such a program, so the compiler was built on `go/parser`
    plus an ad-hoc string-keyed type environment. Its own package doc records
    this as deliberate and permanent: "full `go/types` checking was evaluated and
    is not viable".
 
-A later spec (`author-once-kernels.md`) fixed (1) by replacing operators with
-methods (`a.Sub(b)`, `m.MulV(v)`), which made the source valid Go and delivered
-exact CPU/GPU parity, verified on real Metal hardware at max diff 0.000000. It
-did not go back and revisit (2). That is the debt this spec pays.
+A later spec (`author-once-kernels.md`) narrowed the gap by replacing operators
+with methods (`a.Sub(b)`, `m.MulV(v)`), which made the source valid Go and
+delivered exact CPU/GPU parity for its corpus, verified on real Metal hardware
+at max diff 0.000000. It still ran a separately maintained CPU path and did not
+go back and revisit (2). That is the debt this spec pays.
 
 The visible symptom of the whole arrangement is
 `gpu/shader/compile.go:652`, which emits `layout(local_size_x = 1) in;`
@@ -39,15 +42,18 @@ unconditionally. See [002](002-compute-model.md) for why that alone is fatal.
 
 ## The keystone
 
-**The kernel language is exactly the set of Go programs that (a) compile and run
-correctly under `go build`, and (b) the accel compiler accepts.** Not a
-superset, not a dialect.
+**The kernel language is exactly the set of Go programs that (a) type-check and
+compile under `go build`, and (b) the accel compiler accepts.** Not a superset,
+not a dialect. The authored function is the type-safe source form, not the CPU
+runtime entry point.
 
-This is not a stylistic preference. Requirement (a) is forced by decision 3: the
-CPU backend runs the source, so the source must be Go. And requirement (a) is
-what makes `go/types` usable, since `go/types` is by definition the checker for
-valid Go. One constraint delivers both. The predecessor lost both at once by
-relaxing it.
+This is not a stylistic preference. Requirement (a) is what makes `go/types`
+usable and lets ordinary Go tooling check names, types, and signatures before
+generation. Decision 3 additionally requires the CPU lowering to preserve the
+same typed operations and control flow as every shader lowering. Generating it
+from the common IR is what provides that guarantee; directly calling the source
+would bypass the explicit rounding, access tracking, and barrier diagnostics the
+oracle is required to provide.
 
 Everything below is a consequence.
 
@@ -59,8 +65,8 @@ a doc directive:
 ```go
 //accel:kernel workgroup=256
 func Sum(t accel.Thread, in []float32, out []float32, tile *[256]float32) {
-	i := t.GlobalID()
-	l := t.LocalID()
+	i := t.GlobalIndex()
+	l := t.LocalIndex()
 	tile[l] = in[i]
 	t.Barrier()
 	for s := uint32(128); s > 0; s >>= 1 {
@@ -70,14 +76,14 @@ func Sum(t accel.Thread, in []float32, out []float32, tile *[256]float32) {
 		t.Barrier()
 	}
 	if l == 0 {
-		out[t.GroupID()] = tile[0]
+		out[t.GroupIndex()] = tile[0]
 	}
 }
 ```
 
 Three alternatives were rejected. **A build tag** makes the file invisible to
-the ordinary build, which is precisely what must not happen: the CPU backend
-imports this package and calls `Sum`. **Every top-level func is a kernel**, the
+the ordinary build, which defeats ordinary Go type checking and package tooling.
+**Every top-level func is a kernel**, the
 predecessor's rule, makes adding a plain Go helper to the file a compile error
 at a distance, and is why `//gpu:helper` had to be invented later.
 **Signature-based detection** is implicit: a refactor that changes a parameter
@@ -87,7 +93,7 @@ The directive wins because it is explicit, greppable, carries attributes
 (`workgroup=`), and marks the exact boundary where the restricted subset starts.
 It matches Go's recognized directive shape, so `gofmt` leaves it alone
 (verified on go1.27).
-Undirected functions in the same package are ordinary Go and are never compiled.
+Undirected functions in the same package are ordinary Go and are never lowered.
 `//accel:helper` marks a callee. The `//accel:` namespace is reserved; `vertex`
 and `fragment` are held for the graphics stages this spec defers.
 
@@ -127,19 +133,19 @@ the id to `int` to keep GLSL happy. The predecessor did the coercion
 information to do otherwise.
 
 Shared memory is a **parameter and not a local declaration**. A
-`var tile [256]float32` in the body is per-invocation under Go's semantics, and
-no Go local can be shared by 256 goroutines. As a parameter, the CPU driver
-allocates one array per workgroup and hands the same pointer to every invocation
-in it: the GPU semantics, in stock Go. It pays twice, because Go's bounds check
-catches an out-of-range shared access where a GPU silently corrupts a
-neighbour's tile.
+`var tile [256]float32` in the body is per-invocation under Go's semantics. The
+parameter tells the IR that one allocation is shared by all invocations in a
+workgroup. The generated CPU lowering indexes an instrumented allocation with
+the same extent; it checks bounds and definition state before each load, so an
+out-of-range or read-before-write access fails where a GPU could corrupt a
+neighbouring tile or observe unspecified data.
 
 `workgroup=` in the directive and the array extent both appear in the source, so
 the compiler can check the relationship it can see (an extent that is not a
 multiple of, or is smaller than, the declared group size is reported at both
-positions). Per [002](002-compute-model.md) the pipeline descriptor still
-carries the workgroup size; a descriptor disagreeing with the source is a graph
-build error naming both.
+positions). The generated `Kernel` owns the workgroup size. Callers do not repeat
+it in a pipeline descriptor, so there is no second value to disagree with the
+source.
 
 ### The subset itself
 
@@ -162,26 +168,39 @@ a target cannot express the construct. The ones under *Out of scope for v0*
 which is which so a future reader does not argue with a wall that was only ever
 a schedule.
 
-## Running as Go: what a barrier means
+## The generated CPU lowering
 
-This is the crux of decision 5, so it is spelled out mechanically.
+This is the crux of decision 5, so it is spelled out mechanically. Generation
+produces a Go implementation of the typed IR with explicit operations for every
+load, store, arithmetic rounding point, atomic, subgroup operation, and barrier.
+The authored function is never registered as an executable callback. Its only
+runtime-independent roles are to be valid Go and to supply the typed source from
+which the IR is built.
 
 The CPU backend runs each workgroup as a unit and workgroups in parallel across
-`GOMAXPROCS`. Within a workgroup:
+`GOMAXPROCS`. The CPU target emits two entry points when the analyses permit it:
 
-- **No barrier, no subgroup op in the kernel** (a property the compiler already
-  knows, since it has the typed IR): invocations run as a plain loop. No
-  goroutines, no synchronisation, full speed.
-- **Otherwise**: one goroutine per invocation, and `t.Barrier()` is a cyclic
-  rendezvous over the group's invocation count.
+- **Flat lowering.** When the IR has no shared memory, barrier, or subgroup
+  operation, invocations execute as a plain generated loop. There are no
+  goroutines or synchronization points.
+- **Cooperative lowering.** The generator splits the structured IR at barriers
+  and subgroup rendezvous into resumable states. Each invocation carries a
+  program counter and locals; the workgroup scheduler advances every active
+  invocation to its next suspension point. This is an instrumented lowering of
+  the same IR, not an interpreter of source and not a direct function call.
 
-The cost is real: 1024 goroutines per workgroup is not fast. Accepted, because
-the alternative (transforming the kernel into a state machine split at barriers)
-is a second compiler, and because the fast path covers the kernels that have no
-barrier to begin with.
+The cooperative transform is more compiler work than one goroutine per
+invocation, but it makes barrier failures deterministic, permits exact
+read-before-write tracking, and avoids scheduler-dependent deadlocks. The flat
+path remains the performance path for kernels that need none of those features.
 
-**Shared memory** is a Go array, poison-filled per [002](002-compute-model.md)
-before each workgroup, so a kernel relying on zero-init fails on the oracle.
+**Shared memory uses definition tracking, not a sentinel value.** Each scalar
+element has a shadow initialized bit. A store marks the element defined; a load
+or atomic read-modify-write checks the bit first and reports the kernel, source
+position, workgroup, invocation, and element when it is clear. Filling bytes
+with a poison pattern may remain a debugging aid, but it is not the correctness
+mechanism: every bit pattern is a valid integer and some poison NaNs can be
+overwritten or propagated without proving which access was first.
 
 **Atomics** are free functions taking a buffer and an index,
 `accel.AddU32(buf, i, v) uint32`, never a pointer into a buffer, because GLSL
@@ -201,17 +220,20 @@ because a kernel that silently assumes a size must fail when the harness runs it
 at 1, 4, 32, and 64.
 
 **Non-uniform barrier arrival is detected, not timed out**, because a timeout is
-flaky and this is an oracle. The rendezvous holds the number of invocations
-still inside the kernel; an invocation returning decrements it. If that count
-falls below the number already blocked at a barrier, the missing arrival can
-never come: report non-uniform arrival at the barrier's source position. It
-fires on the first offending run.
+flaky and this is an oracle. A generated suspension point has a stable barrier
+ID and source position. At each dynamic rendezvous epoch, every active invocation
+must suspend at the same ID. If one returns, reaches a different barrier ID, or
+continues to another epoch while peers wait, the scheduler reports the expected
+and observed barrier positions plus the offending invocation IDs. It therefore
+does not rely on the invalid inference that a count of live invocations becoming
+smaller than a blocked count is the only way an arrival can become impossible.
 
-**`-race` is the real prize.** A missing barrier is invisible on every GPU
-backend (it produces a plausible wrong number) and is a textbook data race on
-the Go path. `go test -race` over the CPU backend finds it. Honest caveat: the
-race detector reports an interleaving that actually occurred, so it is a strong
-probabilistic detector and not a proof.
+**Race diagnostics are explicit.** The generated lowering associates each
+shared and storage access with its source position and tracks overlapping
+unordered accesses during a workgroup epoch. It reports a conflicting pair
+deterministically. `go test -race` remains an additional check for mistakes in
+the CPU runtime itself, but it is not the kernel race detector: the resumable
+lowering need not execute invocations as simultaneous goroutines.
 
 ## Type checking with go/types
 
@@ -243,38 +265,84 @@ The cost is that type checking needs the package loaded, with its import graph
 and the `go` tool present, which a deployed binary does not have. That decides
 the next section.
 
+### Compiler packaging and the exact v0 IR
+
+The generator is `cmd/accel-kernel` in the main module, with reusable compiler
+code in `internal/kernelc`. `golang.org/x/tools/go/packages` is therefore a
+build-tool dependency in `go.mod`, but neither the root runtime package nor a
+deployed binary imports it. A second module is rejected for v0: it would make the
+tool unable to share internal compiler/runtime ABI definitions without exporting
+them or duplicating them.
+
+The structured IR has this closed v0 node set:
+
+- types: bool, i32, u32, f32, the f16/bf16 storage wrappers, `ID3`, structs,
+  fixed shared arrays, and typed resource slices;
+- values: constants, parameters, locals, field selection, indexing, unary and
+  binary operations, explicit conversion, helper call, and intrinsic call; and
+- statements: block, local declaration, assignment, expression statement, `if`,
+  three-clause/condition/infinite `for`, `break`, `continue`, and single-value or
+  empty `return`.
+
+There is deliberately no generic “AST escape” node. Encountering `range`,
+`switch`, `select`, a labeled branch, or any construct outside the list is a
+source-positioned subset error. Each value and statement carries its resolved Go
+type, source position, and referenced `go/types.Object`; resource accesses also
+carry binding identity and inferred access mode.
+
+Intrinsic identity is likewise closed and versioned. Thread IDs, barriers,
+atomics, conversions, and `FMA` are functions or methods in the root `accel`
+package. Bounded scalar math (`Sqrt`, `RSqrt`, `Exp`, `Log`, `Sin`, `Cos`,
+`Tanh`) lives in `accel/kmath`. `internal/kernelc` builds a table from the exact
+import-path/name objects and rejects a same-named function from any other
+package. The table records IR opcode, uniformity effect, capability requirement,
+numeric class, and target lowering; its ABI version participates in the kernel
+digest. The ordinary Go bodies exist only so authored packages type-check and
+are never the registered CPU implementation.
+
+The v0 corpus lives at `tensor/internal/kernels/...`, imports only the root
+device API and `accel/kmath`, and is registered into the tensor runtime from
+inside `tensor`. The root package never imports the tensor or corpus packages.
+Conformance cases that need both use external test packages, so there is no
+device → tensor or compiler → corpus import cycle.
+
 ## Compilation is ahead of time
 
 **Locked.** The compiler is a build-time generator run under `go generate`,
-emitting one Go file per kernel package: for each kernel, the shader text for
-every target, the binding layout, the workgroup size, and a **hash of the
-kernel's source**. Registration includes a generated adapter closure, typed at
-the call site, so the untyped dispatch path never reflects to call the Go
-function:
+emitting one Go file per kernel package. For each kernel it emits the requested
+shader artifacts, the flat or cooperative CPU lowering, and one immutable
+`Kernel` record that owns all facts inferred from the source:
+
+- workgroup size and workgroup-shared allocation layout;
+- binding kinds, dtypes, uniform codecs, and inferred read/write/atomic access;
+- capability and numeric-limit requirements;
+- barrier/source-position tables used by CPU diagnostics;
+- the transitive helper and intrinsic dependencies, generator/IR ABI version,
+  target set, and a digest over all of those inputs.
+
+Callers supply only the generated `Kernel` and a label when creating a compute
+pipeline. They do not repeat workgroup, shared-memory, binding-layout, or access
+metadata in `ComputePipelineDescriptor`; duplicating compiler-owned facts would
+turn every generated change into a possible runtime mismatch.
+
+Registration points at generated CPU code, not at the authored function:
 
 ```go
 func init() {
 	accel.Register(accel.KernelRec{
-		Name: "Sum", Workgroup: [3]uint32{256, 1, 1}, SrcHash: "…",
-		Bindings: […],
-		MSL: mslSum, GLSL: glslSum, SPIRV: spirvSum,
-		Run: func(t accel.Thread, a accel.RawArgs) {
-			Sum(t,
-				unsafe.Slice((*float32)(a.Buf[0]), a.Len[0]),
-				unsafe.Slice((*float32)(a.Buf[1]), a.Len[1]),
-				(*[256]float32)(a.Shared))
-		},
+		Name: "Sum", Workgroup: [3]uint32{256, 1, 1}, Digest: "…",
+		Bindings: sumBindingLayout, Access: sumAccess,
+		Shared: sumSharedLayout, Requires: sumRequirements,
+		Dependencies: sumDependencies,
+		Targets: accel.TargetArtifacts{CPU: runSumCPU, MSL: mslSum},
 	})
 }
 ```
 
-`accel.RawArgs` is a fixed, hand-written struct of untyped pointers and lengths.
-Every typed detail (which index, which dtype, which extent) lives in the
-**generated** unpacking expression, not in a method on the arg type. That
-direction matters: a hand-written `Args` would need a method per
-(kind, index, dtype, extent) combination, which is not a type anyone can write.
-The generator knows the signature because `go/types` told it, so it writes the
-unpacking once per kernel.
+The internal CPU ABI may still use raw resource handles, but every typed detail
+(which index, dtype, extent, access mode, and uniform codec) lives in generated
+code and immutable kernel metadata. It is never reconstructed by reflection at
+dispatch.
 
 **Uniform structs are decoded, not cast.** A by-value struct parameter is
 `constant T&` on the GPU under std140 (narrowed from 'std140 or std430' by [001](001-device-resources.md), because GLSL ES 3.1 permits std140 on uniform blocks and not std430) layout, and Go's struct layout is
@@ -286,12 +354,61 @@ the Go side conforms to it, because the alternative (declaring padding fields in
 the caller's Go struct) leaks a backend detail into a type users write by hand.
 An unsafe cast is rejected outright: it would be silently correct for a struct of
 four floats and silently wrong for the first one containing a three-float member.
-The slice cast above is a different case and stays: a buffer's element layout is
-one scalar, so there is no padding to disagree about.
+
+### Typed uniform binding
+
+A by-value uniform parameter also causes the generator to emit a typed codec and
+a typed binding field. Callers never construct std140 bytes:
+
+```go
+params, err := accel.NewUniformBuffer(dev, SumParamsCodec)
+if err != nil { /* ... */ }
+if err := params.Write(queue, SumParams{K: k}); err != nil { /* ... */ }
+
+bindings := SumBindings{
+	In: in.View(), Out: out.View(), Params: params.View(),
+}
+rec.Dispatch(pipeline, bindings.Bind(), groups)
+```
+
+`SumParamsCodec` is generated for the exact Go struct type and knows its std140
+size, alignment, field offsets, and encoder/decoder. `UniformBuffer[T]` owns an
+ordinary uniform buffer; `Write` encodes `T` into it through the queue, so values
+may change between graph submissions without changing graph structure. `Bind`
+returns the ordinary resource bindings after checking all fields. The raw byte
+codec is internal. A caller that already manages a uniform arena may request the
+generated codec's encoded size and call its typed `Encode(dst, value)` method,
+but still never spells padding offsets.
+
+This path is required for v0 because a storage-buffer substitute would make a
+uniform loop bound appear non-uniform to the barrier analysis. It also makes the
+signature-to-binding promise executable rather than leaving a by-value parameter
+with no public way to supply it.
+
+### Target generation policy
+
+The target set is explicit generator input and is never inferred from the host
+running `go generate`:
+
+```go
+//go:generate go run ./cmd/accel-kernel -targets=cpu,metal .
+```
+
+`cpu` is mandatory. M2 permits `cpu`; M5 adds `metal`, and the v0 release corpus
+is generated for exactly `cpu,metal`. Later milestones admit `vulkan`, `d3d12`,
+`gles`, and `webgpu` only when their emitter and conformance gate exist.
+Requesting an unknown or not-yet-admitted target fails generation instead of
+leaving an empty artifact. Generated files record the ordered target set, so
+generation on Linux and macOS produces identical bytes. Opening a pipeline on a
+backend for which the kernel was not generated is a pipeline-creation error that
+names the missing target and the generator command needed to add it.
 
 CI runs `go generate ./...` then `git diff --exit-code`. A kernel edited without
-regenerating fails the build, and the `SrcHash` makes the failure name the
-kernel.
+regenerating fails the build, and the dependency digest makes the failure name
+the kernel and changed input. The digest covers the kernel body, every reachable
+`//accel:helper`, the referenced intrinsic identities and ABI versions, directive
+attributes, compiler version, and target set. Editing a helper or changing a
+codec therefore cannot leave a stale kernel looking fresh.
 
 This is the direct fix for the predecessor's worst hazard: its kernel sources
 lived as Go **string constants** (`shadingKernelSrc`, `helperSrc`) duplicating
@@ -310,12 +427,12 @@ flowchart TD
     TC["go/types<br/>scopes, object identity, untyped constant values"]
     IR["typed IR<br/>structured statement tree, not a CFG"]
     AN["analyses, run once for every target<br/>uniformity (002 3.3), recursion,<br/>helper storage rules, capability inference"]
-    GO["Go target<br/>registration plus a typed adapter,<br/>explicit float32() at each rounding point"]
+    GO["CPU Go target<br/>generated flat/state-machine lowering,<br/>rounding, access and barrier instrumentation"]
     MSL["MSL text"]
     SPV["SPIR-V binary"]
     GLSL["GLSL ES 3.1 text"]
     HLSL["HLSL SM 6 text"]
-    GEN["generated_kernels.go<br/>shader text per target, binding layout,<br/>workgroup size, std140 codec, SrcHash"]
+    GEN["generated_kernels.go<br/>requested target artifacts, inferred metadata,<br/>std140 codecs, dependency digest"]
 
     SRC --> TC --> IR --> AN
     AN --> GO
@@ -328,19 +445,18 @@ flowchart TD
     SPV --> GEN
     GLSL --> GEN
     HLSL --> GEN
-    SRC -. "the CPU backend calls this function directly" .-> GEN
 ```
 
 Two things the picture is making an argument about. The analyses sit on the IR
-and are shared by every target, which is why an IR exists at all when v0 has one
-text target ([`000-decisions.md`](000-decisions.md)'s v0 milestone). And the
-kernel source appears twice, once as input to the compiler and once as the thing
-the CPU backend calls, which is decision 5: one text, not two.
+and are shared by every target, which is why an IR exists even when v0 has one
+GPU text target ([`000-decisions.md`](000-decisions.md)'s v0 milestone). And the
+CPU is an ordinary target of that lowering pipeline, which prevents it from
+bypassing the semantics the GPU emitters implement.
 
 
 | Target | Artifact | Source level |
 | --- | --- | --- |
-| Go (CPU backend) | none, the source already is Go | n/a |
+| Go (CPU backend) | generated instrumented Go lowering | yes |
 | MSL | text | yes |
 | GLSL ES 3.1 / GLSL 4.3 | text | yes |
 | HLSL SM 6 | text | yes, but see below |
@@ -401,8 +517,10 @@ Microsoft binary. Whether HLSL text is a sufficient artifact is open below.
 
 Carried forward from the predecessor, which proved it: a `//accel:helper`
 function is emitted ahead of its callers, `static` in MSL, plain in GLSL, and
-called as an ordinary Go function on the CPU. Verified there as byte-identical
-output for pre-existing kernels and exact on Metal hardware.
+inlined or emitted into the generated CPU lowering from the same helper IR.
+Verified in the predecessor as byte-identical output for pre-existing kernels
+and exact on Metal hardware; the new dependency digest additionally makes a
+helper edit invalidate every caller.
 
 One rule, from [`conventions.md`](../docs/conventions.md): **helpers take
 values, never storage.** Not a storage buffer, because GLSL ES 3.1 cannot pass
@@ -464,8 +582,9 @@ Every rejection carries a `token.Pos` and is formatted as
 
 Parity is exact **not because floating point is associative** but because both
 sides execute the same algorithm in the same order: a barrier-based tree
-reduction reduces in the same tree on the CPU, since the CPU is running that
-kernel. What survives that argument is hardware divergence, and it is bounded:
+reduction reduces in the same tree in the generated CPU and GPU lowerings from
+one typed IR. What survives that argument is hardware divergence, and it is
+bounded:
 
 These classes are normative in [008](008-numerics.md), which derives the bounds
 the tolerance columns refer to. They are kept here because they are a property of
@@ -473,50 +592,28 @@ what the emitter produces, and 008 is where a test finds out what to assert.
 
 | Class | Contents | Contract |
 | --- | --- | --- |
-| A | Integer ops; f32 add, sub, mul; loads, stores, indexing | Bit-exact |
-| B | `a*b+c` where a target may contract to FMA | Bit-exact where contraction is controllable, tolerance otherwise. Explicit `accel.FMA` is always exact. |
-| C | Division, `sqrt`, and transcendentals (`sin`, `exp`, `pow`, …) | Stated bound per operation. Implementation-defined on every backend: SPIR-V specifies `OpFDiv` at 2.5 ULP rather than correctly rounded, and Metal's default floating-point mode may compute a division as a multiplication by a reciprocal. See [008](008-numerics.md) §6. |
-| D | f16 and bf16 conversion | Rounding mode must be pinned and stated; tolerance otherwise. |
-| E | Atomic float add | **Tolerance only.** The hardware picks the accumulation order and it varies between runs, so no CPU implementation can reproduce it. |
+| A | Integer ops; f32 add, sub, mul; loads, stores, indexing | Bit-exact only in 008 §3's proved domain/profile; otherwise Bounded or Special. |
+| B | Implicitly contractible `a*b+c`; explicit `accel.FMA` | Implicit form uses 008's expression-DAG budget. Explicit FMA is correctly rounded in its finite domain or the target rejects it. |
+| C | Division, `sqrt`, and admitted transcendentals | Normative per-operation domain and ceiling from 008 §6; an unbounded primitive is rejected. |
+| D | f16 and bf16 conversion | Exact canonical bits under 008 §4, including rounding and NaN rules. |
+| E | Atomic float add | Bounded, order-dependent, and excluded from same-backend determinism. |
 
 Class E deserves the emphasis: an integer atomic contention test asserts an
 exact total, and the same test written in f32 cannot, on any hardware. Writing
 it as if it could is how a flaky test enters a suite.
 
-## Open questions
+## Post-v0 questions
 
-- **Where the `golang.org/x/tools/go/packages` dependency lives.** Loading a
-  package for `go/types` wants it, and the runtime library should not carry it.
-  A tool-only submodule for `cmd/accel` keeps the library's import graph clean
-  at the cost of a second `go.mod`. Leaning toward the submodule, unresolved.
-- **Workgroup-size specialization.** Go has no const generics, so a kernel's
-  shared array extent is a literal and one source cannot produce a 128-lane and
-  a 256-lane variant. Options: generate variants from a directive
-  (`workgroup=128,256`), use SPIR-V specialization constants where available and
-  regenerate elsewhere, or accept one size per source. Undecided, and it is the
-  question a tuned GEMM will ask first.
-- ~~**f32 contraction control across targets.**~~ **Moved to
-  [008](008-numerics.md)**, which owns the contract this question was really
-  about and states the decision: contraction is forbidden in the exact tier and
-  forbidding it is an obligation on the emitter, including on the Go target, which
-  emits an explicit `float32(...)` at each rounding point rather than trusting how
-  the source was written. Where a target cannot be controlled (GLSL ES 3.1 and
-  WGSL have no equivalent of `precise`), that target's `a*b+c` drops to class C
-  with the bound in 008 §4.3. What remains unmeasured, and is 008's own first
-  open question, is whether MSL can be made to stop contracting: if it cannot, the
-  largest exact class on the only v0 GPU backend collapses.
-- **Whether the intrinsic set is a package or a table.** Intrinsics resolved by
-  object identity must be *some* Go function with a real body for the CPU path.
-  An `accel/kmath` package is the obvious home, but then the Go body and the
-  GPU builtin are two implementations of `sin`, which is the divergence class
-  this spec exists to eliminate. Bounded, not fatal: class C already concedes
-  transcendentals are per-backend and tested to a stated ULP, so the question is
-  whether that concession is the right size or whether the CPU path should carry
-  a shared correctly-rounded implementation to shrink it.
-- **Generic kernels for dtype parameterization.** `func Add[T Numeric](...)`
-  would be the natural way to write one kernel per dtype, and `go/types` does
-  expose instantiation. Out of scope for v0, but it is the obvious v1 request
-  and the IR should not foreclose it.
+v0 accepts exactly one literal workgroup size and shared-array extent per
+authored entry function. A tuned second size is a distinct entry function and
+stable 010 variant. Whether later versions generate several variants from one
+directive or use target specialization constants remains open, but it cannot
+change a v0 variant's identity.
+
+Generic dtype-parameterized kernels are also post-v0. `go/types` exposes
+instantiation, but the v0 IR is monomorphic after type checking. A later design
+may instantiate `func Add[T Numeric]` into several ordinary stable variants; it
+must not add runtime generic dispatch to the kernel ABI.
 
 ## Testing
 
@@ -529,13 +626,14 @@ Four levels, each catching what the one below cannot.
    is worthless. MSL through the Metal compiler, GLSL through the GL driver,
    SPIR-V structurally validated and accepted by the Vulkan driver.
 3. **Differential execution, the core test.** For every kernel in the corpus:
-   run it on the CPU backend (which calls the Go function), run it on each
-   available GPU backend, compare buffers under the class contract above. The
-   harness reports max absolute difference, and class A kernels report 0.000000
-   or fail. This is the only test that can exist because of decision 5, and it
+   run its generated CPU lowering, run each generated GPU artifact on an
+  available backend, and compare buffers under the class contract above. The
+  harness reports max absolute difference; class-A cases inside a profile's
+  proved exact domain compare bits. This is the only test that can exist because of decision 5, and it
    replaces the predecessor's hand-written second implementation.
-4. **`go test -race` over the CPU backend** for every barrier-using kernel, to
-   catch missing barriers that no GPU backend can report.
+4. **CPU instrumentation tests** for every barrier-using kernel, including
+   deterministic non-uniform arrival, conflicting accesses, and definition
+   tracking. `go test -race` separately checks the runtime implementation.
 
 Plus:
 
@@ -544,12 +642,15 @@ Plus:
   emitted as broken shader text instead.
 - **Non-uniform barrier arrival** is detected by the CPU backend, deterministically,
   and names the barrier's position.
-- **Shared-memory poison**: a kernel reading before writing fails on the CPU
-  backend.
-- **Subgroup size sweep**: every subgroup kernel runs on the CPU backend at
-  sizes 4, 32, and 64, and agrees with its no-subgroup fallback at each.
-- **Source-hash freshness**: `go generate ./...` and `git diff --exit-code` in
-  CI, so the Go function and the shader text can never be different programs.
+- **Shared-memory definition tracking**: a kernel reading before writing fails
+  on the CPU backend for every possible stored bit pattern; the test cannot pass
+  merely because a sentinel happened to compare unequal.
+- **Subgroup size sweep**: every subgroup-independent semantic result runs on the
+  CPU backend at sizes 1, 4, 32, and 64, and agrees with its no-subgroup fallback
+  at each.
+- **Dependency freshness**: editing the entry function, a reachable helper, an
+  intrinsic ABI, a uniform codec input, or the target list changes the digest;
+  `go generate ./...` and `git diff --exit-code` keep checked-in artifacts fresh.
 - **The tiled GEMM from [002](002-compute-model.md)** is written in this
   language, or this spec has failed alongside that one.
 

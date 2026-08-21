@@ -9,36 +9,11 @@ package accel
 // It is queried before use so an absent feature is a typed answer rather than a
 // dispatch-time failure. A graph requiring something absent fails when it is
 // built, with an error naming the capability and the device. See
-// docs/design.md decision 6.
+// specs/000-decisions.md decision 6.
 type Capabilities struct {
-	// MaxWorkgroupSize is the largest workgroup per dimension, and
-	// MaxWorkgroupInvocations the largest total across all three. Both are limits:
-	// a pipeline exceeding either fails to create.
-	//
-	// The portable floor for MaxWorkgroupInvocations is 128, not 256. That is not
-	// academic: the worked GEMM in specs/002-compute-model.md uses a 16x8 tile
-	// rather than 16x16 because of it.
-	MaxWorkgroupSize        [3]int
-	MaxWorkgroupInvocations int
-
-	// MaxWorkgroupCount is the largest dispatch per dimension. Real backends cap
-	// this at 65535 per axis, so a large 1D dispatch has to be reshaped rather
-	// than assumed to fit.
-	MaxWorkgroupCount [3]int
-
-	// SharedMemoryBytes is the shared storage budget per workgroup.
-	SharedMemoryBytes int
-
-	// Subgroups reports whether subgroup operations exist. MinSubgroupSize and
-	// MaxSubgroupSize bound the number of lanes scheduled together.
-	//
-	// Two bounds rather than one value, because a single number cannot express
-	// what backends report: D3D12 gives a minimum and a maximum that can differ,
-	// and a device may vary it per pipeline. A kernel must read these rather than
-	// assume, and must have a correct path for Subgroups being false.
-	Subgroups       bool
-	MinSubgroupSize int
-	MaxSubgroupSize int
+	// Subgroups reports whether subgroup operations exist. Numeric lane bounds
+	// live in [Limits].
+	Subgroups bool
 
 	// SubgroupOps reports which subgroup operations are present. Vulkan exposes
 	// these as an independent feature set rather than one flag, so a device can
@@ -50,6 +25,7 @@ type Capabilities struct {
 	// without being able to compute in them.
 	F16Arithmetic  bool
 	BF16Arithmetic bool
+	I8DotProduct   bool
 
 	// AtomicFloatAddStorage and AtomicFloatAddShared are separate because backends
 	// genuinely differ between them: a device can have the storage form and not
@@ -69,6 +45,7 @@ type Capabilities struct {
 	DenormF32Preserved bool
 	DenormF16Preserved bool
 	InfNaNProduced     bool
+	ContractionControl bool
 
 	// SharedMemoryKind reports whether MemoryShared is real on this device, which
 	// is true on unified-memory hardware and removes a staging copy.
@@ -76,16 +53,17 @@ type Capabilities struct {
 
 	// Graphics reports whether this device can rasterize. A compute-only backend
 	// is legitimate.
-	Graphics bool
+	Graphics                bool
+	Presentation            bool
+	Multisampling           bool
+	RasterizerOrderedAccess bool
+	IndirectDispatch        bool
 
 	// NativeGraphReplay reports whether recorded graphs lower to a native
 	// replayable object (Vulkan secondary command buffers, D3D12 bundles, Metal
 	// indirect command buffers) rather than being replayed in software. Replay
 	// works either way; this says how much it saves.
 	NativeGraphReplay bool
-
-	MaxStorageBufferBytes int
-	MaxBindingsPerKind    int
 }
 
 // WorkgroupSize is the shape of one workgroup, fixed when a pipeline is created
@@ -148,16 +126,17 @@ type Unmet struct {
 	Available uint64
 }
 
-// Missing reports every requirement this device does not meet, in a stable order.
-// An empty result means the kernel can run here. It is called at graph build,
-// never at dispatch: absence is reported before work is submitted, not after.
-func (c Capabilities) Missing(r Requirements) []Unmet { panic(ErrNotImplemented) }
+// Missing reports every feature or numeric requirement this device does not
+// meet, in stable order. It consults both [Capabilities] and [Limits].
+func (d *Device) Missing(r Requirements) []Unmet { panic(ErrNotImplemented) }
 
 // WorkgroupCount is how many workgroups a dispatch runs.
 //
 // This counts workgroups, not threads, deliberately. A thread count makes the
 // workgroup size invisible to the caller, which is how a predecessor project
 // ended up dispatching one thread per workgroup and leaving the hardware idle.
+// For a direct dispatch, omitted Y or Z values normalize to one. X must be
+// positive. Indirect dispatches keep zero as the specified skip mechanism.
 type WorkgroupCount struct{ X, Y, Z int }
 
 // SharedMemory declares workgroup-shared storage for a kernel. The size is fixed
@@ -174,18 +153,9 @@ type SharedMemory struct {
 // ComputePipelineDescriptor describes a compute pipeline to create.
 type ComputePipelineDescriptor struct {
 	// Kernel is the compiled kernel. See the kernel authoring package for how one
-	// is produced from Go source.
+	// is produced from Go source. It owns the workgroup, shared-memory, binding,
+	// access, and requirement metadata.
 	Kernel *Kernel
-
-	// WorkgroupSize is fixed here, not at dispatch.
-	WorkgroupSize WorkgroupSize
-
-	// Shared declares the kernel's workgroup-shared storage, if any.
-	Shared []SharedMemory
-
-	// Layout declares the binding slots the kernel expects. Slots are matched by
-	// type, dtype, and access when a graph binds resources to them.
-	Layout []BindingSlot
 
 	Label string
 }
@@ -198,11 +168,34 @@ func (p *ComputePipeline) Close() error { panic(ErrNotImplemented) }
 
 // Kernel is a kernel compiled to whatever form the target device consumes.
 //
-// Kernels are authored in a subset of Go: one source runs as ordinary Go on
-// [BackendCPU] and compiles to native shader code on GPU backends, which is what
-// makes the CPU backend an exact oracle rather than an approximation. See
-// specs/004-kernel-authoring.md.
+// Kernels are authored in a subset of Go and lowered from one typed IR to
+// generated, instrumented CPU code and native GPU shaders. The authored function
+// is type-checking input, not the CPU executable. See specs/004-kernel-authoring.md.
 type Kernel struct{ _ noCopy }
+
+// UniformCodec is generated for one by-value kernel parameter type. It owns the
+// std140 size, alignment, field offsets, and typed encoder.
+type UniformCodec[T any] interface {
+	EncodedSize() int
+	Encode(dst []byte, value T) error
+}
+
+// UniformBuffer owns a generated-codec uniform allocation.
+type UniformBuffer[T any] struct{ _ noCopy }
+
+// NewUniformBuffer allocates storage sized and aligned by codec.
+func NewUniformBuffer[T any](d *Device, codec UniformCodec[T]) (*UniformBuffer[T], error) {
+	panic(ErrNotImplemented)
+}
+
+// Write encodes value and stages it through q.
+func (u *UniformBuffer[T]) Write(q *Queue, value T) error { panic(ErrNotImplemented) }
+
+// View returns the ordinary uniform-buffer view used by generated bindings.
+func (u *UniformBuffer[T]) View() BufferView { panic(ErrNotImplemented) }
+
+// Close releases the uniform buffer.
+func (u *UniformBuffer[T]) Close() error { panic(ErrNotImplemented) }
 
 // Access is how a binding is used by a kernel. The graph builder infers
 // dependency edges and barriers from declared access, so this must be accurate:

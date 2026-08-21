@@ -5,6 +5,7 @@ layer: device
 depends_on:
   - 001-device-resources.md
   - 003-command-graph.md
+  - 004-kernel-authoring.md
 ---
 
 # Graphics
@@ -14,18 +15,23 @@ render pass becomes a node in the graph of [003](003-command-graph.md), how draw
 are issued, how a rasterized G-buffer is handed to a compute pass without leaving
 the device, and how a frame reaches a screen.
 
-**Status: normative and frozen, not built at v0.**
+**Status: drafted parent design, post-v0.**
 [`000-decisions.md`](000-decisions.md)'s v0 milestone is compute only. This spec
-is written now, and its API shape is settled now, because attachment formats,
-blend state, and stencil operations are compile-time pipeline inputs on every
-backend: adding them after callers have written pipeline descriptors is a
-breaking change, which is the same argument [002](002-compute-model.md) makes for
-designing the compute model in rather than retrofitting it. What v0 defers is the
-implementation, and with it the CPU reference rasterizer, the surface and present
-path, and the Metal drawable path. [004](004-kernel-authoring.md) correspondingly
-keeps the vertex and fragment directives reserved and unimplemented, which
-removes the contradiction between the two specs: this one describes a stage
-language 004 does not yet compile, and says so.
+fixes the architectural boundaries and the cross-component invariants, but it
+does not freeze a public graphics API before any implementation has tested that
+shape. Implementation starts only after four tightly scoped child specs cover:
+
+1. the vertex/fragment stage ABI and kernel lowering;
+2. render pipeline, pass, attachment, and draw APIs;
+3. surfaces, acquisition, resize, and present;
+4. the CPU reference rasterizer and its conformance corpus.
+
+Each child may refine names and descriptor layout while preserving this parent's
+decisions: render passes are graph nodes, attachment formats are pipeline state,
+resource hazards are inferred, presentation remains external to the graph, and
+the CPU path is the oracle. [004](004-kernel-authoring.md) keeps the vertex and
+fragment directives reserved and unimplemented until the stage-ABI child spec
+exists.
 
 The design target is a deferred renderer: a geometry pass writing several colour
 attachments plus depth, then compute doing the shading. That target is chosen
@@ -89,15 +95,23 @@ true on every backend, and the kernel compiler rejects a perspective-interpolate
 integer varying with an error naming the restriction rather than letting the
 driver do it.
 
-**The fragment stage cannot write a storage buffer.** Not "should not": the API
-has no way to express it. [`conventions.md`](../docs/conventions.md) records why:
-fragment buffer writes are unordered with respect to other fragments covering the
-same pixel, so a G-buffer written that way holds a nondeterministic winner
-wherever geometry overlaps, while the depth buffer looks perfectly correct.
-Render targets with the depth test on do not have this problem, because the ROP
-applies the depth test and the colour write as one indivisible operation. A
-fragment stage writes attachments, and only attachments. Where rasterizer-ordered
-access is genuinely needed it is a queryable capability and absent by default.
+**The baseline fragment stage writes attachments, not storage resources.**
+[`conventions.md`](../docs/conventions.md) records why: ordinary fragment buffer
+writes are unordered with respect to other fragments covering the same pixel, so
+a G-buffer written that way holds a nondeterministic winner wherever geometry
+overlaps while the depth buffer looks correct. Render targets do not have this
+problem because fixed-function depth/stencil/blend processing orders the
+attachment operation.
+
+Rasterizer-ordered access (ROA) is a later, capability-gated extension to the
+stage ABI, not a loophole in the baseline. A pipeline using it must say so in its
+generated stage requirements, every written storage binding is declared
+read-write, and graph build requires the device capability. ROA orders covered
+fragment shader storage accesses in primitive order; it does **not** make an
+attachment simultaneously sampleable, does not turn an unordered storage write
+into an attachment write, and is limited to sample count 1 until an MSAA child
+spec defines per-sample ordering. The CPU rasterizer must emulate the same order
+before it can report ROA support.
 
 ### Rasterizer state
 
@@ -163,7 +177,7 @@ built graph. The per-object section below makes the same distinction concretely.
 | Depth test, compare, write, stencil ops and masks | Stencil reference value |
 | Blend state and write mask, per attachment | Blend constant |
 | Colour attachment formats and count, depth format | Viewport and scissor (per pass) |
-| Sample count | Draw counts, first index, instance count |
+| Sample count (fixed to 1 until the MSAA child spec) | Draw counts, first index, instance count |
 
 The split is not a taste decision, it is what backends require. D3D12 compiles a
 pipeline state object, Vulkan compiles a `VkPipeline`, Metal compiles a
@@ -178,6 +192,14 @@ Attachment formats being compiled in has a consequence worth stating: a pipeline
 is valid only in a pass whose attachments match its declared formats and count.
 That agreement is checked at graph build, and the error names the pipeline, the
 node, and the attachment index.
+
+The drafted baseline has a sample count field so the eventual pipeline key has a
+place for it, but the only legal value is 1. The MSAA child spec must define
+multisampled texture creation, equal sample-count validation across all pass
+attachments, single-sample resolve targets, load/store/resolve combinations,
+per-sample shading, coverage masks, and CPU-oracle limits before any value above
+1 is accepted. ROA and MSAA remain mutually exclusive until that spec defines a
+portable ordering rule.
 
 ## Render passes as graph nodes
 
@@ -264,17 +286,26 @@ pass writing a G-buffer and a compute pass reading it produce an edge with no
 caller involvement, and the barrier that makes the render target readable by
 compute is computed, not written.
 
-**A pass may not read a resource it writes.** A texture bound for sampling while
-also an attachment of the same pass is a feedback loop, undefined on every
-backend, and it is a build error naming both uses.
+**Shader feedback and attachment access are different categories.** The fixed
+function operations implied by `Load`, blending, depth test, stencil test, and
+their writes are legal attachment read-modify-write operations; describing them
+as a pass reading a resource it writes would incorrectly reject every blended or
+depth-tested pass.
 
-The one exception is narrow and worth stating precisely, because two different
-things are easy to confuse here. A depth attachment with **write disabled**, so
-that the ROP tests against it and nothing writes it, is legal everywhere and is
-declared as a read; it is not a feedback loop, and it is expressible only because
-depth write enable is a separate field from depth test enable. A depth attachment
-**sampled by the fragment stage of the same pass** is the feedback loop, is
-undefined on several backends, and stays rejected.
+The forbidden case is an overlapping texture subresource that is both an
+attachment and shader-visible in the same pass. Sampling or storage-accessing the
+mip/layer range currently bound as a colour or depth attachment is a build error
+naming both views, regardless of load action and regardless of ROA. Disjoint
+mips or array layers are different subresources and are legal when the backend
+can bind those views independently. The child render-API spec must make view
+ranges part of pass validation; comparing only texture handles is insufficient.
+
+A depth attachment with writes disabled, used only by the fixed-function depth
+test, is a read-only attachment and is legal everywhere. Binding that same depth
+subresource for sampling in the fragment stage is still forbidden feedback.
+ROA applies only to shader storage accesses and does not relax either attachment
+rule. Within the ROA storage set, read/write overlap is intentional and ordered;
+without ROA, fragment storage writes are absent from the baseline API.
 
 ## Draw commands
 
@@ -302,11 +333,12 @@ uniform buffer. The offsets are structure, so they are baked into the graph. The
 transforms are contents, so they are rewritten every frame through 003's first
 kind of variation. Nothing is re-recorded, and the graph replays.
 
-This is why **there are no push constants in v0**. Push constants (Vulkan push
-constants, D3D12 root constants, Metal `setVertexBytes`) put per-draw values into
-the command stream itself, which makes changing them a re-record. That is
-precisely the cost decision 1 exists to avoid, and offering them would make the
-convenient path the one that defeats the model. The recorded-offset mechanism has
+This is why **there are no push constants in the initial graphics API**. Push
+constants (Vulkan push constants, D3D12 root constants, Metal `setVertexBytes`)
+put per-draw values into the command stream itself, which makes changing them a
+re-record. That is precisely the cost decision 1 exists to avoid, and offering
+them would make the convenient path the one that defeats the model. The
+recorded-offset mechanism has
 a native expression everywhere (dynamic uniform buffer offsets in Vulkan, buffer
 offsets in Metal, root descriptor offsets in D3D12).
 
@@ -431,31 +463,39 @@ would reappear in a document that claims to have learned from it.
 A **surface** is a swapchain: a rotation of presentable textures, acquired one per
 frame, rendered into, and presented.
 
-### The acquired image is a binding slot
+### The acquired image is a typed present slot
 
 A graph cannot name a swapchain texture at record time, because which texture the
-frame gets is decided at acquire time. So the swapchain image is recorded as a
-**binding slot** ([003](003-command-graph.md) gives slots their API), declared
-with the surface's format so the builder can validate attachment agreement
-without a texture, and each frame binds the acquired texture into it before
-submitting. That is 003's second kind of variation used exactly as specified, and
-it means a frame graph is built once and replayed for the life of the window.
+frame gets is decided at acquire time. An ordinary attachment slot is not enough:
+`BindingAttachment` plus a format cannot prove that the eventual texture is
+presentable, belongs to the right surface, or is from the surface generation for
+which the graph was built. The surface child spec therefore adds a dedicated
+present-slot constructor:
 
 Frame loop:
 
 ```go
 // Recorded once, when the frame graph is built:
-swap := rec.Slot(accel.SlotDescriptor{
-	Name: "swapchain", Kind: accel.BindingAttachment,
-	Access: accel.AccessWrite, Format: surface.Format(),
-})
+swap := rec.PresentSlot(surface, "swapchain")
 
 // Per frame, for the life of the window:
 frame, err := surface.Acquire(timeout) // texture plus an acquire fence
-graph.Bind(accel.Binding{Slot: swap, Texture: frame.Texture})
+graph.BindPresent(swap, frame)
 fence := queue.SubmitAfter(graph, frame.Acquired)
 surface.Present(frame, fence)
 ```
+
+Internally the slot records the device, surface identity, surface generation,
+format, extent, render-target usage, and the fact that its final state is
+`Present`. `BindPresent` accepts a `Frame`, not a naked texture, and verifies the
+same surface and generation. This makes the present transition representable to
+the graph planner and prevents an ordinary texture with the same format from
+being mistaken for a swapchain image. Resize increments the generation, so old
+graphs and frames fail binding with an explicit stale-surface error.
+
+This is [003](003-command-graph.md)'s second kind of variation with a stronger
+slot type. The graph is built once and replayed until resize or surface
+reconfiguration changes that type-level contract.
 
 `Acquire` can block (the swapchain is full, the compositor has not released an
 image) so it takes a timeout and can report expiry, rather than blocking forever
@@ -467,11 +507,11 @@ Present is **not** a graph node. It is a queue operation taking the submission
 fence it must follow.
 
 The reason is that present is not work on the device, it is a handoff to a
-compositor whose completion is not the device's to signal, and a graph that
-contained a present could not be submitted twice in flight without the second
-submission's present racing the first. Keeping it outside means a graph is a
-description of rendering and stays replayable, and the ordering that does matter
-(rendering finishes before the image is shown) is expressed by the fence.
+compositor whose completion is not the device's to signal. Acquisition and
+presentation are paired to one external `Frame`, while a graph describes only
+device work. Keeping present outside preserves that boundary; the ordering that
+does matter (rendering finishes before the image is shown) is expressed by the
+submission fence.
 
 What the graph does contain is the write to the bound swapchain image. The
 builder knows that image is presentable, so it inserts the transition to
@@ -532,9 +572,9 @@ the call itself must be made on the main thread, and says so.
 
 **The honest cost**: accel cannot ship a runnable windowed example without either
 a second package or a test-only window shim. That is not hypothetical, it is
-exactly why the predecessor needed an `app/` package. The v0 answer is a
-test-only shim, small and unexported, sufficient for the present tests described
-below and explicitly not a windowing library.
+exactly why the predecessor needed an `app/` package. The initial graphics answer
+is a test-only shim, small and unexported, sufficient for the present tests
+described below and explicitly not a windowing library.
 
 **The known gap to close.** The predecessor implemented on-screen present for
 X11/EGL and Win32/ANGLE, and never implemented Metal's `CAMetalLayer` drawable
@@ -542,9 +582,9 @@ path, so present worked on GL and not on Metal. That is a warning, not a detail:
 Metal is the backend where present differs most from the others (the drawable is
 owned by the layer, `nextDrawable` can block or return nothing, and the
 completion-handler lifetime rule in
-[`conventions.md`](../docs/conventions.md) applies directly). v0 must prove the
-Metal drawable path or present is not portable, and it should be proven early
-rather than left as the last brick again.
+[`conventions.md`](../docs/conventions.md) applies directly). The first
+presentation milestone must prove the Metal drawable path or present is not
+portable, and it should be proven early rather than left as the last brick again.
 
 ## Convention guarantees
 
@@ -568,7 +608,7 @@ reasoning in [`conventions.md`](../docs/conventions.md):
   transfer size computation, and readback buffer sizing all derive it, and none
   of them assumes 4.
 
-## Out of scope for v0
+## Out of scope for the initial graphics implementation
 
 Each of these is excluded for a reason, not by omission.
 
@@ -586,13 +626,13 @@ Each of these is excluded for a reason, not by omission.
   want it are better served by compute today.
 - **Geometry shaders.** Metal does not have them at all, they are slow where they
   do exist, and every use has a compute or instancing formulation.
-- **Multisampling.** Deliberately deferred rather than designed out: sample count
-  is already a pipeline field, and the store action enumeration reserves a
-  resolve. What is excluded is resolve attachments, per-sample shading, sample
-  masks, and alpha-to-coverage. The reason is the CPU oracle: an MSAA reference
-  rasterizer has to match a sample pattern that is not standardized across
-  vendors, so the oracle would be weaker for the paths MSAA touches while the
-  API surface grew.
+- **Multisampling.** Deliberately deferred rather than designed out. The baseline
+  accepts sample count 1 only and does not reserve a partially specified resolve
+  action. A child spec must add resolve attachments and actions together with the
+  validation and per-sample semantics listed above. The reason is the CPU oracle:
+  an MSAA reference rasterizer has to match a sample pattern that is not
+  standardized across vendors, so the oracle would be weaker for the paths MSAA
+  touches while the API surface grew. ROA remains sample-count-1-only until then.
 - **Queries** (occlusion, pipeline statistics, timestamps). Useful, and a
   profiling concern rather than a rendering one.
 - **Sparse and virtual texture memory**, consistent with 001.
@@ -610,14 +650,6 @@ Each of these is excluded for a reason, not by omission.
   `[0, 1]`, is a breaking change to every authored vertex kernel and to
   `conventions.md`. Unresolved, and worth resolving before the first caller
   writes a projection matrix.
-- ~~**Rebindable slots versus concurrent submission.**~~ **Resolved in
-  [003](003-command-graph.md)**, which took the second of the two options this
-  spec offered: a graph has one submission in flight at a time, and that holds for
-  every graph rather than only those with rebindable slots, because transient
-  aliasing has the same race from the other direction. Snapshotting bindings at
-  submit was rejected as fixing half the race for the price of a per-submission
-  copy of the binding set. The frame loop above is unaffected: one graph per
-  surface, one frame in flight per graph.
 - **Whether the vertex input layout should be derived from the Go vertex kernel
   signature.** Declaring it twice, once in the kernel and once in the descriptor,
   is a mismatch waiting to happen, and the compiler already knows the types.
@@ -683,9 +715,11 @@ comparison.
 This distinction is what makes the CPU rasterizer credible, and conflating the
 two would produce a test suite that either fails constantly or proves nothing.
 
-**Exact**, on every backend:
+**Exact**, on every backend and on the non-degenerate domains stated by each
+test:
 
-- occlusion ordering (which surface wins a pixel),
+- occlusion ordering when competing depths are separated by more than both
+  pipelines' allowed interpolation/rounding intervals,
 - attachment routing (which fragment output lands in which attachment),
 - winding and cull behaviour,
 - clip-range survival (which geometry is clipped),
@@ -697,6 +731,11 @@ two would produce a test suite that either fails constantly or proves nothing.
 - interpolated attribute values and shaded colours, since interpolation rounding
   differs between implementations,
 - coverage at shared and near-degenerate edges, per the fill-rule limit above.
+
+No portable winner is asserted when two depth intervals overlap: depth testing
+chooses a discrete surface, so an ordinary numeric tolerance cannot repair a
+different winner. Occlusion fixtures deliberately use separated depths and
+report the interpolated depth intervals when they fail.
 
 ### Tests
 
@@ -742,8 +781,15 @@ two would produce a test suite that either fails constantly or proves nothing.
   and the result matches the equivalent direct draw. On a device with the count
   capability, a device-written count below the build-time maximum draws that many,
   and a count above it clamps and reports.
-- **Feedback loop rejected.** A texture bound for sampling and as an attachment of
-  the same pass is a build error naming both uses.
+- **Feedback validation.** Sampling the same mip/layer range used as an
+  attachment is rejected and names both views; disjoint subresources are
+  accepted. Attachment `Load`, blending, depth, and stencil read-modify-write are
+  accepted. A capability-present ROA storage test is ordered; the same stage is
+  rejected without ROA, and ROA never permits attachment sampling feedback.
+- **Present-slot identity.** A frame from another surface, an earlier resize
+  generation, or an ordinary render-target texture with the same format is
+  rejected by `BindPresent`; a frame acquired from the matching surface binds and
+  reaches the present state.
 - **Headless surface frame loop.** Acquire, render, present, and rotate for
   several frames, with double buffering and a resize in the middle, verified by
   readback. Runs everywhere with no display, on every backend.

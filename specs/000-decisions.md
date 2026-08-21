@@ -20,9 +20,9 @@ look at before arguing with one.
 | --- | --- | --- | --- |
 | 1 | Submission is a recordable, replayable graph | **Total.** Layer 1 and layer 2 are both shaped around it | [003](003-command-graph.md), [005](005-graphics.md), [006](006-backends.md), [007](007-tensor-layer.md) |
 | 2 | cgo-free is a hard requirement | **Total.** Every backend, and the reason the project exists | [004](004-kernel-authoring.md), [006](006-backends.md) |
-| 3 | A pure-Go CPU backend is first-class | **High.** Every test strategy and the whole verification story | [002](002-compute-model.md), [004](004-kernel-authoring.md), [005](005-graphics.md), [006](006-backends.md) |
+| 3 | A pure-Go CPU backend is first-class | **High.** Every test strategy and the whole verification story | [002](002-compute-model.md), [004](004-kernel-authoring.md), [005](005-graphics.md), [006](006-backends.md), [011](011-conformance-harness.md) |
 | 4 | The compute model is designed in | **High.** Kernel signatures change, so every kernel is rewritten | [002](002-compute-model.md), [004](004-kernel-authoring.md), [007](007-tensor-layer.md) |
-| 5 | Kernels are authored in Go | **High.** Removes decision 3's exactness and the author-once property | [004](004-kernel-authoring.md), [006](006-backends.md) |
+| 5 | Kernels are authored once in Go and lowered from one typed IR | **High.** Removes decision 3's exactness and the author-once property | [004](004-kernel-authoring.md), [006](006-backends.md), [010](010-kernel-corpus.md) |
 | 6 | Capabilities are queryable, absence explicit | **Moderate.** Contained to error paths and the capability struct | [002](002-compute-model.md), [006](006-backends.md) |
 
 Decisions 1 and 2 are the two that cannot be revisited without restarting. The
@@ -174,9 +174,9 @@ GPU backend is finished.
 
 It is also the cross-backend oracle. Every GPU backend is verified against it.
 
-**Be precise about what that proves.** Decision 5 has the CPU backend run the
-*same kernel source* as every GPU backend, so agreement between them proves the
-lowering is correct: the compiler, the bindings, the dispatch, and the backend's
+**Be precise about what that proves.** Decision 5 has the CPU backend and every
+GPU backend lower the same typed kernel IR, so agreement between them proves the
+lowerings agree: the compiler, the bindings, the dispatch, and the backend's
 conventions. It does not prove the kernel computes the right thing. A wrong
 formula is wrong identically everywhere and every parity test passes.
 
@@ -201,9 +201,11 @@ rasterizes.
 
 ### 4. The compute model is designed in, not retrofitted
 
-Workgroup size is part of the pipeline descriptor. Shared memory, barriers,
-atomics, and subgroup operations are in the layer 1 API from the start. Dtypes
-include f16, bf16, and 8-bit integers alongside f32.
+Workgroup size, shared-memory extent, binding layout, and access are generated
+kernel metadata consumed by pipeline creation rather than handwritten a second
+time. Shared memory, barriers, atomics, and subgroup operations are in the layer
+1 API from the start. Dtypes include f16, bf16, and 8-bit integers alongside
+f32.
 
 This corrects a specific, known mistake. The predecessor emitted
 `layout(local_size_x = 1) in;`, had no shared memory, no barriers, and no atomics,
@@ -224,25 +226,34 @@ a rewrite, because they change what a kernel signature means.
 [002](002-compute-model.md) turned out not to need one of these primitives, that
 primitive could move to a capability. The GEMM is the arbiter.
 
-### 5. Kernels are authored in Go
+### 5. Kernels are authored once in Go and lowered from one typed IR
 
-A restricted subset of Go compiles to each backend's shading language. One kernel
-source runs as ordinary Go on the CPU backend and as native shader code on the
-GPU, which is what makes decision 3's oracle exact rather than approximate.
+A restricted subset of Go is type-checked once and lowered into one typed IR.
+That IR produces an instrumented Go runner for the CPU backend and native shader
+code for each GPU backend. The authored function is the single source of truth;
+the unmodified function is not called directly by the oracle.
+
+The distinction is load-bearing. The CPU lowering inserts explicit f32 rounding
+points, shared-memory initialization tracking, and barrier-generation checks.
+Those behaviours cannot be supplied by a call adapter around an ordinary Go
+function. They are instrumentation of the same program, not an independently
+maintained CPU implementation, so decision 3 retains the author-once and
+differential-lowering properties it needs.
 
 The predecessor proved this works, including helper functions that compile
 correctly on both Metal and GLSL and match a Go run bit for bit. It also showed
 the compiler must be built on `go/types` rather than a bare AST walk; skipping
 that is a debt that surfaces later as confusing failures.
 
-Note the limit this places on decision 3: sharing the source is what makes the
-oracle exact, and equally what stops it from being independent. See decision 3.
+Note the limit this places on decision 3: sharing the source and typed IR is what
+makes the oracle a precise lowering oracle, and equally what stops it from being
+an independent algorithm oracle. See decision 3.
 
 **Alternatives rejected.**
 
 | Alternative | Why not |
 | --- | --- |
-| Callers write native shader source per backend | No compiler to build, and full access to each language. It also means writing every kernel four times, and it makes decision 3's oracle impossible, since the CPU backend would have nothing to run. |
+| Callers write native shader source per backend | No compiler to build, and full access to each language. It also means writing every kernel four times, and it makes decision 3's oracle impossible, since the CPU backend would have no common program to lower. |
 | A new DSL, not Go | Free to design for GPUs, with no Go semantics to honour. But it cannot run as Go on the CPU, so the oracle goes; it needs its own parser, type checker, and tooling; and the predecessor's DSL overloaded operators, which is exactly what made `go/types` unusable there. |
 | Go, but transpiled from an AST walk rather than `go/types` | Simpler to start, which is why the predecessor did it. It resolves identifiers by name instead of by object identity, cannot disambiguate a conversion from a call, and cannot resolve untyped constants, each of which surfaces later as a confusing miscompile. |
 | WGSL as the source language | Already portable, already specified, with tooling. It is not Go, so the oracle goes, and it drags in a WGSL front end for no gain over emitting to it. |
@@ -295,14 +306,14 @@ it moves as milestones land. It is here rather than in a sibling spec because a
 spec that contradicts it is wrong in the same way as one that contradicts a
 decision, and because two of the specs disagreed about it before it was written.
 
-**v0 is compute only.** [005](005-graphics.md) stays normative and is not
-implemented. Its API shape is settled now because it has to be: attachment
-formats, blend state, and stencil operations are compile-time pipeline inputs on
-every backend, so adding them later is a breaking change to every caller who
-wrote a pipeline descriptor. What is deferred is the code: the CPU reference
-rasterizer, the surface and present path, and the Metal drawable path.
-[004](004-kernel-authoring.md) correspondingly keeps `//accel:vertex` and
-`//accel:fragment` reserved and unimplemented, which is what it already said.
+**v0 is compute only.** [005](005-graphics.md) remains the normative parent
+design and is not implemented, but it is drafted rather than frozen. No graphics
+public API is promised until its stage ABI, render API, surface/present contract,
+and CPU rasterizer have their own implementation-ready child specs. Attachment
+formats, blend state, and stencil operations remain design inputs now so the
+device layer does not accidentally foreclose them. [004](004-kernel-authoring.md)
+correspondingly keeps `//accel:vertex` and `//accel:fragment` reserved and
+unimplemented.
 
 The cost, stated: **the graphics half of
 [`conventions.md`](../docs/conventions.md) is unverified at v0.** Clip-space
@@ -325,6 +336,13 @@ follow and are load-bearing:
    `import "C"` grep) is the whole blocking set, plus Metal on a macOS runner.
    The lavapipe, llvmpipe, and WARP jobs arrive with their backends.
 
+**v0 inference is deliberately unquantized.** It proves one f16/f32 transformer
+decode path and the minimum prefill path needed to compare incremental decode
+against the same token sequence evaluated in one pass. Quantized weights, a
+quantized KV cache, and the kernel variants they require are post-v0 work. This
+keeps the first token a proof of the layering and execution model rather than a
+claim of production throughput.
+
 The cost of a two-backend set is that **the oracle has no second opinion.** 006's
 rule is that the CPU backend enforces the intersection of what every backend
 allows; at v0 it is enforcing an intersection nothing else in the room can
@@ -336,9 +354,12 @@ standing between a kernel and a portability bug that no v0 device can produce.
 **What v0 must prove**, in the order the sequencing spec builds it: a buffer
 round trip on both backends, [002](002-compute-model.md)'s tiled GEMM running
 under the kernel compiler on both backends and agreeing with an independently
-written reference, and [007](007-tensor-layer.md)'s decode step reaching a token.
-The GEMM is the gate [006](006-backends.md) §7 already names; the token is the
-one that proves the layering.
+written reference, and [007](007-tensor-layer.md)'s unquantized decode step
+reaching a token while matching its minimum prefill path. [010](010-kernel-corpus.md)
+owns the kernels that make those demonstrations possible and
+[011](011-conformance-harness.md) owns the evidence. The GEMM is the gate
+[006](006-backends.md) §7 already names; the token is the one that proves the
+layering.
 
 ## Layering rules
 
