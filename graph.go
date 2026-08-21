@@ -79,11 +79,21 @@ type NodeID int
 // A Graph is immutable. Immutability is the point: it means validation, memory
 // planning, barrier computation, and lowering happen once rather than per
 // submission. Between submissions only three things may vary: buffer contents,
-// which resource is bound to a declared slot, and dynamic dispatch counts.
-// Anything else is a different graph.
+// which resource is bound to a declared slot, and dynamic dispatch or draw
+// counts. Anything else is a different graph.
 //
-// A Graph is safe for concurrent submission. Submissions are not implicitly
-// ordered with respect to each other; wait on a [Fence] if ordering matters.
+// Note that a per-step address is none of those three and travels as buffer
+// contents. A KV cache write offset, for example, is passed as a value a kernel
+// reads rather than by rebinding a view, because rebinding would cost a binding
+// update per layer per step.
+//
+// A Graph may have only one submission in flight at a time. That is narrower
+// than immutability suggests, and the reason is memory planning: its transients
+// are aliased into a single pool, so two overlapping submissions would write
+// each other's intermediates, and a rebind between two in-flight submissions
+// races on which one sees it. To run the same work concurrently, build a graph
+// per concurrent user: they share pipelines and caller-owned buffers, and only
+// the transient pool is duplicated. Wait on a [Fence] if you need ordering.
 type Graph struct{ _ noCopy }
 
 // Rebind points a declared binding slot at a different resource. The new resource
