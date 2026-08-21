@@ -65,6 +65,68 @@ kernel from buffer contents cannot declare a tight sub-range, so it declares the
 whole slab it might touch and takes edges a tighter declaration would not need.
 The address gap is paid in lost parallelism, not in correctness.
 
+### Rebindable slots, as an API
+
+Variation 2 needs a name for the thing being rebound, and both the worked example
+below and [005](005-graphics.md)'s frame loop have been writing `r.Slot(...)` and
+`g.Bind(...)` as if one existed. It does now, because a slot is not a convenience:
+it carries check V21, the swapchain image, and [007](007-tensor-layer.md)'s
+per-sequence cache selection.
+
+```go
+// SlotDescriptor declares a binding point whose resource is supplied before
+// submission rather than at record time. Everything the builder needs in order to
+// validate and to infer hazards is here, because at record time the resource is
+// not.
+type SlotDescriptor struct {
+    Name   string // appears in every error about this slot
+    Kind   BindingKind
+    DType  DType  // for buffer kinds; the bound view must match exactly
+    Access Access
+
+    // MinCount is the smallest bound range the recorded nodes can be given, in
+    // elements of DType. It is what check V5 compares against, moved from build
+    // to bind because at build there is no buffer to measure.
+    MinCount int
+
+    // Format constrains a texture slot; zero means any format the nodes accept.
+    Format Format
+}
+
+// Slot names a rebindable binding point within one graph. The zero value is not a
+// slot: ids start at one, so a Binding that forgot to set Slot is a validation
+// error rather than a silent reference to the first one.
+type Slot int
+
+func (r *Recorder) Slot(desc SlotDescriptor) Slot
+
+// Bind points one slot at a resource; Rebind does several at once and is the
+// hot-path form. A Binding names its slot and exactly one resource. Both validate
+// kind, dtype, access, size, device ownership and liveness, then run check V21
+// over the whole bound set, so a batch is rejected as a batch rather than half
+// applied.
+func (g *Graph) Bind(b Binding) error
+func (g *Graph) Rebind(b []Binding) error
+
+// Slots reports what a graph expects, so a caller holding a graph they did not
+// record can discover its inputs.
+func (g *Graph) Slots() []SlotDescriptor
+```
+
+A `Binding` therefore names either a concrete resource or a slot, and a node
+records whichever it was given. Three rules make the rest fall out:
+
+1. **A slot with no resource bound is check V1 at submit**, not at build. The
+   graph builds fine with every slot empty, which is what lets a frame graph be
+   built before the first swapchain image is acquired.
+2. **Rebinding while a submission is in flight is `ErrGraphInFlight`**, for the
+   reason the one-in-flight rule already gives: a rebind between two submissions
+   is a race on which one sees it. This is the same flag `Submit` takes.
+3. **A slot is its own `resourceID` for hazard inference**, per the IR above.
+   That is what makes V21 necessary and it is why a slot declares `MinCount` and
+   `Access` rather than being an untyped hole: without them the builder could
+   neither size transients around it nor classify its hazards.
+
 Anything else, a different pipeline, a different node order, a different set of
 nodes, is a different graph. Building a graph is cheap enough to build several,
 and callers with genuinely dynamic structure are expected to cache graphs keyed
@@ -867,7 +929,7 @@ point at its own structure.
 
 | # | Check | Error says | Enforces |
 | --- | --- | --- | --- |
-| V1 | Every slot in the pipeline's layout has a binding | node, slot index, slot name, "no resource bound" | 002 binding layout |
+| V1 | Every slot in the pipeline's layout has a binding. At build for statically bound slots; **at submit** for rebindable ones, which may legally be empty until then | node, slot index, slot name, "no resource bound" | 002 binding layout |
 | V2 | Bound resource kind matches the slot's `BindingKind` | both kinds, slot name | 002 |
 | V3 | Bound buffer dtype matches the slot's declared dtype | both dtypes, buffer label | 001 typed buffers |
 | V4 | Bound resource access is compatible with the slot's declared `Access` | slot access, resource usage | 002 |

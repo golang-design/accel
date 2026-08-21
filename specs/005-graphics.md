@@ -437,7 +437,9 @@ frame, rendered into, and presented.
 
 A graph cannot name a swapchain texture at record time, because which texture the
 frame gets is decided at acquire time. So the swapchain image is recorded as a
-**binding slot**, and each frame binds the acquired texture into it before
+**binding slot** ([003](003-command-graph.md) gives slots their API), declared
+with the surface's format so the builder can validate attachment agreement
+without a texture, and each frame binds the acquired texture into it before
 submitting. That is 003's second kind of variation used exactly as specified, and
 it means a frame graph is built once and replayed for the life of the window.
 
