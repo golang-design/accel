@@ -19,27 +19,37 @@ type Limits struct {
 	// MinStorageBufferOffsetAlignment and MinUniformBufferOffsetAlignment are the
 	// alignments a bound buffer range must satisfy. They constrain suballocation
 	// directly: a pool hands out offsets that satisfy the strictest alignment any
-	// declared usage requires.
+	// declared usage requires. A multiple of 256 is always sufficient on every
+	// backend; these report what this device actually needs, for callers who want
+	// the waste back.
 	MinStorageBufferOffsetAlignment int
 	MinUniformBufferOffsetAlignment int
 
-	// OptimalBufferCopyRowPitchAlignment is the row pitch a texture-to-buffer copy
-	// wants. D3D12 requires 256 bytes and others differ; accel guarantees tightly
-	// packed rows to the caller and pays for the repack itself, so this is
-	// reported for callers sizing their own staging, not imposed on them. See
-	// docs/conventions.md.
-	OptimalBufferCopyRowPitchAlignment int
-	OptimalBufferCopyOffsetAlignment   int
+	// MinBufferCopyOffsetAlignment and MinBufferCopyRowPitchAlignment constrain
+	// transfers rather than bindings, which is why a texture readback can cost a
+	// repack. accel guarantees tightly packed rows to the caller and pays for the
+	// repack itself, so these are reported for callers sizing their own staging,
+	// not imposed on them. See docs/conventions.md.
+	MinBufferCopyOffsetAlignment   int
+	MinBufferCopyRowPitchAlignment int
 
-	MaxBufferBytes        int
-	MaxStorageBufferRange int
-	MaxUniformBufferRange int
-	MaxTextureDimension2D int
+	// MinTexturePlacementAlignment is the alignment a texture's backing memory must
+	// start at inside a pool. It is far coarser than any buffer alignment on some
+	// backends, which is why a pool is either a buffer pool or a texture pool and
+	// never both.
+	MinTexturePlacementAlignment int
+
+	// MaxBufferBytes is the largest single buffer, MaxPoolBytes the largest single
+	// device allocation, and MaxPools the driver's cap on live allocations.
+	// MaxPools is the number that makes pooling mandatory rather than merely
+	// efficient.
+	MaxBufferBytes int
+	MaxPoolBytes   int
+	MaxPools       int
+
+	MaxTextureExtent2D    int
+	MaxTextureExtent3D    int
 	MaxTextureArrayLayers int
-
-	// MaxBoundBuffers and MaxBoundTextures cap one pipeline's binding layout.
-	MaxBoundBuffers  int
-	MaxBoundTextures int
 }
 
 // Limits reports the device's numeric bounds.
@@ -53,12 +63,28 @@ func (d *Device) Limits() Limits { panic(ErrNotImplemented) }
 // constant.
 type FormatInfo struct {
 	Format        Format
-	BytesPerPixel int
+	BytesPerPixel int // 0 when the layout is device-defined, as for Depth24PlusStencil8
 	Channels      int
 
-	Renderable   bool
-	Sampleable   bool
-	Storage      bool
+	IsDepth   bool
+	IsStencil bool
+	IsSRGB    bool
+
+	Renderable bool
+	Sampleable bool
+
+	// Filterable is not implied by Sampleable. The 32-bit float formats are
+	// sampleable everywhere and linearly filterable only where the device says so,
+	// and assuming otherwise is how a resolve ends up with nearest-neighbour
+	// artefacts on one vendor only.
+	Filterable bool
+
+	// StorageRead and StorageWrite are separate because an sRGB format is neither:
+	// its transfer function is applied by fixed-function hardware that a storage
+	// write bypasses.
+	StorageRead  bool
+	StorageWrite bool
+
 	Blendable    bool
 	HostCopyable bool
 }

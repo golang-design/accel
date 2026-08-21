@@ -27,6 +27,40 @@ const (
 	MemoryShared
 )
 
+// PoolPolicy selects how a pool carves itself up. See specs/001-device-resources.md.
+type PoolPolicy int
+
+const (
+	// PoolGeneral is a general-purpose pool: arbitrary allocation and free order,
+	// O(1) allocate and free through a two-level segregated fit allocator, and
+	// bounded internal fragmentation. The default, and what a caller holding
+	// weights and caches wants.
+	PoolGeneral PoolPolicy = iota
+
+	// PoolLinear allocates by bumping a cursor and frees only by resetting the
+	// whole pool, so an individual Close is a no-op against the memory. This is
+	// what a Graph's transient pool uses: the graph computed every offset at build,
+	// so that pool needs no runtime allocator at all.
+	PoolLinear
+)
+
+// PoolDescriptor describes a pool to create.
+type PoolDescriptor struct {
+	Kind   MemoryKind
+	Bytes  int
+	Policy PoolPolicy
+
+	// Textures reserves the pool for textures. Texture placement alignment is far
+	// coarser than buffer alignment on some backends and some forbid the mixture
+	// outright, so it is a pool property rather than a per-allocation one. Mixing
+	// them would apply a texture's granularity to a model's thousands of tensors,
+	// which is not a tax but a fatal multiplier.
+	Textures bool
+
+	// Label appears in allocation errors and in backend debug tooling.
+	Label string
+}
+
 // Pool is a device memory allocation that buffers are suballocated from.
 //
 // Pooling exists because one device allocation per buffer is fine for a renderer
@@ -41,14 +75,29 @@ func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error) { panic(ErrNotImple
 // Stats reports the pool's size, how much is in use, and how much is free.
 func (p *Pool) Stats() PoolStats { panic(ErrNotImplemented) }
 
-// Close releases the pool. Buffers suballocated from it must be closed first.
+// Close releases the pool. Buffers suballocated from it must be closed first:
+// closing a pool with live buffers reports a *LifetimeError and frees nothing,
+// because closing children out from under a caller who still holds them turns a
+// bug into a silent success.
 func (p *Pool) Close() error { panic(ErrNotImplemented) }
 
 // PoolStats reports a pool's occupancy.
 type PoolStats struct {
 	Size int
-	Used int
-	Free int
+	Used int // sum of allocation sizes, which includes alignment padding
+	Free int // Size - Used
+
+	// LargestFree is the biggest single allocation this pool can still serve. The
+	// gap between Free and LargestFree is fragmentation, and it is what predicts
+	// an allocation failure rather than reporting it afterwards. A pool never
+	// compacts, because a device address is already baked into descriptor sets and
+	// recorded commands, so fragmentation inside a pool is permanent for its life.
+	LargestFree int
+
+	// Allocations is the live count and Blocks the number of free blocks. Rising
+	// Blocks against flat Allocations is fragmentation accumulating.
+	Allocations int
+	Blocks      int
 }
 
 // DType is the element type of a buffer.

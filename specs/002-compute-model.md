@@ -1249,12 +1249,17 @@ because it is the code nobody runs on their own machine.
   (`packHalf2x16`, `f32tof16`, `pack2x16float`), while arithmetic is not
   emulable. The practical consequence is worth stating: a quantized model *runs*
   everywhere and is *fast* only where f16 arithmetic is present.
-- **Indirect dispatch**, a device-written workgroup count. Needed for anything
-  data-dependent, and it interacts with the graph model's immutability (see
-  [003](003-command-graph.md)) and with 3.3: the count is still uniform within a
-  workgroup, so the barrier rule holds, but the number of workgroups is unknown
-  at build time and a kernel computing a tail must read `NumGroups()` rather than
-  derive it from a uniform the host filled in.
+- ~~**Indirect dispatch**, a device-written workgroup count.~~ **Resolved in
+  [003](003-command-graph.md)**: the node records a build-time `maxCount`, the
+  device supplies the actual count, and the builder validates the maximum against
+  this spec's limits. That gives validation something to check and transients
+  something to be sized against, which a wholly device-decided count does not.
+  Two consequences of this spec's own remain and are not open questions but
+  obligations: the count is still uniform within a workgroup, so 3.3's barrier
+  rule is untouched, and a kernel computing a tail must read `NumGroups()` rather
+  than derive it from a uniform the host filled in, because at build the host does
+  not know it. The clamp against `maxCount` is enforced on device only in strict
+  mode; in release it is a documented caller obligation.
 - **An escape hatch for the conservative uniformity analysis.** 3.3 rejects what
   it cannot prove, and two families of correct kernel are rejected with it. A
   `t.AssumeUniform(x)` intrinsic that the CPU backend *checks* at runtime (every

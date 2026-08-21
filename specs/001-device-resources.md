@@ -1283,13 +1283,10 @@ The immediate path is a convenience for setup, teardown and debugging. It exists
 because writing initial weights and reading final logits should not require
 building a graph.
 
-**A correction to the current doc comment.** `memory.go` says of `Buffer.Write`:
-"It is recorded, not immediate: for a transfer that participates in graph
-dependency tracking, record it with `Recorder.CopyToBuffer` instead." The two
-clauses contradict each other and the second is the intended meaning. The comment
-should read: "It is immediate, not recorded: it does not participate in graph
-dependency tracking. For a transfer that does, record it with
-`Recorder.CopyToBuffer`." The decision is unchanged, only its statement.
+The doc comment on `Buffer.Write` previously said it was "recorded, not
+immediate" while directing callers to `Recorder.CopyToBuffer` for anything that
+participates in dependency tracking, which are contradictory claims. The comment
+now states the immediate path; the decision never changed, only its statement.
 
 ### 8.2 `Write` is asynchronous, `Read` is synchronous, and both are precise
 

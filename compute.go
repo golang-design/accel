@@ -108,6 +108,51 @@ const (
 	SubgroupArithmetic
 )
 
+// Capability names something a kernel can require and a device may lack. It is a
+// requirement set, not a feature list: the values here are exactly the ones a
+// kernel body can imply, and they are inferred from that body rather than
+// declared by its author, because a declaration can be forgotten.
+type Capability uint32
+
+const (
+	CapSubgroupBasic Capability = 1 << iota
+	CapSubgroupVote
+	CapSubgroupBallot
+	CapSubgroupShuffle
+	CapSubgroupArithmetic
+	CapF16Arithmetic
+	CapBF16Arithmetic
+	CapAtomicFloatAddStorage
+	CapAtomicFloatAddShared
+	CapI8DotProduct
+)
+
+// Requirements is what a compiled kernel needs from a device. It is derived from
+// the kernel body by the kernel compiler, never written by hand. The
+// //accel:requires directive is an assertion checked against this, not a source
+// of it: a mismatch in either direction fails generation.
+type Requirements struct {
+	Caps                 Capability
+	WorkgroupSize        [3]uint32
+	WorkgroupInvocations uint32
+	SharedBytes          uint32
+}
+
+// Unmet is one requirement a device does not meet. It carries what was required
+// and what the device reports, because an error saying only that a capability is
+// missing does not tell a caller whether to change the kernel or the device.
+type Unmet struct {
+	Cap       Capability // zero when the unmet requirement is a limit
+	Limit     string     // the Capabilities field that was exceeded, if any
+	Required  uint64
+	Available uint64
+}
+
+// Missing reports every requirement this device does not meet, in a stable order.
+// An empty result means the kernel can run here. It is called at graph build,
+// never at dispatch: absence is reported before work is submitted, not after.
+func (c Capabilities) Missing(r Requirements) []Unmet { panic(ErrNotImplemented) }
+
 // WorkgroupCount is how many workgroups a dispatch runs.
 //
 // This counts workgroups, not threads, deliberately. A thread count makes the
