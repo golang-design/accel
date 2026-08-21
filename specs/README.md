@@ -53,6 +53,16 @@ around, and the other specs are hard to evaluate without it.
 | --- | --- | --- |
 | [007-tensor-layer.md](007-tensor-layer.md) | Drafted | Dtypes, shapes, strides and views, the operator set, graph build and execute, memory planning, quantization |
 
+## Process
+
+| Spec | Status | Covers |
+| --- | --- | --- |
+| [009-sequencing.md](009-sequencing.md) | Drafted | What gets built in what order, what done means per milestone, the work no spec owns, and the risks with what retires each |
+
+This is the one spec here that is expected to change as work lands. Read it
+before picking anything up: the `depends_on` graph is a graph of documents, and
+the order things can actually be demonstrated in is different.
+
 ## Conventions
 
 - **Numbered** so dependency order is visible at a glance. Numbers are stable
