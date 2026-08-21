@@ -75,7 +75,7 @@ The address gap is paid in lost parallelism, not in correctness.
 Variation 2 needs a name for the thing being rebound, and both the worked example
 below and [005](005-graphics.md)'s frame loop have been writing `r.Slot(...)` and
 `g.Bind(...)` as if one existed. It does now, because a slot is not a convenience:
-it carries check V21, the swapchain image, and [007](007-tensor-layer.md)'s
+it carries descriptor check V21, alias check V24, the swapchain image, and [007](007-tensor-layer.md)'s
 per-sequence cache selection.
 
 ```go
@@ -87,14 +87,18 @@ type SlotDescriptor struct {
     Name   string // appears in every error about this slot
     Kind   BindingKind
     DType  DType  // for buffer kinds; the bound view must match exactly
+    // Access is the union of every access any node may make through this slot.
+    // Build rejects a recorded use outside it; submit may therefore use it as a
+    // conservative graph-wide alias class.
     Access Access
 
     // MinCount is the smallest bound range the recorded nodes can be given, in
-    // elements of DType. It is what check V5 compares against, moved from build
-    // to bind because at build there is no buffer to measure.
+    // elements of DType. It is what check V5 compares against at bind, and every
+    // recorded slot-relative range must end at or before it at build.
     MinCount int
 
-    // Format constrains a texture slot; zero means any format the nodes accept.
+    // Format constrains a texture slot; FormatInvalid (zero) means any format
+    // compatible with every recorded use (001 section 4.1).
     Format Format
 }
 
@@ -107,15 +111,20 @@ func (r *Recorder) Slot(desc SlotDescriptor) Slot
 
 // Bind points one slot at a resource; Rebind does several at once and is the
 // hot-path form. A Binding names its slot and exactly one resource. Both validate
-// kind, dtype, access, size, device ownership and liveness, then run check V21
+// kind, dtype, access, size, device ownership and liveness, then run check V24
 // over the whole bound set, so a batch is rejected as a batch rather than half
 // applied.
 func (g *Graph) Bind(b Binding) error
 func (g *Graph) Rebind(b []Binding) error
 
-// Slots reports what a graph expects, so a caller holding a graph they did not
-// record can discover its inputs.
-func (g *Graph) Slots() []SlotDescriptor
+type GraphSlot struct {
+    Slot       Slot
+    Descriptor SlotDescriptor
+}
+
+// Slots reports stable IDs together with descriptors, so a caller holding a
+// graph they did not record can discover and bind its inputs.
+func (g *Graph) Slots() []GraphSlot
 ```
 
 **Two vocabularies meet here and the specs use one word for both, so it is fixed
@@ -123,9 +132,9 @@ once**: a *binding slot* is an entry in a pipeline's binding layout, declared by
 [002](002-compute-model.md)'s `BindingSlot` and fixed at pipeline creation. A
 *graph slot* is a rebindable input of a graph, declared by `Recorder.Slot` and
 bound per submission. A pipeline's binding slot is where a resource is *used*; a
-graph's slot is where it *comes from*. Checks V21 and V23 are about the former
-(two bindings of one node reaching the same bytes) even though what makes V21
-undecidable at build is the latter.
+graph's slot is where it *comes from*. V21 proves the graph-slot descriptor
+covers every binding-slot use. V23 handles concrete same-node aliases at build;
+V24 handles graph-slot aliases against the whole graph at bind and submit.
 
 A `Binding` therefore names either a concrete resource or a graph slot, and a
 node records whichever it was given. Three rules make the rest fall out:
@@ -137,9 +146,16 @@ node records whichever it was given. Three rules make the rest fall out:
    reason the one-in-flight rule already gives: a rebind between two submissions
    is a race on which one sees it. This is the same flag `Submit` takes.
 3. **A slot is its own `resourceID` for hazard inference**, per the IR above.
-   That is what makes V21 necessary and it is why a slot declares `MinCount` and
-   `Access` rather than being an untyped hole: without them the builder could
+   That is what makes V24 necessary, and it is why V21 requires a slot to declare
+   `MinCount` and `Access` rather than being an untyped hole: without them the builder could
    neither size transients around it nor classify its hazards.
+
+At build, the recorder also proves **descriptor coverage**: every node use
+through a graph slot matches its kind, dtype and optional format, its access is a
+subset of `SlotDescriptor.Access`, and its slot-relative range is within
+`MinCount`. A descriptor is an upper bound the planner can trust, not an
+informational label. This does not prove two slots will not later alias; the
+graph-wide submit check below handles that case.
 
 Anything else, a different pipeline, a different node order, a different set of
 nodes, is a different graph. Building a graph is cheap enough to build several,
@@ -262,7 +278,7 @@ type renderPassPayload struct {
 }
 
 type attachment struct {
-    tex        resourceRef // one mip, one layer, one aspect
+    tex        resourceRef // whole v0 base level, colour or depth aspect
     load       LoadAction  // Clear, Load, DontCare
     store      StoreAction // Store, DontCare
     clearValue ClearValue  // explicit, no zero-value special case (005)
@@ -272,7 +288,7 @@ type copyBufferPayload struct{ dst, src resourceRef }
 
 type copyTexBufPayload struct {
     buf        resourceRef // buffer side
-    tex        resourceRef // texture side, one mip and layer range
+    tex        resourceRef // whole v0 base level
     rowStride  int         // bytes, backend-aligned, computed not declared
     rowsPerImg int
     origin     Origin3D
@@ -294,10 +310,14 @@ Notes on the payloads, each of which is a decision:
   actual count, and the builder validates the maximum against device limits.
   Without it there is nothing to validate at build and nothing to size transients
   against, and exceeding the indirect workgroup count limit is undefined
-  behaviour on Vulkan rather than a clean error. The honest gap: the clamp is not
-  free to enforce on device. Strict mode inserts a one-workgroup clamp dispatch
-  that mins the count buffer against the maximum; release mode makes the maximum
-  a documented caller obligation.
+  behaviour on Vulkan rather than a clean error. **Every build mode clamps on
+  device before the indirect fetch.** The cost is one tiny clamp dispatch (or an
+  equivalent backend command) and its barrier. Correctness cannot depend on a
+  debug flag, and no backend submits an out-of-range indirect count.
+- **Zero and omitted axes are distinct.** Direct counts require `X > 0`; omitted
+  host-authored `Y` or `Z` values normalise from zero to one. The host-authored
+  indirect `maxCount` follows the same rule. The three values read from the
+  indirect buffer are not normalised: if any is zero, the dispatch is skipped.
 - **`rowStride` is computed, never declared.** Backends impose row alignment on
   texture-buffer copies (256 bytes on D3D12, backend-specific elsewhere) and
   bytes per pixel comes from the format
@@ -348,18 +368,17 @@ type resourceRef struct {
     // so elements are not a common unit across two views of one buffer.
     off, size uint64
 
-    // Texture sub-resources. Half-open ranges over mip level and array layer.
-    // There is deliberately no region within a mip; see the cost note below.
-    baseMip, mipCount     uint16
-    baseLayer, layerCount uint16
-    aspect                Aspect // AspectColour, AspectDepth, AspectStencil
+    // v0 textures name the whole base level and sole array layer. Aspect keeps
+    // colour and depth/stencil semantics distinct; subresource ranges arrive
+    // only with the resource/view API deferred by 001 section 4.
+    aspect Aspect // AspectColour, AspectDepth, AspectStencil
 }
 
 // resourceID names the thing hazards are tracked against. Three cases:
 //   - a caller-created Buffer or Texture, identified by its object
 //   - a transient the builder owns
 //   - a rebindable slot, identified by the slot, NOT by whatever is bound to it
-// The third is why an overlap check has to happen again at submit, see V21.
+// The third is why an overlap check has to happen again at submit, see V24.
 type resourceID uint32
 ```
 
@@ -538,14 +557,12 @@ func overlaps(a, b resourceRef) bool {
     if a.kind == resourceBuffer {
         return a.off < b.off+b.size && b.off < a.off+a.size
     }
-    return a.aspect&b.aspect != 0 &&
-        a.baseMip < b.baseMip+b.mipCount && b.baseMip < a.baseMip+a.mipCount &&
-        a.baseLayer < b.baseLayer+b.layerCount && b.baseLayer < a.baseLayer+a.layerCount
+    return a.aspect&b.aspect != 0
 }
 ```
 
-**Exact interval overlap on buffers, exact subresource-rectangle overlap on
-textures, and nothing finer.**
+**Exact interval overlap on buffers, whole-resource overlap on v0 textures, and
+nothing finer.**
 
 The alternative, treating every access as covering the whole resource, is simpler
 and wrong for this design. Two cases make it concrete:
@@ -558,11 +575,11 @@ and wrong for this design. Two cases make it concrete:
   barrier per layer per token, which is the hot path of the workload this library
   exists for.
 
-**What is deliberately not modelled**: a region within one texture mip. A node
-declaring the top-left quadrant and one declaring the bottom-right quadrant of
-the same mip get an edge they do not need. This is conservative in the safe
-direction, it costs a barrier in a case nobody has hit, and modelling it would
-put rectangle-set intersection in the hazard loop for a speculative benefit.
+**What is deliberately not modelled**: texture subresources or a region within
+the base level. Two compute passes writing disjoint rectangles in one texture
+get an edge they do not need. This is conservative in the safe direction and
+matches 001's v0 texture surface; adding mip/layer fields only here would pretend
+the public creation, view, copy, and binding APIs already had matching semantics.
 Revisit when a real workload produces it.
 
 ### Cost
@@ -769,7 +786,7 @@ tracking the *current* state of each range rather than pending hazards.
 
 ```go
 type rangeState struct {
-    span                     // off, size for buffers; mip and layer range for textures
+    span                     // off and size for buffers; whole base level for textures
     lastWriteStage StageMask // stages that wrote it, empty if clean
     lastWriteMode  AccessMode
     readStages     StageMask // stages that have read since the last write
@@ -942,7 +959,7 @@ var (
     ErrClosedResource    = errors.New("accel: resource is closed")
     ErrPoolExhausted     = errors.New("accel: transient pool cannot be allocated")
     ErrGraphCycle        = errors.New("accel: cycle in the inferred graph") // internal assertion
-    ErrRebindOverlap     = errors.New("accel: two slots bound to overlapping ranges")
+    ErrRebindOverlap     = errors.New("accel: dynamic binding overlaps another graph resource")
     ErrGraphInFlight     = errors.New("accel: graph already has a submission in flight")
     ErrDeviceLost        = errors.New("accel: device lost")
 )
@@ -964,8 +981,8 @@ point at its own structure.
 | V5 | Buffer is large enough for the declared range | declared bytes, actual bytes | 001 |
 | V6 | Buffer declares the usage the access needs (storage, uniform, indirect, transfer) | the missing usage flag by name | 001, usage is declared up front |
 | V7 | Texture declares the usage the access needs and the format supports it | format, usage, access | 001 |
-| V8 | Recorded workgroup count is within the per-dimension limit | count, limit, dimension | 002 |
-| V9 | An indirect dispatch's `maxCount` is within the same limit | max, limit | 002, this spec |
+| V8 | Recorded direct workgroup count normalises omitted Y/Z to one, has positive X, and is within the per-dimension limit | count, limit, dimension | 002 |
+| V9 | An indirect dispatch's host-authored `maxCount` follows the same normalization and limit checks | max, limit | 002, this spec |
 | V10 | Pipeline workgroup size within max size and max invocations | size, limits | 002 |
 | V11 | Shared memory request within the device budget | requested, budget | 002 |
 | V12 | No resource is both read and written by one render pass | both uses, attachment index and draw index | 005 feedback loop |
@@ -975,31 +992,44 @@ point at its own structure.
 | V16 | A `Clear` load action carries an explicit value | attachment index | 005, the zero-value depth hazard |
 | V17 | Every capability a node needs is present on the device | capability name, device name | 000 decision 6 |
 | V18 | Copy extents and offsets are within both resources | extents, sizes | 001 |
-| V19 | Every resource belongs to the recorder's device and is open | resource label | 001 lifetime |
+| V19 | Every resource belongs to the recorder's device and is open: at build for concrete resources, and at rebind plus submit for dynamic resources | resource label | 001 lifetime |
 | V20 | The planned transient pool fits the device's reported budget | pool size, budget | 001 pools |
-| V21 | (at submit, not build) No two **bindings of one node** whose resources arrive through graph slots cover overlapping ranges, unless both are read-only | both bindings, both resources, the overlap | this spec, below |
+| V21 | Every recorded use through a graph slot is covered by its `SlotDescriptor`: kind, dtype, optional format, access union, and slot-relative range | slot, descriptor field, recorded use, node | this spec, below |
 | V22 | (internal assertion) The inferred edge set is acyclic | node ids on the cycle | builder defect only |
-| V23 | No two **statically bound** views at one node overlap unless both are read-only | both bindings, both view ranges, the overlap | [001](001-device-resources.md) 6.1, the build-time half of V21 |
+| V23 | No two **statically bound** views at one node overlap unless both are read-only | both bindings, both view ranges, the overlap | [001](001-device-resources.md) 6.1 concrete same-node alias rule |
+| V24 | (at rebind and submit) No resource supplied through a graph slot overlaps another dynamic binding or any concrete graph resource, including a transient, when either side may write anywhere in the graph | both slots/resources, both graph-wide access unions, overlap | this spec, below |
 
-**V21 is the one check that cannot happen at build**, and that is a genuine hole
-in the validate-once story. Hazards are tracked against `resourceID`, and a
-rebindable slot is its own `resourceID` because at record time nobody knows what
-will be bound. Bind one buffer to two slots the builder assumed independent and
-the inferred edge set is wrong, so the missing barrier is a race. `Rebind` and
-`Submit` therefore check pairwise overlap over the bound set, at `O(s^2)` in the
-count of **rebindable** slots (single digits in every design seen so far), in
-release builds too: a race that reproduces only under load is worth more than the
-microsecond.
+**V24 is the check that cannot happen at build**, and it is intentionally
+graph-wide. Hazards are tracked against `resourceID`, and a graph slot is its own
+id because its eventual resource is unknown. If two graph slots later resolve to
+overlapping bytes, or one resolves over a concrete resource or transient, the builder
+may have omitted RAW, WAR, or WAW edges between nodes far apart in the graph.
+Checking only two bindings of one node misses exactly that race.
 
-**V21 covers only the rebindable case.** Two views bound *statically* at record
-time are compared at build, where the buffer, offset and length are all known and
-the error can carry the recording call site;
-[001](001-device-resources.md) §6.1 states that half and this spec states this
-one. They are the same rule at two times, and implementing either alone leaves
-the other case as a race. The static half is check V23 above; it is
-separated from V21 rather than folded into it because the two fire at different
-times, carry different diagnostics, and a builder can implement one and believe
-it has implemented both.
+`Rebind` and `Submit` therefore resolve every slot-relative access declaration to
+the bound resource and compare it with declarations from every other dynamic
+slot and every concrete resource range in the graph, including transient
+placements. An overlap is accepted only when
+both graph-wide access unions are read-only; otherwise the whole binding update
+is rejected with `ErrRebindOverlap`. Comparisons use the declared byte ranges for
+buffers and the whole base level for v0 textures, not unused tails of a larger
+bound allocation. This runs in release builds. Its cost is quadratic in the
+small dynamic declaration set plus a linear scan of the graph's indexed static
+ranges, paid once per binding update/submit rather than per node execution.
+
+V21 makes that submit-time decision sound: a node cannot access outside the
+range or modes summarized by its descriptor. V23 remains a separate build-time
+same-node rule for concrete bindings. Static/static aliases across different
+nodes need no rejection because their shared resource identity and exact ranges
+were known when edges were inferred.
+
+V19 is repeated at submit because a caller may close a resource after binding
+it. Submission acquires every dynamic resource's retain in the same critical
+section that verifies its open generation, before backend work can observe the
+binding. A racing `Close` therefore has only two outcomes: submission retains
+first and `Close` reports the in-flight retain while work completes, or close
+retires the handle first and submission returns an already-failed closed-resource
+fence. There is no validate-then-retain gap.
 
 ---
 
@@ -1084,7 +1114,8 @@ that can go wrong at submit is delivered through the fence:
 | Failure | Delivered as |
 | --- | --- |
 | The graph already has a submission in flight | An already-failed fence wrapping `ErrGraphInFlight`. |
-| The V21 overlap check fails | An already-failed fence wrapping `ErrRebindOverlap`. |
+| The V24 overlap check fails | An already-failed fence wrapping `ErrRebindOverlap`. |
+| A dynamic resource closed after bind, or loses the submit-time retain race | An already-failed fence wrapping the closed-resource error. |
 | Device lost, at submit or during execution | `ErrDeviceLost` on this fence and on every other outstanding fence for the device. |
 | Out of device memory at submit (staging, descriptor pool) | An already-failed fence wrapping the allocator's error. |
 
@@ -1117,9 +1148,13 @@ one costs a device round trip.**
 
 ### Plan-time facts, free, always available
 
-Whether a texture copy repacks, the row pitch the backend chose, a transient's
-pool offset, the inferred edges, and the barrier positions are all decided at
-build. They cost nothing to expose because the builder computed them anyway.
+Node kind, whether a texture copy repacks, the row pitch the backend chose, and
+barrier positions are public as soon as build completes. Aggregate transient
+memory is public through `Graph.Memory`. Exact inferred edges, access declarations,
+transient identities, and pool offsets remain an internal normalized plan
+snapshot used by 011's planner goldens and fuzz oracle. They are intentionally
+not a stable user API: exposing backend-aligned placement would make an
+implementation detail part of the compatibility contract.
 
 ```go
 // NodeStats reports what the builder decided about one node. Valid as soon as
@@ -1141,8 +1176,8 @@ func (g *Graph) NodeStats(id NodeID) NodeStats
 func (g *Graph) Nodes() []NodeStats
 ```
 
-This is also what makes 003's own barrier and planner tests assertable on the
-plan rather than on results, which several of them already assume.
+Public barrier tests assert through `NodeStats`; edge and placement tests use the
+test-only normalized plan snapshot. Neither needs a device readback.
 
 ### Run-time counters, opt-in, because they cost a readback
 
@@ -1179,12 +1214,12 @@ func (f *Fence) Stats() (SubmissionStats, error)
 **A graph with `CollectRunStats` off still clamps**, per the `maxCount` rule
 above; what it loses is being told. That is the honest reading of 005's sentence:
 the clamp is reported when the caller asked for reporting, and is silent
-otherwise, which is why the maximum is a documented caller obligation in release
-mode rather than a checked one.
+otherwise. The maximum is still enforced on device in every build mode; disabling
+statistics disables only the readback.
 
 ### Queue counters, cumulative
 
-[001](001-device-resources.md) §8.2 says a full staging ring makes `Buffer.Write`
+[001](001-device-resources.md) §8.2 says a full staging ring makes `Queue.WriteBuffer`
 block and that this "is reported through queue statistics". That record lives
 here, because the queue owns the staging ring:
 
@@ -1194,7 +1229,7 @@ here, because the queue owns the staging ring:
 type QueueStats struct {
     Submissions   int64
     BytesStaged   int64
-    StagingWaits  int64 // times a Write blocked waiting for a recycled block
+    StagingWaits  int64 // times WriteBuffer blocked waiting for a recycled block
     ImmediateReads int64
     Repacks       int64 // immediate-path texture copies that repacked (001 4.2)
 }
@@ -1203,7 +1238,7 @@ func (q *Queue) Stats() QueueStats
 ```
 
 The immediate transfer path reports here rather than returning a `CopyStats` per
-call, because widening `Buffer.Read` and `Texture.Read` to a second return value
+call, because widening `Queue.ReadBuffer` and `Queue.ReadTexture` to a second return value
 would put an observability concern in two signatures every caller touches. A
 caller who needs per-copy detail records the copy, which is the path 001 §8.1
 already directs them to for anything that is not setup or debugging.
@@ -1303,7 +1338,7 @@ the graph writes them. `n5` and `n6` both read `kv` and get no edge from that
 either (RAR).
 
 `n7` writes `y` and reads `x`, two resources, so no WAR edge. If a caller bound
-one buffer to both the `x` and `y` slots, check V21 fires at submit, because the
+one buffer to both the `x` and `y` slots, check V24 fires at submit, because the
 builder assumed they were independent.
 
 **The sub-range case, as a variant.** Replace `t1` and `t2` with one 8 MiB
@@ -1499,10 +1534,10 @@ passes on one device and fails on the next.
   per iteration, or leaving it out of v0. Not decided.
   [005](005-graphics.md) resolves only the bounded case (a build-time maximum
   count with the device supplying the actual one) and this spec adopts the same
-  shape for indirect dispatch. The unbounded case is untouched. A zero-workgroup
-  dispatch is the cheapest partial answer, since a node whose device-written
-  count is zero costs almost nothing, and it makes "skip this block" expressible
-  without leaving the DAG.
+  shape for indirect dispatch. The unbounded case is untouched. A node whose
+  device-written count has any zero axis is skipped, which is the bounded
+  "skip this block" form without leaving the DAG; direct omitted axes normalise
+  to one and never mean skip.
 - **Cross-graph aliasing.** Two graphs alive at once each plan their own pool.
   Whether they can share is unresolved and matters for memory-constrained
   inference. [007](007-tensor-layer.md) puts a number on it: five prefill buckets
@@ -1544,19 +1579,6 @@ passes on one device and fails on the next.
   was avoiding, and it makes the ranges hazards were inferred from
   submission-dependent, which breaks the infer-once property outright. Probably
   no, but the cost of no is now written down.
-- ~~Graph lowering per backend, and how much replay actually saves.~~
-  **Resolved in [006](006-backends.md).** Replay saves three separable things,
-  and only one of them, encode-once, needs a native replayable object, which is
-  two backends of six. Plan-once, validating, memory planning, and barrier
-  computation, is most of the value and every backend gets it, including those
-  that replay a recorded list in software. So the model is justified even where
-  lowering is not native. Two corrections to the framing above came out of it:
-  Vulkan's replayable object is a reusable *primary* command buffer rather than a
-  secondary, and a D3D12 bundle cannot contain resource barriers, so any graph
-  with a dependency cannot be one bundle.
-- ~~Rebindable slots versus concurrent submission~~ (raised by
-  [005](005-graphics.md)). **Resolved above**: one submission in flight per graph,
-  which covers the transient race as well as the rebinding race.
 
 ## Testing
 
@@ -1616,13 +1638,25 @@ passes on one device and fails on the next.
 - Every error message contains a file and line from the caller's source, checked
   by matching the test's own file name. This is the check that keeps the
   deferred-validation promise honest, and it is the one most likely to rot.
-- V21: binding one buffer to two slots the builder treated as independent fails
-  at submit with `ErrRebindOverlap`, and binding it to two read-only slots
-  succeeds.
-- V23: the same overlap expressed with two *statically* bound views fails at
-  build instead, with the recording call site in the message. Both halves are
-  tested, because a builder that implements one and not the other passes whichever
-  test it has.
+- `Graph.Slots` returns each stable non-zero slot ID with its descriptor; a caller
+  that did not record the graph discovers, binds, and submits it without treating
+  slice position as an undocumented ID.
+- V21: a slot descriptor whose access omits a recorded write, or whose
+  `MinCount` does not cover a recorded range, fails at build naming both the slot
+  and node.
+- V23: two overlapping *statically* bound views used by one node fail at build,
+  with the recording call site in the message; a read-only pair succeeds.
+- V24: bind two slots used by different nodes to overlapping writable ranges;
+  submit fails even though no node binds both. Repeat with one graph slot
+  overlapping a statically bound resource. Read-only/read-only overlaps succeed.
+- Bind a live resource, then close it before submit: V19 returns an already-failed
+  fence. Race close against submit repeatedly; either the close reports the
+  submission retain and work completes, or submit reports closed, never a use
+  after free under `-race`.
+- Direct `{X:n}` and `{X:n,Y:1,Z:1}` plans agree; direct `X == 0` fails V8.
+  Indirect actual counts with a zero axis skip, while a count above `maxCount`
+  is clamped in both strict and release builds. With run stats off, a result
+  buffer proves the clamp; with stats on, `Clamped` also reports it.
 
 ### Submission and fences
 

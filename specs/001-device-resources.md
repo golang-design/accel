@@ -92,13 +92,14 @@ some detail nobody can find without a device that has two.
 
 ### 1.1 Limits are a separate record from capabilities
 
-`Capabilities` (in `compute.go`) answers "can this device do X". Allocation needs
-a different question answered: "what numbers must I round to". Those numbers are
-not capabilities. They are always present and always have a value, so they live
-in their own record, queried at open.
+`Capabilities` (in `compute.go`) answers "can this device do X". Allocation,
+pipeline creation, and dispatch validation ask a different question: "what
+numeric bound applies". Those numbers are not capabilities. They are always
+present and always have a value, so they live in their own record, queried at
+open.
 
 ```go
-// Limits are the device's numeric allocation and binding constraints. Unlike
+// Limits are the device's numeric allocation, binding, and execution constraints. Unlike
 // Capabilities, every field always has a value: the question is never whether
 // the limit exists, only what it is.
 //
@@ -140,6 +141,23 @@ type Limits struct {
 	// carry. Section 3.3 bakes an encoded block size into the pipeline, so this is
 	// the number that size is validated against.
 	MaxUniformBlockBytes int
+
+	// Compute limits are numbers a pipeline or dispatch is checked against. They
+	// are limits, not feature flags, and therefore live here rather than in
+	// Capabilities (002 section 8).
+	MaxWorkgroupSize             [3]int
+	MaxWorkgroupInvocations      int
+	MaxWorkgroupCount            [3]int
+	MaxSharedMemoryBytes          int
+	MaxStorageBufferBindingBytes int
+	MaxBindingsPerKind           int
+
+	// SubgroupOps in Capabilities says which operations exist; these numeric
+	// bounds say which lane counts the device may use. A device without subgroups
+	// reports the conservative numeric sentinel 1/1 while Capabilities.Subgroups
+	// is false, preserving the rule that an opened device has no zero limit.
+	MinSubgroupSize int
+	MaxSubgroupSize int
 }
 
 // Limits reports this device's numeric constraints.
@@ -169,8 +187,8 @@ here rather than inferred per type.
 | --- | --- |
 | `Device` | **Safe.** Creating pools, buffers, textures, pipelines, recorders and queues may all happen concurrently. |
 | `Pool` | **Safe.** `Alloc`, `Stats` and `Close` are internally synchronised. §5.2's allocator is O(1) in both directions, so one lock per pool is not a contention problem; a caller who measures one has too few pools, and §5.3 already wants pools split by lifetime class. |
-| `Buffer`, `Texture`, `Sampler` | **Safe** for `View`, `Close`, and the accessors. `Write` and `Read` are safe to call concurrently on *different* ranges; concurrent writes to one range are a caller race with the same meaning as racing on a slice, and accel does not detect it. |
-| `Queue` | **Safe.** `Submit`, `SubmitAfter`, `Flush` and `Stats` may be called from any goroutine. |
+| `Buffer`, `Texture`, `Sampler` | **Safe** for `View`, `Close`, and the accessors. They do not own immediate-transfer methods: ordering belongs to a queue. |
+| `Queue` | **Safe.** `WriteBuffer`, `ReadBuffer`, `ReadTexture`, `Submit`, `SubmitAfter`, `Flush` and `Stats` may be called from any goroutine. Immediate transfers are safe concurrently on different ranges; concurrent writes to one range are a caller race with the same meaning as racing on a slice. |
 | `Recorder` | **Not safe.** One recorder, one goroutine. |
 | `Graph` | `Memory`, `Slots`, `NodeStats` and `Nodes` are **safe**: a built graph is immutable. `Bind`, `Rebind` and `Submit` are **not** safe against each other, and the one-in-flight rule is what a caller synchronises with. |
 
@@ -183,12 +201,13 @@ Two goroutines calling `Submit` concurrently have no agreed order between them,
 so they get *some* total order and not a chosen one. A caller who needs a
 specific order submits from one goroutine, or uses `SubmitAfter`.
 
-**`Buffer.Write`'s batch is per queue, and the flush rule is about program
-order.** §8.2 has pending writes flushed as the next submission's prologue. The
-batch therefore belongs to a queue rather than to the device, and the promise is
-exactly: a `Write` that returned before a `Submit` was called is in that
-submission. A `Write` racing a `Submit` from another goroutine may land in that
-submission or the next, and no ordering was requested, so none is given.
+**Immediate transfers belong to the queue whose ordering they use.** §8.2 has
+pending writes flushed as the next submission's prologue. The promise is exactly:
+a `q.WriteBuffer` that returned before `q.Submit` was called is in that
+submission. A write racing a submit from another goroutine may land in that
+submission or the next, and no ordering was requested, so none is given. There
+is deliberately no queue-ambiguous `Buffer.Write`, `Buffer.Read`, or
+`Texture.Read` method.
 
 **Thread affinity is the backend's problem, with one exception.** A backend
 needing a particular OS thread owns a goroutine locked to it and marshals, so
@@ -279,6 +298,20 @@ type PoolDescriptor struct {
 
 `Device.NewPool(kind, bytes)` stays as the two-argument convenience and means
 `PoolDescriptor{Kind: kind, Bytes: bytes, Policy: PoolGeneral}`.
+
+The pool kind has matching allocation operations; it is not merely accounting
+metadata:
+
+```go
+func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error)
+func (p *Pool) AllocTexture(desc TextureDescriptor) (*Texture, error)
+func (p *Pool) Reset() error
+```
+
+`Alloc` rejects a texture pool and `AllocTexture` rejects a buffer pool. `Reset`
+is public because callers may create `PoolLinear`; it rejects `PoolGeneral` and
+rejects a linear pool while any child is retained by an in-flight submission.
+After a successful reset every child handle allocated from the pool is closed.
 
 ---
 
@@ -548,11 +581,11 @@ the number a caller already looks at.
 supported platform is little-endian.**
 
 All target backends run on little-endian hosts in every configuration accel
-targets, and the CPU backend is the host. So `Buffer.Write` is a memory copy and
+targets, and the CPU backend is the host. So `Queue.WriteBuffer` is a memory copy and
 never a byte swap, `ViewAs` is a reinterpretation and never a conversion, and a
 kernel reading `u32` sees exactly the bytes the host wrote.
 
-A big-endian `GOARCH` is not supported: `Open` fails naming the architecture,
+A big-endian `GOARCH` is not supported: `OpenDevice` fails naming the architecture,
 rather than producing silently byte-swapped results. Stating this is cheap, and
 the alternative is a bug class that only appears on hardware nobody here owns.
 
@@ -560,8 +593,12 @@ the alternative is a bug class that only appears on hardware nobody here owns.
 
 ## 4. Textures, formats, row pitch, and copy alignment
 
-Textures exist for graphics and for sampled reads. They carry a format, extent,
-mip levels, array layers, and a usage set.
+Textures exist for graphics and for sampled reads. At v0 they carry a format, an
+extent, and a usage set. **Every v0 operation addresses the whole base mip and a
+single array layer.** `TextureDescriptor.MipLevels` and `ArrayLayers` may be 0 or
+1 (0 normalises to 1); larger values are rejected. Mip chains, array textures,
+and subresource views are deferred until an API can describe their creation,
+binding, copying, hazards, and layout transitions coherently.
 
 Formats are distinct from buffer dtypes even where they name the same width,
 because texture formats carry sampling and colour-space semantics a buffer dtype
@@ -573,6 +610,12 @@ including a macOS requirement that depth textures be device-private. The backend
 enforces this rather than the caller learning it.
 
 ### 4.1 The format table
+
+`Format` reserves zero as `FormatInvalid`. Valid formats start at one. A texture
+descriptor rejects `FormatInvalid`; an optional constraint such as
+`SlotDescriptor.Format` uses it to mean "accept any format compatible with the
+recorded uses." This keeps the zero value useful without making `RGBA8Unorm`
+indistinguishable from an omitted constraint.
 
 **BPP** is bytes per pixel, which [`conventions.md`](../docs/conventions.md)
 already fixes for four of these and this table completes. **Render** is usable as
@@ -623,7 +666,7 @@ vendor only.
 WebGPU's convention and means "at least 24 bits of depth, exact layout
 unspecified". Metal's 24-bit depth-stencil format is a device capability rather
 than universal, while D3D12 and Vulkan pack it into a 32-bit unit. Because the
-layout is device-defined, **this format is not host-copyable**: `Texture.Read` on
+layout is device-defined, **this format is not host-copyable**: `Queue.ReadTexture` on
 it is an error, and buffer copies of it are an error, each naming the format and
 pointing at `Depth32Float`. That is the honest answer for a format whose point is
 to let the driver choose, and it means 005's depth readback path uses
@@ -669,11 +712,10 @@ table.
 ### 4.2 Row pitch: the guarantee, and who pays
 
 **Guarantee: at the accel API boundary, texture data is tightly packed. Row `r`
-of mip level `m` begins at byte `r * width(m) * BytesPerPixel`, with no padding
-between rows and none between layers or mip levels beyond what that arithmetic
-implies.**
+of the base level begins at byte `r * width * BytesPerPixel`, with no padding
+between rows.**
 
-This holds for `Texture.Read`, `Recorder.CopyTextureToBuffer`, and
+This holds for `Queue.ReadTexture`, `Recorder.CopyTextureToBuffer`, and
 `Recorder.CopyBufferToTexture`. A caller sizes a readback buffer as
 `width * height * bpp` and is always right.
 
@@ -784,7 +826,7 @@ padded one, so the result is correct in neither axis. The flip fingerprint in
 overlap, will **not** identify that, because a pitch error changes the pixel
 count.
 
-As an invariant a test can check: after `Texture.Read` returns, byte
+As an invariant a test can check: after `Queue.ReadTexture` returns, byte
 `(r*width + x) * bpp` holds the pixel the fragment stage wrote at window
 coordinate `(x, r)` with `r = 0` the top row, on every backend, for every width,
 whether or not `width * bpp` is a multiple of anything.
@@ -809,6 +851,10 @@ The cost: a caller who wants one budget for both keeps two pools and adds the
 numbers. That is a real inconvenience for a renderer and the right trade against
 a tensor workload that would otherwise be destroyed by it.
 
+Texture-pool placement is reachable through `Pool.AllocTexture`; convenience
+`Device.NewTexture` uses an implicit texture pool. Without the explicit method,
+`PoolDescriptor.Textures` would reserve a budget that no caller could consume.
+
 ---
 
 ## 5. Suballocation
@@ -824,8 +870,10 @@ flowchart TD
     P4["Pool: Textures=true<br/>coarse placement alignment,<br/>never mixed with buffers"]
     B1["Buffer<br/>dtype plus count, usage declared at creation"]
     V1["BufferView<br/>offset and count in elements<br/>owns nothing, retains nothing"]
+    T1["Texture<br/>base mip, one layer in v0<br/>format and usage declared at creation"]
     DEV --> P1 & P2 & P3 & P4
     P1 --> B1 --> V1
+    P4 --> T1
 ```
 
 Three properties of that picture are load-bearing and are argued below: pools are
@@ -1025,7 +1073,7 @@ decides alignment, and alignment is decided before placement.
 | `UsageVertex` | vertex buffer, interpreted by 005's vertex layout | 4 |
 | `UsageIndirect` | source of dispatch or draw arguments | 4 |
 | `UsageCopySrc` | source of a transfer | `MinBufferCopyOffsetAlignment` |
-| `UsageCopyDst` | destination of a transfer, and of `Buffer.Write` | `MinBufferCopyOffsetAlignment` |
+| `UsageCopyDst` | destination of a transfer, and of `Queue.WriteBuffer` | `MinBufferCopyOffsetAlignment` |
 
 Declaring a usage a buffer does not need costs alignment and possibly a stricter
 memory type. Declaring one it does need late is a build error naming the buffer,
@@ -1212,7 +1260,7 @@ back, and it reports in the sense that the caller learns their teardown ordering
 was wrong. A caller who does not want the error waits on the fence first, which
 is one line.
 
-**After `Close` the handle is dead.** Any subsequent use (`Write`, `Read`,
+**After `Close` the handle is dead.** Any subsequent use (queue transfer,
 `View`, binding it into a graph) is a `*LifetimeError`, never a use-after-free,
 because the closed flag is checked before anything touches device state. That is
 one atomic load on paths that already do more work than that.
@@ -1228,7 +1276,7 @@ instead of reported.
 ```go
 // LifetimeError reports a resource used or released at the wrong time.
 type LifetimeError struct {
-	Op       string // "Close", "Write", "Bind", ...
+	Op       string // "Close", "WriteBuffer", "Bind", ...
 	Resource string // the resource's Label
 	Reason   string // "in flight", "closed", "has live children"
 	InFlight int    // submissions still holding it, when Reason is "in flight"
@@ -1243,7 +1291,7 @@ accel: Close "hdr_target": 2 submissions still in flight. The texture stays
        valid until they complete and its memory is released then. Wait on the
        fence before Close to avoid this.
 
-accel: Write "logits": buffer is closed.
+accel: WriteBuffer "logits": buffer is closed.
 
 accel: Close pool "weights": 1284 live buffers. Close them first; pools do not
        close recursively (spec 001 section 7.2).
@@ -1288,7 +1336,7 @@ and says nothing about what the device is afterwards. It is this:
 
 **A lost device stays lost.** There is no reset, no recovery, and no partial
 survival. Every subsequent call on the `Device` and on every resource descending
-from it returns `ErrDeviceLost`: allocation, `Write`, `Read`, pipeline creation,
+from it returns `ErrDeviceLost`: allocation, queue transfers, pipeline creation,
 graph build, and submit. Every outstanding fence is signalled with that error, so
 nothing waits forever.
 
@@ -1304,7 +1352,7 @@ retain sets, the staging rings, and the Go objects. §7.2's in-flight rule does 
 apply, because there is no in-flight work any more: every fence has already been
 signalled with the error, so every retain has already been released.
 
-**Recovery is the caller's, and it is a full rebuild.** `Enumerate` and `Open`
+**Recovery is the caller's, and it is a full rebuild.** `Enumerate` and `OpenDevice`
 work afterwards and may well return a working device, which is what a caller who
 wants to survive a driver restart does. What they get is a new `Device` with
 nothing carried over: pools, buffers, pipelines and graphs are all recreated,
@@ -1341,7 +1389,18 @@ the composition order fixed by 4.3.
 | Path | Entry point | In a graph | Blocks |
 | --- | --- | --- | --- |
 | recorded | `Recorder.CopyToBuffer`, `CopyBuffer`, `CopyTextureToBuffer`, `CopyBufferToTexture` | yes, a node with declared access | no, it runs when the graph runs |
-| immediate | `Buffer.Write`, `Buffer.Read`, `Texture.Read` | no | `Write` no, `Read` yes |
+| immediate | `Queue.WriteBuffer`, `Queue.ReadBuffer`, `Queue.ReadTexture` | no | write normally no; reads yes |
+
+```go
+func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error
+func (q *Queue) ReadBuffer(src *Buffer, offset int, into any) error
+func (q *Queue) ReadTexture(src *Texture, into []byte) error
+func (q *Queue) Flush() *Fence
+```
+
+Offsets are in buffer elements. All four calls are explicitly queue-scoped;
+resources do not provide forwarding methods that could conceal which queue owns
+the pending batch.
 
 The recorded path is what a hot loop uses. It is a node, so 003 infers its edges,
 computes its barriers, and orders it against everything else.
@@ -1353,55 +1412,67 @@ copies nothing at record time. `Recorder.CopyToBuffer` names a host slice, and
 caller's slice until submit would make the bytes it writes depend on when the
 caller last touched them (003, payload notes). So a per-step value does not go
 through a recorded host write: it goes into an `Upload` buffer through
-`Buffer.Write`, or into a device buffer through a recorded `CopyBuffer` from
+`Queue.WriteBuffer`, or into a device buffer through a recorded `CopyBuffer` from
 staging, both of which vary by contents rather than by structure.
 
 The immediate path is a convenience for setup, teardown and debugging. It exists
 because writing initial weights and reading final logits should not require
 building a graph.
 
-The doc comment on `Buffer.Write` previously said it was "recorded, not
-immediate" while directing callers to `Recorder.CopyToBuffer` for anything that
-participates in dependency tracking, which are contradictory claims. The comment
-now states the immediate path; the decision never changed, only its statement.
+Immediate methods live on `Queue`, not on resources, because the pending batch
+and its ordering are queue-local. Recorded copies remain the only transfer path
+that participates in graph dependency tracking.
 
-### 8.2 `Write` is asynchronous, `Read` is synchronous, and both are precise
+### 8.2 Queue writes are asynchronous, reads are synchronous, and both are precise
 
-**`Buffer.Write` returns once the caller's data has been copied out of the Go
+**`Queue.WriteBuffer` returns once the caller's data has been copied out of the Go
 slice, not once the device has the bytes.** The caller may reuse or modify their
-slice the moment `Write` returns. This matches
+slice the moment `WriteBuffer` returns. This matches
 [003](003-command-graph.md)'s rule that nothing in the API blocks implicitly.
 
 For that to be safe it needs a mechanism, not a hope:
 
-> **Pending writes form a batch that the next submission flushes as its
-> prologue.** `Write` appends a staged copy to the queue's pending transfer batch
-> (per queue, not per device: see §1.2). `Queue.Submit` and `Queue.SubmitAfter` emit the pending batch ahead of
-> the graph's own work on the same queue, so every `Write` issued before a
+> **Pending writes form a batch that the next submission on that queue flushes as
+> its prologue.** `Queue.WriteBuffer` appends a staged copy to that queue's
+> pending transfer batch. `Queue.Submit` and `Queue.SubmitAfter` emit the batch ahead of
+> the graph's own work on the same queue, so every write issued before a
 > `Submit` is visible to that submission, and `Fence.Wait` on that submission
 > also proves the writes landed.
+
+Staging copies the caller's data immediately but retains the destination buffer
+until the batch fence signals. Closing that buffer before flush reports a
+`LifetimeError` with reason `pending transfer`; it retires the caller handle but
+does not invalidate the queued destination. This is the same physical-lifetime
+rule as a submitted graph, extended to the queue-owned batch.
 
 Two consequences, stated rather than left implicit:
 
 - **If the caller never submits again, the batch never flushes.** That is
   harmless for correctness, since nothing reads the buffer, and wrong for a
   caller who wrote and then expects to read back some other way. So
-  `Buffer.Read`, `Texture.Read` and `Device.Close` all flush the pending batch
-  first, and an explicit `Queue.Flush()` exists for the caller who wants it
-  without a read.
-- **The staging ring can fill.** `Write` stages into a ring of `Upload` blocks. If
-  the ring is full, `Write` blocks until a block is recycled by a completed
-  submission. That is the one case where `Write` blocks, it is reported through
+  `Queue.ReadBuffer` and `Queue.ReadTexture` flush the relevant queue first. An
+  explicit `Queue.Flush()` exists for the caller who wants to flush without a
+  read. `Device.Close` does not hide asynchronous work: it reports pending
+  batches as live children, so orderly teardown is `q.Flush().Wait()`, resource
+  closes, then device close.
+- **The staging ring can fill.** `WriteBuffer` stages into a ring of `Upload` blocks. If
+  the ring is full, `WriteBuffer` blocks until a block is recycled by a completed
+  submission. That is the one case where `WriteBuffer` blocks, it is reported through
   queue statistics, and the fix is to submit more often or to use the recorded
   path.
 
-**`Buffer.Read` blocks**, and its doc comment already says so. It flushes pending
+**`Queue.ReadBuffer` blocks.** It flushes pending
 writes, submits a one-shot copy into a `Readback` block, waits on the fence, and
 copies out. That is a full round trip to the device and back, documented as
 inappropriate in a hot loop for the same reason `Queue.Run` is.
 
-**Partial updates are first-class in both directions.** `Write(offset, data)` and
-`Read(offset, into)` address elements of the buffer's dtype and touch only the
+A read orders only the queue it is called on. If another queue owns a pending
+write to the same resource, the caller first flushes that queue and supplies its
+fence through the ordinary cross-queue ordering path. An immediate read never
+silently searches or drains unrelated queues.
+
+**Partial updates are first-class in both directions.** `WriteBuffer(dst, offset,
+data)` and `ReadBuffer(src, offset, into)` address elements of the buffer's dtype and touch only the
 range they name. The range must lie inside the buffer and must satisfy the copy
 alignment from 3.1. That last part is a real constraint on `Device` pools: a
 caller updating one f32 at element 7 needs the backend to round the copy out to
@@ -1416,8 +1487,8 @@ once. There is no staging block and no copy:
 
 | Operation | `Device` pool | `Shared` pool |
 | --- | --- | --- |
-| `Write` | memcpy into staging, plus a device copy in the next submission's prologue | memcpy into the mapping, and that is all |
-| `Read` | flush, device copy into readback, fence wait, memcpy out | memcpy out of the mapping once a fence proves the device is done |
+| `WriteBuffer` | memcpy into staging, plus a device copy in the next submission's prologue | memcpy into the mapping, and that is all |
+| `ReadBuffer` | flush, device copy into readback, fence wait, memcpy out | memcpy out of the mapping once a fence proves the device is done |
 | bytes moved per write | 2x the payload | 1x |
 | device round trips per read | 1 | 0 |
 
@@ -1441,13 +1512,13 @@ The naive version, and why it is slow:
 // Slow. Do not do this.
 for _, t := range tensors {
 	buf, _ := weights.Alloc(descFor(t))
-	buf.Write(0, t.Data) // stages, appends to the pending batch
+	queue.WriteBuffer(buf, 0, t.Data) // stages on queue's pending batch
 }
 queue.Flush()
 ```
 
-Every `Write` stages the tensor into an `Upload` block, so the whole model passes
-through the staging ring. The ring is a few megabytes, so `Write` blocks whenever
+Every `WriteBuffer` stages the tensor into an `Upload` block, so the whole model passes
+through the staging ring. The ring is a few megabytes, so `WriteBuffer` blocks whenever
 it fills and the upload becomes a sequence of small submissions paced by fence
 waits. The data is copied twice (host slice to staging, staging to device) and
 the device idles between blocks.
@@ -1477,7 +1548,7 @@ for _, t := range chunk {
 		Usage: accel.UsageCopySrc,
 		Label: t.Name + ".staging",
 	})
-	src.Write(0, t.Data) // memcpy into the mapping, no device work
+	dev.Queue().WriteBuffer(src, 0, t.Data) // memcpy into the mapping, no device work
 	dv, _ := dst.View(0, t.Count)
 	sv, _ := src.View(0, t.Count)
 	rec.CopyBuffer(dv, sv) // one node per tensor
@@ -1588,7 +1659,7 @@ accel: node 12 binds overlapping views of "kv_cache.k" to slots 1 (read) and 3
        (write), bytes [4096, 8192) in common. Overlapping writable bindings are
        rejected (spec 001 section 6.1).
 
-accel: Texture.Read on Depth24PlusStencil8 is not supported: the format's layout
+accel: Queue.ReadTexture on Depth24PlusStencil8 is not supported: the format's layout
        is device-defined and has no bytes per pixel. Use Depth32Float for
        readback (spec 001 section 4.1).
 
@@ -1607,10 +1678,6 @@ descriptor and why its doc comment already says it is worth setting.
 
 ## 10. Open questions
 
-- **~~Whether pools grow.~~ Resolved in 5.5.** A pool is one device allocation
-  and no backend can resize one, so pools do not grow. The implicit pool behind
-  `Device.NewBuffer` grows by adding blocks, which is what callers mean and is
-  expressible without invalidating an address.
 - **Whether 256 should stay the default suballocation granularity.** 3.1 makes
   256 always sufficient and queries the real number for callers who care.
   Unresolved is whether the *default* granularity should be the queried number,
@@ -1665,14 +1732,18 @@ descriptor and why its doc comment already says it is worth setting.
 - Every dtype round-trips host to device to host unchanged, at every memory kind
   the device reports, for buffers whose sizes are not multiples of anything
   interesting (1 element, 3 elements, 65,537 elements).
-- A partial `Write` followed by a full `Read` changes only the range written, on
-  every memory kind, including a range whose byte offset is not copy-aligned, so
-  the backend's read-merge-write path is exercised.
-- `Write` then `Submit` then `Fence.Wait` makes the written bytes visible to that
-  submission, which is the ordering 8.2 promises. The negative form is also a
-  test: a `Write` issued after `Submit` is not visible to it.
-- `Read` flushes pending writes, so `Write` then `Read` with no submission in
-  between returns the written data.
+- A partial `Queue.WriteBuffer` followed by a full `Queue.ReadBuffer` changes only
+  the range written, on every memory kind, including a range whose byte offset is
+  not copy-aligned, so the backend's read-merge-write path is exercised.
+- `WriteBuffer` then `Submit` then `Fence.Wait` on the same queue makes the
+  written bytes visible to that submission, which is the ordering 8.2 promises.
+  The negative form is also a test: a write issued after `Submit` is not visible
+  to it.
+- `ReadBuffer` flushes pending writes, so `WriteBuffer` then `ReadBuffer` with no
+  submission in between returns the written data.
+- Closing a `WriteBuffer` destination before flush reports `pending transfer`;
+  `Queue.Flush().Wait()` still completes without a use after free, and device
+  close rejects an unflushed batch.
 
 ### 11.2 Alignment and layout
 
@@ -1736,6 +1807,8 @@ descriptor and why its doc comment already says it is worth setting.
   it is a measured guard rather than an assumption.
 - A `PoolLinear` pool refuses individual frees and resets as a whole, and 003's
   transient placement runs against it unchanged.
+- `Pool.Reset` rejects a general pool and an in-flight retained child; after a
+  successful linear reset, every old buffer or texture handle is closed.
 
 ### 11.5 Textures and formats
 
@@ -1751,18 +1824,25 @@ descriptor and why its doc comment already says it is worth setting.
 - Every format in 4.1 is created and its reported `FormatInfo` matches the
   table's guarantees. A `yes` cell that reports false on a real device is a bug
   in the table and is corrected by evidence, per 006's discipline.
-- `Texture.Read` on `Depth24PlusStencil8` errors and names `Depth32Float`.
+- `Queue.ReadTexture` on `Depth24PlusStencil8` errors and names `Depth32Float`.
 - Depth textures are private where the backend requires it, and the depth
   readback path through a transfer node works on macOS, which is 005's test seen
   from this side.
 - A texture pool and a buffer pool cannot be mixed, and the error says so.
+- `Pool.AllocTexture` consumes explicit texture-pool budget, while
+  `Device.NewTexture` uses an implicit texture pool.
+- `FormatInvalid` is rejected by texture creation, while the same zero value on
+  a slot descriptor means no additional format constraint.
+- A descriptor with 0 or 1 mip and array layer creates one base-level,
+  single-layer texture; any larger value is rejected until subresources exist.
 
 ### 11.6 Lifetime
 
 - **Device loss is exercised through the CPU backend's fault injection**: a
   device marked lost mid-submission signals every outstanding fence with
   `ErrDeviceLost`, fails every subsequent call on every descendant resource,
-  still closes cleanly, and a fresh `Open` afterwards yields a working device.
+  still closes cleanly, and a fresh `OpenDevice` afterwards yields a working
+  device.
 - Closing a resource with work in flight does not crash and is reported: the
   submission completes with correct results, the error names the in-flight count,
   and the memory returns to the pool after the fence, verified through
@@ -1785,11 +1865,11 @@ descriptor and why its doc comment already says it is worth setting.
 - Usage validation rejects a buffer used in a way it did not declare, and the
   error names the node, the slot and the recording call site.
 - **The concurrency contract in §1.2 is exercised under `-race`**: many goroutines
-  allocating from one pool, writing disjoint ranges of one buffer, and submitting
+  allocating from one pool, writing disjoint ranges through one queue, and submitting
   distinct graphs to one queue, all concurrently, with no reported race and no
   lost allocation. This is a test that only fails when it matters, which is why it
   runs in the ordinary suite rather than as a stress target.
-- A `Write` that returned before a `Submit` is visible to that submission when
+- A `WriteBuffer` that returned before a `Submit` on the same queue is visible to that submission when
   both happen on one goroutine; the racing case asserts only that the write lands
   in *some* submission and is never lost.
 - Requesting `MemoryShared` on a device reporting it absent errors naming the

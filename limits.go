@@ -57,6 +57,20 @@ type Limits struct {
 	// to validate that size against, and a struct that is too large for the device
 	// would be discovered at pipeline creation on somebody else's machine.
 	MaxUniformBlockBytes int
+
+	// Compute limits constrain generated kernel metadata and dispatches. Feature
+	// availability remains in Capabilities.
+	MaxWorkgroupSize             [3]int
+	MaxWorkgroupInvocations      int
+	MaxWorkgroupCount            [3]int
+	MaxSharedMemoryBytes         int
+	MaxStorageBufferBindingBytes int
+	MaxBindingsPerKind           int
+
+	// Devices without subgroups report 1/1 while Capabilities.Subgroups is false,
+	// so every opened device still has positive numeric limits.
+	MinSubgroupSize int
+	MaxSubgroupSize int
 }
 
 // Limits reports the device's numeric bounds.
@@ -118,7 +132,7 @@ type CopyStats struct {
 // AlignedRowPitch returns the row pitch a texture-to-buffer copy of the given
 // format and width will use on this device, in bytes.
 //
-// Callers do not need this for correctness. Readback through [Texture.Read]
+// Callers do not need this for correctness. Readback through [Queue.ReadTexture]
 // returns tightly packed rows in caller order regardless, and accel pays for the
 // repack. It exists so a caller sizing its own staging buffer can size it right
 // the first time.

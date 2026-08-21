@@ -72,6 +72,16 @@ type Pool struct{ _ noCopy }
 // Alloc suballocates a buffer from the pool.
 func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error) { panic(ErrNotImplemented) }
 
+// AllocTexture suballocates a texture from a pool created with Textures set.
+// Buffer pools reject it, and texture pools reject [Pool.Alloc].
+func (p *Pool) AllocTexture(desc TextureDescriptor) (*Texture, error) {
+	panic(ErrNotImplemented)
+}
+
+// Reset releases every allocation in a linear pool at once. It rejects general
+// pools and a linear pool with resources retained by an in-flight submission.
+func (p *Pool) Reset() error { panic(ErrNotImplemented) }
+
 // Stats reports the pool's size, how much is in use, and how much is free.
 func (p *Pool) Stats() PoolStats { panic(ErrNotImplemented) }
 
@@ -111,8 +121,9 @@ type DType int
 const (
 	F32 DType = iota
 
-	// F16 and BF16 are capabilities, not guarantees. BF16 trades precision for
-	// the range of f32 at the same width, and backend support for it is thinner.
+	// F16 and BF16 storage are universal. Native arithmetic on them is separately
+	// gated by CapF16Arithmetic and CapBF16Arithmetic. BF16 trades precision for
+	// the range of f32 at the same width.
 	F16
 	BF16
 
@@ -182,21 +193,6 @@ func (b *Buffer) View(offset, count int) (BufferView, error) { panic(ErrNotImple
 func (b *Buffer) ViewAs(d DType, offset, count int) (BufferView, error) {
 	panic(ErrNotImplemented)
 }
-
-// Write copies host data into the buffer. It is immediate from the caller's point
-// of view and asynchronous with respect to the device: it returns once the data
-// has been staged, not once the device can see it.
-//
-// It takes part in no graph dependency tracking. For a transfer that must be
-// ordered against other work, record it with [Recorder.CopyToBuffer] instead.
-func (b *Buffer) Write(offset int, data any) error { panic(ErrNotImplemented) }
-
-// Read copies buffer contents back to the host, blocking until the data is ready.
-//
-// Unlike [Buffer.Write] this is synchronous, because there is nothing useful to
-// return early with. It therefore drains outstanding work touching this buffer,
-// which makes it the wrong call in a hot loop.
-func (b *Buffer) Read(offset int, into any) error { panic(ErrNotImplemented) }
 
 // Close releases the buffer.
 //

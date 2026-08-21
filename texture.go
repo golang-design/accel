@@ -14,7 +14,10 @@ package accel
 type Format int
 
 const (
-	RGBA8Unorm Format = iota
+	// FormatInvalid is not a creatable format. It is the zero-value sentinel used
+	// by optional format constraints such as a graph slot.
+	FormatInvalid Format = iota
+	RGBA8Unorm
 	RGBA8UnormSRGB
 	BGRA8Unorm
 	R16Float
@@ -60,10 +63,12 @@ type TextureDescriptor struct {
 	Size   Extent
 	Usage  TextureUsage
 
-	// MipLevels of 0 means one level.
+	// MipLevels of 0 means one level. v0 rejects values greater than one until the
+	// public API can name subresources.
 	MipLevels int
 
-	// ArrayLayers of 0 means one layer.
+	// ArrayLayers of 0 means one layer. v0 rejects values greater than one until
+	// the public API can name subresources.
 	ArrayLayers int
 
 	Label string
@@ -77,14 +82,6 @@ func (t *Texture) Format() Format { panic(ErrNotImplemented) }
 
 // Size reports the texture's extent.
 func (t *Texture) Size() Extent { panic(ErrNotImplemented) }
-
-// Read copies the texture back to the host, blocking until it is ready.
-//
-// Rows arrive in caller order on every backend. Both GL and Metal read render
-// targets back bottom-origin natively, and Metal does so despite its top-left
-// texture origin, so the backend flips rather than the caller. See
-// docs/conventions.md.
-func (t *Texture) Read(into []byte) error { panic(ErrNotImplemented) }
 
 // Close releases the texture.
 func (t *Texture) Close() error { panic(ErrNotImplemented) }

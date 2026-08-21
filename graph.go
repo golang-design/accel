@@ -95,7 +95,7 @@ type SlotDescriptor struct {
 	// build there is no buffer to measure.
 	MinCount int
 
-	// Format constrains a texture slot. The zero value accepts any format the
+	// Format constrains a texture slot. FormatInvalid accepts any format the
 	// recorded nodes accept.
 	Format Format
 }
@@ -127,6 +127,20 @@ func (r *Recorder) CollectRunStats(on bool) { panic(ErrNotImplemented) }
 
 // NodeID identifies a recorded node, for referring to it in errors.
 type NodeID int
+
+// NodeKind identifies the public operation family represented by a graph node.
+type NodeKind uint8
+
+const (
+	NodeDispatch NodeKind = iota
+	NodeDispatchIndirect
+	NodeRenderPass
+	NodeCopyBuffer
+	NodeCopyTextureToBuffer
+	NodeCopyBufferToTexture
+	NodeHostWrite
+	NodeBarrier // builder-synthesized; not returned by Graph.Nodes
+)
 
 // Graph is validated, planned work that can be submitted many times.
 //
@@ -166,9 +180,15 @@ type Graph struct{ _ noCopy }
 func (g *Graph) Bind(b Binding) error     { panic(ErrNotImplemented) }
 func (g *Graph) Rebind(b []Binding) error { panic(ErrNotImplemented) }
 
-// Slots reports what a graph expects, so a caller holding a graph they did not
-// record can discover its inputs.
-func (g *Graph) Slots() []SlotDescriptor { panic(ErrNotImplemented) }
+// GraphSlot pairs a discoverable graph slot ID with its descriptor.
+type GraphSlot struct {
+	Slot       Slot
+	Descriptor SlotDescriptor
+}
+
+// Slots reports the stable IDs and descriptors a graph expects, so a caller
+// holding a graph they did not record can bind its inputs.
+func (g *Graph) Slots() []GraphSlot { panic(ErrNotImplemented) }
 
 // NodeStats reports what the builder decided about one node, and Nodes reports
 // all of them. Both are valid as soon as Build returns and are identical for
@@ -179,6 +199,7 @@ func (g *Graph) Nodes() []NodeStats            { panic(ErrNotImplemented) }
 // NodeStats is one node's plan-time facts.
 type NodeStats struct {
 	Node  NodeID
+	Kind  NodeKind
 	Label string
 
 	// Copy is non-nil for copy nodes. Whether a texture copy repacks is decided at
@@ -217,6 +238,29 @@ type GraphMemory struct {
 // Queue accepts submitted work.
 type Queue struct{ _ noCopy }
 
+// WriteBuffer copies data into queue-owned staging and appends the transfer to
+// this queue's next submission prologue. It returns once data no longer aliases
+// the caller's value, not when the device has consumed it.
+func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
+	panic(ErrNotImplemented)
+}
+
+// ReadBuffer flushes this queue's pending writes, waits for prior work on the
+// queue, and copies a buffer range into host memory.
+func (q *Queue) ReadBuffer(src *Buffer, offset int, into any) error {
+	panic(ErrNotImplemented)
+}
+
+// ReadTexture flushes this queue's pending writes, waits for prior work, and
+// returns the base mip and sole array layer as tightly packed top-origin rows.
+func (q *Queue) ReadTexture(src *Texture, into []byte) error {
+	panic(ErrNotImplemented)
+}
+
+// Flush submits this queue's pending immediate writes without a graph. When no
+// writes are pending it returns an already-signalled fence.
+func (q *Queue) Flush() *Fence { panic(ErrNotImplemented) }
+
 // Submit submits a graph and returns immediately with a [Fence]. Nothing in this
 // API blocks implicitly.
 func (q *Queue) Submit(g *Graph) *Fence { panic(ErrNotImplemented) }
@@ -239,7 +283,7 @@ func (q *Queue) Stats() QueueStats { panic(ErrNotImplemented) }
 type QueueStats struct {
 	Submissions    int64
 	BytesStaged    int64
-	StagingWaits   int64 // times a Buffer.Write blocked waiting for a recycled block
+	StagingWaits   int64 // times WriteBuffer blocked waiting for a recycled block
 	ImmediateReads int64
 	Repacks        int64 // immediate-path texture copies that needed a padded pitch
 }
@@ -275,7 +319,7 @@ type SubmissionStats struct {
 // IndirectStats is one indirect node's actual count and whether it was clamped.
 type IndirectStats struct {
 	Node    NodeID
-	Actual  [3]uint32
+	Actual  [3]uint32 // device-supplied count before clamping
 	Max     [3]uint32
-	Clamped bool
+	Clamped bool // Actual exceeded Max on at least one axis
 }
