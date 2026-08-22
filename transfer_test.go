@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -510,6 +511,77 @@ func TestQueueStats(t *testing.T) {
 	// 009's M1 deviation.
 	if after.StagingWaits != 0 {
 		t.Errorf("StagingWaits = %d, want 0 at M1", after.StagingWaits)
+	}
+}
+
+// TestHostVisibleWritesDoNotStage is spec 001 section 8.3's table as an
+// assertion rather than a claim. That table says a write to a Device pool moves
+// twice the payload and a write to a Shared pool moves it once, and the whole
+// argument for MemoryShared being a kind rather than a hint rests on it.
+//
+// The property is measured as **whether allocation scales with the payload**,
+// not as a count. A staging copy is payload-sized, so staging makes the bytes
+// allocated per write grow with the data; writing into a mapping does not. An
+// allocation count cannot see the difference, because flushing allocates a
+// fence either way and a first version of this test passed with the second copy
+// reinstated.
+func TestHostVisibleWritesDoNotStage(t *testing.T) {
+	d := openCPU(t, accel.CPUOptions{})
+	q := d.Queue()
+
+	const (
+		small = 1 << 8
+		large = 1 << 16
+		runs  = 200
+	)
+
+	bytesPerWrite := func(kind accel.MemoryKind, n int) uint64 {
+		t.Helper()
+		p := newPool(t, d, kind, 4<<20)
+		defer p.Close()
+		b := alloc(t, p, accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: accel.UsageCopyDst, Label: "measured",
+		})
+		defer b.Close()
+		data := make([]float32, n)
+
+		write := func() {
+			if err := q.WriteBuffer(b, 0, data); err != nil {
+				t.Fatal(err)
+			}
+			if err := q.Flush().Wait(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write() // warm any one-time allocation out of the measurement
+
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for range runs {
+			write()
+		}
+		runtime.ReadMemStats(&after)
+		return (after.TotalAlloc - before.TotalAlloc) / runs
+	}
+
+	// The payload difference, in bytes, between the two measurements.
+	payloadDelta := uint64((large - small) * 4)
+
+	deviceGrowth := bytesPerWrite(accel.MemoryDevice, large) - bytesPerWrite(accel.MemoryDevice, small)
+	if deviceGrowth < payloadDelta/2 {
+		t.Fatalf("a Device write's allocation grew by %d bytes for a %d-byte larger payload; "+
+			"it has to stage, and staging is payload-sized", deviceGrowth, payloadDelta)
+	}
+
+	for _, kind := range []accel.MemoryKind{accel.MemoryShared, accel.MemoryUpload, accel.MemoryReadback} {
+		growth := bytesPerWrite(kind, large) - bytesPerWrite(kind, small)
+		if growth > payloadDelta/8 {
+			t.Errorf("a %v write's allocation grew by %d bytes for a %d-byte larger payload, "+
+				"against %d for Device: a kind the device maps takes the bytes straight from "+
+				"the caller's slice, and an allocation that scales with the payload is the "+
+				"second copy MemoryShared exists to remove", kind, growth, payloadDelta, deviceGrowth)
+		}
 	}
 }
 

@@ -56,21 +56,30 @@ func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
 		return err
 	}
 
-	// Copy out of the caller's slice before returning, always. Holding it until
-	// flush would make the bytes written depend on when the caller last touched
-	// it, which is the same reason a recorded host write copies at record time.
-	staged := make([]byte, len(src))
-	copy(staged, src)
-
 	if mapped := dst.mapping(); mapped != nil {
-		// Host-visible memory takes the bytes now: there is no staging block and
-		// no copy to schedule, which is the entire point of MemoryShared on
-		// unified hardware. Nothing is counted as staged, because nothing was.
-		// The ordering obligation does not vanish with the copy, and accel does
-		// not detect a host write racing a device read.
-		copy(mapped[byteOffset:], staged)
+		// Host-visible memory takes the bytes now: one copy, straight from the
+		// caller's slice into the mapping, and that is all. Staging first would
+		// move the payload twice for memory that needs no staging, which is the
+		// exact cost MemoryShared exists to remove. Nothing is counted as staged
+		// because nothing was.
+		//
+		// This still satisfies the promise that the caller may reuse their slice
+		// the moment this returns: the bytes are in the mapping, and nothing
+		// holds a reference to the slice.
+		//
+		// The ordering obligation does not vanish with the copy. A shared buffer
+		// written while the device reads it is a race with no copy in between to
+		// hide it, and accel does not detect that.
+		copy(mapped[byteOffset:], src)
 		return nil
 	}
+
+	// Otherwise the bytes have to wait for a flush, so they are copied out of the
+	// caller's slice now. Holding the slice until then would make what lands
+	// depend on when the caller last touched it, which is the same reason a
+	// recorded host write copies at record time.
+	staged := make([]byte, len(src))
+	copy(staged, src)
 
 	q.mu.Lock()
 	q.stats.BytesStaged += int64(len(staged))
