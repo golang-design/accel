@@ -30,6 +30,7 @@ internal/conformance/
   device/       discovery, profiles, modes, skips            [M1]
   numeq/        008 comparison API and budget traces          [M1]
   cover/        per-package coverage under section 10's rules [M1]
+  direct/       flat kernel execution with no device               [M2]
   oracle/       exact/high-precision references and committed corpora
   graphcheck/   naive plan, plan normalization, graph fuzz
   kernelcheck/  generated 010 manifest and per-variant runner
@@ -44,6 +45,13 @@ directory rather than arguing about where something goes.
 program to be a checked rule rather than a claim. It ships with `covercheck`, a
 command CI runs after `go test -coverprofile`, and it is the only entry here
 with an executable: the rest are libraries the tests call.
+
+`direct/` runs a generated flat kernel over a grid with no device, which is what
+makes [004](004-kernel-authoring.md)'s fifth testing level possible before
+graphs exist at M3. It refuses a cooperative kernel rather than inventing an
+order: those invocations rendezvous, so running them in sequence is a different
+program rather than a slower one. Whether it survives M3 is
+[012](012-kernel-pipeline.md)'s open question.
 
 Allocator fuzzing is in `internal/alloc` beside the allocators rather than here.
 §13's M1 line names it because it is an M1 obligation, not because it is harness
@@ -216,7 +224,7 @@ cleanup. Required milestone scenarios are:
 | Milestone | Scenario |
 | --- | --- |
 | M1 | Open CPU → allocate → write → read → close — **done 2026-08-22** |
-| M2 | Kernel source → generator → direct flat adapter → checked output |
+| M2 | Kernel source → generator → direct flat adapter → checked output — **done 2026-08-22** for [012](012-kernel-pipeline.md)'s scope |
 | M3 | Upload → flat Add graph → readback → rebind and replay |
 | M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised |
 | M5 | Upload → portable tiled GEMM graph → readback in strict mode |

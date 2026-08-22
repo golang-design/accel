@@ -1,6 +1,6 @@
 ---
 title: "Kernel pipeline: the generator, the IR, and one kernel end to end"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -76,7 +76,11 @@ Everything needed to take that from source to a checked result:
   function in any other package.
 - **The generated artifacts.** The flat Go lowering, the `Kernel` record with
   binding metadata and inferred access modes, registration, the source digest,
-  and the generator/IR ABI version.
+  and the generator/IR ABI version, written to `accel_kernels.go` inside the
+  package the kernels came from. One file per package rather than one per
+  kernel: the package is what `go/packages` loads and what a digest's intrinsic
+  table applies to, and a file per kernel would make a table change touch every
+  file in a diff nobody can read.
 
   The bound arguments are validated **once against the declared bindings before
   the invocation loop**, not per invocation. The signature is the binding
@@ -134,7 +138,63 @@ lives. So:
   invalidating every committed digest, and a relocation is exactly the kind of
   thing that happens when M4 grows the rendezvous state.
 
-## 4. The intrinsic table is not separable, and why
+## 4. The generated-kernel ABI is public, and it has to be
+
+Generated code lives in the package whose kernels it came from, which is a
+caller's package. Every name it uses therefore has to be reachable from outside
+this module, and an `internal/` path is importable only from within it: a
+generated file naming one would compile here and nowhere else.
+
+So the root package carries the surface a generated file names:
+
+```go
+type Kernel = kernel.Kernel               // what generation inferred, plus the entry point
+type KernelBinding = kernel.Binding       // one resource, with its inferred access
+type KernelArgs = kernel.Args             // the host slices an invocation runs over
+type KernelDType = kernel.DType           // a binding's element type
+type KernelAccess = kernel.Access         // read, write, or both
+
+const KernelABIVersion = kernel.ABIVersion
+
+const (
+	KernelF32, KernelF16, KernelBF16 = kernel.F32, kernel.F16, kernel.BF16
+	KernelI32, KernelU32             = kernel.I32, kernel.U32
+	KernelI8, KernelU8               = kernel.I8, kernel.U8
+	KernelRead, KernelWrite          = kernel.Read, kernel.Write
+)
+
+func KernelSlice[T any](a KernelArgs, i int) []T
+```
+
+Aliases rather than wrappers, for the reason §3 gives: the record a generated
+file builds and the record a backend consumes have to be one type, not two that
+need converting at the seam between them. `KernelSlice` is a function because Go
+has no function aliases.
+
+**A caller never constructs any of it.** The generator does. They are exported
+because a generated file has to name them, which is a different reason from the
+usual one, and it is why they carry a prefix rather than sitting in the
+vocabulary a caller reads.
+
+`accel.Kernel` was a placeholder struct before this milestone. It is the alias
+now, because [004](004-kernel-authoring.md) describes exactly one immutable
+`Kernel` record and two would be one too many.
+
+## 5. Where this milestone's corpus lives
+
+`internal/testkernels`, which is **not** the v0 corpus.
+[004](004-kernel-authoring.md) puts that at `tensor/internal/kernels/...`, owned
+by [010](010-kernel-corpus.md) and registered into the tensor runtime. This one
+is the compiler's own development corpus: the smallest kernel that exercises the
+pipeline, committed together with its generated file so freshness has something
+to compare against.
+
+Keeping them separate matters because they answer different questions. 010's
+corpus asks whether the kernels a model needs are correct. This one asks whether
+the compiler works at all, and it must keep working when 010's corpus is empty,
+which it is until M5.
+
+## 6. The intrinsic table is not separable, and why
 
 It would be natural to defer the table until there are intrinsics worth
 tabulating. It is here instead because the failure it prevents is
@@ -152,7 +212,7 @@ never the parser's: a front end that inherits an upstream tool's refusals has an
 unstated dependency on that tool's release, and Go 1.27's generic methods are
 the live example.
 
-## 5. Testing
+## 7. Testing
 
 **Level 5 from [004](004-kernel-authoring.md) §Testing is mandatory here**, not
 deferred. The authored `Scale` is called directly over the same buffers and
@@ -188,7 +248,56 @@ and one `packages.Load` takes every case at once. That matters because
 a corpus that costs a module resolution per case is one nobody runs, and one
 that needs a toolchain per case cannot run where the rest of the suite does.
 
-## 6. Open questions
+## 8. Outcome — complete 2026-08-22
+
+Every item in §2 is built, and the E2E runs through the public path: kernel
+source → generator → registered adapter → direct CPU execution → an
+independently checked result. Coverage on the CPU path: `kernelc` 90.9%,
+`kernelc/front` 90.8%, `kernelc/emit` 97.6%, `kernelc/ir` and `kernelc/intrin`
+100%, `conformance/direct` 100%, `cmd/accel-kernel` 95.8%.
+
+**Five bugs, none a coding slip, each found by a test written to a property
+rather than to an example.** They are recorded because what found them
+generalizes.
+
+- **Go 1.27 removed the `gotypesalias` GODEBUG, so `go/types` always produces
+  `Alias` nodes.** `accel.Thread` is an alias, so asserting straight to
+  `*types.Named` failed and a parameter written `accel.Thread` fell through and
+  was rejected as a uniform struct. `types.Unalias` is load-bearing wherever a
+  named type is matched. It surfaced only because the corpus kernel is compiled
+  from its real source rather than from a restatement of it, which is the whole
+  argument for §1's vertical cut.
+- **`return c.block(s)` returned a non-nil `ir.Stmt` wrapping a nil
+  `*ir.Block`.** Go's typed nil: every caller's nil check passed and a nil block
+  would have reached the emitter. Found by feeding each builder an operand that
+  cannot be built and asserting it declines rather than constructs.
+- **`[]bool` was accepted as a binding.** Go's bool is one byte and every
+  target's is four or a lane mask, so that buffer would have had a different
+  element width on the CPU oracle than on any GPU. A condition is a bool; a
+  buffer of them is not.
+- **`for var n uint32 = 0; ...` is not Go.** A for-init takes a simple
+  statement. Found by building the loop nodes the corpus does not use, a
+  milestone before [013](013-kernel-subset.md) reaches them from source.
+- **The O(1) allocator guard asserted a property it could not measure under the
+  race detector.** Its own comment claimed both sides paid the same tax; the
+  detector's cost grows with live state, which is the axis the ratio measures.
+  A ratio is the allocator's only when nothing else scales with the same
+  variable. Landed after this milestone was recorded complete, as a correction.
+
+**One inconsistency in [004](004-kernel-authoring.md), resolved there.** Its IR
+type list omitted `i8` and `u8` while its parameter table admitted `int8` and
+`uint8`, so the two halves disagreed about whether a quantized plane had a type.
+Resolved in 004 rather than by adding a kind in passing, which is the rule
+[013](013-kernel-subset.md) states.
+
+**One exemption removed rather than widened.** The conformance harness was
+outside its own coverage gate on the grounds that test infrastructure is not
+production code. That is a weak argument for a package which had already shipped
+a bug: `covercheck` reported a 99% package at 60% by summing duplicate coverage
+blocks. The skip list is empty by default now, so an exemption has to be named
+in the workflow where a reviewer sees it.
+
+## 9. Open questions
 
 - **Whether the direct executor should survive M3.** [009](009-sequencing.md)
   says it disappears behind the common harness once graphs exist. Keeping it
