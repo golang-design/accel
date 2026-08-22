@@ -1,6 +1,6 @@
 ---
 title: "Kernel subset: control flow, helpers, and the full rejection corpus"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 012-kernel-pipeline.md
@@ -20,8 +20,8 @@ The rest of [004](004-kernel-authoring.md)'s subset, which is:
 - `break` and `continue`;
 - helper functions marked `//accel:helper`, emitted ahead of their callers and
   lowered from the same helper IR as their callers;
-- the full scalar type set, including the `F16` and `BF16` storage wrappers with
-  their conversions;
+- the full scalar type set, including the `Float16` and `BFloat16` storage
+  wrappers with their conversions;
 - struct field selection on non-uniform structs, compound assignment, and
   explicit conversions across the scalar set; and
 - the bounded scalar math intrinsics in `accel/kmath`, each carrying its numeric
@@ -91,7 +91,48 @@ a reader to the wrong place, which for a compiler is most of the cost.
   naming both; and
 - direct and mutual recursion are rejected naming the cycle.
 
-## 5. Open questions
+## 5. Outcome — complete 2026-08-22
+
+Everything in §1 is built, the rejection corpus in §3 has a case per row
+asserting a message and a line, and the development corpus gained three kernels
+that exercise what this child adds: all three loop forms, two helpers with a
+value returned through one of them, narrow storage widened on load, and two
+bounded intrinsics. Each is compared against its authored function under spec
+004's fifth testing level.
+
+**Four things the implementation forced, none of which this spec predicted.**
+
+- **Helper signatures are built before any helper body.** Building bodies in
+  declaration order left the first helper checking a call against a signature
+  that did not exist yet, so a helper calling one declared later in the file was
+  rejected. Rejecting a file for the order its author chose is a rule about the
+  compiler rather than about the subset, so it is three passes: declare, sign,
+  build.
+- **A helper's access to a binding is mapped onto the caller's.** §2 says the
+  access is a property of the call site; what that means in practice is that
+  `SegmentSum` never indexes `in` directly and its record still has to say the
+  binding is read, because the record is what a caller and every backend read.
+- **`accel.F16` was already taken** by the `DType` constant for the same format.
+  The storage types are `Float16` and `BFloat16`, and
+  [004](004-kernel-authoring.md) is amended with the reason rather than the code
+  working around it.
+- **A method call and a package-qualified call are the same AST shape.**
+  `in[i].F32()` and `kmath.Sqrt(x)` both parse as a selector, and walking the
+  second's `kmath` as a value reported that it was neither a parameter nor a
+  local. Which one it is comes from `go/types`, which is the same reason the
+  front end type-checks at all rather than walking an AST.
+
+**Rounding points did not reach argument positions.** The emitter wrapped
+assignment right-hand sides, so `kmath.Sqrt(a + b)` passed an f32 expression a
+compiler may evaluate wider. A conversion to f32 is still left alone, because
+the conversion is itself the rounding point and wrapping it would put a
+redundant one in every generated file.
+
+`for range n` stays out. It is still worth admitting and it is still an
+amendment to [004](004-kernel-authoring.md)'s node set, not a decision to take
+while implementing this.
+
+## 6. Open questions
 
 - **Whether `for range` over an integer should be admitted.** Go 1.22's
   `for range n` is exactly the bounded loop kernels write most, and it lowers to

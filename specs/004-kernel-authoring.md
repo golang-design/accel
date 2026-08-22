@@ -110,9 +110,23 @@ real Go meaning:
 | `T` (struct, by value) | uniform | Immutable per dispatch, which is what by-value means in Go. |
 | `*[N]T` | workgroup shared memory | Pointer to a **fixed-size array**: `go/types` reads `N` off the type, so the extent is static without inventing const generics. Pointer, so all invocations in the group share one. |
 
-`T` ranges over `float32`, `int32`, `uint32`, `int8`, `uint8`, `accel.F16`,
-`accel.BF16`. Pointer-to-array is the only pointer the subset admits, and only
-as a parameter.
+`T` ranges over `float32`, `int32`, `uint32`, `int8`, `uint8`,
+`accel.Float16`, `accel.BFloat16`. Pointer-to-array is the only pointer the
+subset admits, and only as a parameter.
+
+**The narrow types are named `Float16` and `BFloat16`, not `F16` and `BF16`.**
+An earlier draft of this spec used the short names, and they were already taken:
+`accel.F16` is the [`001`](001-device-resources.md) `DType` constant for the
+same format, and it appears at every allocation site. A dtype is metadata a
+descriptor carries and a storage type is what a parameter is made of; both
+wanted the short name and the constant shipped first. Found while implementing
+[013](013-kernel-subset.md).
+
+They are **structs, not defined integer types**, and that is what makes the
+narrow-arithmetic exclusion below enforceable rather than advisory. A defined
+type over `uint16` carries `uint16`'s operators, so `a + b` on two narrow values
+would compile and add their *bit patterns*, with no diagnostic anywhere. A
+struct has no operators at all.
 
 The **ids are three-dimensional** (`accel.ID3`, with `.X`, `.Y`, `.Z` of type
 `uint32`) with linear forms alongside. An earlier draft made them scalar
@@ -618,10 +632,10 @@ Every rejection carries a `token.Pos` and is formatted as
   had to transliterate the CPU sampler into a storage-buffer kernel to get
   parity at all. Admitting samplers admits a permanent tolerance into the oracle.
 - **Native narrow arithmetic.** Narrow dtypes are storage that converts on load
-  and store, per [002](002-compute-model.md). `accel.F16` and `accel.BF16` carry
-  no arithmetic operators at all, so Go itself forces `f.F32()` on the way in and
-  `accel.ToF16(x)` on the way out, and f32 accumulation is not a convention but
-  the only thing that compiles. Native f16 arithmetic will be explicit
+  and store, per [002](002-compute-model.md). `accel.Float16` and
+  `accel.BFloat16` carry no arithmetic operators at all, so Go itself forces
+  `f.F32()` on the way in and `accel.ToFloat16(x)` on the way out, and f32
+  accumulation is not a convention but the only thing that compiles. Native f16 arithmetic will be explicit
   capability-gated intrinsics, later.
 - **Cooperative matrix intrinsics**, per [002](002-compute-model.md).
 - Generic kernels, **generic methods**, closures, recursion, `goto`, `defer`,

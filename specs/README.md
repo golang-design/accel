@@ -46,8 +46,8 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 
 | | |
 | --- | --- |
-| Done | M0's cgo-free gate, M1's memory on the CPU backend, M2's [012](012-kernel-pipeline.md) |
-| Next | [013](013-kernel-subset.md), the rest of the authored subset, then [014](014-kernel-uniforms.md) |
+| Done | M0's cgo-free gate, M1's memory on the CPU backend, M2's [012](012-kernel-pipeline.md) and [013](013-kernel-subset.md) |
+| Next | [014](014-kernel-uniforms.md), uniform structs and std140, which completes M2 |
 | Blocked on nothing | M2's inputs are 002, 004, and 011, all of which are drafted or in progress |
 | Retired | 009's compiler-scope risk, by 012's direct flat E2E |
 
@@ -74,7 +74,7 @@ numbered in.
 | [006-backends.md](006-backends.md) | Drafted | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 | [008-numerics.md](008-numerics.md) | Drafted | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
-| [013-kernel-subset.md](013-kernel-subset.md) | Drafted | M2 child: control flow, helpers, and the positioned rejection corpus |
+| [013-kernel-subset.md](013-kernel-subset.md) | Implemented | M2 child: control flow, helpers, and the positioned rejection corpus |
 | [014-kernel-uniforms.md](014-kernel-uniforms.md) | Drafted | M2 child: std140 codecs, typed uniform binding, and the device-side layout check |
 
 ## Layer 2: the tensor

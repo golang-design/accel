@@ -204,7 +204,7 @@ wait for graphics work, as stated above. Device-loss fault injection (001 §7.4,
 §11.6) waits for M3: there is no submission to inject a loss at until one
 exists, and the CPU backend cannot lose a device on its own.
 
-### M2. Minimum compiler and flat direct CPU execution — in progress, 012 complete 2026-08-22
+### M2. Minimum compiler and flat direct CPU execution — in progress, 012 and 013 complete 2026-08-22
 
 Build:
 
@@ -246,7 +246,7 @@ does not reopen them inside the estimate.
 | Child | Scope |
 | --- | --- |
 | [012](012-kernel-pipeline.md) | The whole pipeline for one straight-line kernel: tool, front end, IR, intrinsic table, generated adapter, registration, digests, freshness, direct flat executor — **complete 2026-08-22** |
-| [013](013-kernel-subset.md) | The rest of the authored subset: all three `for` forms, `break`/`continue`, helpers, the full scalar set, and the positioned rejection corpus |
+| [013](013-kernel-subset.md) | The rest of the authored subset: all three `for` forms, `break`/`continue`, helpers, the full scalar set, and the positioned rejection corpus — **complete 2026-08-22** |
 | [014](014-kernel-uniforms.md) | Uniform structs: std140 codecs, `UniformBuffer[T]`, typed bindings, and the device-side layout check |
 
 The cut is vertical: each child ends with source → generator → execution →
