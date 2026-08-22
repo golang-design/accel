@@ -219,8 +219,40 @@ and every injected condition has an assertion that the intended path was reached
 
 The gate is greater than 90% statement coverage for each affected production
 package on the CPU path, reported independently rather than as one repository
-average. Generated registration boilerplate may be excluded only by a checked
-rule; generated executable adapters and encoders count.
+average.
+
+### 10.1 The two checked exclusions, and nothing else
+
+An exclusion is a **mechanical rule a program applies**, never a list someone
+maintains. There are exactly two, and each retires itself:
+
+| Excluded | Rule | Retires when |
+| --- | --- | --- |
+| Generated registration boilerplate | the declaration is in a generated file and is registration rather than behaviour | never; it is permanent boilerplate |
+| A design-stage stub | the function body is exactly `panic(ErrNotImplemented)` | the function is implemented |
+
+Generated *executable* adapters and encoders count, because they are the thing
+under test rather than the wiring around it.
+
+The stub rule exists because this repository declares its whole API surface
+before implementing it, so the design reads as Go and the compiler checks it
+(000 decision 1's shape is only reviewable that way). Counting several hundred
+unimplemented declarations against the package that implements the first of
+them would report a number about how much is left to build, not about how well
+the built part is tested, and a gate nobody can pass is a gate that gets turned
+off.
+
+The rule is deliberately narrow and syntactic. A body of exactly
+`panic(ErrNotImplemented)` cannot hide a branch, cannot drift into doing
+something, and stops matching the moment a real body replaces it. A function
+with any other body counts in full, including one that validates its arguments
+before panicking, since that validation is behaviour someone should test.
+
+The exclusion is reported, never silent: every run prints how many declarations
+each package excluded, so a package whose coverage is high because most of it
+does not exist yet is visible as exactly that. A milestone's completion is
+judged on the covered number *and* the excluded count going to zero for the
+packages it owns.
 
 Branch-oriented manifests supplement statement coverage:
 

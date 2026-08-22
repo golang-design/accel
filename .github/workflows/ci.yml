@@ -1,8 +1,13 @@
 name: ci
 
-# The API surface is design-stage and compiles to nothing, so this guards exactly
-# two things: that it keeps compiling, and that it stays cgo-free. Both are cheap
-# and both rot silently without a check.
+# Tier 1 from specs/011-conformance-harness.md section 11: the CPU backend on
+# Linux, macOS, and Windows, with the race detector, the fuzz seed corpus, the
+# per-package coverage gate, formatting, vet, and the cgo-free check. Every one
+# of these runs on every commit, because each of them rots silently.
+#
+# Tier 2 arrives with Metal at M6 and is a separate workflow: a job that
+# promises a backend and finds no device is a failure, not a skip, so it cannot
+# share a matrix with the jobs that promise only the CPU.
 
 on:
   push:
@@ -13,9 +18,15 @@ on:
 permissions:
   contents: read
 
+env:
+  # CGO_ENABLED=0 is the point, not an optimization: specs/000-decisions.md
+  # decision 2 makes cgo-free a hard requirement, so the build that must pass is
+  # the one without it.
+  CGO_ENABLED: '0'
+
 jobs:
-  build:
-    name: build and vet
+  test:
+    name: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,22 +40,72 @@ jobs:
         go-version: '1.27.x'
         check-latest: true
 
-    # CGO_ENABLED=0 is the point, not an optimization: specs/000-decisions.md decision 2 makes
-    # cgo-free a hard requirement, so the build that must pass is the one without it.
     - name: Build
-      env:
-        CGO_ENABLED: '0'
       run: go build ./...
 
     - name: Vet
-      env:
-        CGO_ENABLED: '0'
       run: go vet ./...
 
     - name: Test
-      env:
-        CGO_ENABLED: '0'
       run: go test ./...
+
+    # The race detector needs cgo on most platforms, so this is the one step
+    # that turns it on. The cgo-free guarantee is about what the library
+    # compiles to, not about what the test harness may use to find a race, and
+    # the build and vet steps above already proved the library itself.
+    - name: Test under the race detector
+      env:
+        CGO_ENABLED: '1'
+      run: go test -race ./...
+
+  fuzz:
+    name: fuzz seed corpus
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # A short run rather than the committed corpus alone: the corpus proves the
+    # known failures stay fixed, and a minute of fresh input is what finds the
+    # next one. Anything it finds is written to testdata and becomes permanent,
+    # per specs/011-conformance-harness.md section 7.
+    - name: Fuzz the allocators
+      env:
+        CGO_ENABLED: '1'
+      run: |
+        go test -race -run=xxx -fuzz=FuzzTLSF -fuzztime=60s ./internal/alloc/
+        go test -race -run=xxx -fuzz=FuzzBump -fuzztime=30s ./internal/alloc/
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # Per package, not one repository average: an average lets a well-tested
+    # package carry an untested one and reports a number nobody can act on. The
+    # only exclusions are the two checked rules in
+    # specs/011-conformance-harness.md section 10.1, and the report prints what
+    # each package excluded so a high score on a package that is mostly
+    # unimplemented is visible as exactly that.
+    - name: Measure
+      run: go test -coverprofile=cover.out -coverpkg=./... ./...
+
+    - name: Gate
+      run: go run ./internal/conformance/cover/covercheck -profile=cover.out
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-profile
+        path: cover.out
 
   cgo-free:
     name: no cgo anywhere
