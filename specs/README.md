@@ -13,9 +13,11 @@ The decisions everything here is built on live in
 [`000-decisions.md`](000-decisions.md). It is normative: a spec that contradicts
 it is wrong.
 
-M0's cgo-free CI gate is complete and M1 is in progress: a CPU device can be
-enumerated, opened, and asked what it is, and everything past that still
-reports `ErrNotImplemented`. [009](009-sequencing.md) records what has landed.
+M0 and M1 are complete. A CPU device can be opened, pooled memory allocated and
+suballocated, buffers typed and sliced into views, and bytes moved to the device
+and back; everything past that still reports `ErrNotImplemented`.
+[009](009-sequencing.md) records what has landed and the three deviations M1
+took.
 
 **What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
 narrower than this directory: compute only, on the CPU backend and Metal.

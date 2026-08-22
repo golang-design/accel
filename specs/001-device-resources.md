@@ -1727,6 +1727,15 @@ descriptor and why its doc comment already says it is worth setting.
 
 ## 11. Testing
 
+**What M1 built and what it did not.** §§1-3 and §§5-8 are implemented on the
+CPU backend as of 2026-08-22, excluding textures. Not implemented: §4 in full
+(textures, formats, row pitch) and §7.4 (device loss), both deferred with
+reasons in [`009-sequencing.md`](009-sequencing.md)'s M1 section. §7.3's per-use
+view check is implemented but has no public use site until the recorded copy
+path lands at M3. This spec therefore stays *in progress* rather than
+implemented, and the sections below are the obligations, not a report.
+
+
 ### 11.1 Round trips and dtypes
 
 - Every dtype round-trips host to device to host unchanged, at every memory kind

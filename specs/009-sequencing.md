@@ -44,7 +44,7 @@ consumer lands.
 ```mermaid
 flowchart TD
     M0["<b>M0</b> cgo-free build gate<br/><i>complete 2026-08-21</i>"]
-    M1["<b>M1</b> memory on CPU<br/>pools, TLSF, buffers, views, lifetime"]
+    M1["<b>M1</b> memory on CPU<br/>pools, TLSF, buffers, views, lifetime<br/><i>complete 2026-08-22</i>"]
     M2["<b>M2</b> minimum compiler, flat direct execution<br/>go/types, IR, generator, std140"]
     M3["<b>M3</b> graph planning, flat submission<br/>edges, interference, packing, barriers"]
     M4["<b>M4</b> cooperative execution model<br/>resumable lowering, definition tracking,<br/>deterministic conflict reporting"]
@@ -75,7 +75,7 @@ platforms and the cgo-free constraint is mechanically enforced. There were no
 runtime tests because all operations remained design-stage stubs. The workflow's
 negative cgo check is the acceptance test for this milestone.
 
-### M1. Memory on the CPU backend — in progress, started 2026-08-22
+### M1. Memory on the CPU backend — complete 2026-08-22
 
 Build:
 
@@ -102,19 +102,37 @@ Done:
 Textures and formats remain deferred until graphics work; no earlier milestone
 reads one.
 
-#### M1 progress
+#### M1 outcome
 
-The milestone is built in slices, each one committed on its own. What is done
-is recorded here as it lands, because the definition of done above is not
-rewritten to match what happened.
+Built in five slices, each committed on its own:
 
 | Slice | State |
 | --- | --- |
 | Backend seam, enumeration, device open, selection, dtype widths, capability and limit profiles | done |
-| `internal/alloc`: TLSF and bump allocators | not started |
-| Pools, buffers, views, lifetime | not started |
-| Transfers and the M1 E2E | not started |
-| The 011 M1 harness increment | not started |
+| `internal/alloc`: TLSF and bump allocators | done |
+| Pools, buffers, views, lifetime | done |
+| Transfers and the M1 E2E | done |
+| The 011 M1 harness increment and the coverage gate | done |
+
+Every item in the definition of done above is satisfied. The E2E runs through
+public APIs: `OpenCPU(CPUOptions{})` → allocate → queue write → queue read →
+close. Coverage on the CPU path, under [011](011-conformance-harness.md) §10.1's
+checked exclusions: `accel` 95.6%, `internal/alloc` 99.0%, `internal/cpu` 98.6%.
+`go test -race`, `go vet`, gofmt, and the cgo-free gate all run on every commit,
+which they did not before this milestone despite being named above since M0.
+
+Two bugs are worth recording because neither was a coding slip and both were
+found by a test written to the spec rather than to the code:
+
+- The TLSF size classes indexed the exponent over **bytes**, so a block spanning
+  fewer bits than the mantissa shifted by a negative amount. Unreachable at the
+  256-byte default granularity and reachable at every smaller one, which is why
+  the fuzz target varies the granularity. Its input is a permanent seed.
+- The device's live-allocation count was read under one lock and written under
+  another, and `Device.Close` marked the handle dead before discovering its
+  children and rolled back. Both violate [001](001-device-resources.md) §1.2's
+  concurrency contract, and both were found by writing §11.7's case as it is
+  actually specified: the operations *together* rather than one at a time.
 
 **The package split.** The backend contract is `internal/driver`, the pure-Go
 backend is `internal/cpu`, and the reusable allocator machinery will be
@@ -139,7 +157,7 @@ pin per-backend numeric bounds until they are measured. Nothing is invented and
 nothing is claimed as measured, and a measured value replaces its row at first
 contact with that backend.
 
-**Scoped deviation from [001](001-device-resources.md) §8.2: no staging ring at
+**Deviation 1, from [001](001-device-resources.md) §8.2: no staging ring at
 M1.** §8.2 stages queue writes into a fixed ring of `Upload` blocks recycled by
 a *completed submission*, and has `WriteBuffer` block when the ring is full.
 There are no submissions until M3, so that recycle edge does not exist yet. At
@@ -149,6 +167,20 @@ M1 a write to a host-visible kind memcpys into the mapping and a write to
 submissions. Every observable §8.2 semantic holds at M1 unchanged: the caller's
 slice is copied out before the call returns, a read flushes first, and closing
 a pending destination reports `pending transfer`.
+
+**Deviation 2, from [001](001-device-resources.md) §7.3: the per-use view check
+has no public use site yet.** "Every use of a view checks the buffer" needs a
+use, and M1's immediate transfers address buffers rather than views. The rule is
+implemented and tested white-box, including a hand-constructed view with an
+out-of-range count and a view of a closed buffer whose offsets have since been
+reallocated, so wiring it to `Recorder.CopyBuffer` at M3 is wiring rather than
+design. §11.3's two view cases are satisfied at that point and not before.
+
+**Deviation 3, recorded in [011](011-conformance-harness.md) §10.1 rather than
+here:** design-stage stubs are excluded from the coverage gate by a checked
+syntactic rule. It is written into the owning spec because a threshold that
+passes because of an undocumented exclusion is the failure mode that spec exists
+to prevent.
 
 **Deferred inside M1's own owning spec.** Textures and formats (001 §4, §11.5)
 wait for graphics work, as stated above. Device-loss fault injection (001 §7.4,
