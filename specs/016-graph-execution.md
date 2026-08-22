@@ -1,6 +1,6 @@
 ---
 title: "Edge inference, barrier planning, and flat dispatch"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -161,7 +161,82 @@ rather than a second test of the kernel.
 - A benchmark reports inference and barrier planning cost against node count,
   since [003](003-command-graph.md) §"Cost" makes a claim about it.
 
-## 6. What it does not build
+## 6. What it added, beyond what §1 listed
+
+**`Graph.Hazards` and `Graph.Edges`** alongside `Graph.Barriers`. The gap
+between the first two numbers is what batching bought, and a caller asking why a
+graph does not overlap wants both rather than either. `Edges` exposes the
+inferred DAG because a plan is the thing worth asserting on: a test comparing
+results cannot tell a graph that overlapped correctly from one that serialized
+and got the same answer.
+
+**`ComputePipeline` gained a real body**, with `Kernel()` exposing the record it
+was created from, and `Device.Missing` is implemented rather than panicking.
+`requirementsOf` returns a zero capability set, and that is a fact about the v0
+subset rather than a gap: every value in `Capability` is subgroups, atomics,
+native narrow arithmetic, or integer dot product, and a flat kernel can imply
+none of them. When [009](009-sequencing.md)'s M4 adds the analysis that infers
+them, that function reads a field and `Missing` does not change.
+
+**`internal/kernel.Dispatch`** is the workgroup loop, shared by the CPU backend
+and by the bring-up path that runs a generated kernel without a device. Two
+copies would be two definitions of what a workgroup id is, and the second to be
+updated is the one that quietly stops agreeing with
+[002](002-compute-model.md).
+
+**`driver.Dispatch`** carries a kernel record, a workgroup count, binding
+operands, and uniforms across the seam. Bindings are positional because the
+kernel indexes its arguments by layout index, so the position *is* the contract
+and a reordering silently swaps two buffers.
+
+**A dispatch's accesses come from the kernel's binding layout, never from the
+caller.** The mode was inferred from the kernel body by the compiler, and
+letting a caller restate it would let them under-declare, which is exactly how a
+missing dependency becomes a race. §1 implied this by saying accesses are the
+input; it is worth stating as a rule.
+
+**The `Add` corpus kernel** takes two inputs rather than one, for a reason about
+the graph rather than the compiler: with a single input, a dispatch that read
+the resource a rebind replaced is indistinguishable from one that read the new
+one.
+
+## 7. Outcome — complete 2026-08-23
+
+Everything in §1 is built and §5's cases pass, including M3's end-to-end
+criterion and [003](003-command-graph.md)'s worked graph asserted edge for edge
+and barrier for barrier: nine hazards, seven barriers, and no edge between the
+two GEMMs.
+
+**Two properties were confirmed by reinstating the bug rather than by passing.**
+Whole-resource comparison was substituted for the sub-range test, and it fails
+exactly on the GEMM pair the spec named. Queue-wide batching was removed, and
+the worked graph goes to eight barriers with one appearing before `n3`. A test
+that only passes proves less than one seen to fail for the stated reason.
+
+**Bindings reach a kernel as slices aliasing device memory**, not copies: a
+kernel writing its output must write where the graph said it would, and copying
+back afterwards would be a second definition of what a binding means. The
+reinterpretation refuses a byte range that is not a whole number of elements
+rather than truncating, because truncation hides a range computed with the wrong
+element size and the kernel then runs over one element fewer than the caller
+believes it bound.
+
+**Planning is linear in node count**, which is what
+[003](003-command-graph.md)'s cost section claims. An earlier reading suggesting
+otherwise was a hundred-iteration benchmark measuring mostly noise, and it is
+recorded here because the wrong conclusion was nearly acted on. No wall-clock
+assertion guards it: a timing threshold is the shape that produced four red
+Windows runs on a coarse clock, so the benchmark reports the number and no gate
+fails on someone else's machine.
+
+**One thing this milestone did not have to do.** [004](004-kernel-authoring.md)'s
+IR node set did not grow, no new payload kind was needed beyond `OpDispatch`,
+and the record-order plan of [015](015-graph-recording.md) needed no change to
+be replaced — the barrier list went from "every node" to "what the accesses
+need" without the surrounding structure moving, which is the evidence that the
+cut between the two children was in the right place.
+
+## 8. What it does not build
 
 - **No aliasing**: every transient still gets its own bytes.
   [017](017-graph-aliasing.md).

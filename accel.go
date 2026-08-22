@@ -26,21 +26,25 @@
 // Uniform blocks are encoded by a generated std140 codec, so a caller supplies
 // a [UniformBuffer] and never writes a padding offset.
 //
-// A graph of transfers can be recorded, validated, built once, bound,
-// submitted, waited on, and replayed with a rebound input: [Device.NewRecorder],
-// [Recorder.CopyToBuffer], [Recorder.CopyBuffer], [Recorder.Transient],
-// [Recorder.Slot], [Recorder.Build], [Graph.Bind], [Queue.Submit] and
-// [Fence.Wait]. It runs on a deliberately conservative plan -- nodes in record
-// order, a barrier before each, no transient aliasing -- which is correct
-// because record order is a topological order of any dependency DAG the
-// declared accesses imply. Inferred edges, computed barriers and transient
-// aliasing are next, and the plan here is kept afterwards as the oracle they
-// are checked against.
+// Graphs of transfers and flat compute dispatches can be recorded, validated,
+// built once, bound, submitted, waited on, and replayed with a rebound input:
+// [Device.NewRecorder], [Recorder.CopyToBuffer], [Recorder.CopyBuffer],
+// [Recorder.Dispatch], [Recorder.Transient], [Recorder.Slot],
+// [Recorder.Build], [Graph.Bind], [Queue.Submit] and [Fence.Wait].
 //
-// Not implemented, and reporting [ErrNotImplemented]: textures, compute
-// pipelines, and therefore [Recorder.Dispatch], [Recorder.DispatchIndirect],
-// [Queue.SubmitAfter] and [Fence.Stats]. specs/009-sequencing.md is the order
-// they arrive in.
+// Dependency edges are inferred from each node's declared accesses, compared as
+// byte ranges rather than whole resources, and barriers come from those: nodes
+// with no hazard between them are not separated. [Graph.Edges],
+// [Graph.Hazards], and [Graph.Barriers] report the plan, because a caller
+// asking why a graph does not overlap needs the plan rather than a timing.
+//
+// Transients are not yet aliased: each gets its own bytes, so
+// [GraphMemory.TransientBytes] equals its unaliased total. Packing them is
+// next.
+//
+// Not implemented, and reporting [ErrNotImplemented]: textures, indirect
+// dispatch ([Recorder.DispatchIndirect]), [Queue.SubmitAfter], and
+// [Fence.Stats]. specs/009-sequencing.md is the order they arrive in.
 //
 // # The model
 //

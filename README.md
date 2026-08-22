@@ -162,9 +162,10 @@ bindings are the better choice.
 | Kernel compiler: subset checking, IR, Go lowering, generator | **Built** |
 | Kernel language: loops, helpers, narrow storage, scalar math | **Built** |
 | Kernel uniforms: std140 codecs and typed binding | **Built** |
-| Command graphs: recording, slots, validation, submission, fences | **Built** on the CPU backend, on a conservative plan |
-| Command graphs: inferred edges, computed barriers, transient aliasing | Specified, next |
-| Compute dispatch in a graph | Specified, next |
+| Command graphs: recording, slots, validation, submission, fences | **Built** on the CPU backend |
+| Command graphs: inferred edges, sub-range hazards, computed barriers | **Built** on the CPU backend |
+| Compute dispatch in a graph | **Built** on the CPU backend |
+| Command graphs: transient aliasing and the whole-plan fuzz | Specified, next |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
@@ -172,14 +173,18 @@ bindings are the better choice.
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1, M2, and the first third of M3](specs/009-sequencing.md).
+rows came from [M1, M2, and most of M3](specs/009-sequencing.md).
 
-A graph runs today on the most conservative plan there is: nodes in record
-order, a barrier before each, and no transient aliasing. That is correct rather
-than merely safe, because record order is a topological order of any dependency
-DAG the declared accesses imply. What comes next is computing the edges instead
-of assuming them all, and packing the transients — and the plan above is kept
-afterwards rather than replaced, as the oracle the optimized one is checked
+A graph infers its own dependency edges from what each node declares it touches,
+comparing byte ranges rather than whole resources, so two nodes writing disjoint
+halves of one buffer are not serialized. Barriers come from those edges and are
+batched, because a barrier is queue-wide: [spec 003's worked
+graph](specs/003-command-graph.md) has nine hazards and emits seven barriers,
+and the test asserts their positions rather than only their count.
+
+What remains of M3 is transient aliasing. Every transient still gets its own
+bytes today, and the conservative plan that ran before edges were inferred is
+kept rather than deleted — it is the oracle the optimized one will be checked
 against.
 
 **v0 is compute only, on the CPU backend and Metal.** The other backends and the
