@@ -33,6 +33,7 @@ package front
 import (
 	"fmt"
 	"go/ast"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"sort"
@@ -161,6 +162,25 @@ type checker struct {
 	nextID  int
 }
 
+// normalize prints a declaration back from its AST.
+//
+// From the AST rather than from the file, because a package under test may not
+// be on disk, and because normalizing is the behaviour worth having: a gofmt
+// run must not force every kernel to be regenerated, while an edit that changes
+// what the code means must.
+func (c *checker) normalize(fn *ast.FuncDecl) string {
+	var b strings.Builder
+	cfg := printer.Config{Mode: printer.RawFormat, Tabwidth: 8}
+	if err := cfg.Fprint(&b, c.fset, fn); err != nil {
+		// Printing an AST that type-checked cannot fail; if it does, the digest
+		// falls back to something that is at least stable per position rather
+		// than silently becoming the empty string, which would make every kernel
+		// in the package share a digest.
+		return fmt.Sprintf("unprintable:%v", c.fset.Position(fn.Pos()))
+	}
+	return b.String()
+}
+
 func (c *checker) errorf(p token.Pos, format string, args ...any) {
 	c.diags = append(c.diags, Diagnostic{Pos: c.fset.Position(p), Msg: fmt.Sprintf(format, args...)})
 }
@@ -243,6 +263,7 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 
 	k := &ir.Func{Name: name, Kernel: true, Workgroup: extent, Thread: -1}
 	k.P = fn.Pos()
+	k.Source = c.normalize(fn)
 
 	if !c.signature(fn, k) {
 		return nil

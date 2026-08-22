@@ -400,6 +400,19 @@ type Func struct {
 	// authored spelling. The digest records these rather than resolved package
 	// paths, so relocating a type does not invalidate a committed digest.
 	Intrinsics []string
+
+	// Source is the normalized text of the authored declaration, printed from
+	// the AST rather than read from the file.
+	//
+	// Printed, because it has to work for a package that is not on disk, and
+	// because normalizing means a gofmt run does not force every kernel to be
+	// regenerated while a semantic edit still does. Comments are dropped for the
+	// same reason: a comment is not something the generated form depends on.
+	Source string
+
+	// Digest identifies everything this kernel's generated form depends on, not
+	// only its source. Filled in by the generator.
+	Digest string
 }
 
 // Builders. Constructing nodes through functions rather than literals keeps the

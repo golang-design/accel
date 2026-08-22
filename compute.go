@@ -199,7 +199,11 @@ func (p *ComputePipeline) Close() error { panic(ErrNotImplemented) }
 // Kernels are authored in a subset of Go and lowered from one typed IR to
 // generated, instrumented CPU code and native GPU shaders. The authored function
 // is type-checking input, not the CPU executable. See specs/004-kernel-authoring.md.
-type Kernel struct{ _ noCopy }
+//
+// A caller does not construct one. The generator emits it, filled in from
+// everything it inferred: the workgroup extent, the bindings and their access
+// modes, the source digest, and the entry point.
+type Kernel = kernel.Kernel
 
 // UniformCodec is generated for one by-value kernel parameter type. It owns the
 // std140 size, alignment, field offsets, and typed encoder.
