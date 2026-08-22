@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/testkernels"
 )
 
 func benchDevice(b *testing.B) *accel.Device {
@@ -297,4 +298,96 @@ func benchView(b *testing.B, buf *accel.Buffer) accel.BufferView {
 		b.Fatalf("view: %v", err)
 	}
 	return v
+}
+
+// Inference and barrier planning against node count. Spec 003 claims the cost
+// is O(N·k·Ā) with Ā small, and that claim needs a number rather than an
+// argument — especially since it is what a caller pays at build to save at
+// every submission.
+func BenchmarkGraphPlanning(b *testing.B) {
+	for _, n := range []int{16, 64, 256} {
+		b.Run(fmt.Sprintf("nodes=%d", n), func(b *testing.B) {
+			d, err := accel.OpenCPU(accel.CPUOptions{})
+			if err != nil {
+				b.Fatalf("open: %v", err)
+			}
+			defer d.Close()
+
+			// A chain, which is the shape with the most hazards per node: each
+			// node reads what the last one wrote.
+			bufs := make([]*accel.Buffer, 8)
+			for i := range bufs {
+				bufs[i] = benchBuffer(b, d, fmt.Sprintf("b%d", i))
+			}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				r := d.NewRecorder()
+				for i := range n {
+					dst, src := bufs[i%len(bufs)], bufs[(i+1)%len(bufs)]
+					r.CopyBuffer(benchView(b, dst), benchView(b, src))
+				}
+				g, err := r.Build()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := g.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// A dispatch through a graph against the same kernel run directly. The gap is
+// what the graph costs per submission, and spec 003's claim is that it is
+// small: everything expensive happened at build.
+func BenchmarkDispatchThroughAGraph(b *testing.B) {
+	const n = 4096
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "add",
+	})
+	if err != nil {
+		b.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	mk := func(label string) *accel.Buffer {
+		buf, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: storage, Label: label,
+		})
+		if err != nil {
+			b.Fatalf("buffer: %v", err)
+		}
+		b.Cleanup(func() { _ = buf.Close() })
+		return buf
+	}
+	in, out := mk("in"), mk("out")
+
+	r := d.NewRecorder()
+	r.Dispatch(p, []accel.Binding{
+		{Index: 0, Buffer: benchView(b, in)},
+		{Index: 1, Buffer: benchView(b, in)},
+		{Index: 2, Buffer: benchView(b, out)},
+	}, accel.WorkgroupCount{X: n / 64})
+	g, err := r.Build()
+	if err != nil {
+		b.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	q := d.Queue()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := q.Submit(g).Wait(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

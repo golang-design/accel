@@ -98,7 +98,8 @@ func (g *Graph) planBarriers() {
 			b.reasons = append(b.reasons, barrierReason{hazard: h, from: from, label: label})
 		}
 
-		for _, a := range g.spansOf(n) {
+		spans := g.spansOf(n)
+		for _, a := range spans {
 			for _, rs := range states[key(a.res)] {
 				if !rs.span.overlaps(a) {
 					continue
@@ -134,7 +135,7 @@ func (g *Graph) planBarriers() {
 			clearPending(states)
 		}
 
-		for _, a := range g.spansOf(n) {
+		for _, a := range spans {
 			commitRange(states, a)
 		}
 	}
