@@ -261,6 +261,44 @@ What it does **not** buy: it will not tell you a program is a legal *GPU*
 program. Recursion, divergent barriers, and the helper storage restrictions are
 separate analyses over the IR.
 
+### Every rejection is the checker's, never the parser's
+
+A front end whose coverage depends on what an upstream tool happens to reject
+has an unstated dependency on that tool's current release. Go 1.27 makes the
+point concretely rather than hypothetically.
+
+Through Go 1.26 the parser rejected a method carrying type parameters outright,
+reporting `method must have no type parameters` and discarding them, so
+`FuncDecl.Recv != nil` implied `FuncDecl.Type.TypeParams == nil`. Go 1.27 permits
+generic methods: the parser keeps the type parameters, and `types.NewSignatureType`
+no longer panics on a receiver plus type parameters.
+
+**Nothing in the subset changes.** Generic kernels and helpers are out of scope
+for v0 either way, and that was a sequencing decision before and remains one.
+What changes is who enforces it. A walk that inherited the parser's rejection
+now traverses a generic method silently and lowers its body as though the type
+parameters were not there. That is a wrong-answer bug rather than a compile
+error, and it is the same failure shape as the predecessor's bare-name intrinsic
+table: the tool agrees with itself and disagrees with the source.
+
+So the rule, which is worth more than the instance that prompted it:
+
+> Every construct outside the closed node set is rejected by an explicit check
+> carrying a source position. Never by relying on something upstream to have
+> failed first.
+
+The v0 checker therefore rejects a type parameter list on any kernel, helper, or
+method reachable from a kernel, naming the position and saying generic kernels
+are out of scope for v0 rather than unrepresentable, per the distinction the
+subset section draws. It carries a negative test like every other rejected
+construct.
+
+The same reasoning applies to the two other Go 1.27 language changes, neither of
+which the subset admits: a struct literal keyed by a promoted field is still a
+bare `*ast.Ident` key, so a walk assuming a key names a field of the literal's
+own type is now wrong, and generalized function type inference does not reach a
+subset with no function values.
+
 The cost is that type checking needs the package loaded, with its import graph
 and the `go` tool present, which a deployed binary does not have. That decides
 the next section.
@@ -574,8 +612,10 @@ Every rejection carries a `token.Pos` and is formatted as
   the only thing that compiles. Native f16 arithmetic will be explicit
   capability-gated intrinsics, later.
 - **Cooperative matrix intrinsics**, per [002](002-compute-model.md).
-- Generic kernels, closures, recursion, `goto`, `defer`, `panic`, slices of
-  slices, interfaces, maps, channels, goroutines, string operations, allocation.
+- Generic kernels, **generic methods**, closures, recursion, `goto`, `defer`,
+  `panic`, slices of slices, interfaces, maps, channels, goroutines, string
+  operations, allocation. Generic methods are called out separately because Go
+  1.27 made them legal syntax that the parser accepts; see the rule above.
 - Runtime compilation, multiple helper results, CUDA/PTX.
 
 ## Exactness: what parity actually promises
