@@ -165,7 +165,8 @@ bindings are the better choice.
 | Command graphs: recording, slots, validation, submission, fences | **Built** on the CPU backend |
 | Command graphs: inferred edges, sub-range hazards, computed barriers | **Built** on the CPU backend |
 | Compute dispatch in a graph | **Built** on the CPU backend |
-| Command graphs: transient aliasing and the whole-plan fuzz | Specified, next |
+| Command graphs: transient aliasing and the whole-plan fuzz | **Built** on the CPU backend |
+| Cooperative kernels: barriers, shared memory, subgroups | Specified, next |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
@@ -173,7 +174,7 @@ bindings are the better choice.
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1, M2, and most of M3](specs/009-sequencing.md).
+rows came from [M1, M2, and M3](specs/009-sequencing.md).
 
 A graph infers its own dependency edges from what each node declares it touches,
 comparing byte ranges rather than whole resources, so two nodes writing disjoint
@@ -182,10 +183,15 @@ batched, because a barrier is queue-wide: [spec 003's worked
 graph](specs/003-command-graph.md) has nine hazards and emits seven barriers,
 and the test asserts their positions rather than only their count.
 
-What remains of M3 is transient aliasing. Every transient still gets its own
-bytes today, and the conservative plan that ran before edges were inferred is
-kept rather than deleted — it is the oracle the optimized one will be checked
-against.
+Transients the builder owns share memory when every node touching one is ordered
+before every node touching the other. That is reachability, not record-order
+position, and the difference is not theoretical: an interval-based planner
+aliases two transients on opposite arms of a diamond and corrupts one of them on
+any backend that runs the arms at once.
+
+The conservative plan that ran before edges were inferred is kept rather than
+deleted. It is the oracle: every random graph is built twice, once optimized and
+once naively, and the results compared. It found three real bugs in minutes.
 
 **v0 is compute only, on the CPU backend and Metal.** The other backends and the
 graphics half are designed and normative so their shape cannot break callers

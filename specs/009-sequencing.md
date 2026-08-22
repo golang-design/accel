@@ -293,7 +293,7 @@ bound, and a storage-buffer substitute would make it appear non-uniform to the
 barrier analysis. So 014 lands after 013 because the only honest test of it
 requires control flow to exist.
 
-### M3. Graph planning and flat compute/transfer submission
+### M3. Graph planning and flat compute/transfer submission — complete 2026-08-23
 
 Build:
 
@@ -321,13 +321,56 @@ Done:
 - E2E: public recorder with upload → flat Add dispatch → readback, retained and
   replayed with a rebound input.
 
+#### M3 outcome
+
+All five done criteria are met. 003's worked graph is asserted at its own sizes,
+22 MiB unaliased, 12 MiB peak and 16 MiB allocated, with every transient's user
+set matching the spec's compatibility table; its edge set and barrier positions
+are asserted separately at reduced sizes, nine hazards and seven barriers with
+no edge between the two GEMMs. The diamond proves unsafe transients do not
+alias, asserted on the placement rather than the output, because a backend that
+executes serially cannot observe the race an unsound layout would create on one
+that overlaps. Every applicable validation row has a focused negative test, and
+015 §4 maps all 24 of 003's rows to a child or to a written deferral. The
+whole-plan fuzz compares optimized execution against the naive plan and ran 13.9
+million executions clean after the bugs below.
+
+**What the whole-plan oracle found, and why it is the model for later
+milestones.** Three bugs in minutes, all of them in the implementation and none
+in the specs. The interference relation had been implemented per pair where 003
+asks for a uniform direction. Reading a transient nothing wrote was undefined
+rather than refused, in three variants the oracle found in order. And a kernel
+panic aborted the process instead of reaching the fence. None was predicted by
+the spec that owns them; all three were found by comparing two plans that
+disagree only in the thing under test. That is the argument for keeping 015's
+planner rather than deleting it, and it is why the same shape is worth building
+before M5's GEMM rather than after.
+
+**Deviation 2 is closed.** The per-use view check now has its public use site:
+`Recorder.CopyBuffer` and every other recording call check a view's range
+against its buffer, and 001 §11.3's two view cases are satisfied. As predicted,
+it was wiring rather than design.
+
+**Deviation 4: the naive planner is a public entry point.** 003 describes the
+naive plan as an oracle mode, and what shipped is `Recorder.BuildNaive` on the
+public API rather than a test-only hook. The reason is that a caller who
+suspects a planning bug has no other way to bisect one, and an oracle available
+only to this repository's tests is not available to the person who actually hits
+the bug. It costs one exported method and no state; nothing else changes, and
+the conservative plan it produces is the one 015 shipped and proved correct.
+
+**A validation row 003 does not list.** Reading a transient nothing wrote is a
+build error, checked per byte range. It is recorded in
+[017](017-graph-aliasing.md) §8.1 with what the oracle found, and it belongs in
+003's table the next time that table is revised.
+
 #### M3 is split, on the same rule that split M2
 
 | Child | Scope |
 | --- | --- |
 | [015](015-graph-recording.md) | Recorder, node and payload IR, access declaration, slots and rebinding, build validation, submission, fences, device loss, per-use view checks, copy lowering, statistics. Plans conservatively: no aliasing, one barrier per node — **complete 2026-08-22** |
 | [016](016-graph-execution.md) | Edge inference, reachability, hazard classification, sub-ranges, the barrier state machine and batching, the flat dispatch node and its lowering. Carries M3's E2E and the barrier-position assertion — **complete 2026-08-23** |
-| [017](017-graph-aliasing.md) | Interference over reachability, greedy packing, `GraphMemory`'s three fields diverging, aliasing handovers, and the whole-plan differential fuzz |
+| [017](017-graph-aliasing.md) | Interference over reachability, greedy packing, `GraphMemory`'s three fields diverging, aliasing handovers, and the whole-plan differential fuzz — **complete 2026-08-23** |
 
 The cut is vertical: each child ends with something that records, plans,
 submits, and produces bytes, so each is evidenced by execution rather than by a

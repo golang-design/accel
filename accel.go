@@ -38,9 +38,12 @@
 // [Graph.Hazards], and [Graph.Barriers] report the plan, because a caller
 // asking why a graph does not overlap needs the plan rather than a timing.
 //
-// Transients are not yet aliased: each gets its own bytes, so
-// [GraphMemory.TransientBytes] equals its unaliased total. Packing them is
-// next.
+// Transients the builder owns are aliased: two share bytes when every node
+// touching one is ordered before every node touching the other, which is
+// reachability rather than record-order position. [Graph.Memory] reports what
+// that bought and [Graph.TransientPlacement] reports the layout.
+// [Recorder.BuildNaive] builds the same graph without any of it, for bisecting
+// a suspected planning bug.
 //
 // Not implemented, and reporting [ErrNotImplemented]: textures, indirect
 // dispatch ([Recorder.DispatchIndirect]), [Queue.SubmitAfter], and

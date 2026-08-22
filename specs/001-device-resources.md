@@ -1763,13 +1763,20 @@ descriptor and why its doc comment already says it is worth setting.
 
 ## 11. Testing
 
-**What M1 built and what it did not.** §§1-3 and §§5-8 are implemented on the
-CPU backend as of 2026-08-22, excluding textures. Not implemented: §4 in full
-(textures, formats, row pitch) and §7.4 (device loss), both deferred with
-reasons in [`009-sequencing.md`](009-sequencing.md)'s M1 section. §7.3's per-use
-view check is implemented but has no public use site until the recorded copy
-path lands at M3. This spec therefore stays *in progress* rather than
-implemented, and the sections below are the obligations, not a report.
+**What is built and what is not.** §§1-3 and §§5-8 are implemented on the CPU
+backend, excluding textures. **§4 in full (textures, formats, row pitch) is the
+one section still unbuilt**, deferred with reasons in
+[`009-sequencing.md`](009-sequencing.md)'s M1 section; this spec therefore stays
+*in progress* rather than implemented, and §4's obligations below are exactly
+what remains.
+
+Two things that were outstanding at M1 closed at M3, on 2026-08-23. **§7.4,
+device loss**, is terminal and reported through the fence, with the
+fault-injection mode this section asks for exposed as
+`accel.CPUOptions.LoseAtSubmission` — without it the whole path is code nobody
+runs until a caller's driver restarts. **§7.3's per-use view check** now has its
+public use site: every recording call checks a view's range against its buffer,
+and §11.3's two view cases are satisfied.
 
 
 ### 11.1 Round trips and dtypes

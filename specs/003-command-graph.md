@@ -687,6 +687,21 @@ func allBefore(a, b []NodeID, reach []bitset) bool {
 `T` and writing `U` in one dispatch, which is every fused elementwise kernel,
 keeps `T` and `U` apart.
 
+**Implementation note, added after M3.** The first implementation of this
+relation accepted any *per-pair* ordering rather than the uniform direction the
+rule above states, and the whole-plan oracle of
+[017](017-graph-aliasing.md) found the difference within seconds: a transient
+whose entire lifetime sits between two users of another, so its write lands in
+the other's bytes while that one is still live. The rule as written here is
+correct and was not changed. Recorded because the wrong reading is an easy one
+and the code now carries the same warning.
+
+**A check this table does not list.** Reading a transient no earlier node wrote
+is a build error, checked per byte range. Without aliasing such a read returns
+zeros, which is wrong but stable; with aliasing it returns whatever transient
+shares those bytes, so the answer depends on the packer and therefore on an
+unrelated transient's size. See [017](017-graph-aliasing.md) §8.1.
+
 **Cost.** Reachability is `O(V * E / w)` bit operations for word size `w`, and
 `V * V / 8` bytes. For 3000 nodes that is 1.1 MiB of bitsets and a few
 milliseconds, at build, once. Compatibility is

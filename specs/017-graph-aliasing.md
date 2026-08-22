@@ -1,6 +1,6 @@
 ---
 title: "Transient aliasing and the whole-plan oracle"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 015-graph-recording.md
@@ -156,7 +156,82 @@ difference and never scheduling noise.
   [003](003-command-graph.md) claims `O(n² log n)` and claims it is acceptable at
   200 transients.
 
-## 8. What it does not build
+## 8. Outcome — complete 2026-08-23
+
+Everything in §§2–6 is built and §7's cases pass, including
+[003](003-command-graph.md)'s worked graph asserted at its own sizes: 22 MiB
+unaliased, 12 MiB peak, 16 MiB allocated, with every transient's user set
+matching the spec's compatibility table. M3's numeric criterion is complete.
+
+### 8.1 The oracle found three bugs, all of them in the implementation
+
+**The interference relation was implemented per pair rather than uniformly.**
+[003](003-command-graph.md) is unambiguous — "every node touching one is
+ordered, by the inferred DAG, before every node touching the other", with a
+formula and reference code that both say so, and a note that `x ≺ x` is false.
+The first implementation here accepted *any* per-pair ordering instead, which
+permits U's entire lifetime to sit between two users of T: U's write lands in
+T's bytes while T is still live, and T's later reader sees U's data.
+
+The oracle produced that shape within seconds — `t0` written by `n0` and read by
+`n3`, `t1` used only by `n2`, with `n0 → n2 → n3` — and §2's relation is what
+003 asked for all along. **The spec was right and the code was wrong**, which is
+the useful direction for a spec to be, and it is the argument for having written
+the relation down before implementing it.
+
+**Reading a transient nothing wrote is now a build error, checked per byte
+range.** Without aliasing such a read returns zeros — wrong but stable. With
+aliasing it returns whatever transient shares those bytes, which is a wrong
+answer whose value depends on the packer and therefore on an unrelated
+transient's *size*. That is the worst failure mode this design admits, and the
+builder can see it, so it says so. The oracle found three variants in order: a
+transient nothing writes at all, one only partly written and then read whole,
+and a node reading and writing a transient as its first user — which reads what
+was there when it started, and that is nothing. In-place work stays legal as
+soon as an earlier node writes it, which is what makes it an update rather than
+a read of nothing. This is a validation row 003 does not list.
+
+**A kernel panic now reaches the fence rather than aborting.** On a GPU an
+out-of-bounds access is clamped or undefined; on this backend it is a Go panic
+raised inside a goroutine the caller did not start and cannot recover in.
+[006](006-backends.md) §5 makes this backend the oracle, and failing loudly
+means a reported error naming the kernel, not a process abort.
+
+After the three fixes, 13.9 million fuzz executions found nothing further. Each
+bug also has a focused test, and each fix was confirmed by reinstating the old
+rule and watching the right test fail — including one that had to be rebuilt,
+because the first attempt at the "lifetime in between" case used transients
+that were plainly unordered and so did not distinguish the two relations at all.
+
+### 8.2 What the numbers say
+
+| Measure | Value |
+| --- | --- |
+| Worked graph, unaliased | 22 MiB |
+| Worked graph, peak | 12 MiB |
+| Worked graph, allocated | 16 MiB, which is optimal here |
+| Packing, 128 transients | ≈580 µs, superlinear as `O(n² log n)` predicts |
+
+The 16 MiB assertion has an honest limit: this graph reaches its lower bound
+under greedy-by-first-use too, so the test does not discriminate between packing
+orders. 003 says as much — four pairwise interfering 4 MiB transients admit no
+assignment under 16 — so size-descending stays a general claim rather than one
+this case proves.
+
+### 8.3 What it added beyond §§2–6
+
+- **`Recorder.BuildNaive`**, the conservative planner of
+  [015](015-graph-recording.md) retained as a second mode rather than deleted.
+  §1 said the oracle already existed; this is the name it exists under.
+- **`Graph.TransientPlacement`**, because a placement is the thing worth
+  asserting on. An output comparison can pass on a backend that executes
+  serially while the layout is unsound, since such a backend cannot observe the
+  race the layout would create on one that overlaps.
+- **`Graph.Edges` and `Graph.Hazards`** came from
+  [016](016-graph-execution.md) and are what the placement assertions read
+  alongside.
+
+## 9. What it does not build
 
 [003](003-command-graph.md) §"What this does not optimize" is the list, and none
 of it changes here: no node reordering, no transient splitting, no aliasing of

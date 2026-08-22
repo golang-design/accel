@@ -30,20 +30,18 @@ import (
 //
 // # Why the direction must be uniform
 //
-// specs/003-command-graph.md states the rule per pair, as
-// "reaches(t, u) or reaches(u, t)", and that is not the same thing: it lets one
-// pair be ordered one way and another pair the other way, which permits U's
-// whole lifetime to sit *between* two users of T. Then U's write lands in T's
-// bytes while T is still live, and T's later reader sees U's data.
+// One pair being ordered one way and another pair the other way is not enough:
+// that permits U's entire lifetime to sit *between* two users of T, so U's
+// write lands in T's bytes while T is still live and T's later reader sees U's
+// data. The condition is that all of one's users precede all of the other's,
+// which is what "T dies before U is born" means on a DAG.
 //
-// The whole-plan oracle found exactly that: t0 written by n0 and read by n3,
-// t1 used only by n2, with n0 reaching n2 reaching n3. Every pair is ordered,
-// so the per-pair rule aliases them and n2 overwrites t0 before n3 reads it.
-//
-// 003's own compatibility table does not have that bug -- every one of its
-// fifteen rows agrees with the uniform-direction rule, and its "t1 dies at n4,
-// t4 is born at n5" phrasing is exactly this -- so the table is right and the
-// formula beside it is loose. Recorded in specs/017-graph-aliasing.md.
+// 003 says exactly this — "every node touching one is ordered, by the inferred
+// DAG, before every node touching the other" — and this implementation did not,
+// at first: it accepted any per-pair ordering. The whole-plan oracle produced
+// the difference within seconds, as t0 written by n0 and read by n3 with t1
+// used only by n2 and n0 reaching n2 reaching n3. The spec was right and the
+// code was wrong, which is the useful direction for a spec to be.
 //
 // # Why the reachability is strict
 //
