@@ -95,6 +95,11 @@ func parseBlock(line string) (Block, error) {
 		return malformed()
 	}
 	file, rest := line[:colon], line[colon+1:]
+	if file == "" {
+		// A block with no file cannot be attributed to a package, so summarizing
+		// would silently invent one keyed on the empty string.
+		return Block{}, fmt.Errorf("cover: profile line %q names no file", line)
+	}
 
 	fields := strings.Fields(rest)
 	if len(fields) != 3 {
@@ -110,6 +115,16 @@ func parseBlock(line string) (Block, error) {
 	count, err4 := strconv.Atoi(fields[2])
 	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
 		return malformed()
+	}
+
+	// Negative numbers parse and are not positions or counts. A negative
+	// statement count would subtract from a package's total and report a
+	// coverage figure above 100%, or below zero, from a profile that a
+	// cancelled test run truncated. This tool gates the build, so it refuses
+	// input it cannot compute over rather than computing something.
+	if stmts < 0 || count < 0 {
+		return Block{}, fmt.Errorf("cover: profile line %q has a negative statement count or "+
+			"execution count", line)
 	}
 
 	return Block{
@@ -130,6 +145,10 @@ func parsePos(s string) ([2]int, error) {
 	col, err := strconv.Atoi(colText)
 	if err != nil {
 		return [2]int{}, err
+	}
+	if line <= 0 || col <= 0 {
+		return [2]int{}, fmt.Errorf("cover: %q is not a source position: lines and columns "+
+			"are numbered from one", s)
 	}
 	return [2]int{line, col}, nil
 }

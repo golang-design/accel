@@ -42,6 +42,15 @@ func TestParseProfileRejectsGarbage(t *testing.T) {
 		{"no span comma", "mode: set\na.go:1.1 1 1\n"},
 		{"bad position", "mode: set\na.go:x.y,2.2 1 1\n"},
 		{"bad line number", "mode: set\na.go:1.1,2.2 x 1\n"},
+		// Found by FuzzParseProfile. These parse as numbers and are not counts
+		// or positions, and a negative statement count would subtract from a
+		// package total and report a percentage above 100 or below zero.
+		{"negative statement count", "mode: set\na.go:1.1,2.2 -1 1\n"},
+		{"negative execution count", "mode: set\na.go:1.1,2.2 1 -1\n"},
+		{"zero line", "mode: set\na.go:0.1,2.2 1 1\n"},
+		{"negative line", "mode: set\na.go:-1.1,2.2 1 1\n"},
+		{"zero column", "mode: set\na.go:1.0,2.2 1 1\n"},
+		{"no file", "mode: set\n:1.1,2.2 1 1\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := cover.ParseProfile(strings.NewReader(tc.in)); err == nil {

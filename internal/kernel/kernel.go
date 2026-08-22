@@ -203,14 +203,42 @@ func (k *Kernel) Bind(a Args) error {
 			k.Name, len(k.Bindings), len(a.Slices))
 	}
 	for i, b := range k.Bindings {
-		want := goTypeFor(b.DType)
-		got := fmt.Sprintf("%T", a.Slices[i])
-		if got != want {
-			return fmt.Errorf("accel: kernel %q binding %d (%q, %v) takes %s and got %s",
-				k.Name, i, b.Name, b.DType, want, got)
+		if !matches(a.Slices[i], b.DType) {
+			return fmt.Errorf("accel: kernel %q binding %d (%q, %v) takes %s and got %T",
+				k.Name, i, b.Name, b.DType, goTypeFor(b.DType), a.Slices[i])
 		}
 	}
 	return nil
+}
+
+// matches reports whether a bound argument is the slice its dtype names.
+//
+// A type switch rather than comparing formatted type names. This runs once per
+// binding per dispatch, and formatting a type to compare it allocates on the
+// path that succeeds, which is every path that matters. The name is built only
+// to explain a failure.
+func matches(v any, d DType) bool {
+	switch d {
+	case F32:
+		_, ok := v.([]float32)
+		return ok
+	case F16, BF16:
+		_, ok := v.([]uint16)
+		return ok
+	case I32:
+		_, ok := v.([]int32)
+		return ok
+	case U32:
+		_, ok := v.([]uint32)
+		return ok
+	case I8:
+		_, ok := v.([]int8)
+		return ok
+	case U8:
+		_, ok := v.([]uint8)
+		return ok
+	}
+	return false
 }
 
 // goTypeFor is the host slice type a dtype binds to.
