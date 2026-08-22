@@ -201,7 +201,7 @@ the race detector, one-in-flight Graph/Plan rejection, rebind during flight,
 close while retained by a submission, and fence completion visibility.
 
 CPU test hooks inject allocator exhaustion, closed resources, unsupported
-capabilities, collapsed exact classes, invalid indirect counts, poison reads,
+capabilities, collapsed exact classes, invalid indirect counts, undefined-memory reads,
 non-uniform barriers, and device loss. Hooks are unavailable in production builds
 and every injected condition has an assertion that the intended path was reached.
 

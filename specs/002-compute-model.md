@@ -246,7 +246,7 @@ descriptor. There is no undefined-behaviour-permits-anything clause here.
 | Class | Go spelling | Lifetime | Visible to | Initial contents | Made visible by |
 | --- | --- | --- | --- | --- | --- |
 | Private | locals, `var x`, by-value params | one invocation | that invocation | zero | nothing needed |
-| Workgroup (shared) | `*[N]T` parameter | one workgroup instance | every invocation of that workgroup | **poison** | `t.Barrier()` or `t.BarrierShared()` |
+| Workgroup (shared) | `*[N]T` parameter | one workgroup instance | every invocation of that workgroup | **undefined, and tracked** | `t.Barrier()` or `t.BarrierShared()` |
 | Storage | `[]T` parameter | the buffer's | every invocation of every dispatch | whatever the buffer holds | `t.Barrier()` or `t.BarrierStorage()` within a workgroup; [003](003-command-graph.md)'s computed barriers between nodes |
 | Uniform | struct-by-value parameter | one dispatch | every invocation, read-only | host-written before submission | n/a, immutable for the dispatch |
 
@@ -257,12 +257,22 @@ omits the store, the Go path reads 0, the GPU path reads whatever the register
 held, and the oracle silently stops being an oracle.
 
 **Shared memory is uninitialised at workgroup start**, and the CPU backend
-deliberately fills it with a poison pattern rather than zeroes, so that a kernel
-accidentally relying on zero-initialisation fails loudly on the oracle instead of
-silently working on one backend and not another. The poison pattern is a
-signalling NaN for float dtypes and `0xDEADBEEF` for integer dtypes, chosen
-because both are wrong loudly rather than plausibly: a poisoned accumulator
-produces NaN in the output rather than a number that looks like an answer.
+proves it by **tracking definition rather than by writing a poison value**. Each
+scalar element carries a shadow initialized bit; a store sets it, and a load or
+atomic read-modify-write that finds it clear fails naming the kernel, source
+position, workgroup, invocation, and element
+([004](004-kernel-authoring.md)). A kernel accidentally relying on
+zero-initialisation therefore fails on the oracle instead of silently working on
+whichever backend happens to zero.
+
+A poison byte pattern remains useful as a debugging aid and is not the
+correctness mechanism, for a reason worth stating because the earlier design
+turned on it: **every bit pattern is a valid integer.** `0xDEADBEEF` is a
+perfectly ordinary `u32`, so an integer kernel reading undefined shared memory
+could consume it without any test noticing, and a floating poison NaN can be
+overwritten or propagated without proving which access came first. A shadow bit
+answers the actual question, which is whether this element was written before it
+was read.
 
 **Uniform is immutable for the dispatch and read-only in the kernel**, which is
 what makes its fields a seed for the uniformity analysis in 3.3. Assigning to a
@@ -558,17 +568,22 @@ is [004](004-kernel-authoring.md)'s argument for having an IR at all.
 
 Static analysis is conservative in one direction; the runtime check is exact. The
 CPU backend detects **non-uniform arrival** and fails deterministically rather
-than hanging. The mechanism is [004](004-kernel-authoring.md)'s: the workgroup's
-rendezvous holds the number of invocations still inside the kernel, a returning
-invocation decrements it, and if that count falls below the number already
-blocked at a barrier, the missing arrival can never come. The failure names the
-workgroup, the invocations that did not arrive, and the barrier's position. It is
-a detection, not a timeout, so it is not flaky and it fires on the first
-offending run.
+than hanging. The mechanism is [004](004-kernel-authoring.md)'s: every generated
+suspension point carries a stable barrier ID and source position, and at each
+rendezvous epoch every active invocation must suspend at the same ID. An
+invocation that returns, reaches a different ID, or runs on into another epoch
+while peers wait is reported with the expected and observed barrier positions and
+the offending invocation ids. It is a detection, not a timeout, so it is not
+flaky and it fires on the first offending run.
 
-It also catches two invocations reaching *different* barrier statements: the
-rendezvous is keyed by barrier identity, so arriving at A while a peer waits at B
-is a reported mismatch, not a silent pairing. The CPU backend catching this is a
+Note what this does *not* rely on: counting live invocations against the number
+blocked at a barrier. That count falling short is one way an arrival becomes
+impossible and not the only one, so inferring from it alone would miss the cases
+where an invocation is still running but will never arrive at this barrier.
+
+Reaching two *different* barrier statements is caught by the same rule rather
+than by a separate one: the epoch is keyed by barrier identity, so arriving at A
+while a peer waits at B is a reported mismatch, not a silent pairing. The CPU backend catching this is a
 large part of why it is worth having.
 
 ---
@@ -789,10 +804,10 @@ The dtype set has no 64-bit integer, and Vulkan's ballot is 128 bits wide, so a
    occasionally a bug.
 3. Reading an inactive lane through `Broadcast`, `Shuffle`, `ShuffleXor`,
    `ShuffleUp`, or `ShuffleDown` yields an **undefined value**. It does not yield
-   zero, and it does not fault. The CPU oracle returns the poison pattern from
-   2.2, so the wrongness propagates as a NaN rather than as a plausible number,
-   and strict mode reports it as an error naming the reading lane and the
-   requested lane.
+   zero, and it does not fault. The CPU oracle marks the result undefined through
+   the same definition tracking as 2.2, so strict mode reports it as an error
+   naming the reading lane and the requested lane rather than letting a plausible
+   number propagate.
 4. Scans skip inactive lanes rather than treating them as identity elements.
    These differ: an exclusive add-scan over active lanes `{0, 2, 3}` gives lane 3
    the sum of lanes 0 and 2, not the sum of lanes 0, 1, and 2 with lane 1 reading
@@ -1177,8 +1192,9 @@ overwrites `tileA[ly*16+lx]` while a slow one is still summing `kt`. The second
 is the one that gets left out, because removing it leaves the kernel correct on
 any implementation that happens to run lanes in step, which is every
 implementation the project can test without buying hardware. It is exactly what
-[004](004-kernel-authoring.md)'s `go test -race` on the CPU backend catches, and
-that is the only mechanism here that catches it reliably.
+[004](004-kernel-authoring.md)'s conflicting-access reporting on the CPU backend
+catches deterministically, and that is the only mechanism here that catches it
+reliably.
 
 **Why f32 accumulators over f16 storage, and what the memory model says.** `acc0`
 and `acc1` are `float32` and the loads spell `.F32()` because `accel.F16` has no
@@ -1385,16 +1401,20 @@ This is the question the section exists to answer, because a race that produces
 the right answer on every machine in CI is not detected by comparing outputs.
 Four mechanisms, and they catch different things:
 
-1. **`go test -race` over the CPU backend.** Shared memory is a Go array and
-   invocations are real goroutines, so a missing barrier around a shared-memory
-   read-after-write is a genuine Go data race with both stacks reported. This is
-   the only mechanism that finds a *missing* barrier directly. Honest caveat: the
-   race detector reports an interleaving that actually occurred, so it is a
-   strong probabilistic detector, not a proof.
-2. **Poison.** A read of shared memory before any invocation wrote it yields a
-   signalling NaN or `0xDEADBEEF` and propagates to the output, so a kernel that
-   relies on zero-initialisation fails loudly on the oracle instead of working on
-   whichever backend happens to zero.
+1. **Conflicting-access reporting in the generated CPU lowering.** Every shared
+   and storage access carries its source position, and the lowering tracks
+   overlapping unordered accesses within a rendezvous epoch, reporting the
+   conflicting pair deterministically. This is the mechanism that finds a
+   *missing* barrier directly, and it finds it on the first offending run rather
+   than on an unlucky interleaving. It replaces an earlier design in which
+   invocations were goroutines and `go test -race` was the detector: the race
+   detector reports an interleaving that actually occurred, which makes it a
+   strong probabilistic check and not a proof. `-race` still runs, over the CPU
+   runtime itself rather than over kernels.
+2. **Definition tracking.** A read of shared memory before any invocation wrote
+   it fails against the element's shadow initialized bit, for every stored bit
+   pattern, so the check cannot be defeated by an integer kernel whose undefined
+   value happens to be a legal number (2.2).
 3. **Non-uniform arrival detection.** Deterministic, not a timeout, naming the
    workgroup, the invocations, and the barrier position (3.4).
 4. **An in-band sentinel stress kernel**, which turns a statistical failure into
@@ -1429,9 +1449,12 @@ its omitted host-authored maximum axes normalise to one.
   is missing, on every backend, plus the sentinel variant above so the failure is
   deterministic rather than probabilistic.
 - Class-masked barriers order what they claim and nothing more: `BarrierShared`
-  around a *storage* read-after-write is a race and `-race` reports it. This is
-  what stops the masked variants from being used as cheaper synonyms.
-- Shared-memory poison fails on the CPU backend for a float and an integer dtype;
+  around a *storage* read-after-write is a race, and conflicting-access reporting
+  names both accesses. This is what stops the masked variants from being used as
+  cheaper synonyms.
+- Definition tracking fails a read-before-write on the CPU backend for a float
+  and an integer dtype, and the integer case is the one that matters: it must
+  fail for every stored bit pattern, not only for one chosen sentinel;
   private zero-initialisation reads 0 on every backend, which tests 2.2's
   emitter obligation rather than the hardware.
 - Non-uniform arrival is reported with the workgroup, the invocations, and the
@@ -1468,7 +1491,7 @@ semantics get one test each: `Ballot` reports 0 for inactive lanes; a reduction
 over a partial active set equals the reduction of exactly those lanes; an
 exclusive scan skips inactive lanes rather than treating them as identity;
 `Elect` picks the lowest-numbered active lane; `Shuffle` from an inactive lane
-returns poison and is reported in strict mode. A workgroup whose invocation count
+returns an undefined value and is reported in strict mode. A workgroup whose invocation count
 is not a multiple of the subgroup size exercises the tail at every size.
 
 **Dtypes.** Every dtype round-trips host to device to host unchanged. Conversion
@@ -1489,8 +1512,9 @@ independently in the test, not derived from the kernel source, per
 [`000-decisions.md`](000-decisions.md) decision 3: cross-backend agreement proves
 the lowering, only the independent reference proves the mathematics.
 Non-multiple-of-16 dimensions in all three of M, N, and K exercise 7.3's
-predication. Removing either barrier must fail the suite, the first under
-`-race`, the second under the sentinel test; this asserts that a test can fail,
+predication. Removing either barrier must fail the suite, the first through
+conflicting-access reporting, the second through definition tracking or the
+sentinel test; this asserts that a test can fail,
 which matters because a barrier test that passes without the barrier is the most
 common way this area ends up with no coverage at all. It runs under strict
 portable mode, which is the mechanical check on 1.5's floors and 7.1's budget.

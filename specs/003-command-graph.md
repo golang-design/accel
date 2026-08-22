@@ -878,7 +878,7 @@ Detail lives in [006](006-backends.md) section 4. The shape:
 | Metal | Encoder boundaries give ordering between encoders for free; within an encoder, `memoryBarrierWithScope`. Untracked resources need an `MTLFence` between encoders. |
 | GLES 3.1 | `glMemoryBarrier` with the bits implied by the destination access. Coarser than every other backend: the bit set names destination access only, so `accel`'s source stage information is discarded here. |
 | WebGPU | No explicit barrier exists; the implementation tracks hazards itself. `accel`'s barriers become no-ops, but pass splitting still matters because WebGPU orders at pass granularity. |
-| CPU | A barrier is a join over the goroutines running the prior nodes. `go test -race` then reports a missing barrier as a genuine Go data race, per [006](006-backends.md). |
+| CPU | A barrier is a join between the node executions it separates. A missing *intra-kernel* barrier is caught instead by the generated lowering's conflicting-access reporting, deterministically, per [004](004-kernel-authoring.md). |
 
 The GLES and WebGPU rows are the reason barriers are computed rather than written
 by the caller: a correct hand-written Vulkan barrier carries information that has
@@ -1494,9 +1494,11 @@ What breaks it, none of which is the graph's doing:
   using it is not bit-reproducible even against itself.
 - Reading a transient before writing it within a submission. The pool is aliased,
   so the bytes are whatever the previous submission left there, which differs
-  between the first submission and the second. The CPU backend poisons transient
-  memory at the start of every submission for exactly this reason, matching
-  [002](002-compute-model.md)'s treatment of shared memory.
+  between the first submission and the second. The CPU backend marks transient
+  memory undefined at the start of every submission for exactly this reason,
+  matching [002](002-compute-model.md)'s treatment of shared memory: a read
+  before a write in the same submission is reported rather than silently reusing
+  the previous submission's bytes.
 - Unordered fragment writes to a storage buffer, which
   [`conventions.md`](../docs/conventions.md) documents and this library declines
   to offer as a way to produce a deterministic buffer.
@@ -1617,9 +1619,10 @@ passes on one device and fails on the next.
 ### Barriers
 
 - A read-after-write chain whose result is wrong if the barrier is missing, run
-  enough times to catch a race, on every backend including CPU. Under
-  `go test -race` on the CPU backend a missing barrier is a reported data race,
-  per [006](006-backends.md).
+  enough times to catch a race, on every backend including CPU. On the CPU
+  backend the missing barrier is reported deterministically by the generated
+  lowering's conflicting-access tracking rather than by an unlucky interleaving,
+  per [004](004-kernel-authoring.md).
 - The barrier count and positions for the worked example are asserted exactly:
   six plus the submission boundary. A change that adds one is a change someone
   should have to justify.
@@ -1679,7 +1682,8 @@ passes on one device and fails on the next.
 - Two submissions of one graph on one backend are bit-identical, for a kernel set
   with no atomic float add.
 - A kernel reading a transient it did not write fails on the CPU backend against
-  the poison pattern.
+  the submission's definition tracking, for every stored bit pattern rather than
+  for one chosen sentinel.
 - Plan structure (nodes, edges, barrier positions, aliasing decisions) is
   identical across backends for one recording; pool offsets are compared only
   within a device.
