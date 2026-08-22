@@ -81,7 +81,7 @@ func TestGeneratedSourceTypeChecks(t *testing.T) {
 	// package: the generated lowering calls the helpers they declare and names
 	// the types they import.
 	files := []*ast.File{f}
-	for _, name := range []string{"scale.go", "reduce.go"} {
+	for _, name := range []string{"scale.go", "reduce.go", "scaled.go"} {
 		authored, err := os.ReadFile(filepath.Join("..", "..", "testkernels", name))
 		if err != nil {
 			t.Fatal(err)

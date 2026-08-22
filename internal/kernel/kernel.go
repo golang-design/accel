@@ -160,6 +160,19 @@ type Binding struct {
 	Access Access
 }
 
+// Uniform is one by-value parameter a kernel declares.
+//
+// It is separate from [Binding] because a caller supplies it differently: a
+// binding is a slice and a uniform is a value, and the record says which is
+// which so a mismatched argument set is refused rather than reinterpreted.
+type Uniform struct {
+	Name string
+	Type string
+
+	// Size is the encoded std140 block size in bytes.
+	Size int
+}
+
 // Args carries the host slices a generated kernel runs over.
 //
 // Host slices, not device buffers: the direct executor this feeds is compiler
@@ -167,6 +180,9 @@ type Binding struct {
 // M3.
 type Args struct {
 	Slices []any
+
+	// Uniforms are the by-value parameters, in signature order.
+	Uniforms []any
 }
 
 // Kernel is everything generation inferred about one kernel, plus the entry
@@ -181,6 +197,9 @@ type Kernel struct {
 	// makes a stale adapter refuse to run rather than run differently.
 	Digest    string
 	Generator int
+
+	// Uniforms are the by-value parameters, in signature order.
+	Uniforms []Uniform
 
 	// Flat runs one invocation. It is nil for a cooperative kernel, which has no
 	// direct-call form by construction.
@@ -207,6 +226,16 @@ func (k *Kernel) Bind(a Args) error {
 			return fmt.Errorf("accel: kernel %q binding %d (%q, %v) takes %s and got %T",
 				k.Name, i, b.Name, b.DType, goTypeFor(b.DType), a.Slices[i])
 		}
+	}
+
+	// A uniform's type cannot be checked structurally here, because the record
+	// names it as a string and the value arrives as an any. What is checked is
+	// the count, which is what catches a caller who supplied them in the wrong
+	// order or omitted one; the type itself is checked where the generated
+	// entry point recovers it, and that call names the type.
+	if len(a.Uniforms) != len(k.Uniforms) {
+		return fmt.Errorf("accel: kernel %q takes %d uniforms and got %d",
+			k.Name, len(k.Uniforms), len(a.Uniforms))
 	}
 	return nil
 }
@@ -274,6 +303,22 @@ func Slice[T any](a Args, i int) []T {
 		panic(fmt.Sprintf("accel: binding %d is %T, not %T: Kernel.Bind was not called", i, a.Slices[i], s))
 	}
 	return s
+}
+
+// UniformValue recovers one by-value parameter for a generated entry point.
+//
+// It names the type in its failure, which is the check [Kernel.Bind] cannot
+// make: the record carries a uniform's type as a string, and only the generated
+// code knows the Go type it was generated for.
+func UniformValue[T any](a Args, i int) T {
+	if i < 0 || i >= len(a.Uniforms) {
+		panic(fmt.Sprintf("accel: uniform %d of %d requested: Kernel.Bind was not called", i, len(a.Uniforms)))
+	}
+	v, ok := a.Uniforms[i].(T)
+	if !ok {
+		panic(fmt.Sprintf("accel: uniform %d is %T, not %T", i, a.Uniforms[i], v))
+	}
+	return v
 }
 
 // String describes a kernel for a diagnostic.

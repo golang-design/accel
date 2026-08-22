@@ -41,6 +41,7 @@ import (
 	"strings"
 
 	"golang.design/x/accel/internal/kernelc/ir"
+	"golang.design/x/accel/internal/kernelc/std140"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -115,6 +116,7 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 		pkg: pkg, fset: pkg.Fset, info: pkg.TypesInfo,
 		helpers: map[types.Object]*ir.Func{},
 		calls:   map[*ir.Func][]*ir.Func{},
+		layouts: map[string]*std140.Layout{},
 	}
 
 	var decls []declaration
@@ -215,6 +217,10 @@ type checker struct {
 	// the recursion check runs over.
 	helpers map[types.Object]*ir.Func
 	calls   map[*ir.Func][]*ir.Func
+
+	// layouts is every uniform struct's std140 placement, by type name, so the
+	// generator can emit one codec per type however many kernels take it.
+	layouts map[string]*std140.Layout
 
 	// order is every function in declaration order.
 	//
@@ -347,13 +353,18 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 	k.Body = body
 	inferAccess(k)
 
-	// A binding nothing touches is a binding the caller has to supply for no
-	// reason, and it is nearly always a typo in the body rather than a
-	// deliberate signature.
+	// A resource nothing touches is one the caller has to supply for no reason,
+	// and it is nearly always a typo in the body rather than a deliberate
+	// signature.
 	for _, b := range k.Bindings {
 		if !b.Read && !b.Write {
 			c.errorf(k.Params[b.Index].Pos(), "kernel %s: binding %q is never read or written",
 				name, b.Name)
+		}
+	}
+	for _, u := range k.Uniforms {
+		if !u.Reads {
+			c.errorf(k.Params[u.Index].Pos(), "kernel %s: uniform %q is never read", name, u.Name)
 		}
 	}
 	return k
@@ -582,8 +593,8 @@ func (c *checker) signature(fn *ast.FuncDecl, k *ir.Func) bool {
 		ok = false
 	}
 	if len(k.Bindings) == 0 && ok {
-		c.errorf(fn.Type.Params.Pos(), "kernel %s has no bindings: a kernel with nothing to read "+
-			"or write cannot observe anything", k.Name)
+		c.errorf(fn.Type.Params.Pos(), "kernel %s has no slice bindings: a uniform is read-only, "+
+			"so a kernel with no slice has nowhere to put a result", k.Name)
 		ok = false
 	}
 	return ok
@@ -631,15 +642,75 @@ func (c *checker) param(k *ir.Func, index int, id *ast.Ident, obj types.Object) 
 		return nil, false
 
 	case *types.Struct:
-		c.errorf(id.Pos(), "kernel %s: parameter %q is a by-value struct, which is a uniform and "+
-			"is out of scope for now: uniform structs arrive with spec 014 "+
-			"(specs/014-kernel-uniforms.md)", k.Name, id.Name)
-		return nil, false
+		return c.uniformParam(k, index, id, obj)
 	}
 
 	c.errorf(id.Pos(), "kernel %s: parameter %q has type %s, which is not a resource: a binding is "+
 		"a slice, and the first parameter is accel.Thread", k.Name, id.Name, t)
 	return nil, false
+}
+
+// uniformParam places a by-value struct parameter.
+//
+// By value is what "uniform" means in Go: immutable for the dispatch. The
+// layout is computed here rather than at emission because the block's size is
+// checked against the device's limit and a rejected layout has to name the
+// field, which needs the type.
+func (c *checker) uniformParam(k *ir.Func, index int, id *ast.Ident, obj types.Object) (*ir.Param, bool) {
+	name := typeName(obj.Type())
+	if name == "" {
+		c.errorf(id.Pos(), "kernel %s: parameter %q is an unnamed struct: a uniform's codec is "+
+			"generated for a named type, because a caller has to be able to write the value down",
+			k.Name, id.Name)
+		return nil, false
+	}
+
+	layout, err := std140.Of(name, obj.Type())
+	if err != nil {
+		c.errorf(id.Pos(), "kernel %s: %s", k.Name, err)
+		return nil, false
+	}
+
+	k.Uniforms = append(k.Uniforms, &ir.Uniform{
+		Name: id.Name, Index: index, TypeName: name, Size: layout.Size,
+		Fields: uniformFields(layout),
+	})
+	c.layouts[name] = layout
+
+	return ir.NewParam(id.Pos(), &ir.Type{Kind: ir.Struct, Name: name}, index, id.Name, obj), true
+}
+
+// uniformFields flattens a layout into what the emitter needs.
+func uniformFields(l *std140.Layout) []ir.UniformField {
+	out := make([]ir.UniformField, 0, len(l.Fields))
+	for _, f := range l.Fields {
+		uf := ir.UniformField{
+			Name: f.Name, Offset: f.Offset, Scalar: f.Scalar.String(), Len: f.Len,
+		}
+		switch f.Kind {
+		case std140.KScalar:
+			uf.Kind = "scalar"
+		case std140.KVector:
+			uf.Kind = "vector"
+		case std140.KArray:
+			uf.Kind, uf.Stride = "array", 16
+		case std140.KMatrix:
+			uf.Kind, uf.Stride = "matrix", 16
+		case std140.KStruct:
+			uf.Kind = "struct"
+		}
+		out = append(out, uf)
+	}
+	return out
+}
+
+// typeName is a named type's name, or empty for an unnamed one.
+func typeName(t types.Type) string {
+	n, ok := types.Unalias(t).(*types.Named)
+	if !ok || n.Obj() == nil {
+		return ""
+	}
+	return n.Obj().Name()
 }
 
 // isThread reports whether a type is accel.Thread, by identity rather than by

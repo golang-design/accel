@@ -7,6 +7,44 @@ import (
 	"golang.design/x/accel/kmath"
 )
 
+// ParamsCodec is the generated std140 codec for Params.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type ParamsCodec struct{}
+
+// ParamsBlockSize is the encoded size of a Params block, in bytes.
+const ParamsBlockSize = 96
+
+// EncodedSize reports the std140 block size.
+func (ParamsCodec) EncodedSize() int { return ParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (ParamsCodec) Encode(dst []byte, value Params) error {
+	w := accel.NewUniformWriter(dst)
+	w.F32(0, value.Scale)
+	w.F32(16, value.Origin[0])
+	w.F32(20, value.Origin[1])
+	w.F32(24, value.Origin[2])
+	w.U32(28, value.Steps)
+	w.F32(32, value.Inverse[0][0])
+	w.F32(36, value.Inverse[0][1])
+	w.F32(40, value.Inverse[0][2])
+	w.F32(44, value.Inverse[0][3])
+	w.F32(48, value.Inverse[1][0])
+	w.F32(52, value.Inverse[1][1])
+	w.F32(56, value.Inverse[1][2])
+	w.F32(60, value.Inverse[1][3])
+	w.F32(64, value.Inverse[2][0])
+	w.F32(68, value.Inverse[2][1])
+	w.F32(72, value.Inverse[2][2])
+	w.F32(76, value.Inverse[2][3])
+	w.F32(80, value.Inverse[3][0])
+	w.F32(84, value.Inverse[3][1])
+	w.F32(88, value.Inverse[3][2])
+	w.F32(92, value.Inverse[3][3])
+	return w.Err()
+}
+
 // clampIndexFlat is the generated lowering of the helper clampIndex.
 func clampIndexFlat(i uint32, n uint32) uint32 {
 	if n == uint32(0) {
@@ -167,5 +205,43 @@ var ScaleKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		scaleFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
+	},
+}
+
+// transformFlat is the generated flat lowering of Transform.
+//
+// It is what the CPU backend runs. The authored Transform is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func transformFlat(t accel.Thread, p Params, in []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if (i >= p.Steps) || (i >= uint32(int32(len(out)))) {
+		return
+	}
+	var acc float32 = (float32(in[i]*p.Scale) + p.Origin[int32(0)])
+	{
+		var c uint32 = uint32(0)
+		for ; c < uint32(4); c = (c + uint32(1)) {
+			acc = float32(acc + float32(p.Inverse[c][int32(0)]*p.Origin[int32(1)]))
+		}
+	}
+	out[i] = float32(acc + p.Origin[int32(2)])
+}
+
+// TransformKernel is the compiled form of Transform.
+var TransformKernel = accel.Kernel{
+	Name:          "Transform",
+	WorkgroupSize: accel.ID3{X: 32, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "684924c0e723f6b164d600454328dbee",
+	Generator: accel.KernelABIVersion,
+	Uniforms: []accel.KernelUniform{
+		{Name: "p", Type: "Params", Size: 96},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		transformFlat(t, accel.KernelUniformValue[Params](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
 	},
 }

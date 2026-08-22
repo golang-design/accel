@@ -404,6 +404,56 @@ func (o Opcode) String() string {
 	return opcodeNames[o]
 }
 
+// UniformField is one member of a uniform block, placed.
+//
+// It carries the offset rather than a way to compute one, because the offset is
+// the whole point: std140's padding is not Go's, and a generated encoder that
+// recomputed it would be a second implementation of the layout.
+type UniformField struct {
+	Name   string
+	Offset int
+
+	// Kind is "scalar", "vector", "array", "matrix", or "struct".
+	Kind string
+
+	// Scalar is the Go spelling of the element type.
+	Scalar string
+
+	// Len is an array's length, a vector's component count, or a matrix's
+	// column count.
+	Len int
+
+	// Stride is the byte distance between elements of an array or columns of a
+	// matrix, which std140 rounds up to sixteen.
+	Stride int
+}
+
+// Uniform is one by-value struct parameter.
+//
+// It is a separate list from [Binding] because it is a different resource kind
+// with a different layout rule: a binding is a tightly packed array of one
+// dtype and a uniform is a std140 block whose padding is not the caller's to
+// compute. See specs/001-device-resources.md section 3.3.
+type Uniform struct {
+	Name  string
+	Index int
+
+	// TypeName is the Go type's name, which the generated codec is named after
+	// and which a caller writes when constructing a value.
+	TypeName string
+
+	// Size is the encoded block size in bytes, rounded up to sixteen.
+	Size int
+
+	// Fields is the block's placement, which the generated codec is emitted
+	// from.
+	Fields []UniformField
+
+	// Reads is whether the body reads any of it. A uniform nothing reads is a
+	// value the caller has to supply for no reason.
+	Reads bool
+}
+
 // Binding is one resource parameter, as the IR sees it.
 type Binding struct {
 	Name  string
@@ -460,6 +510,10 @@ type Func struct {
 	// helper's signature is built before any body, so that a helper calling
 	// another can be checked whatever order the file declares them in.
 	SignatureBuilt bool
+
+	// Uniforms are the by-value struct parameters, in signature order. Each
+	// carries the std140 layout its codec is generated from.
+	Uniforms []*Uniform
 
 	// Helpers are the helpers this function's body reaches, transitively, in a
 	// stable order. The digest records them so that editing a helper without

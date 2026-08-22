@@ -613,16 +613,56 @@ func (c *checker) selector(e *ast.SelectorExpr) ir.Value {
 	if x == nil {
 		return nil
 	}
-	if x.Type().Kind != ir.ID3Kind {
-		c.errorf(e.Pos(), "%v has no field %s in the subset", x.Type(), e.Sel.Name)
-		return nil
+
+	switch x.Type().Kind {
+	case ir.ID3Kind:
+		idx := slices.Index([]string{"X", "Y", "Z"}, e.Sel.Name)
+		if idx < 0 {
+			c.errorf(e.Pos(), "an id has components X, Y, and Z, not %s", e.Sel.Name)
+			return nil
+		}
+		return ir.NewFieldSel(e.Pos(), &ir.Type{Kind: ir.U32}, x, idx, e.Sel.Name)
+
+	case ir.Struct:
+		// A uniform's member. The offset is the layout's, not Go's, and it is
+		// resolved at emission; here the field only needs a type and an index.
+		ft, err := c.irType(c.info.TypeOf(e))
+		if err != nil {
+			c.errorf(e.Pos(), "%s.%s: %s", x.Type(), e.Sel.Name, err)
+			return nil
+		}
+		idx := c.uniformFieldIndex(x.Type().Name, e.Sel.Name)
+		if idx < 0 {
+			c.errorf(e.Pos(), "%s has no field %s that a uniform block can hold",
+				x.Type(), e.Sel.Name)
+			return nil
+		}
+		if p, ok := x.(*ir.Param); ok && c.current != nil {
+			for _, u := range c.current.Uniforms {
+				if u.Index == p.Index {
+					u.Reads = true
+				}
+			}
+		}
+		return ir.NewFieldSel(e.Pos(), ft, x, idx, e.Sel.Name)
 	}
-	idx := slices.Index([]string{"X", "Y", "Z"}, e.Sel.Name)
-	if idx < 0 {
-		c.errorf(e.Pos(), "an id has components X, Y, and Z, not %s", e.Sel.Name)
-		return nil
+
+	c.errorf(e.Pos(), "%v has no field %s in the subset", x.Type(), e.Sel.Name)
+	return nil
+}
+
+// uniformFieldIndex is a member's position in its block's layout.
+func (c *checker) uniformFieldIndex(typeName, field string) int {
+	l, ok := c.layouts[typeName]
+	if !ok {
+		return -1
 	}
-	return ir.NewFieldSel(e.Pos(), &ir.Type{Kind: ir.U32}, x, idx, e.Sel.Name)
+	for i, f := range l.Fields {
+		if f.Name == field {
+			return i
+		}
+	}
+	return -1
 }
 
 // index builds a load from a binding, recording the read.
@@ -641,7 +681,7 @@ func (c *checker) index(e *ast.IndexExpr) ir.Value {
 	}
 
 	binding := -1
-	if p, ok := x.(*ir.Param); ok {
+	if p, ok := x.(*ir.Param); ok && x.Type().Kind == ir.Slice {
 		binding = p.Index
 	}
 	return ir.NewIndex(e.Pos(), x.Type().Elem, x, i, binding)
@@ -942,11 +982,15 @@ func (c *checker) irType(t types.Type) (*ir.Type, error) {
 		}
 		return &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: k}}, nil
 	case *types.Array:
-		k, err := elementKind(u.Elem())
+		// Recursive, because a uniform's matrix member is an array of arrays and
+		// a kernel indexes it twice. A flat rule would have admitted the outer
+		// array and rejected the element it is made of, which reads as the
+		// element type being wrong rather than the nesting.
+		elem, err := c.irType(u.Elem())
 		if err != nil {
-			return nil, errType{err.Error()}
+			return nil, err
 		}
-		return &ir.Type{Kind: ir.Array, Len: int(u.Len()), Elem: &ir.Type{Kind: k}}, nil
+		return &ir.Type{Kind: ir.Array, Len: int(u.Len()), Elem: elem}, nil
 	}
 	return nil, errType{"the type " + t.String() + " is outside the subset"}
 }

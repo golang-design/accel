@@ -13,6 +13,7 @@ import (
 
 	"golang.design/x/accel/internal/kernelc/intrin"
 	"golang.design/x/accel/internal/kernelc/ir"
+	"golang.design/x/accel/internal/kernelc/std140"
 )
 
 // newChecker builds a checker over an empty package, for exercising the
@@ -31,7 +32,8 @@ func newChecker(t *testing.T) *checker {
 		fset:    fset,
 		info:    &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}},
 		locals:  map[types.Object]*ir.Local{},
-		current: &ir.Func{Name: "K"},
+		layouts: map[string]*std140.Layout{},
+		current: &ir.Func{Name: "K", Kernel: true},
 	}
 }
 
@@ -517,5 +519,71 @@ func TestInferAccessReachesEveryNode(t *testing.T) {
 	}
 	if k.Bindings[1].Read {
 		t.Error("out is marked read: len is not an element access")
+	}
+}
+
+// TestUniformFieldIndexRejectsWhatItCannotFind covers the lookup a uniform
+// member selection goes through, whose failures a source case cannot reach:
+// go/types has already checked that the field exists, so a miss here means the
+// layout and the type disagree, which is a compiler bug rather than a source
+// one.
+func TestUniformFieldIndexRejectsWhatItCannotFind(t *testing.T) {
+	c := newChecker(t)
+	c.layouts["Params"] = &std140.Layout{
+		Name:   "Params",
+		Fields: []std140.Field{{Name: "Scale"}, {Name: "Steps"}},
+	}
+
+	if got := c.uniformFieldIndex("Params", "Scale"); got != 0 {
+		t.Errorf("Scale is at %d, want 0", got)
+	}
+	if got := c.uniformFieldIndex("Params", "Steps"); got != 1 {
+		t.Errorf("Steps is at %d, want 1", got)
+	}
+	if got := c.uniformFieldIndex("Params", "Missing"); got != -1 {
+		t.Errorf("a field the layout does not have resolved to %d", got)
+	}
+	if got := c.uniformFieldIndex("Unknown", "Scale"); got != -1 {
+		t.Errorf("a type with no layout resolved to %d", got)
+	}
+}
+
+// TestReturnRejectsSeveralValues covers the guard on a helper's return, which
+// go/types would also catch and which is checked here so the message is the
+// subset's rather than the language's.
+func TestReturnRejectsSeveralValues(t *testing.T) {
+	c := newChecker(t)
+	c.current.Kernel = false
+	stmt := &ast.ReturnStmt{Return: 1, Results: []ast.Expr{
+		&ast.BadExpr{From: 1}, &ast.BadExpr{From: 2},
+	}}
+	if got := c.stmt(stmt); got != nil {
+		t.Error("a return of two values was accepted")
+	}
+	if len(c.diags) != 1 || !strings.Contains(c.diags[0].Msg, "one value or none") {
+		t.Errorf("diagnostics = %v", c.diags)
+	}
+}
+
+// TestSelectorOnAStructWithoutALayout covers the path where a struct-typed
+// value is selected from and no layout is known, which is what a Thread
+// receiver used as a value would look like.
+func TestSelectorOnAStructWithoutALayout(t *testing.T) {
+	c := newChecker(t)
+	x := &ast.Ident{NamePos: 1, Name: "p"}
+	obj := types.NewVar(1, nil, "p", types.Typ[types.Uint32])
+	c.info.Uses[x] = obj
+	c.locals[obj] = ir.NewLocal(1, &ir.Type{Kind: ir.Struct, Name: "Unknown"}, 0, "p", obj)
+
+	sel := &ast.SelectorExpr{X: x, Sel: &ast.Ident{NamePos: 2, Name: "Field"}}
+	// The member's own type has to resolve before the layout is consulted, so
+	// the synthetic case supplies one.
+	c.info.Types[sel] = types.TypeAndValue{Type: types.Typ[types.Float32]}
+
+	if got := c.selector(sel); got != nil {
+		t.Error("a member of a struct with no known layout was accepted")
+	}
+	if len(c.diags) != 1 || !strings.Contains(c.diags[0].Msg, "no field Field") {
+		t.Errorf("diagnostics = %v", c.diags)
 	}
 }

@@ -174,14 +174,6 @@ func K(t accel.Thread, tile *[64]float32, out []float32) { out[0] = 1 }`,
 			line: 2, want: "cooperative kernels arrive at M4",
 		},
 		{
-			name: "uniform struct",
-			body: `type P struct{ K uint32 }
-
-//accel:kernel workgroup=64
-func K(t accel.Thread, p P, out []float32) { out[0] = 1 }`,
-			line: 4, want: "uniform structs arrive with spec 014",
-		},
-		{
 			name: "no thread",
 			body: `//accel:kernel workgroup=64
 func K(out []float32) { out[0] = 1 }`,
@@ -273,7 +265,7 @@ func K(t accel.Thread, out []float32) {
 			name: "no bindings",
 			body: `//accel:kernel workgroup=64
 func K(t accel.Thread) { _ = t }`,
-			line: 2, want: "cannot observe anything",
+			line: 2, want: "nowhere to put a result",
 		},
 	}
 
@@ -589,6 +581,39 @@ func K(t accel.Thread, out []float32) {
 		line: 5, want: "there is no body to lower",
 	},
 	{
+		name: "unread uniform",
+		body: `type P struct{ K uint32 }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, p P, out []float32) { out[0] = 1 }`,
+		line: 4, want: `uniform "p" is never read`,
+	},
+	{
+		name: "uniform with a forbidden field",
+		body: `type P struct {
+	K uint32
+	B bool
+}
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, p P, out []float32) { out[0] = float32(p.K) }`,
+		line: 7, want: "one byte in Go and four on every device",
+	},
+	{
+		name: "uniform with an int field",
+		body: `type P struct{ N int }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, p P, out []float32) { out[0] = float32(p.N) }`,
+		line: 4, want: "platform-width",
+	},
+	{
+		name: "unnamed uniform struct",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, p struct{ K uint32 }, out []float32) { out[0] = float32(p.K) }`,
+		line: 2, want: "generated for a named type",
+	},
+	{
 		name: "boolean binding element",
 		body: `//accel:kernel workgroup=64
 func K(t accel.Thread, out []float32, flags []bool) {
@@ -886,6 +911,23 @@ func K(t accel.Thread, out []float32) {
 	}
 }`,
 			write: []string{"out"},
+		},
+		{
+			name: "uniform read by a kernel",
+			body: `type Params struct {
+	Scale  float32
+	Origin [3]float32
+	Steps  uint32
+}
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, p Params, in []float32, out []float32) {
+	i := t.GlobalID().X
+	if i < p.Steps && i < uint32(len(out)) {
+		out[i] = in[i]*p.Scale + p.Origin[0]
+	}
+}`,
+			read: []string{"in"}, write: []string{"out"},
 		},
 		{
 			name: "read-write binding",

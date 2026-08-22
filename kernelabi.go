@@ -30,6 +30,9 @@ type (
 
 	// KernelAccess is how a kernel touches a binding.
 	KernelAccess = kernel.Access
+
+	// KernelUniform is one by-value parameter a kernel declares.
+	KernelUniform = kernel.Uniform
 )
 
 // Binding element types, as generated code names them. They mirror the public
@@ -95,3 +98,9 @@ func BFloat16FromBits(b uint16) BFloat16 { return kernel.BFloat16FromBits(b) }
 // here is a generator bug and not a caller's, and it panics rather than
 // returning an error a generated caller would have to handle at every binding.
 func KernelSlice[T any](a KernelArgs, i int) []T { return kernel.Slice[T](a, i) }
+
+// KernelUniformValue recovers one by-value parameter for a generated entry
+// point. Like [KernelSlice] it panics rather than returning an error, because
+// [Kernel.Bind] has already checked the argument set's shape and a generated
+// caller would be handling an impossible error at every parameter.
+func KernelUniformValue[T any](a KernelArgs, i int) T { return kernel.UniformValue[T](a, i) }

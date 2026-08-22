@@ -205,30 +205,6 @@ func (p *ComputePipeline) Close() error { panic(ErrNotImplemented) }
 // modes, the source digest, and the entry point.
 type Kernel = kernel.Kernel
 
-// UniformCodec is generated for one by-value kernel parameter type. It owns the
-// std140 size, alignment, field offsets, and typed encoder.
-type UniformCodec[T any] interface {
-	EncodedSize() int
-	Encode(dst []byte, value T) error
-}
-
-// UniformBuffer owns a generated-codec uniform allocation.
-type UniformBuffer[T any] struct{ _ noCopy }
-
-// NewUniformBuffer allocates storage sized and aligned by codec.
-func NewUniformBuffer[T any](d *Device, codec UniformCodec[T]) (*UniformBuffer[T], error) {
-	panic(ErrNotImplemented)
-}
-
-// Write encodes value and stages it through q.
-func (u *UniformBuffer[T]) Write(q *Queue, value T) error { panic(ErrNotImplemented) }
-
-// View returns the ordinary uniform-buffer view used by generated bindings.
-func (u *UniformBuffer[T]) View() BufferView { panic(ErrNotImplemented) }
-
-// Close releases the uniform buffer.
-func (u *UniformBuffer[T]) Close() error { panic(ErrNotImplemented) }
-
 // Access is how a binding is used by a kernel. The graph builder infers
 // dependency edges and barriers from declared access, so this must be accurate:
 // under-declaring is what turns a missing dependency into a race.

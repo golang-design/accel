@@ -57,6 +57,20 @@ func Generate(p Package) ([]byte, error) {
 	var body bytes.Buffer
 	e := &emitter{buf: &body}
 
+	// Uniform codecs first, one per type however many kernels take it. A codec
+	// belongs to the type rather than to a kernel: two kernels taking the same
+	// Params want one encoder, and a caller constructing a value wants one name
+	// to write.
+	emitted := map[string]bool{}
+	for _, k := range p.Kernels {
+		for _, u := range k.Uniforms {
+			if !emitted[u.TypeName] {
+				emitted[u.TypeName] = true
+				e.codec(u)
+			}
+		}
+	}
+
 	// Helpers first, and each one once however many kernels reach it. Every
 	// target that requires declaration before use gets it for free, and the Go
 	// lowering does not care but reads the same way as the others.
@@ -152,14 +166,116 @@ func (e *emitter) kernel(k *ir.Func) {
 	e.printf("\t},\n")
 	e.printf("\tDigest: %q,\n", k.Digest)
 	e.printf("\tGenerator: accel.KernelABIVersion,\n")
+	if len(k.Uniforms) > 0 {
+		e.printf("\tUniforms: []accel.KernelUniform{\n")
+		for _, u := range k.Uniforms {
+			e.printf("\t\t{Name: %q, Type: %q, Size: %d},\n", u.Name, u.TypeName, u.Size)
+		}
+		e.printf("\t},\n")
+	}
 	e.printf("\tFlat: func(t accel.Thread, a accel.KernelArgs) {\n")
 	e.printf("\t\t%s(t", lower)
-	for i, b := range k.Bindings {
-		e.printf(", accel.KernelSlice[%s](a, %d)", e.goType(b.Type.Elem), i)
+	// Parameters are passed in signature order, which interleaves uniforms and
+	// bindings however the author wrote them. The argument set is indexed the
+	// same way, so a caller supplies them in the order the signature reads.
+	slot := 0
+	uniformSlot := 0
+	for _, p := range k.Params {
+		if p.Index == k.Thread {
+			continue
+		}
+		if u := uniformAt(k, p.Index); u != nil {
+			e.printf(", accel.KernelUniformValue[%s](a, %d)", u.TypeName, uniformSlot)
+			uniformSlot++
+			continue
+		}
+		e.printf(", accel.KernelSlice[%s](a, %d)", e.goType(p.Type().Elem), slot)
+		slot++
 	}
 	e.printf(")\n")
 	e.printf("\t},\n")
 	e.printf("}\n\n")
+}
+
+// codec emits a uniform type's std140 encoder.
+//
+// The encoder is a list of writes at fixed offsets, and the offsets came from
+// the layout rather than from Go's own struct. That separation is the whole
+// point: a caller's struct declares no padding field, and an unsafe cast would
+// be silently correct until the first three-component vector.
+func (e *emitter) codec(u *ir.Uniform) {
+	name := u.TypeName + "Codec"
+
+	e.printf("// %s is the generated std140 codec for %s.\n", name, u.TypeName)
+	e.printf("//\n")
+	e.printf("// The offsets are std140's, not Go's. A caller never spells one.\n")
+	e.printf("type %s struct{}\n\n", name)
+
+	e.printf("// %sBlockSize is the encoded size of a %s block, in bytes.\n", u.TypeName, u.TypeName)
+	e.printf("const %sBlockSize = %d\n\n", u.TypeName, u.Size)
+
+	e.printf("// EncodedSize reports the std140 block size.\n")
+	e.printf("func (%s) EncodedSize() int { return %sBlockSize }\n\n", name, u.TypeName)
+
+	e.printf("// Encode writes value into dst in std140 layout.\n")
+	e.printf("func (%s) Encode(dst []byte, value %s) error {\n", name, u.TypeName)
+	e.printf("\tw := accel.NewUniformWriter(dst)\n")
+	for _, f := range u.Fields {
+		e.codecField(f, "value."+f.Name, f.Offset, 1)
+	}
+	e.printf("\treturn w.Err()\n")
+	e.printf("}\n\n")
+}
+
+// codecField emits the writes for one member.
+func (e *emitter) codecField(f ir.UniformField, expr string, offset, depth int) {
+	write := func(off int, val string) {
+		e.printf("%sw.%s(%d, %s)\n", indent(depth), writerMethod(f.Scalar), off, val)
+	}
+
+	switch f.Kind {
+	case "scalar":
+		write(offset, expr)
+
+	case "vector":
+		// A vector's components are adjacent, unlike an array's.
+		for i := range f.Len {
+			write(offset+i*4, fmt.Sprintf("%s[%d]", expr, i))
+		}
+
+	case "array":
+		// Each element starts a fresh sixteen-byte slot, which is the padding
+		// that makes an array of 64 floats occupy 1024 bytes.
+		for i := range f.Len {
+			write(offset+i*f.Stride, fmt.Sprintf("%s[%d]", expr, i))
+		}
+
+	case "matrix":
+		// A matrix is an array of column vectors, so each column starts a slot
+		// and its components are adjacent within it.
+		for col := range f.Len {
+			base := offset + col*f.Stride
+			for row := range f.Len {
+				write(base+row*4, fmt.Sprintf("%s[%d][%d]", expr, col, row))
+			}
+		}
+
+	default:
+		e.fail("no encoder for uniform member %s of kind %q", f.Name, f.Kind)
+	}
+}
+
+// writerMethod is the UniformWriter method for a scalar type.
+func writerMethod(scalar string) string {
+	switch scalar {
+	case "float32":
+		return "F32"
+	case "int32":
+		return "I32"
+	case "uint32":
+		return "U32"
+	}
+	return "F32"
 }
 
 // helper emits one helper's lowering.
@@ -180,6 +296,16 @@ func (e *emitter) helper(h *ir.Func) {
 	e.printf(" {\n")
 	e.block(h.Body, 1)
 	e.printf("}\n\n")
+}
+
+// uniformAt reports the uniform at a parameter index, if there is one.
+func uniformAt(k *ir.Func, index int) *ir.Uniform {
+	for _, u := range k.Uniforms {
+		if u.Index == index {
+			return u
+		}
+	}
+	return nil
 }
 
 // lowerName is the unexported name a kernel's lowering takes.
@@ -384,6 +510,9 @@ func (e *emitter) value(v ir.Value) {
 		e.printf("%s", v.Name)
 
 	case *ir.FieldSel:
+		// An id component and a uniform member are both an ordinary field
+		// selection in the Go lowering. The difference is the layout, and the
+		// layout is the codec's business, not the body's.
 		e.value(v.X)
 		e.printf(".%s", v.Name)
 
