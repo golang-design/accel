@@ -4,7 +4,10 @@
 
 package accel
 
-import "golang.design/x/accel/internal/driver"
+import (
+	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/kernel"
+)
 
 // Capabilities is what a device can actually do.
 //
@@ -67,6 +70,24 @@ type Capabilities struct {
 	// works either way; this says how much it saves.
 	NativeGraphReplay bool
 }
+
+// ID3 is a three-dimensional invocation identifier, with X, Y, and Z of type
+// uint32.
+//
+// Ids are three-dimensional rather than scalar because a two-dimensional shared
+// tile cannot be addressed from a scalar id without index arithmetic the
+// compiler then cannot prove uniform. See specs/002-compute-model.md section 1.
+type ID3 = kernel.ID3
+
+// Thread is a kernel's first parameter. It carries the invocation's ids and,
+// once cooperative kernels exist, the CPU backend's rendezvous state.
+//
+// A kernel author writes accel.Thread and never names an internal package. It
+// is an alias because the backend that executes kernels cannot import this
+// package, so the type has to be declared below it; that also makes the
+// generated code's accel.Thread and the runtime's kernel.Thread one type rather
+// than two that have to be converted. See specs/012-kernel-pipeline.md.
+type Thread = kernel.Thread
 
 // WorkgroupSize is the shape of one workgroup, fixed when a pipeline is created
 // because backends need it at compile time.
