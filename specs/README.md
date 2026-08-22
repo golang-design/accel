@@ -13,9 +13,9 @@ The decisions everything here is built on live in
 [`000-decisions.md`](000-decisions.md). It is normative: a spec that contradicts
 it is wrong.
 
-No runtime feature is implemented yet. M0's cgo-free CI gate is complete; the
-remaining repository is design plus an API surface that compiles and does
-nothing.
+M0's cgo-free CI gate is complete and M1 is in progress: a CPU device can be
+enumerated, opened, and asked what it is, and everything past that still
+reports `ErrNotImplemented`. [009](009-sequencing.md) records what has landed.
 
 **What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
 narrower than this directory: compute only, on the CPU backend and Metal.
@@ -49,7 +49,7 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
-| [001-device-resources.md](001-device-resources.md) | Drafted | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
+| [001-device-resources.md](001-device-resources.md) | In progress | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
 | [002-compute-model.md](002-compute-model.md) | Drafted | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
 | [003-command-graph.md](003-command-graph.md) | Drafted | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | Drafted | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |

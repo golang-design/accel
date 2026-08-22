@@ -75,7 +75,7 @@ platforms and the cgo-free constraint is mechanically enforced. There were no
 runtime tests because all operations remained design-stage stubs. The workflow's
 negative cgo check is the acceptance test for this milestone.
 
-### M1. Memory on the CPU backend
+### M1. Memory on the CPU backend — in progress, started 2026-08-22
 
 Build:
 
@@ -101,6 +101,59 @@ Done:
 
 Textures and formats remain deferred until graphics work; no earlier milestone
 reads one.
+
+#### M1 progress
+
+The milestone is built in slices, each one committed on its own. What is done
+is recorded here as it lands, because the definition of done above is not
+rewritten to match what happened.
+
+| Slice | State |
+| --- | --- |
+| Backend seam, enumeration, device open, selection, dtype widths, capability and limit profiles | done |
+| `internal/alloc`: TLSF and bump allocators | not started |
+| Pools, buffers, views, lifetime | not started |
+| Transfers and the M1 E2E | not started |
+| The 011 M1 harness increment | not started |
+
+**The package split.** The backend contract is `internal/driver`, the pure-Go
+backend is `internal/cpu`, and the reusable allocator machinery will be
+`internal/alloc`. accel links its backends in, so a backend cannot import
+accel: everything crossing the seam is declared below both, and the duplicated
+`Limits` and `Capabilities` declarations are kept in step by the compiler
+rather than by a test, since Go permits the whole-struct conversion between
+them only while the field lists are identical.
+
+`Limits` and `Capabilities` cross the seam because [001](001-device-resources.md)
+§1.1 requires every field to be queried at device open. A seam that carried
+only raw allocations would push that query back into the public package, and
+M6's Metal backend would have to reopen it.
+
+**Where the strict-mode baselines come from.** [006](006-backends.md) §5 has
+strict mode reject a backend without a published baseline profile but does not
+say what one is. It is resolved as: the capability half is derived mechanically
+from 006's own matrix by the rule `yes`/`emul` present, `cap`/`?`/`gated`/`no`
+absent; the limit half is [002](002-compute-model.md) §1.5's portable floor
+plus [001](001-device-resources.md) §3.1's alignments, since 006 declines to
+pin per-backend numeric bounds until they are measured. Nothing is invented and
+nothing is claimed as measured, and a measured value replaces its row at first
+contact with that backend.
+
+**Scoped deviation from [001](001-device-resources.md) §8.2: no staging ring at
+M1.** §8.2 stages queue writes into a fixed ring of `Upload` blocks recycled by
+a *completed submission*, and has `WriteBuffer` block when the ring is full.
+There are no submissions until M3, so that recycle edge does not exist yet. At
+M1 a write to a host-visible kind memcpys into the mapping and a write to
+`MemoryDevice` stages into a per-batch buffer that `Flush` releases, so
+`WriteBuffer` never blocks. The ring and its one blocking path land with M3's
+submissions. Every observable §8.2 semantic holds at M1 unchanged: the caller's
+slice is copied out before the call returns, a read flushes first, and closing
+a pending destination reports `pending transfer`.
+
+**Deferred inside M1's own owning spec.** Textures and formats (001 §4, §11.5)
+wait for graphics work, as stated above. Device-loss fault injection (001 §7.4,
+§11.6) waits for M3: there is no submission to inject a loss at until one
+exists, and the CPU backend cannot lose a device on its own.
 
 ### M2. Minimum compiler and flat direct CPU execution
 
