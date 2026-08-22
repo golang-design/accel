@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"golang.design/x/accel/internal/driver"
 )
 
 // Sentinels for [errors.Is]. Each typed error in this package unwraps to one of
@@ -24,6 +26,31 @@ var (
 	ErrUsage             = errors.New("accel: usage violation")
 	ErrLifetime          = errors.New("accel: lifetime violation")
 	ErrFormat            = errors.New("accel: format not usable this way")
+
+	// ErrGraphInFlight reports an attempt to rebind or resubmit a graph while a
+	// submission of it is running. A graph's transients are one pool, so two
+	// overlapping submissions would write each other's intermediates, and a
+	// rebind between them races on which submission sees it. Build one graph per
+	// concurrent user. See specs/003-command-graph.md.
+	ErrGraphInFlight = errors.New("accel: a submission of this graph is already in flight")
+
+	// ErrRebindOverlap reports a binding update in which two resources supplied
+	// to one graph name overlapping bytes and at least one of them is written
+	// somewhere in the graph.
+	//
+	// It cannot be a build-time error: hazards are inferred against the slot,
+	// because a slot's eventual resource is unknown then. Two slots resolving to
+	// the same bytes means the builder may have omitted an edge between nodes far
+	// apart in the graph, which is a missing barrier and therefore a race. See
+	// specs/003-command-graph.md, check V24.
+	ErrRebindOverlap = errors.New("accel: bound resources overlap where the graph assumed they did not")
+
+	// ErrDeviceLost reports terminal device loss. It is not recoverable: every
+	// subsequent call on the device and on every resource under it reports it,
+	// and every outstanding fence is signalled with it so that nothing waits
+	// forever. Recovery is a full rebuild from Enumerate. See
+	// specs/001-device-resources.md section 7.4.
+	ErrDeviceLost = driver.ErrDeviceLost
 )
 
 // AllocError reports a failed suballocation.

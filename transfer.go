@@ -47,7 +47,7 @@ type pendingWrite struct {
 // flush is visible to that flush, so waiting on the returned fence proves the
 // bytes landed.
 func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
-	src, err := hostBytes("WriteBuffer", dst, data)
+	src, err := hostBytes("WriteBuffer", dst.desc.Label, dst.desc.DType, data)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
 // write to the same resource, flush that queue first: an immediate read never
 // silently searches or drains unrelated queues.
 func (q *Queue) ReadBuffer(src *Buffer, offset int, into any) error {
-	dst, err := hostBytes("ReadBuffer", src, into)
+	dst, err := hostBytes("ReadBuffer", src.desc.Label, src.desc.DType, into)
 	if err != nil {
 		return err
 	}
@@ -145,21 +145,84 @@ func (q *Queue) Flush() *Fence {
 	q.mu.Lock()
 	batch := q.pending
 	q.pending = nil
+	if len(batch) == 0 && settled(q.prev) {
+		// Nothing to flush and nothing ahead of it, so the fence's promise --
+		// everything enqueued on this queue up to here is complete -- already
+		// holds. Going through the stream would only add a scheduling hop.
+		q.mu.Unlock()
+		f := newFence()
+		f.signal()
+		return f
+	}
 	if len(batch) > 0 {
 		q.stats.Submissions++
 	}
 	q.mu.Unlock()
 
-	f := newFence()
+	return q.enqueue(func() error { return runWrites(batch) })
+}
+
+// runWrites performs one staged batch.
+func runWrites(batch []pendingWrite) error {
+	var first error
 	for _, w := range batch {
 		// The destination is retained, so it is still valid even if the caller
 		// closed their handle in the meantime.
-		if err := w.dst.pool.block.Write(w.dst.alloc.Offset+w.offset, w.data); err != nil && f.state.err == nil {
-			f.state.err = err
+		if err := w.dst.pool.block.Write(w.dst.alloc.Offset+w.offset, w.data); err != nil && first == nil {
+			first = err
 		}
 		w.dst.release()
 	}
-	f.signal()
+	return first
+}
+
+// settled reports whether a queue's previous unit of work has finished.
+func settled(prev chan struct{}) bool {
+	if prev == nil {
+		return true
+	}
+	select {
+	case <-prev:
+		return true
+	default:
+		return false
+	}
+}
+
+// enqueue puts one unit of work on this queue's serial stream and returns a
+// fence for it, without blocking.
+//
+// # Why a queue is a stream and not a set of goroutines
+//
+// specs/003-command-graph.md requires that two submissions to one queue are
+// fully ordered: the second begins no earlier than the first ends, and every
+// write by the first is visible to the second with no caller action. That is a
+// deliberate cost -- the alternative, starting submissions in order and leaving
+// memory hazards to the caller, is what the underlying APIs provide and is
+// faster -- and it is rejected because its failure mode is a race that appears
+// under load on one backend.
+//
+// The mechanism is a chain rather than a worker goroutine: each unit captures
+// the previous unit's completion channel under the queue lock, so the order
+// units run in is exactly the order Submit and Flush were called in, and a
+// caller that never waits still gets ordering.
+func (q *Queue) enqueue(work func() error) *Fence {
+	f := newFence()
+	done := make(chan struct{})
+
+	q.mu.Lock()
+	prev := q.prev
+	q.prev = done
+	q.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		if prev != nil {
+			<-prev
+		}
+		f.state.err = work()
+		f.signal()
+	}()
 	return f
 }
 
@@ -226,7 +289,13 @@ func (b *Buffer) mapping() []byte {
 // meaningful because accel fixes the byte order. A mismatched slice is rejected
 // naming both types, because silently accepting one would write the right number
 // of bytes with the wrong meaning.
-func hostBytes(op string, b *Buffer, data any) ([]byte, error) {
+// hostBytes reinterprets a caller's typed slice as the bytes a device holds.
+//
+// It takes a dtype and a label rather than a *Buffer because a view may be at a
+// different dtype than the buffer it names, and a graph slot has a dtype and no
+// buffer at all. Matching against the buffer's own dtype would reject a legal
+// reinterpreting view and would have nothing to match a slot against.
+func hostBytes(op, label string, dt DType, data any) ([]byte, error) {
 	if !hostIsLittleEndian {
 		return nil, fmt.Errorf("accel: %s: this architecture is big-endian, which accel does "+
 			"not support: host and device must share byte order (spec 001 section 3.5)", op)
@@ -234,37 +303,37 @@ func hostBytes(op string, b *Buffer, data any) ([]byte, error) {
 
 	mismatch := func(got string) error {
 		return fmt.Errorf("accel: %s %q: buffer is %v, so the host slice must be %s, not %s",
-			op, b.desc.Label, b.desc.DType, goSliceFor(b.desc.DType), got)
+			op, label, dt, goSliceFor(dt), got)
 	}
 
 	switch v := data.(type) {
 	case []byte:
-		if b.desc.DType != U8 {
+		if dt != U8 {
 			return nil, mismatch("[]byte")
 		}
 		return v, nil
 	case []int8:
-		if b.desc.DType != I8 {
+		if dt != I8 {
 			return nil, mismatch("[]int8")
 		}
 		return asBytes(v), nil
 	case []uint16:
-		if b.desc.DType != F16 && b.desc.DType != BF16 {
+		if dt != F16 && dt != BF16 {
 			return nil, mismatch("[]uint16")
 		}
 		return asBytes(v), nil
 	case []int32:
-		if b.desc.DType != I32 {
+		if dt != I32 {
 			return nil, mismatch("[]int32")
 		}
 		return asBytes(v), nil
 	case []uint32:
-		if b.desc.DType != U32 {
+		if dt != U32 {
 			return nil, mismatch("[]uint32")
 		}
 		return asBytes(v), nil
 	case []float32:
-		if b.desc.DType != F32 {
+		if dt != F32 {
 			return nil, mismatch("[]float32")
 		}
 		return asBytes(v), nil

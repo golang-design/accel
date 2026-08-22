@@ -325,7 +325,7 @@ func (d *Device) QueueFor(kind QueueKind) *Queue {
 // caller never named it: it has no handle to close, so the device owns it.
 func (d *Device) Close() error {
 	d.mu.Lock()
-	live := len(d.pools)
+	live := len(d.pools) + d.graphs
 	implicit := make([]*blockSet, 0, len(d.implicit))
 	for _, set := range d.implicit {
 		implicit = append(implicit, set)

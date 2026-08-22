@@ -250,6 +250,14 @@ type Buffer struct {
 	alloc *alloc.Allocation
 	bytes int
 	state resourceState
+
+	// transient is non-nil when the graph builder owns this buffer's memory
+	// rather than the caller. It is the one field that distinguishes the two,
+	// because a transient's Buffer exists before its memory does: it is declared
+	// while recording so that views of it can be recorded, and it is backed at
+	// Build. Every path that would reach for pool and alloc checks here first.
+	// See specs/015-graph-recording.md.
+	transient *transient
 }
 
 // BufferView is a sub-range of a [Buffer], possibly at a different dtype. It is a

@@ -134,9 +134,23 @@ func (v BufferView) check(op string) error {
 	if v.Buffer == nil {
 		return fmt.Errorf("accel: %s: the view names no buffer", op)
 	}
+	if v.Buffer.transient != nil {
+		return fmt.Errorf("accel: %s on %q: it is a graph transient, whose memory the builder "+
+			"owns and may reuse between nodes, so only the graph that declared it may touch it",
+			op, v.Buffer.desc.Label)
+	}
 	if err := v.Buffer.state.checkOpen(op); err != nil {
 		return err
 	}
+	return v.checkRange(op)
+}
+
+// checkRange is the half of [BufferView.check] that measures.
+//
+// It is separate because the graph builder needs the range check and not the
+// rest: a transient is exactly the case check rejects, and a graph is the one
+// caller allowed to touch one.
+func (v BufferView) checkRange(op string) error {
 	elem := v.DType.Size()
 	if elem == 0 {
 		return fmt.Errorf("accel: %s on %q: %v is not a dtype", op, v.Buffer.desc.Label, v.DType)

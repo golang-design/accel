@@ -206,6 +206,12 @@ type Device struct {
 	pools          []*Pool
 	implicit       map[MemoryKind]*blockSet
 	implicitBlocks int
+
+	// graphs counts built, unclosed graphs. They own transient memory and a
+	// compiled executable, so a device closing under one would strand both;
+	// counted here for the same reason implicit blocks are, since a graph has a
+	// handle and is therefore a live child.
+	graphs int
 }
 
 // QueueKind is what a queue accepts.
@@ -240,12 +246,6 @@ func (d *Device) NewTexture(desc TextureDescriptor) (*Texture, error) {
 func (d *Device) NewComputePipeline(desc ComputePipelineDescriptor) (*ComputePipeline, error) {
 	panic(ErrNotImplemented)
 }
-
-// NewRecorder returns a recorder for building a [Graph].
-//
-// A Recorder belongs to one goroutine. The [Graph] it produces is immutable but
-// permits only one in-flight submission; build one graph per concurrent user.
-func (d *Device) NewRecorder() *Recorder { panic(ErrNotImplemented) }
 
 // noCopy makes `go vet` complain about copying a value that owns device state.
 type noCopy struct{}

@@ -4,7 +4,12 @@
 
 package accel
 
-import "sync"
+import (
+	"errors"
+	"sync"
+
+	"golang.design/x/accel/internal/driver"
+)
 
 // Recorder accumulates nodes for a [Graph]. It executes nothing.
 //
@@ -17,7 +22,11 @@ import "sync"
 // made, which is what lets the builder compute barriers correctly and overlap
 // independent work, and what makes a missing dependency a validation error
 // instead of a race.
-type Recorder struct{ _ noCopy }
+type Recorder struct {
+	_ noCopy
+
+	state recorderState
+}
 
 // Dispatch records a compute dispatch.
 func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, count WorkgroupCount) NodeID {
@@ -47,10 +56,124 @@ func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, count Buffe
 // staging buffer and [Recorder.CopyBuffer], and for anything varying per
 // submission, which wants an Upload buffer written between submissions. It is
 // here for small constants baked into a graph.
-func (r *Recorder) CopyToBuffer(dst BufferView, src any) NodeID { panic(ErrNotImplemented) }
+func (r *Recorder) CopyToBuffer(dst BufferView, src any) NodeID {
+	a, ok := r.declare("CopyToBuffer", dst, AccessWrite)
+	if !ok {
+		return r.node(NodeHostWrite, "CopyToBuffer", nil, nil)
+	}
+	data, err := hostBytes("CopyToBuffer", dst.Buffer.desc.Label, dst.DType, src)
+	if err != nil {
+		r.state.errs = append(r.state.errs, err)
+		return r.node(NodeHostWrite, "CopyToBuffer", nil, nil)
+	}
+	if len(data) != a.size {
+		r.fail("CopyToBuffer on %q: the view holds %d bytes and src has %d",
+			dst.Buffer.desc.Label, a.size, len(data))
+		return r.node(NodeHostWrite, "CopyToBuffer", nil, nil)
+	}
+	// Copied now, because a Graph is immutable and holding the caller's slice
+	// would make what a submission writes depend on when they last touched it.
+	owned := make([]byte, len(data))
+	copy(owned, data)
+
+	id := r.node(NodeHostWrite, "CopyToBuffer", []access{a}, owned)
+	r.touch(id, a)
+	return id
+}
+
+// CopyToBufferSlot records a host-to-device transfer into a slot's eventual
+// resource, over its first count elements from offset.
+//
+// It exists because [Recorder.CopyToBuffer] takes a view and a slot has no
+// resource to make a view of. Splitting it out rather than overloading a
+// BufferView with an optional slot keeps a view a thing that names bytes.
+func (r *Recorder) CopyToBufferSlot(dst Slot, offset, count int, src any) NodeID {
+	d, ok := r.slotDescriptor(dst)
+	if !ok {
+		r.fail("CopyToBufferSlot: slot %d was not declared by this recorder", int(dst))
+		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+	}
+	data, err := hostBytes("CopyToBufferSlot", d.Name, d.DType, src)
+	if err != nil {
+		r.state.errs = append(r.state.errs, err)
+		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+	}
+	a, ok := r.slotAccess("CopyToBufferSlot", dst, offset*d.DType.Size(), count*d.DType.Size(), AccessWrite)
+	if !ok {
+		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+	}
+	if len(data) != a.size {
+		r.fail("CopyToBufferSlot on %q: the range holds %d bytes and src has %d",
+			d.Name, a.size, len(data))
+		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+	}
+	owned := make([]byte, len(data))
+	copy(owned, data)
+
+	id := r.node(NodeHostWrite, "CopyToBufferSlot", []access{a}, owned)
+	r.touch(id, a)
+	return id
+}
 
 // CopyBuffer records a device-to-device buffer copy.
-func (r *Recorder) CopyBuffer(dst, src BufferView) NodeID { panic(ErrNotImplemented) }
+func (r *Recorder) CopyBuffer(dst, src BufferView) NodeID {
+	return r.copy("CopyBuffer", r.operandOf("CopyBuffer", dst, AccessWrite), r.operandOf("CopyBuffer", src, AccessRead))
+}
+
+// CopyFromSlot records a device-to-device copy whose source arrives before
+// submission.
+func (r *Recorder) CopyFromSlot(dst BufferView, src Slot, offset, count int) NodeID {
+	d, _ := r.slotDescriptor(src)
+	return r.copy("CopyFromSlot",
+		r.operandOf("CopyFromSlot", dst, AccessWrite),
+		r.slotOperand("CopyFromSlot", src, offset*d.DType.Size(), count*d.DType.Size(), AccessRead))
+}
+
+// CopyToSlot records a device-to-device copy whose destination arrives before
+// submission.
+func (r *Recorder) CopyToSlot(dst Slot, offset, count int, src BufferView) NodeID {
+	d, _ := r.slotDescriptor(dst)
+	return r.copy("CopyToSlot",
+		r.slotOperand("CopyToSlot", dst, offset*d.DType.Size(), count*d.DType.Size(), AccessWrite),
+		r.operandOf("CopyToSlot", src, AccessRead))
+}
+
+// copy records a two-operand copy once both ends have been declared.
+//
+// Both ends are declared before either is checked for success, so a call with
+// two bad operands reports two errors rather than the first one.
+func (r *Recorder) copy(op string, dst, src declared) NodeID {
+	if !dst.ok || !src.ok {
+		return r.node(NodeCopyBuffer, op, nil, nil)
+	}
+	if dst.a.size != src.a.size {
+		r.fail("%s: the destination holds %d bytes and the source %d", op, dst.a.size, src.a.size)
+		return r.node(NodeCopyBuffer, op, nil, nil)
+	}
+	// Destination first, so that node.accesses[0] is always the write. Build
+	// reads them positionally and a reordering here would silently swap a copy.
+	id := r.node(NodeCopyBuffer, op, []access{dst.a, src.a}, nil)
+	r.touch(id, dst.a)
+	r.touch(id, src.a)
+	return id
+}
+
+// declared is one operand plus whether declaring it succeeded, so that a caller
+// can declare both ends before deciding.
+type declared struct {
+	a  access
+	ok bool
+}
+
+func (r *Recorder) operandOf(op string, v BufferView, mode Access) declared {
+	a, ok := r.declare(op, v, mode)
+	return declared{a: a, ok: ok}
+}
+
+func (r *Recorder) slotOperand(op string, s Slot, off, size int, mode Access) declared {
+	a, ok := r.slotAccess(op, s, off, size, mode)
+	return declared{a: a, ok: ok}
+}
 
 // CopyTextureToBuffer records an on-device copy from a texture into a buffer.
 //
@@ -72,7 +195,9 @@ func (r *Recorder) CopyBufferToTexture(dst *Texture, src BufferView) NodeID {
 // range across the graph and packs those that do not overlap into shared storage.
 // Buffers the caller created are never aliased. This is why a model can run
 // without allocating per operation.
-func (r *Recorder) Transient(desc BufferDescriptor) BufferView { panic(ErrNotImplemented) }
+func (r *Recorder) Transient(desc BufferDescriptor) BufferView {
+	return r.transientImpl(desc)
+}
 
 // Slot declares a binding point whose resource is supplied before submission
 // rather than at record time.
@@ -83,7 +208,7 @@ func (r *Recorder) Transient(desc BufferDescriptor) BufferView { panic(ErrNotImp
 // The descriptor carries everything the builder needs in order to validate and to
 // infer hazards without a resource in hand, which is why MinCount and Access are
 // there rather than being discovered at bind.
-func (r *Recorder) Slot(desc SlotDescriptor) Slot { panic(ErrNotImplemented) }
+func (r *Recorder) Slot(desc SlotDescriptor) Slot { return r.slotImpl(desc) }
 
 // SlotDescriptor declares a rebindable binding point.
 type SlotDescriptor struct {
@@ -107,19 +232,6 @@ type SlotDescriptor struct {
 // The zero value is not a slot: ids start at one, so a [Binding] that forgot to
 // set Slot is a validation error rather than a silent reference to the first one.
 type Slot int
-
-// Build validates the recorded nodes, plans transient memory, computes barriers,
-// and lowers the result for the target device.
-//
-// Every check lives here: type and dtype agreement at every binding, workgroup
-// sizes within device limits, resources large enough for declared access,
-// capabilities present, no unresolvable hazard, no cycle.
-//
-// This is the cost the recording model accepts: errors surface at Build rather
-// than at the call that caused them. An error therefore names the node, the
-// binding slot, and the source position of the recording call. An error that says
-// only "type mismatch" is a defect.
-func (r *Recorder) Build() (*Graph, error) { panic(ErrNotImplemented) }
 
 // CollectRunStats makes the graph carry back the counters only the device knows:
 // an indirect node's actual count and whether it was clamped. It is off by
@@ -164,7 +276,28 @@ const (
 // races on which one sees it. To run the same work concurrently, build a graph
 // per concurrent user: they share pipelines and caller-owned buffers, and only
 // the transient pool is duplicated. Wait on a [Fence] if you need ordering.
-type Graph struct{ _ noCopy }
+type Graph struct {
+	_ noCopy
+
+	dev *Device
+
+	nodes      []recNode
+	slots      []SlotDescriptor
+	transients []*transient
+
+	pool driver.Block
+	plan *driver.Plan
+	exe  driver.Executable
+
+	memory   GraphMemory
+	barriers int
+
+	state resourceState
+
+	mu       sync.Mutex
+	bound    []Binding // by one-based slot; index 0 unused
+	inFlight bool
+}
 
 // Bind points one slot at a resource. Rebind does several at once and is the
 // hot-path form.
@@ -179,8 +312,8 @@ type Graph struct{ _ noCopy }
 //
 // Binding while a submission is in flight reports ErrGraphInFlight, for the same
 // reason submitting twice does.
-func (g *Graph) Bind(b Binding) error     { panic(ErrNotImplemented) }
-func (g *Graph) Rebind(b []Binding) error { panic(ErrNotImplemented) }
+func (g *Graph) Bind(b Binding) error     { return g.bindAll([]Binding{b}) }
+func (g *Graph) Rebind(b []Binding) error { return g.bindAll(b) }
 
 // GraphSlot pairs a discoverable graph slot ID with its descriptor.
 type GraphSlot struct {
@@ -190,13 +323,42 @@ type GraphSlot struct {
 
 // Slots reports the stable IDs and descriptors a graph expects, so a caller
 // holding a graph they did not record can bind its inputs.
-func (g *Graph) Slots() []GraphSlot { panic(ErrNotImplemented) }
+func (g *Graph) Slots() []GraphSlot {
+	out := make([]GraphSlot, len(g.slots))
+	for i, d := range g.slots {
+		out[i] = GraphSlot{Slot: Slot(i + 1), Descriptor: d}
+	}
+	return out
+}
 
 // NodeStats reports what the builder decided about one node, and Nodes reports
 // all of them. Both are valid as soon as Build returns and are identical for
 // every submission: these are the plan, not a measurement, so they cost nothing.
-func (g *Graph) NodeStats(id NodeID) NodeStats { panic(ErrNotImplemented) }
-func (g *Graph) Nodes() []NodeStats            { panic(ErrNotImplemented) }
+func (g *Graph) NodeStats(id NodeID) NodeStats {
+	if id < 0 || int(id) >= len(g.nodes) {
+		return NodeStats{Node: id}
+	}
+	n := &g.nodes[id]
+	// Every node carries a barrier at this milestone, which is the definition of
+	// the record-order plan rather than an incidental fact. Asserting it is what
+	// makes specs/016-graph-execution.md lowering the count a visible change.
+	return NodeStats{Node: n.id, Kind: n.kind, Label: n.label, BarriersBefore: 1}
+}
+
+func (g *Graph) Nodes() []NodeStats {
+	out := make([]NodeStats, len(g.nodes))
+	for i := range g.nodes {
+		out[i] = g.NodeStats(NodeID(i))
+	}
+	return out
+}
+
+// Barriers is how many barriers the plan emits in total.
+//
+// It is reported separately from the per-node count because the number a reader
+// wants first is the whole-graph one, and because it is the single figure
+// specs/016-graph-execution.md changes.
+func (g *Graph) Barriers() int { return g.barriers }
 
 // NodeStats is one node's plan-time facts.
 type NodeStats struct {
@@ -220,10 +382,32 @@ type NodeStats struct {
 //
 // Callers need this before submitting, to size a KV cache or decide how many
 // layers fit in device memory.
-func (g *Graph) Memory() GraphMemory { panic(ErrNotImplemented) }
+func (g *Graph) Memory() GraphMemory { return g.memory }
 
-// Close releases the graph.
-func (g *Graph) Close() error { panic(ErrNotImplemented) }
+// Close releases the graph, including the transient memory it owns.
+//
+// It fails while a submission is in flight rather than freeing memory the
+// device is reading.
+func (g *Graph) Close() error {
+	g.mu.Lock()
+	if g.inFlight {
+		g.mu.Unlock()
+		return &LifetimeError{Op: "Close", Resource: "graph", Reason: reasonInFlight}
+	}
+	g.mu.Unlock()
+
+	if !g.state.beginClose() {
+		return nil
+	}
+	if g.exe != nil {
+		if err := g.exe.Close(); err != nil {
+			return err
+		}
+	}
+	g.releaseTransients()
+	g.dev.countGraphs(-1)
+	return nil
+}
 
 // GraphMemory reports a graph's memory requirement.
 type GraphMemory struct {
@@ -247,6 +431,10 @@ type Queue struct {
 	mu      sync.Mutex
 	pending []pendingWrite
 	stats   QueueStats
+
+	// prev is closed when the last unit of work put on this queue finishes. It
+	// is what makes the queue a serial stream: see [Queue.enqueue].
+	prev chan struct{}
 }
 
 // ReadTexture flushes this queue's pending writes, waits for prior work, and
@@ -257,7 +445,46 @@ func (q *Queue) ReadTexture(src *Texture, into []byte) error {
 
 // Submit submits a graph and returns immediately with a [Fence]. Nothing in this
 // API blocks implicitly.
-func (q *Queue) Submit(g *Graph) *Fence { panic(ErrNotImplemented) }
+func (q *Queue) Submit(g *Graph) *Fence {
+	if fail := q.reject(g); fail != nil {
+		return fail
+	}
+
+	// The pending host writes join the same stream rather than being flushed
+	// alongside it. Flushing here would let a write race a submission already
+	// running, which is exactly what the queue's ordering guarantee forbids.
+	q.mu.Lock()
+	batch := q.pending
+	q.pending = nil
+	q.stats.Submissions++
+	q.mu.Unlock()
+
+	return q.enqueue(func() error {
+		if err := runWrites(batch); err != nil {
+			return err
+		}
+		return g.run()
+	})
+}
+
+// reject reports a submission that cannot be attempted at all, as a fence that
+// has already failed. Returning an error instead would make Submit the one
+// entry point a caller has to check twice.
+func (q *Queue) reject(g *Graph) *Fence {
+	var err error
+	switch {
+	case g == nil:
+		err = errors.New("accel: Submit: nil graph")
+	case g.dev != q.dev:
+		err = errors.New("accel: Submit: the graph belongs to a different device")
+	default:
+		return nil
+	}
+	f := newFence()
+	f.state.err = err
+	f.signal()
+	return f
+}
 
 // SubmitAfter submits a graph that begins only once every given fence has
 // signalled.
@@ -267,7 +494,16 @@ func (q *Queue) SubmitAfter(g *Graph, after ...*Fence) *Fence { panic(ErrNotImpl
 //
 // It exists for readability in simple cases and carries the full cost of building
 // a graph every call, so it is the wrong choice in a hot loop.
-func (q *Queue) Run(record func(*Recorder)) error { panic(ErrNotImplemented) }
+func (q *Queue) Run(record func(*Recorder)) error {
+	r := q.dev.NewRecorder()
+	record(r)
+	g, err := r.Build()
+	if err != nil {
+		return err
+	}
+	defer g.Close()
+	return q.Submit(g).Wait()
+}
 
 // QueueStats are cumulative since device open.
 type QueueStats struct {

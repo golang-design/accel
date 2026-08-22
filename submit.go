@@ -1,0 +1,318 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+package accel
+
+import (
+	"errors"
+	"fmt"
+
+	"golang.design/x/accel/internal/driver"
+)
+
+// bind resolves one slot, or reports why it cannot.
+//
+// The checks here are validation rows V2, V3, V4, V5, V6 and V19 against the
+// [SlotDescriptor], which is one of the two declarations a bound resource has
+// to satisfy. The other is the pipeline's binding layout, checked where a node
+// uses one; specs/015-graph-recording.md section 4 records why collapsing the
+// two would drop whichever declaration the survivor did not consult.
+func (g *Graph) checkBinding(b Binding) (driver.SlotBinding, error) {
+	d, ok := g.descriptor(b.Slot)
+	if !ok {
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind: slot %d is not one of this graph's %d",
+			int(b.Slot), len(g.slots))
+	}
+	if b.Texture != nil || b.Sampler != nil {
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: textures and samplers arrive "+
+			"with specs/001-device-resources.md section 4", d.Name)
+	}
+	v := b.Buffer
+	if v.Buffer == nil {
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: no resource bound", d.Name)
+	}
+
+	// V2: the kind the descriptor declared.
+	switch d.Kind {
+	case BindingStorageBuffer, BindingUniformBuffer:
+	default:
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: a buffer was bound to a %v slot",
+			d.Name, d.Kind)
+	}
+	// V3: dtype agreement, exactly. A reinterpreting view is legal on a buffer
+	// and not on a slot, because the recorded nodes computed their byte offsets
+	// from the descriptor's dtype.
+	if v.DType != d.DType {
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: the slot is %v and the view is %v",
+			d.Name, d.DType, v.DType)
+	}
+	// V19: the resource is this device's and open. Repeated at submit, because a
+	// caller may close it after binding.
+	if err := v.check("Bind " + d.Name); err != nil {
+		return driver.SlotBinding{}, err
+	}
+	if v.Buffer.pool.dev != g.dev {
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: %q belongs to a different device",
+			d.Name, v.Buffer.desc.Label)
+	}
+	// V5: large enough for what the recorded nodes declared.
+	if v.Count < d.MinCount {
+		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: the recorded nodes need %d "+
+			"elements and the view has %d", d.Name, d.MinCount, v.Count)
+	}
+	// V6: the usage the access needs was declared when the buffer was created.
+	if err := g.checkUsage(d, v.Buffer); err != nil {
+		return driver.SlotBinding{}, err
+	}
+
+	off, size := v.byteRange()
+	return driver.SlotBinding{
+		Slot:   int(b.Slot),
+		Block:  v.Buffer.pool.block,
+		Offset: v.Buffer.alloc.Offset + off,
+		Size:   size,
+	}, nil
+}
+
+func (g *Graph) checkUsage(d SlotDescriptor, b *Buffer) error {
+	var need BufferUsage
+	switch d.Kind {
+	case BindingUniformBuffer:
+		need = UsageUniform
+	default:
+		need = UsageStorage
+	}
+	if b.desc.Usage&need == 0 {
+		return fmt.Errorf("accel: Bind %q: this slot needs %v and %q was created with %v",
+			d.Name, need, b.desc.Label, b.desc.Usage)
+	}
+	return nil
+}
+
+func (g *Graph) descriptor(s Slot) (SlotDescriptor, bool) {
+	if s < 1 || int(s) > len(g.slots) {
+		return SlotDescriptor{}, false
+	}
+	return g.slots[s-1], true
+}
+
+// bindAll validates a whole batch, then applies it or none of it.
+func (g *Graph) bindAll(bs []Binding) error {
+	if err := g.state.checkOpen("Bind"); err != nil {
+		return err
+	}
+	if lost := g.dev.dev.Lost(); lost != nil {
+		return lost
+	}
+
+	staged := make([]driver.SlotBinding, 0, len(bs))
+	var errs []error
+	for _, b := range bs {
+		sb, err := g.checkBinding(b)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		staged = append(staged, sb)
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inFlight {
+		return ErrGraphInFlight
+	}
+	// V24, dynamic against dynamic and dynamic against concrete. The transient
+	// term lands with specs/017-graph-aliasing.md, when transients have
+	// placements to collide over.
+	if err := g.checkOverlaps(bs); err != nil {
+		return err
+	}
+	if err := g.exe.Rebind(staged); err != nil {
+		return err
+	}
+	for _, b := range bs {
+		g.bound[b.Slot] = b
+	}
+	return nil
+}
+
+// checkOverlaps is V24.
+//
+// It is graph-wide rather than per node, and that is the point. Hazards were
+// inferred against the *slot*, because a slot's eventual resource is unknown at
+// build. If two slots later resolve to overlapping bytes, or one resolves over
+// a concrete resource the graph already names, then the builder may have
+// omitted a read-after-write edge between nodes far apart in the graph, and
+// checking only two bindings of one node would miss exactly that.
+//
+// **Only pairs involving a slot are compared.** Two concrete resources
+// overlapping is not a violation and never was: their identity and their exact
+// ranges were known when the edges were inferred, so whatever hazards exist
+// between them were already expressed. Comparing them here would reject a graph
+// that writes one buffer from two nodes, which is ordinary.
+//
+// An overlap is accepted only when both sides' graph-wide access unions are
+// read-only. g.mu is held.
+func (g *Graph) checkOverlaps(updates []Binding) error {
+	// The prospective binding set: what is already bound, with this batch
+	// applied. Checking the batch against the old state would let a batch that
+	// swaps two slots pass while leaving them overlapping.
+	next := make([]Binding, len(g.bound))
+	copy(next, g.bound)
+	for _, b := range updates {
+		next[b.Slot] = b
+	}
+
+	var slots []span
+	for s := 1; s < len(next); s++ {
+		v := next[s].Buffer
+		if v.Buffer == nil {
+			continue
+		}
+		off, size := v.byteRange()
+		base := v.Buffer.alloc.Offset + off
+		slots = append(slots, span{
+			what:  fmt.Sprintf("slot %q", g.slots[s-1].Name),
+			buf:   v.Buffer,
+			lo:    base,
+			hi:    base + size,
+			write: g.slotWrites(Slot(s)),
+		})
+	}
+	concrete := g.concreteSpans()
+
+	for i := range slots {
+		for j := i + 1; j < len(slots); j++ {
+			if err := conflict(slots[i], slots[j]); err != nil {
+				return err
+			}
+		}
+		for j := range concrete {
+			if err := conflict(slots[i], concrete[j]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// span is one byte range a graph reaches, with its graph-wide access union.
+type span struct {
+	what  string
+	buf   *Buffer
+	lo    int
+	hi    int
+	write bool
+}
+
+// conflict reports an overlap that at least one side writes.
+func conflict(a, b span) error {
+	if a.buf != b.buf || !(a.write || b.write) {
+		return nil
+	}
+	if a.lo >= b.hi || b.lo >= a.hi {
+		return nil
+	}
+	return fmt.Errorf("%w: %s and %s both name bytes [%d, %d) of %q, and at least "+
+		"one of them writes: the inferred hazards treated them as independent",
+		ErrRebindOverlap, a.what, b.what,
+		max(a.lo, b.lo), min(a.hi, b.hi), a.buf.desc.Label)
+}
+
+// slotWrites reports whether any node writes through a slot anywhere in the
+// graph. Graph-wide, because that is the union V24 compares.
+func (g *Graph) slotWrites(s Slot) bool {
+	for i := range g.nodes {
+		for _, a := range g.nodes[i].accesses {
+			if a.res.slot == s && a.writes() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// concreteSpans is every byte range the graph names through a resource it
+// already holds, with each range's graph-wide access union.
+//
+// Transients are excluded, because at this milestone each has its own bytes and
+// nothing a caller can bind reaches them. specs/017-graph-aliasing.md adds them
+// once placements exist and a slot can therefore land on one.
+func (g *Graph) concreteSpans() []span {
+	var out []span
+	for i := range g.nodes {
+		n := &g.nodes[i]
+		for _, a := range n.accesses {
+			b := a.res.buf
+			if b == nil || b.transient != nil {
+				continue
+			}
+			base := b.alloc.Offset + a.off
+			out = append(out, span{
+				what: fmt.Sprintf("node %d's use of %q", n.id, b.desc.Label),
+				buf:  b, lo: base, hi: base + a.size, write: a.writes(),
+			})
+		}
+	}
+	return out
+}
+
+// run executes the graph once, on the queue's stream, and returns when it is
+// done. It is called from inside [Queue.enqueue], which is what orders it
+// against everything else on that queue.
+func (g *Graph) run() error {
+	if err := g.state.checkOpen("Submit"); err != nil {
+		return err
+	}
+	if lost := g.dev.dev.Lost(); lost != nil {
+		return lost
+	}
+
+	g.mu.Lock()
+	if g.inFlight {
+		g.mu.Unlock()
+		return ErrGraphInFlight
+	}
+	// V19 again, and V1 for slots: a caller may have closed a bound resource
+	// since binding it, and a rebindable slot may legally have been empty until
+	// now. Both are checked inside the same critical section that marks the
+	// graph in flight, so there is no validate-then-submit gap.
+	if err := g.checkBoundAtSubmit(); err != nil {
+		g.mu.Unlock()
+		return err
+	}
+	g.inFlight = true
+	g.mu.Unlock()
+
+	defer func() {
+		g.mu.Lock()
+		g.inFlight = false
+		g.mu.Unlock()
+	}()
+
+	df, err := g.exe.Submit()
+	if err != nil {
+		return err
+	}
+	return df.Wait()
+}
+
+func (g *Graph) checkBoundAtSubmit() error {
+	var errs []error
+	for s := 1; s <= len(g.slots); s++ {
+		b := g.bound[s]
+		if b.Buffer.Buffer == nil {
+			errs = append(errs, fmt.Errorf("accel: Submit: slot %q has no resource bound",
+				g.slots[s-1].Name))
+			continue
+		}
+		if err := b.Buffer.check("Submit " + g.slots[s-1].Name); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
