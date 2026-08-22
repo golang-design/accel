@@ -268,3 +268,171 @@ func TestWorkedGraphRuns(t *testing.T) {
 		}
 	}
 }
+
+// Spec 003's worked graph at its own sizes, asserting the three memory numbers
+// its packing section derives: 22 MiB unaliased, 12 MiB peak, 16 MiB allocated.
+//
+// This is M3's numeric criterion, and it needs the graph exactly rather than an
+// approximation of it: the pool size follows from which pairs of transients are
+// compatible, so a substitute with a different user set gives a different
+// number. An earlier copy-based version of this test produced 20 MiB for that
+// reason, which is a true statement about a different graph.
+//
+// The 4 MiB between the peak and the pool is the price of DAG-safe aliasing and
+// not fragmentation — the pool is fully packed — and it is exactly the t0/t3
+// pair an interval planner would have merged.
+func TestWorkedGraphMemoryNumbers(t *testing.T) {
+	const (
+		mib   = 1 << 20
+		elems = mib // 1 Mi f32 elements is 4 MiB
+	)
+	d := openDevice(t)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "op",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	buf := func(label string) accel.BufferView {
+		return whole(t, newBuffer(t, d, label, elems, storage))
+	}
+	x, params, wQ, wK, kv, y := buf("x"), buf("params"), buf("wQ"), buf("wK"), buf("kv"), buf("y")
+
+	r := d.NewRecorder()
+	mk := func(label string, n int) accel.BufferView {
+		return r.Transient(accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: storage, Label: label,
+		})
+	}
+	t0, t1, t2, t3 := mk("t0", elems), mk("t1", elems), mk("t2", elems), mk("t3", elems)
+	t4 := mk("t4", elems/2) // 2 MiB, the one transient of a different size
+	t5 := mk("t5", elems)
+
+	dis := func(a, b, out accel.BufferView) {
+		r.Dispatch(p, []accel.Binding{
+			{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: out},
+		}, accel.WorkgroupCount{X: 1})
+	}
+	r.CopyToBuffer(params, make([]float32, elems)) // n0, the parameter upload
+	dis(x, params, t0)                             // n1: t0 = norm(x)
+	dis(t0, wQ, t1)                                // n2: the diamond's first arm
+	dis(t0, wK, t2)                                // n3: the second arm
+	dis(t1, params, t3)                            // n4: rope, extending arm one
+	dis(halfOf(t3), halfOf(t2), t4)                // n5: the arms join
+	dis(t4, halfOf(kv), halfOf(t5))                // n6: attend
+	dis(halfOf(t5), halfOf(x), halfOf(y))          // n7: y = x + t5
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	// Each transient's users, which is what the interference relation quantifies
+	// over and what the spec's compatibility table is written against.
+	want := map[string][]accel.NodeID{
+		"t0": {1, 2, 3}, "t1": {2, 4}, "t2": {3, 5},
+		"t3": {4, 5}, "t4": {5, 6}, "t5": {6, 7},
+	}
+	for _, pl := range g.TransientPlacement() {
+		got := want[pl.Label]
+		if len(got) != len(pl.Users) {
+			t.Errorf("%s has users %v, want %v", pl.Label, pl.Users, got)
+			continue
+		}
+		for i := range got {
+			if got[i] != pl.Users[i] {
+				t.Errorf("%s has users %v, want %v", pl.Label, pl.Users, got)
+				break
+			}
+		}
+	}
+
+	m := g.Memory()
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"UnaliasedBytes", m.UnaliasedBytes, 22 * mib},
+		{"PeakBytes", m.PeakBytes, 12 * mib},
+		{"TransientBytes", m.TransientBytes, 16 * mib},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s is %d MiB, want the spec's %d MiB", c.name, c.got/mib, c.want/mib)
+		}
+	}
+	// 16 MiB is optimal here, and the spec says why: t0, t1, t2 and t3 are
+	// pairwise interfering, so no assignment places four 4 MiB transients in
+	// less. Asserting it keeps the heuristic honest on the one case where the
+	// lower bound is known.
+	if m.TransientBytes < 16*mib {
+		t.Errorf("the pool is %d MiB, below the 16 MiB lower bound four pairwise "+
+			"interfering 4 MiB transients impose", m.TransientBytes/mib)
+	}
+}
+
+// halfOf is the first half of a view, for the worked graph's one transient of
+// a different size and the reads that meet it.
+func halfOf(v accel.BufferView) accel.BufferView {
+	out := v
+	out.Count = v.Count / 2
+	return out
+}
+
+// Aliasing does not add a barrier: both of the worked graph's handovers ride on
+// one the data flow required anyway. A planner that emitted one per handover
+// would be paying for aliasing twice, which is the thing worth checking, since
+// the saving is memory and the cost would be parallelism.
+func TestAliasingAddsNoBarrier(t *testing.T) {
+	const n = 64
+	d := openDevice(t)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "op",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	in := newBuffer(t, d, "in", n, storage)
+	out := newBuffer(t, d, "out", n, storage)
+
+	// A chain, whose transients alias because every pair is fully ordered — and
+	// whose nodes already need a barrier each for the data flow.
+	build := func() *accel.Graph {
+		t.Helper()
+		r := d.NewRecorder()
+		prev := whole(t, in)
+		for range 4 {
+			v := r.Transient(accel.BufferDescriptor{DType: accel.F32, Count: n, Usage: storage})
+			r.Dispatch(p, []accel.Binding{
+				{Index: 0, Buffer: prev}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
+			}, accel.WorkgroupCount{X: 1})
+			prev = v
+		}
+		r.CopyBuffer(whole(t, out), prev)
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		return g
+	}
+
+	g := build()
+	defer g.Close()
+	if m := g.Memory(); m.TransientBytes >= m.UnaliasedBytes {
+		t.Fatalf("this graph should alias: pool %d, unaliased %d",
+			m.TransientBytes, m.UnaliasedBytes)
+	}
+	// Every node in a chain needs a barrier for its own read-after-write, so
+	// the handovers cost nothing on top.
+	if got, want := g.Barriers(), len(g.Nodes()); got != want {
+		t.Errorf("got %d barriers for %d chained nodes, want %d: aliasing should "+
+			"ride on the barriers the data flow required anyway", got, want, want)
+	}
+}

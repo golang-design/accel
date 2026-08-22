@@ -391,3 +391,45 @@ func BenchmarkDispatchThroughAGraph(b *testing.B) {
 		}
 	}
 }
+
+// Packing cost against transient count. Spec 003 claims O(n² log n), dominated
+// by the scan of placed transients per placement, and calls it acceptable at
+// 200 transients — a claim that needs a number rather than an argument, since
+// it is paid at build for every graph a caller keeps.
+func BenchmarkTransientPacking(b *testing.B) {
+	for _, n := range []int{8, 32, 128} {
+		b.Run(fmt.Sprintf("transients=%d", n), func(b *testing.B) {
+			d, err := accel.OpenCPU(accel.CPUOptions{})
+			if err != nil {
+				b.Fatalf("open: %v", err)
+			}
+			defer d.Close()
+			in := benchBuffer(b, d, "in")
+
+			b.ReportAllocs()
+			for b.Loop() {
+				r := d.NewRecorder()
+				// A chain, so every transient is compatible with every other
+				// one it does not share a node with: the case where the
+				// compatibility scan does the most work.
+				prev := benchView(b, in)
+				for range n {
+					v := r.Transient(accel.BufferDescriptor{
+						DType: accel.F32, Count: 1024, // matches benchBuffer
+						Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+					})
+					r.CopyBuffer(v, prev)
+					prev = v
+				}
+				r.CopyBuffer(benchView(b, in), prev)
+				g, err := r.Build()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := g.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
