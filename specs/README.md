@@ -13,11 +13,16 @@ The decisions everything here is built on live in
 [`000-decisions.md`](000-decisions.md). It is normative: a spec that contradicts
 it is wrong.
 
-M0, M1, and M2 are complete. A CPU device can be opened, pooled memory
-allocated and suballocated, buffers typed and sliced into views, bytes moved to
-the device and back, and a kernel written in the Go subset compiled to a
-generated lowering that runs and is checked against the source it came from.
-Everything past that still reports `ErrNotImplemented`.
+M0, M1, and M2 are complete, and M3 is under way. A CPU device can be opened,
+pooled memory allocated and suballocated, buffers typed and sliced into views,
+bytes moved to the device and back, and a kernel written in the Go subset
+compiled to a generated lowering that runs and is checked against the source it
+came from. A graph of transfers can be recorded, validated, built once, bound,
+submitted, waited on, and replayed with a rebound input; it runs on a
+deliberately conservative plan that [015](015-graph-recording.md) proves correct
+and that [017](017-graph-aliasing.md) will keep as its oracle. Dispatch nodes,
+inferred edges, and transient aliasing are next. Everything past that still
+reports `ErrNotImplemented`.
 [009](009-sequencing.md) records what has landed and the deviations taken.
 
 **What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
@@ -76,7 +81,7 @@ numbered in.
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
 | [013-kernel-subset.md](013-kernel-subset.md) | Implemented | M2 child: control flow, helpers, and the positioned rejection corpus |
 | [014-kernel-uniforms.md](014-kernel-uniforms.md) | Implemented | M2 child: std140 codecs, typed uniform binding, and the device-side layout check |
-| [015-graph-recording.md](015-graph-recording.md) | Drafted | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
+| [015-graph-recording.md](015-graph-recording.md) | Implemented | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
 | [016-graph-execution.md](016-graph-execution.md) | Drafted | M3 child: edge inference, sub-range hazards, barrier planning, and the flat dispatch node |
 | [017-graph-aliasing.md](017-graph-aliasing.md) | Drafted | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
 

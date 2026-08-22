@@ -26,9 +26,21 @@
 // Uniform blocks are encoded by a generated std140 codec, so a caller supplies
 // a [UniformBuffer] and never writes a padding offset.
 //
+// A graph of transfers can be recorded, validated, built once, bound,
+// submitted, waited on, and replayed with a rebound input: [Device.NewRecorder],
+// [Recorder.CopyToBuffer], [Recorder.CopyBuffer], [Recorder.Transient],
+// [Recorder.Slot], [Recorder.Build], [Graph.Bind], [Queue.Submit] and
+// [Fence.Wait]. It runs on a deliberately conservative plan -- nodes in record
+// order, a barrier before each, no transient aliasing -- which is correct
+// because record order is a topological order of any dependency DAG the
+// declared accesses imply. Inferred edges, computed barriers and transient
+// aliasing are next, and the plan here is kept afterwards as the oracle they
+// are checked against.
+//
 // Not implemented, and reporting [ErrNotImplemented]: textures, compute
-// pipelines, [Recorder] and [Graph], and [Queue.Submit]. specs/009-sequencing.md
-// is the order they arrive in.
+// pipelines, and therefore [Recorder.Dispatch], [Recorder.DispatchIndirect],
+// [Queue.SubmitAfter] and [Fence.Stats]. specs/009-sequencing.md is the order
+// they arrive in.
 //
 // # The model
 //

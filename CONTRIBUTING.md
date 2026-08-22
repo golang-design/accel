@@ -118,15 +118,24 @@ go run ./internal/conformance/cover/covercheck -profile=cover.out
 | `docs/` | Documentation | People using or contributing to accel |
 | `specs/` | Internal design specs and decisions | People building or reviewing accel |
 | `*.go` | The device layer's public API and its policy | Callers, and everyone |
-| `internal/driver/` | The backend contract | Anyone adding a backend |
+| `internal/driver/` | The backend contract, and the plan a built graph lowers to | Anyone adding a backend |
 | `internal/cpu/` | The pure-Go backend and oracle | Anyone adding a backend |
 | `internal/alloc/` | Suballocation inside a pool | Nobody, ideally |
+| `internal/kernelc/` | The kernel compiler: loader, subset checker, IR, emitters | Anyone changing the kernel language |
+| `internal/kernel/` | The vocabulary a kernel is written in, declared below accel | Anyone changing the kernel language |
 | `internal/conformance/` | Test machinery: profiles, comparisons, coverage | People writing tests |
 
 Policy lives in the public package and only what a backend alone can answer
 crosses into `internal/driver`. accel links its backends in, so a backend cannot
 import accel: anything crossing that seam is declared below both, and the two
 declarations are kept in step by the compiler rather than by a test.
+
+That is also why a *built graph* crosses the seam as a value rather than being
+replayed by the layer above calling backend primitives one at a time. A Vulkan
+primary command buffer, a D3D12 closed list and a Metal indirect command buffer
+are each built from a whole plan, and none of them can be assembled from a
+stream of unrelated calls. So `driver.Plan` is what a backend receives:
+validated, ordered, barriered, and with offsets already assigned.
 
 If you change behaviour that a spec describes, update the spec in the same
 change. A spec that no longer matches reality is worse than no spec.

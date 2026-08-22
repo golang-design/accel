@@ -162,7 +162,9 @@ bindings are the better choice.
 | Kernel compiler: subset checking, IR, Go lowering, generator | **Built** |
 | Kernel language: loops, helpers, narrow storage, scalar math | **Built** |
 | Kernel uniforms: std140 codecs and typed binding | **Built** |
-| Command graphs | Specified, next |
+| Command graphs: recording, slots, validation, submission, fences | **Built** on the CPU backend, on a conservative plan |
+| Command graphs: inferred edges, computed barriers, transient aliasing | Specified, next |
+| Compute dispatch in a graph | Specified, next |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
@@ -170,8 +172,15 @@ bindings are the better choice.
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 and M2](specs/009-sequencing.md); the next step is the rest
-of the kernel language.
+rows came from [M1, M2, and the first third of M3](specs/009-sequencing.md).
+
+A graph runs today on the most conservative plan there is: nodes in record
+order, a barrier before each, and no transient aliasing. That is correct rather
+than merely safe, because record order is a topological order of any dependency
+DAG the declared accesses imply. What comes next is computing the edges instead
+of assuming them all, and packing the transients — and the plan above is kept
+afterwards rather than replaced, as the oracle the optimized one is checked
+against.
 
 **v0 is compute only, on the CPU backend and Metal.** The other backends and the
 graphics half are designed and normative so their shape cannot break callers

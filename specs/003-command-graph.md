@@ -1,6 +1,6 @@
 ---
 title: "Command graph: recording, replay, and submission"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md

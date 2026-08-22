@@ -1,6 +1,6 @@
 ---
 title: "Graph recording, the record-order plan, and transfer submission"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -131,7 +131,9 @@ later reader cannot mistake a scoped-out row for an omission:
 
 | Row | Where | Note |
 | --- | --- | --- |
-| V1–V6 | **015** | binding completeness, kind, dtype, access, size, usage |
+| V1 | [016](016-graph-execution.md) | binding completeness is a property of a *pipeline's* layout, and there is no pipeline here |
+| V2–V4 | **both** | kind, dtype, access — see below |
+| V5, V6 | **015** | size and declared usage, on every bound resource |
 | V7 | deferred | textures, [001](001-device-resources.md) §4, unbuilt |
 | V8–V11 | [016](016-graph-execution.md) | workgroup counts, sizes, shared memory — all dispatch |
 | V12–V16 | deferred | [005](005-graphics.md), post-v0 |
@@ -142,6 +144,22 @@ later reader cannot mistake a scoped-out row for an omission:
 | V22 | [016](016-graph-execution.md) | acyclicity is an assertion over an inferred edge set |
 | V23 | **015** | concrete same-node overlap |
 | V24 | **split — see below** | graph-wide dynamic overlap |
+
+### V2–V4 are enforced twice, against two different declarations
+
+A resource's kind, dtype, and access are checked against the **`SlotDescriptor`**
+when a slot is bound, and against the **pipeline's `BindingSlot`** when a node
+uses one. These are two different declarations written by two different people:
+the first by whoever recorded the graph, the second by whoever wrote the kernel.
+A graph can satisfy one and violate the other — a slot declared `AccessRead` and
+bound correctly, used at a node whose pipeline declares that entry
+`AccessWrite`, passes the first check and must fail the second.
+
+So this child implements V2–V4 at `Bind` and `Rebind`, and
+[016](016-graph-execution.md) implements them again at record time against the
+pipeline layout. Recorded because it looks like duplication, and collapsing the
+two into one check would silently drop whichever declaration the survivor did
+not consult.
 
 ### V24 spans this child and [017](017-graph-aliasing.md)
 
@@ -199,7 +217,101 @@ not read as overlap:
   [003](003-command-graph.md)'s claim is that the second is small and that claim
   needs a number before [016](016-graph-execution.md) makes the first larger.
 
-## 7. Open questions
+## 7. What it added, beyond what §2 listed
+
+**A plan is a type the backend receives, not a walk the layer above performs.**
+[006](006-backends.md) R7 requires a backend to turn a built graph into
+something it can resubmit cheaply, and a Vulkan primary command buffer, a D3D12
+closed list and a Metal indirect command buffer are each built from a *whole*
+plan rather than assembled from a stream of unrelated calls. So
+`internal/driver` gained `Plan`, `PlanNode`, `Operand`, `SlotBinding`,
+`Executable`, `Fence`, and the optional `GraphCompiler` a backend is discovered
+to implement. The CPU backend replays the node list, which
+[006](006-backends.md) §4.5 states is enough.
+
+**An operand is constructed, never assembled.** The obvious shape is a struct
+with a block field and a slot field, and nothing in it says exactly one is set,
+so a node that filled neither is a copy that moves nothing and reports success.
+`BlockOperand` and `SlotOperand` return an error instead, the fields are
+unexported, and `Plan.Validate` rejects an unset one at compile rather than at
+execution, where work has already started. This is the same rule the kernel IR
+is closed by, applied for the same reason.
+
+**`driver.Device.Lost` is in the core contract**, not discovered by assertion,
+because every backend can answer it and a `Fence.Wait` that could report only
+completion would turn a lost device into a hang.
+
+**Three slot-facing recording calls.** `CopyToBufferSlot`, `CopyFromSlot` and
+`CopyToSlot` exist because §2's copy entry points take a `BufferView` and a slot
+has no resource to make a view of. Splitting them out rather than giving
+`BufferView` an optional slot field keeps a view a thing that names bytes.
+
+**`Graph.Barriers`** reports the whole-graph count. It is separate from the
+per-node figure because the number a reader wants first is the total, and
+because it is the single figure [016](016-graph-execution.md) changes.
+
+**`ErrGraphInFlight`, `ErrRebindOverlap` and `ErrDeviceLost`** are sentinels, so
+a caller can branch on the class. `Access` gained a `String`, because V21's
+rejection otherwise read "declared 0 and this use is 1", which
+[001](001-device-resources.md) §9 calls a defect rather than a terse style.
+
+**`CPUOptions.LoseAtSubmission`** is the fault injection §2 named indirectly by
+homing device loss here. It is public rather than a test helper because
+[001](001-device-resources.md) §7.4 asks for it by name.
+
+## 8. Outcome — complete 2026-08-22
+
+Everything in §2 is built and §6's cases pass. The record-order plan is asserted
+as a definition rather than observed: `Barriers()` equals the node count, and
+`TransientBytes` equals `UnaliasedBytes`, so [016](016-graph-execution.md)
+lowering the first and [017](017-graph-aliasing.md) separating the second are
+both visible changes rather than new numbers appearing. The worked graph's
+22 MiB unaliased and 12 MiB peak are asserted here;
+[017](017-graph-aliasing.md) carries the 16 MiB.
+
+**Three defects, none of which was a coding slip.**
+
+- **`Queue.WriteBuffer` nil-dereferenced on a transient.** The view-level guard
+  could not see it: `WriteBuffer` and `ReadBuffer` take a `*Buffer` rather than
+  a view, so they reached for a pool that does not exist until Build. The fix is
+  at the point both paths converge, not at each entry point.
+- **Same-queue submissions were not ordered.** [003](003-command-graph.md)
+  requires the second to begin no earlier than the first ends with the first's
+  writes visible, and `Queue.Submit` was flushing pending host writes on the
+  caller's goroutine and then starting work that could overlap a submission
+  already running. The fix is not to move the flush: **a queue is a serial
+  stream**, and a flush and a submission are both units on it, ordered by the
+  call that enqueued them. Recorded in this spec because it is a rule about what
+  a queue *is*, not an implementation detail.
+- **V24 rejected graphs it should accept.** It compared every pair of ranges
+  including concrete against concrete, so a graph writing one buffer from two
+  nodes was refused. §4's table now says only pairs involving a slot are
+  compared, and [003](003-command-graph.md) says why: static aliases across
+  nodes need no rejection, because their identity and exact ranges were known
+  when the edges were inferred.
+
+**Two performance findings, both contradicting something
+[003](003-command-graph.md) states.** The backend resolved every node into a
+freshly allocated slice per submission, and 003 is explicit that no backend
+allocates per submission. And `Rebind` rescanned every node to rebuild V24's
+inputs, which are fixed at Build; precomputing them took a 200-node rebind from
+1813 allocations to 3.
+
+The regression test for the first measures **bytes rather than allocation
+count**, and the distinction is the test: resolving into one large slice is a
+single object however many nodes it holds, so a count-based assertion passes
+against exactly the implementation it exists to catch. That is the second time
+an allocation count has been the wrong instrument in this repository, so it is
+written down here rather than rediscovered.
+
+**One thing the implementation forced.** A transient's `Buffer` exists from the
+moment it is declared and its memory arrives at Build, so `Buffer` carries a
+`transient` pointer that every path checks before reaching for `pool` and
+`alloc`. The alternative -- allocating at record time -- would make
+`Graph.Memory` report a number that had already been spent, which is the
+opposite of what a caller sizing a KV cache needs it for.
+
+## 9. Open questions
 
 - **Whether a transfer-only graph should be submittable at all**, or whether the
   API should require at least one dispatch. It should be submittable: an upload

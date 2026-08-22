@@ -214,7 +214,7 @@ If you contribute a backend, that file is the contract.
 | M0, the cgo-free build gate | done |
 | M1, memory on the CPU backend | done |
 | M2, the minimum kernel compiler and flat CPU execution | done |
-| M3, graph planning and flat submission | next |
+| M3, graph planning and flat submission | in progress: recording, validation, submission and fences done ([015](../specs/015-graph-recording.md)); edges, barriers and dispatch next ([016](../specs/016-graph-execution.md)); aliasing and the whole-plan fuzz after ([017](../specs/017-graph-aliasing.md)) |
 | M4 to M7, cooperative execution, GEMM, Metal, tensors | specified, not started |
 
 M1 built the bottom of the device layer: enumeration and device open, the
