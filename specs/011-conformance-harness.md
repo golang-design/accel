@@ -224,7 +224,7 @@ cleanup. Required milestone scenarios are:
 | Milestone | Scenario |
 | --- | --- |
 | M1 | Open CPU → allocate → write → read → close — **done 2026-08-22** |
-| M2 | Kernel source → generator → direct flat adapter → checked output — **done 2026-08-22** for [012](012-kernel-pipeline.md)'s scope |
+| M2 | Kernel source → generator → direct flat adapter → checked output — **done 2026-08-22** |
 | M3 | Upload → flat Add graph → readback → rebind and replay |
 | M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised |
 | M5 | Upload → portable tiled GEMM graph → readback in strict mode |

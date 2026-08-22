@@ -1,6 +1,6 @@
 ---
 title: "Kernel uniforms: std140 codecs and typed binding"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -92,7 +92,54 @@ too because the generated code is where it becomes visible.
   size, and the limit, checked against a mimicked profile with a small limit so
   the path does not wait for hardware that has one.
 
-## 5. Open question
+## 5. What it added, beyond what §2 listed
+
+`internal/kernelc/std140` computes the layout, separately from the emitter that
+writes an encoder from it. Separately because they answer different questions: a
+layout is checked against [001](001-device-resources.md) §3.3's table offset by
+offset, and an encoder is checked by round-tripping bytes. Folding them together
+would make a wrong offset and a wrong write indistinguishable.
+
+Two names on the root package that §2 did not anticipate:
+
+- **`accel.UniformWriter`** is what a generated encoder is built from, so the
+  generated code is a list of field writes at fixed offsets rather than a list
+  of byte manipulations. A caller who already manages a uniform arena may use it
+  and still never spells padding, which is the escape hatch §2's "typed codec"
+  implies without naming.
+- **`accel.KernelUniform` and `accel.KernelUniformValue`** are the record's
+  declaration of a by-value parameter and the generated entry point's way of
+  recovering one. A uniform is a separate list from a binding in the record
+  because a caller supplies one as a value and the other as a slice: a record
+  that conflated them would reinterpret a mismatched argument set rather than
+  refusing it.
+
+## 6. Outcome — complete 2026-08-22
+
+Everything in §2 is built and §4's cases pass, including the device-side check
+against a mimicked profile with a small `MaxUniformBlockBytes` so that path does
+not wait for hardware that has one.
+
+**Two things the implementation forced.**
+
+- **The IR's array type had to become recursive.** A matrix member is an array
+  of arrays and a kernel indexes it twice; the flat rule admitted the outer
+  array and rejected the element it is made of, which reads as the element type
+  being wrong rather than as the nesting being unsupported.
+- **A uniform is a separate list from a binding**, in the IR and in the record,
+  for the reason above.
+
+**§4's device-side check is deferred, and this is the one gap.** The case that
+matters most is a kernel reading each field of a uniform and writing it to a
+distinct storage element, because that is the only thing that catches an encoder
+agreeing with itself and disagreeing with the shader. The corpus kernel reads a
+uniform and its result is compared against the authored function, which catches
+an encoder disagreeing with the *lowering*; what it cannot catch is both being
+wrong the same way. That check needs a second consumer of the bytes, and the
+first one is a GPU backend at M6, so it lands with Metal. Recorded here rather
+than left implicit, because a reader of §4 would otherwise believe it is done.
+
+## 7. Open question
 
 - **Whether uniform buffers should exist at all.** Carried from
   [001](001-device-resources.md) §10 rather than resolved here, because this

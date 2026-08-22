@@ -204,7 +204,7 @@ wait for graphics work, as stated above. Device-loss fault injection (001 §7.4,
 §11.6) waits for M3: there is no submission to inject a loss at until one
 exists, and the CPU backend cannot lose a device on its own.
 
-### M2. Minimum compiler and flat direct CPU execution — in progress, 012 and 013 complete 2026-08-22
+### M2. Minimum compiler and flat direct CPU execution — complete 2026-08-22
 
 Build:
 
@@ -241,13 +241,37 @@ Done:
 table, and internal corpus package boundary. M2 implements those decisions; it
 does not reopen them inside the estimate.
 
+#### M2 outcome
+
+All three children are complete. A kernel written in the Go subset compiles to a
+generated lowering that runs and is checked against the source it came from, and
+`go generate` plus a freshness gate keep the two from drifting.
+
+**The split was worth taking.** 009's risk table said compiler scope is
+underestimated, and each child found things the others would have buried:
+[012](012-kernel-pipeline.md) found a Go 1.27 alias change and a typed-nil bug,
+[013](013-kernel-subset.md) found a helper-ordering bug and a naming conflict
+with a shipped constant, [014](014-kernel-uniforms.md) found a flat rule where a
+recursive one was needed. Delivered as one milestone, every one of those would
+have arrived at the same time as the others.
+
+**Coverage on the CPU path**, all above the gate: `kernelc` 91.5%,
+`kernelc/front` 90.6%, `kernelc/emit` 94%, `kernelc/std140` 99%,
+`kernelc/ir` and `kernelc/intrin` 100%, `kmath` 100%, `conformance/direct` 100%,
+`cmd/accel-kernel` 95.8%.
+
+**One obligation is carried forward rather than closed.** 014 §4's device-side
+std140 check needs a kernel's reading of a block compared against a second,
+independent consumer of the same bytes, and the first one is a GPU backend. It
+lands with Metal at M6, and 014 records why.
+
 #### M2 is split, per the risk table below
 
 | Child | Scope |
 | --- | --- |
 | [012](012-kernel-pipeline.md) | The whole pipeline for one straight-line kernel: tool, front end, IR, intrinsic table, generated adapter, registration, digests, freshness, direct flat executor — **complete 2026-08-22** |
 | [013](013-kernel-subset.md) | The rest of the authored subset: all three `for` forms, `break`/`continue`, helpers, the full scalar set, and the positioned rejection corpus — **complete 2026-08-22** |
-| [014](014-kernel-uniforms.md) | Uniform structs: std140 codecs, `UniformBuffer[T]`, typed bindings, and the device-side layout check |
+| [014](014-kernel-uniforms.md) | Uniform structs: std140 codecs, `UniformBuffer[T]`, typed bindings, and the device-side layout check — **complete 2026-08-22**, except the device-side check, which needs a second consumer of the bytes and lands with Metal at M6 |
 
 The cut is vertical: each child ends with source → generator → execution →
 independently checked output. A horizontal cut, front end and IR first and the
