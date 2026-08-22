@@ -130,7 +130,7 @@ For v0, over finite inputs and finite normal-or-zero results:
 | Primitive | Domain | Normative ceiling |
 | --- | --- | --- |
 | f32 `/`, reciprocal | non-zero normal denominator | 2.5 ULP of correctly rounded f32 |
-| `sqrt` | `x >= 0` | 1 ULP |
+| `sqrt` | finite `x > 0` after the backend profile's input-subnormal policy; correctly rounded result normal | at most one representable f32 step from the correctly rounded result; zero is Special |
 | `rsqrt` | `x > 0` normal | 4 ULP |
 | `exp` | result finite and normal | 4 ULP |
 | `log` | `x > 0` normal | 4 ULP |
@@ -143,6 +143,28 @@ capacity/domain. `pow` is not required by the v0 tensor kernel corpus and has no
 portable ceiling yet. A later spec must state its argument domain and ceiling
 before admitting it. Trigonometric tests use an absolute bound because argument
 reduction dominates and a ULP count near zero is not meaningful.
+
+The `sqrt` ceiling is deliberately a library quality target, not the weakest
+accuracy promised by every shader language. For an admitted input bit pattern
+`x`, let `r` be the round-to-nearest-even f32 value of the exact real square
+root. The result must be `r` or either immediately adjacent finite f32 value;
+equivalently, its ordered-bit ULP distance from `r` is at most one. This
+definition remains unambiguous at binade boundaries, where the absolute sizes of
+the two neighboring steps differ. Positive f32 inputs cannot produce a
+subnormal square root. `sqrt(+0)` must produce `+0`; `-0`, negative inputs,
+infinities, and NaNs belong to named Special-tier cases.
+
+One ULP is the v0 compromise for CPU and Metal. Requiring `r` exactly would turn
+rare double-rounding or compiler/library differences into portability failures
+without improving the tensor-model contract. Allowing two or more representable
+steps would weaken the test enough to hide an accidental approximate lowering
+such as `x * rsqrt(x)`. The Metal emitter therefore uses the precise `sqrt`
+operation with fast-math transformations disabled and must not substitute a
+reciprocal-square-root sequence. The CPU lowering uses its most accurate native
+operation: after profile preprocessing it evaluates
+`float32(math.Sqrt(float64(x)))`, making the f32 rounding point explicit. Each
+lowering must pass the committed oracle corpus; a future backend that cannot meet
+the ceiling must emit a corrected implementation or reject the primitive.
 
 Ceilings are checked against correctly rounded reference values generated with a
 higher-precision oracle. The committed conformance corpus contains input bits and
@@ -272,6 +294,14 @@ sites rather than banning every float literal.
   plus one output ULP and must fail.
 - Check every normative primitive ceiling over the committed high-precision
   corpus; separately record maximum observed ULP as regression telemetry.
+- For positive normal-reference `sqrt` cases, assert that `r` and each finite
+  adjacent f32 value pass and that the second representable value on either side
+  fails. Assert `sqrt(+0)` is exactly `+0` and all other excluded cases route to
+  `cmp.Special`. Include a committed adversarial input for which an
+  `x * rsqrt(x)` lowering exceeds the one-step ceiling.
+- Inspect the generated Metal artifact and compile options: `sqrt` must remain a
+  precise operation, fast-math transformations must be disabled, and no
+  reciprocal-square-root sequence may replace it.
 - Force a backend profile without class-A proof and assert `cmp.Exact` refuses.
 - Ensure composed Softmax, RMSNorm, MatMul, Attention, and golden-model budget
   traces are stable and every injected primitive error is attributed.
