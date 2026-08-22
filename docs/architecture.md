@@ -4,8 +4,11 @@ A tour of the design, written for someone who wants to understand or contribute
 to it. If you are looking for the formal decision record instead, that lives in
 [`specs/`](../specs/).
 
-Nothing here is implemented yet. This describes what is being built and why, so
-that when you read the code it makes sense.
+Most of this is not implemented yet. Two of eight milestones are built: the CPU
+backend opens a device, reports what it can do, and moves memory. Everything
+below that describes what is being built and why, so that when you read the code
+it makes sense, and [what is built](#what-is-built-so-far) says which parts you
+can run today.
 
 ## The problem
 
@@ -202,6 +205,46 @@ highlights:
 
 If you contribute a backend, that file is the contract.
 
+## What is built so far
+
+| Milestone | State |
+| --- | --- |
+| M0, the cgo-free build gate | done |
+| M1, memory on the CPU backend | done |
+| M2, the minimum kernel compiler and flat CPU execution | next |
+| M3 to M7, graphs, cooperative execution, GEMM, Metal, tensors | specified, not started |
+
+M1 built the bottom of the device layer: enumeration and device open, the
+capability and limit profiles, pooled memory with a two-level segregated fit
+allocator, buffers and typed views, explicit lifetimes, and host-to-device
+transfers, all on the CPU backend and all reachable through the public API.
+
+Three things about it are worth knowing before reading the code.
+
+**A pool is exactly one device allocation, and it never grows.** No backend can
+resize one in place, and growing by reallocating and copying would invalidate
+every address already handed out, since a device address is baked into
+descriptor sets and recorded commands by the time anything runs. So the choice
+was never between fixed and growable; it was between fixed and lying. The one
+thing that does grow is the implicit pool behind `Device.NewBuffer`, which grows
+the only way a device allocation can: by adding another one.
+
+**Nothing compacts, and fragmentation is permanent for a pool's life.** That is
+what a non-compacting allocator is rather than a bug to be fixed, so
+`PoolStats` reports `LargestFree` beside `Free` to let a caller see the failure
+coming instead of hearing about it afterwards. The mitigation is separating
+pools by lifetime class, which is why a pool takes a policy and a label instead
+of accel trying to guess.
+
+**Closing is ordered, not recursive.** A pool with live buffers refuses to
+close, and so does a device with live pools; both report and free nothing, and
+the children keep working. Closing a child out from under a caller who still
+holds it turns their bug into a silent success and makes the next use undefined
+instead of reported.
+
+The milestone list, what done means for each, and the deviations taken so far
+are in [`../specs/009-sequencing.md`](../specs/009-sequencing.md).
+
 ## Where to go next
 
 - [`conventions.md`](conventions.md), the backend divergence table. Genuinely
@@ -209,3 +252,5 @@ If you contribute a backend, that file is the contract.
 - [`../specs/`](../specs/), the internal design specs, if you want the full
   reasoning and the open questions.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md), if you want to help.
+- [`../specs/009-sequencing.md`](../specs/009-sequencing.md), if you want to know
+  what is being built next and what would count as done.

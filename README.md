@@ -10,17 +10,17 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-blue.svg" alt="License: BSD-3-Clause"></a>
   <img src="https://img.shields.io/badge/go-1.27+-00ADD8.svg" alt="Go 1.27+">
   <img src="https://img.shields.io/badge/cgo-free-success.svg" alt="cgo-free">
-  <img src="https://img.shields.io/badge/status-design-orange.svg" alt="Status: design">
+  <img src="https://img.shields.io/badge/status-early-orange.svg" alt="Status: early">
 </p>
 
 ---
 
 > [!IMPORTANT]
-> **This is a design, not a library.** Every function returns
-> `ErrNotImplemented`. There is no working backend yet and the API will change.
-> The repository holds the architecture, the specs, and an API surface that
-> compiles. Feedback on the design is the most useful thing you can give it right
-> now.
+> **Early, and mostly still a design.** Two of eight milestones are built: the
+> CPU backend can open a device and move memory. Kernels, graphs, and every GPU
+> backend are specified and unimplemented, and calling into them reports
+> `ErrNotImplemented`. The API will change. Feedback on the design is still the
+> most useful thing you can give it.
 
 ## What it is
 
@@ -44,6 +44,33 @@ for range steps {
     g.Rebind(nextInputs)
     dev.Queue().Submit(g).Wait()
 }
+```
+
+That is the destination. **What runs today** is the memory half of it, on the
+CPU backend:
+
+```go
+dev, err := accel.OpenCPU(accel.CPUOptions{})
+if err != nil {
+    log.Fatal(err)
+}
+defer dev.Close()
+
+// Memory comes from pools, because a model has thousands of tensors and
+// drivers cap how many allocations you may hold.
+weights, err := dev.NewPool(accel.MemoryDevice, 1<<30)
+defer weights.Close()
+
+w, err := weights.Alloc(accel.BufferDescriptor{
+    DType: accel.F16,
+    Count: 4096 * 4096,
+    Usage: accel.UsageStorage | accel.UsageCopyDst,
+    Label: "blk.0.attn_q.weight", // labels show up in every error
+})
+defer w.Close()
+
+dev.Queue().WriteBuffer(w, 0, hostData) // returns once your slice is free
+head, err := w.View(0, 128)             // a slice, in elements, with no copy
 ```
 
 Two layers. The **device layer** gives you buffers, kernels, and recorded command
@@ -102,15 +129,21 @@ bindings are the better choice.
 | Component | State |
 | --- | --- |
 | Architecture and decisions | Decision record locked; bounded specs drafted |
-| Device layer specs | Drafted |
-| Tensor layer and kernel-corpus specs | Drafted |
-| Device layer API surface | Compiles, unimplemented |
-| CPU backend | Not started |
-| Metal backend | Not started |
-| Kernel compiler | Not started |
-| Tensor layer | Not started |
+| Device open, capabilities, limits | **Built** on the CPU backend |
+| Pools, suballocation, buffers, views, lifetime | **Built** on the CPU backend |
+| Host and device transfers | **Built** on the CPU backend |
+| Textures and formats | Specified, deferred until graphics |
+| Kernel compiler | Specified, next |
+| Command graphs | Specified, not started |
+| Metal backend | Specified, not started |
+| Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
+
+Built means it has tests that fail without it, greater than 90% statement
+coverage on its package, and an end-to-end case through the public API. The
+milestone that produced the three rows above is
+[M1](specs/009-sequencing.md), and the next one is the kernel compiler.
 
 **v0 is compute only, on the CPU backend and Metal.** The other backends and the
 graphics half are designed and normative so their shape cannot break callers
@@ -122,6 +155,13 @@ done for each step, is [`specs/009-sequencing.md`](specs/009-sequencing.md).
 The design is still soft, so an argument against one of its decisions is worth
 more than a patch right now. Every spec ends with the questions we have not
 resolved. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+```sh
+CGO_ENABLED=0 go build ./...
+go test -race ./...
+```
+
+No GPU required, which is deliberate and should stay true.
 
 ## Acknowledgements
 
