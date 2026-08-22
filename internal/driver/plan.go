@@ -7,6 +7,8 @@ package driver
 import (
 	"errors"
 	"fmt"
+
+	"golang.design/x/accel/internal/kernel"
 )
 
 // A Plan is a built graph, resolved down to bytes and handed to a backend.
@@ -58,6 +60,11 @@ const (
 	// rewritten on every submission, which is what makes a graph carrying a
 	// small constant replayable.
 	OpHostWrite
+
+	// OpDispatch runs a compiled kernel over a grid of workgroups. Flat only:
+	// a cooperative kernel needs the resumable lowering that arrives at M4, and
+	// a plan carrying one is rejected rather than run in an invented order.
+	OpDispatch
 )
 
 func (o PlanOp) String() string {
@@ -66,6 +73,8 @@ func (o PlanOp) String() string {
 		return "copy"
 	case OpHostWrite:
 		return "host write"
+	case OpDispatch:
+		return "dispatch"
 	}
 	return "invalid"
 }
@@ -80,6 +89,9 @@ type PlanNode struct {
 	// Data is OpHostWrite's payload, owned by the plan.
 	Data []byte
 
+	// Dispatch is OpDispatch's payload.
+	Dispatch *Dispatch
+
 	// BarrierBefore asks for every prior write to be visible before this node
 	// runs. A backend with real barriers emits one; a backend that executes
 	// serially may ignore it, which is why the CPU backend is not a check on
@@ -90,6 +102,28 @@ type PlanNode struct {
 	// diagnostic can name the node a caller recorded rather than an index into
 	// this slice.
 	ID int
+}
+
+// Dispatch is what one compute node runs.
+//
+// The kernel is a generated record rather than source: specs/006-backends.md R5
+// says a backend does not compile Go, it consumes what the kernel compiler
+// produced for its target. For this backend that artifact is the generated Go
+// lowering the record carries.
+type Dispatch struct {
+	Kernel *kernel.Kernel
+
+	// Count is the workgroup count, not the invocation count.
+	Count kernel.ID3
+
+	// Bindings are the resource ranges, one per entry of the kernel's binding
+	// layout and in that order. Position is the contract: the kernel indexes its
+	// arguments by layout index, so a reordering here silently swaps two
+	// buffers.
+	Bindings []Operand
+
+	// Uniforms are the by-value parameters, in signature order.
+	Uniforms []any
 }
 
 // OperandKind distinguishes bytes known at build from bytes supplied later.
@@ -268,8 +302,10 @@ func (p *Plan) Validate() error {
 		if n.Op == OpInvalid {
 			return fmt.Errorf("accel: plan node %d has no operation", i)
 		}
-		if err := p.checkOperand(i, "destination", n.Dst); err != nil {
-			return err
+		if n.Op != OpDispatch {
+			if err := p.checkOperand(i, "destination", n.Dst); err != nil {
+				return err
+			}
 		}
 		switch n.Op {
 		case OpCopy:
@@ -288,6 +324,34 @@ func (p *Plan) Validate() error {
 				return fmt.Errorf("accel: plan node %d writes %d bytes into a %d-byte destination",
 					i, len(n.Data), n.Dst.size)
 			}
+		case OpDispatch:
+			if err := p.checkDispatch(i, n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Plan) checkDispatch(node int, n *PlanNode) error {
+	d := n.Dispatch
+	if d == nil {
+		return fmt.Errorf("accel: plan node %d is a dispatch with no payload", node)
+	}
+	if d.Kernel == nil {
+		return fmt.Errorf("accel: plan node %d dispatches no kernel", node)
+	}
+	if d.Kernel.Flat == nil {
+		return fmt.Errorf("accel: plan node %d dispatches %q, which is cooperative and has no "+
+			"flat entry point", node, d.Kernel.Name)
+	}
+	if len(d.Bindings) != len(d.Kernel.Bindings) {
+		return fmt.Errorf("accel: plan node %d binds %d resources to %q, which declares %d",
+			node, len(d.Bindings), d.Kernel.Name, len(d.Kernel.Bindings))
+	}
+	for i, o := range d.Bindings {
+		if err := p.checkOperand(node, d.Kernel.Bindings[i].Name, o); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -30,7 +30,7 @@ type Recorder struct {
 
 // Dispatch records a compute dispatch.
 func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, count WorkgroupCount) NodeID {
-	panic(ErrNotImplemented)
+	return r.dispatchImpl(p, b, count)
 }
 
 // DispatchIndirect records a dispatch whose workgroup count is read from a buffer

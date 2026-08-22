@@ -234,6 +234,10 @@ type Device struct {
 	// counted here for the same reason implicit blocks are, since a graph has a
 	// handle and is therefore a live child.
 	graphs int
+
+	// pipelines counts created, unclosed compute pipelines, for the same reason
+	// graphs are counted: a device closing under one would strand it.
+	pipelines int
 }
 
 // QueueKind is what a queue accepts.
@@ -266,7 +270,7 @@ func (d *Device) NewTexture(desc TextureDescriptor) (*Texture, error) {
 // at compile time: it appears in the GLSL layout qualifier and in Metal's
 // threads-per-threadgroup. See specs/002-compute-model.md.
 func (d *Device) NewComputePipeline(desc ComputePipelineDescriptor) (*ComputePipeline, error) {
-	panic(ErrNotImplemented)
+	return d.newComputePipeline(desc)
 }
 
 // noCopy makes `go vet` complain about copying a value that owns device state.

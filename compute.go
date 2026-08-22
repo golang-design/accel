@@ -158,7 +158,79 @@ type Unmet struct {
 
 // Missing reports every feature or numeric requirement this device does not
 // meet, in stable order. It consults both [Capabilities] and [Limits].
-func (d *Device) Missing(r Requirements) []Unmet { panic(ErrNotImplemented) }
+//
+// Stable order matters: a caller printing the result should get the same text
+// twice, and a test asserting on it should not depend on map iteration.
+func (d *Device) Missing(r Requirements) []Unmet {
+	var out []Unmet
+	caps := d.info.Capabilities
+	lim := d.info.Limits
+
+	// Capabilities first, in declaration order, each with the Capabilities field
+	// that answers it.
+	for _, c := range []struct {
+		cap  Capability
+		have bool
+	}{
+		{CapSubgroupBasic, caps.Subgroups && caps.SubgroupOps&SubgroupBasic != 0},
+		{CapSubgroupVote, caps.Subgroups && caps.SubgroupOps&SubgroupVote != 0},
+		{CapSubgroupBallot, caps.Subgroups && caps.SubgroupOps&SubgroupBallot != 0},
+		{CapSubgroupShuffle, caps.Subgroups && caps.SubgroupOps&SubgroupShuffle != 0},
+		{CapSubgroupArithmetic, caps.Subgroups && caps.SubgroupOps&SubgroupArithmetic != 0},
+		{CapF16Arithmetic, caps.F16Arithmetic},
+		{CapBF16Arithmetic, caps.BF16Arithmetic},
+		{CapAtomicFloatAddStorage, caps.AtomicFloatAddStorage},
+		{CapAtomicFloatAddShared, caps.AtomicFloatAddShared},
+		{CapI8DotProduct, caps.I8DotProduct},
+	} {
+		if r.Caps&c.cap != 0 && !c.have {
+			out = append(out, Unmet{Cap: c.cap})
+		}
+	}
+
+	for _, c := range []struct {
+		name      string
+		need      uint64
+		available uint64
+	}{
+		{"MaxWorkgroupSize[0]", uint64(r.WorkgroupSize[0]), uint64(lim.MaxWorkgroupSize[0])},
+		{"MaxWorkgroupSize[1]", uint64(r.WorkgroupSize[1]), uint64(lim.MaxWorkgroupSize[1])},
+		{"MaxWorkgroupSize[2]", uint64(r.WorkgroupSize[2]), uint64(lim.MaxWorkgroupSize[2])},
+		{"MaxWorkgroupInvocations", uint64(r.WorkgroupInvocations), uint64(lim.MaxWorkgroupInvocations)},
+		{"MaxSharedMemoryBytes", uint64(r.SharedBytes), uint64(lim.MaxSharedMemoryBytes)},
+	} {
+		if c.need > c.available {
+			out = append(out, Unmet{Limit: c.name, Required: c.need, Available: c.available})
+		}
+	}
+	return out
+}
+
+func (c Capability) String() string {
+	switch c {
+	case CapSubgroupBasic:
+		return "CapSubgroupBasic"
+	case CapSubgroupVote:
+		return "CapSubgroupVote"
+	case CapSubgroupBallot:
+		return "CapSubgroupBallot"
+	case CapSubgroupShuffle:
+		return "CapSubgroupShuffle"
+	case CapSubgroupArithmetic:
+		return "CapSubgroupArithmetic"
+	case CapF16Arithmetic:
+		return "CapF16Arithmetic"
+	case CapBF16Arithmetic:
+		return "CapBF16Arithmetic"
+	case CapAtomicFloatAddStorage:
+		return "CapAtomicFloatAddStorage"
+	case CapAtomicFloatAddShared:
+		return "CapAtomicFloatAddShared"
+	case CapI8DotProduct:
+		return "CapI8DotProduct"
+	}
+	return fmt.Sprintf("Capability(%d)", uint32(c))
+}
 
 // WorkgroupCount is how many workgroups a dispatch runs.
 //
@@ -191,10 +263,29 @@ type ComputePipelineDescriptor struct {
 }
 
 // ComputePipeline is a kernel compiled for a device with a fixed workgroup size.
-type ComputePipeline struct{ _ noCopy }
+type ComputePipeline struct {
+	_ noCopy
 
-// Close releases the pipeline.
-func (p *ComputePipeline) Close() error { panic(ErrNotImplemented) }
+	dev    *Device
+	kernel *Kernel
+	label  string
+	state  resourceState
+}
+
+// Kernel is the compiled kernel this pipeline was created from. It is the
+// source of truth for everything static: workgroup extent, binding layout,
+// inferred access, and requirements.
+func (p *ComputePipeline) Kernel() *Kernel { return p.kernel }
+
+// Close releases the pipeline. It fails while a graph still names it, because
+// a graph submitted afterwards would dispatch a kernel whose pipeline is gone.
+func (p *ComputePipeline) Close() error {
+	if !p.state.beginClose() {
+		return nil
+	}
+	p.dev.countPipelines(-1)
+	return nil
+}
 
 // Kernel is a kernel compiled to whatever form the target device consumes.
 //

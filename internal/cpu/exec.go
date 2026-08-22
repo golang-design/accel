@@ -7,8 +7,10 @@ package cpu
 import (
 	"fmt"
 	"sync"
+	"unsafe"
 
 	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/kernel"
 )
 
 // Compile turns a plan into something this backend can resubmit.
@@ -148,6 +150,13 @@ type resolvedNode struct {
 	dst, src []byte
 	data     []byte
 	id       int
+
+	// dispatch and args are OpDispatch's payload and the argument set built
+	// from its bindings. The slices in args alias device memory rather than
+	// copying it, which is what makes a kernel write where the graph said it
+	// would.
+	dispatch *driver.Dispatch
+	args     kernel.Args
 }
 
 func (e *executable) resolve() ([]resolvedNode, error) {
@@ -157,9 +166,13 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 	out := e.scratch[:len(e.plan.Nodes)]
 	for i := range e.plan.Nodes {
 		n := &e.plan.Nodes[i]
-		dst, err := e.bytes(n.Dst)
-		if err != nil {
-			return nil, fmt.Errorf("accel: node %d destination: %w", n.ID, err)
+		var dst []byte
+		if n.Op != driver.OpDispatch {
+			var err error
+			dst, err = e.bytes(n.Dst)
+			if err != nil {
+				return nil, fmt.Errorf("accel: node %d destination: %w", n.ID, err)
+			}
 		}
 		r := resolvedNode{op: n.Op, dst: dst, data: n.Data, id: n.ID}
 		if n.Op == driver.OpCopy {
@@ -168,6 +181,11 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 				return nil, fmt.Errorf("accel: node %d source: %w", n.ID, err)
 			}
 			r.src = src
+		}
+		if n.Op == driver.OpDispatch {
+			if err := e.resolveDispatch(&r, n); err != nil {
+				return nil, err
+			}
 		}
 		out[i] = r
 	}
@@ -205,6 +223,80 @@ func (e *executable) bytes(o driver.Operand) ([]byte, error) {
 	return nil, fmt.Errorf("%s", o)
 }
 
+// resolveDispatch turns a dispatch's binding operands into the typed slices its
+// generated entry point takes.
+//
+// The slices alias device memory. They are not copies: a kernel writing its
+// output must write where the graph said it would, and a copy back afterwards
+// would be a second definition of what a binding means.
+func (e *executable) resolveDispatch(r *resolvedNode, n *driver.PlanNode) error {
+	d := n.Dispatch
+	r.dispatch = d
+	slices := make([]any, len(d.Bindings))
+	for i, o := range d.Bindings {
+		raw, err := e.bytes(o)
+		if err != nil {
+			return fmt.Errorf("accel: node %d binding %q: %w", n.ID, d.Kernel.Bindings[i].Name, err)
+		}
+		s, err := typedSlice(d.Kernel.Bindings[i].DType, raw)
+		if err != nil {
+			return fmt.Errorf("accel: node %d binding %q: %w", n.ID, d.Kernel.Bindings[i].Name, err)
+		}
+		slices[i] = s
+	}
+	r.args = kernel.Args{Slices: slices, Uniforms: d.Uniforms}
+	return nil
+}
+
+// typedSlice reinterprets device bytes as the element type a binding declares.
+//
+// A reinterpretation rather than a conversion: the bytes are the device's
+// representation already, and spec 001 section 3.5 requires host and device to
+// share byte order, which is checked where a transfer enters rather than per
+// binding here. Alignment holds because a pool's suballocations are aligned to
+// at least the binding alignment, which is far above any element's.
+func typedSlice(dt kernel.DType, b []byte) (any, error) {
+	switch dt {
+	case kernel.U8:
+		return b, nil
+	case kernel.I8:
+		return reinterpret[int8](b)
+	case kernel.F16:
+		return reinterpret[kernel.Float16](b)
+	case kernel.BF16:
+		return reinterpret[kernel.BFloat16](b)
+	case kernel.I32:
+		return reinterpret[int32](b)
+	case kernel.U32:
+		return reinterpret[uint32](b)
+	case kernel.F32:
+		return reinterpret[float32](b)
+	}
+	return nil, fmt.Errorf("%v is not a binding element type", dt)
+}
+
+// reinterpret views bytes as elements of T.
+//
+// The narrow storage types go through here too: each is a struct wrapping a
+// uint16 and therefore has that layout exactly, which is the property that lets
+// a device store them without the host converting.
+//
+// A byte length that is not a whole number of elements is refused rather than
+// truncated. Truncation would hide a binding whose range was computed with the
+// wrong element size, and the kernel would run happily over one element fewer
+// than the caller believes it bound.
+func reinterpret[T any](b []byte) (any, error) {
+	var zero T
+	size := int(unsafe.Sizeof(zero))
+	if len(b)%size != 0 {
+		return nil, fmt.Errorf("%d bytes is not a whole number of %d-byte elements", len(b), size)
+	}
+	if len(b) == 0 {
+		return []T(nil), nil
+	}
+	return unsafe.Slice((*T)(unsafe.Pointer(&b[0])), len(b)/size), nil
+}
+
 // backing is this backend reaching into its own allocation.
 //
 // Deliberately not [driver.Block.Bytes], which is the *host* mapping and is nil
@@ -237,6 +329,10 @@ func run(nodes []resolvedNode) error {
 			copy(n.dst, n.src)
 		case driver.OpHostWrite:
 			copy(n.dst, n.data)
+		case driver.OpDispatch:
+			if err := kernel.Dispatch(n.dispatch.Kernel, n.dispatch.Count, n.args); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("accel: node %d has operation %v", n.id, n.op)
 		}

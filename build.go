@@ -186,9 +186,16 @@ func (g *Graph) lower() error {
 				return err
 			}
 			node.Dst, node.Src = dst, src
+		case NodeDispatch:
+			node.Op = driver.OpDispatch
+			d, err := g.dispatchOperands(n)
+			if err != nil {
+				return err
+			}
+			node.Dispatch = d
 		default:
-			return fmt.Errorf("accel: Build: node %d is a %v, which arrives with "+
-				"specs/016-graph-execution.md", n.id, n.kind)
+			return fmt.Errorf("accel: Build: node %d is a %v, which is not yet lowered "+
+				"(specs/009-sequencing.md)", n.id, n.kind)
 		}
 		plan.Nodes = append(plan.Nodes, node)
 	}

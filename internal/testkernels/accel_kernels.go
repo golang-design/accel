@@ -68,6 +68,34 @@ func accumulateFlat(in []float32, from uint32, to uint32) float32 {
 	return total
 }
 
+// addFlat is the generated flat lowering of Add.
+//
+// It is what the CPU backend runs. The authored Add is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func addFlat(t accel.Thread, a []float32, b []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = float32(a[i] + b[i])
+	}
+}
+
+// AddKernel is the compiled form of Add.
+var AddKernel = accel.Kernel{
+	Name:          "Add",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "38bab352b11121654f413afaf670a778",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		addFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
 // segmentSumFlat is the generated flat lowering of SegmentSum.
 //
 // It is what the CPU backend runs. The authored SegmentSum is never registered as

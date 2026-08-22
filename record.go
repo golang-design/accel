@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/kernel"
 )
 
 // A recorder accumulates declarations. Nothing is checked as it goes, by
@@ -49,6 +50,10 @@ type recNode struct {
 	// stage is the part of the pipeline this node runs in, which is what a
 	// barrier names on each side.
 	stage stage
+
+	// pipeline and count are a dispatch node's payload.
+	pipeline *ComputePipeline
+	count    kernel.ID3
 }
 
 // access is one resource range one node touches, in bytes.
