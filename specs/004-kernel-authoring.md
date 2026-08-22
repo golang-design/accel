@@ -617,7 +617,7 @@ must not add runtime generic dispatch to the kernel ABI.
 
 ## Testing
 
-Four levels, each catching what the one below cannot.
+Five levels, each catching what the one below cannot.
 
 1. **Golden output.** Emitted text and SPIR-V are byte-stable for a fixed input.
    The predecessor's corpus assertion (existing kernels emit byte-identically
@@ -634,6 +634,38 @@ Four levels, each catching what the one below cannot.
 4. **CPU instrumentation tests** for every barrier-using kernel, including
    deterministic non-uniform arrival, conflicting accesses, and definition
    tracking. `go test -race` separately checks the runtime implementation.
+5. **The authored function against its generated flat lowering.** This level
+   exists because of what changed above, and without it there is a hole where a
+   tautology used to be.
+
+   When the CPU backend called the authored function, "the executed Go and the
+   authored Go agree" needed no test: they were one function. Now nothing
+   executes the authored function, so a mistake in IR construction produces a CPU
+   runner and a GPU artifact that agree with each other, both derived from the
+   same wrong IR, and disagree with the Go program the author read and reasoned
+   about. Differential execution at level 3 cannot see that, for the same reason
+   [`000-decisions.md`](000-decisions.md) decision 3 gives for a wrong formula:
+   it is wrong identically everywhere.
+
+   So every **flat** kernel in the corpus is run twice, once by calling the
+   authored function directly over the same buffers and once through the
+   generated flat lowering, and the results are compared. Flat kernels are the
+   ones eligible because they have no barrier, no shared memory, and no subgroup
+   operation, so an ordinary Go call has the right semantics; cooperative kernels
+   have no direct-call form by construction.
+
+   The comparison follows [008](008-numerics.md) rather than asserting bits
+   unconditionally, and the reason is itself the point of the exercise: the
+   generated lowering emits an explicit `float32(...)` at every rounding point
+   and the authored function does not, so on a host with FMA the two may
+   legitimately differ where the Go compiler contracts. Integer and layout
+   kernels therefore compare bits, and f32 kernels compare under class B's
+   contraction bound. A difference outside that bound is a lowering bug.
+
+   This does not cover every IR node, since cooperative constructs are excluded,
+   but the cooperative lowering is built from the same node set and the same
+   emitters, so it covers the arithmetic, indexing, conversion, and control-flow
+   nodes where a silent mistranslation is most likely.
 
 Plus:
 

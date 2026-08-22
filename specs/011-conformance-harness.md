@@ -149,7 +149,17 @@ It supports three execution stages:
 3. M6+ public execution on every accepted GPU backend.
 
 The same logical case and reference feed every stage. Cooperative variants are
-ineligible for stage 1. Target acceptance compiles emitted source through the
+ineligible for stage 1.
+
+Stage 1 additionally runs each flat kernel through **the authored Go function
+called directly**, alongside the generated flat lowering, and compares them per
+[004](004-kernel-authoring.md)'s fifth testing level. This is the only check that
+the generated lowering means what the authored source says: since the authored
+function is no longer executed by the backend, a mistake in IR construction would
+otherwise appear in the CPU runner and every GPU artifact identically and pass
+differential execution. Integer and layout kernels compare bits; f32 kernels
+compare under the contraction bound, because the generated lowering emits
+explicit rounding points the authored function does not. Target acceptance compiles emitted source through the
 actual target compiler/driver before differential execution.
 
 ## 7. Graph goldens and whole-plan oracle
