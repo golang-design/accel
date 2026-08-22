@@ -23,6 +23,9 @@
 // lowering it names; nothing here compiles a kernel at runtime, because type
 // checking needs the go tool and a deployed binary does not have it.
 //
+// Uniform blocks are encoded by a generated std140 codec, so a caller supplies
+// a [UniformBuffer] and never writes a padding offset.
+//
 // Not implemented, and reporting [ErrNotImplemented]: textures, compute
 // pipelines, [Recorder] and [Graph], and [Queue.Submit]. specs/009-sequencing.md
 // is the order they arrive in.

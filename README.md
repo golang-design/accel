@@ -16,11 +16,12 @@
 ---
 
 > [!IMPORTANT]
-> **Early, and mostly still a design.** The CPU backend can open a device, move
-> memory, and compile a kernel written in the Go subset into a lowering it then
-> runs. Graphs, uniforms, and every GPU backend are specified and unimplemented,
-> and calling into them reports `ErrNotImplemented`. The API will change.
-> Feedback on the design is still the most useful thing you can give it.
+> **Early, and still substantially a design.** The CPU backend can open a
+> device, move memory, and compile a kernel written in the Go subset into a
+> lowering it then runs. Command graphs, cooperative execution, and every GPU
+> backend are specified and unimplemented, and calling into them reports
+> `ErrNotImplemented`. The API will change. Feedback on the design is still the
+> most useful thing you can give it.
 
 ## What it is
 
@@ -92,10 +93,11 @@ bindings with the read and write accesses **inferred from the body**. Anything
 outside the subset is rejected with a source position and a reason.
 
 The subset has loops, helpers, the scalar math in
-[`kmath`](https://pkg.go.dev/golang.design/x/accel/kmath), and 16-bit storage
-types that deliberately carry no arithmetic operators, so a narrow value has to
-widen before it can be used and f32 accumulation is the only thing that
-compiles rather than a rule to remember.
+[`kmath`](https://pkg.go.dev/golang.design/x/accel/kmath), 16-bit storage types
+that deliberately carry no arithmetic operators, and by-value uniform structs
+whose std140 encoder is generated so a caller never writes a padding offset.
+A narrow value has to widen before it can be used, which makes f32 accumulation
+the only thing that compiles rather than a rule to remember.
 
 Two layers. The **device layer** gives you buffers, kernels, and recorded command
 graphs, for renderers and simulations. The **tensor layer** gives you dtypes,
@@ -159,8 +161,8 @@ bindings are the better choice.
 | Textures and formats | Specified, deferred until graphics |
 | Kernel compiler: subset checking, IR, Go lowering, generator | **Built** |
 | Kernel language: loops, helpers, narrow storage, scalar math | **Built** |
-| Kernel uniforms: std140 codecs and typed binding | Specified, next |
-| Command graphs | Specified, not started |
+| Kernel uniforms: std140 codecs and typed binding | **Built** |
+| Command graphs | Specified, next |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
