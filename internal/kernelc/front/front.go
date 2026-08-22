@@ -215,6 +215,16 @@ type checker struct {
 	// the recursion check runs over.
 	helpers map[types.Object]*ir.Func
 	calls   map[*ir.Func][]*ir.Func
+
+	// order is every function in declaration order.
+	//
+	// The recursion check walks this rather than ranging over calls, because Go
+	// randomizes map iteration and a cycle reached from a different starting
+	// point is reported as a different cycle. CI found it: the same source said
+	// "a -> b -> a" on one machine and "b -> a -> b" on another. A compiler
+	// whose diagnostics depend on the run cannot have a golden test and cannot
+	// have a reproducible bug report.
+	order []*ir.Func
 }
 
 // normalize prints a declaration back from its AST.
@@ -319,6 +329,7 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 	k := &ir.Func{Name: name, Kernel: true, Workgroup: extent, Thread: -1}
 	k.P = fn.Pos()
 	k.Source = c.normalize(fn)
+	c.order = append(c.order, k)
 
 	if !c.signature(fn, k) {
 		return nil
@@ -381,6 +392,7 @@ func (c *checker) helper(fn *ast.FuncDecl) *ir.Func {
 	h := &ir.Func{Name: name, Thread: -1}
 	h.P = fn.Pos()
 	h.Source = c.normalize(fn)
+	c.order = append(c.order, h)
 
 	if fn.Type.Results != nil && len(fn.Type.Results.List) == 1 {
 		rt, err := c.irType(c.info.TypeOf(fn.Type.Results.List[0].Type))
@@ -520,7 +532,7 @@ func (c *checker) checkRecursion() {
 		return false
 	}
 
-	for f := range c.calls {
+	for _, f := range c.order {
 		walk(f)
 	}
 }

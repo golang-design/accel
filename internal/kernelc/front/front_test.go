@@ -1045,3 +1045,66 @@ func repoRoot(t *testing.T) string {
 	}
 	return abs
 }
+
+// TestDiagnosticsAreDeterministic is the property CI found the hard way.
+//
+// The recursion check ranged over a map, and Go randomizes map iteration, so the
+// same source reported "a -> b -> a" on one machine and "b -> a -> b" on
+// another. A compiler whose diagnostics depend on the run cannot have a golden
+// test, and a bug report against it cannot be reproduced from the message.
+//
+// The property is stronger than the instance: every diagnostic a package
+// produces, in order, must be the same on every run.
+func TestDiagnosticsAreDeterministic(t *testing.T) {
+	files := map[string]string{
+		"determcase": header("determcase") + `//accel:helper
+func a(x float32) float32 { return b(x) }
+
+//accel:helper
+func b(x float32) float32 { return a(x) }
+
+//accel:helper
+func c(x float32) float32 { return c(x) }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, unusedA []float32, unusedB []float32, out []float32) {
+	switch {
+	}
+	for range out {
+	}
+	out[0] = a(1) + c(1)
+}
+`,
+	}
+	pattern := "./internal/kernelc/front/determcase"
+	pkgs := loadOverlay(t, files, []string{pattern})
+
+	var first string
+	for run := range 20 {
+		_, diags := front.Check(pkgs[pattern])
+		if len(diags) == 0 {
+			t.Fatal("the case produced no diagnostics")
+		}
+		var b strings.Builder
+		for _, d := range diags {
+			fmt.Fprintf(&b, "%d:%d: %s\n", d.Pos.Line, d.Pos.Column, d.Msg)
+		}
+		if run == 0 {
+			first = b.String()
+			continue
+		}
+		if b.String() != first {
+			t.Fatalf("run %d produced different diagnostics:\n--- first ---\n%s\n--- run %d ---\n%s",
+				run, first, run, b.String())
+		}
+	}
+
+	// And the cycles are reported from their first-declared member, which is
+	// what makes the message stable rather than merely repeatable.
+	if !strings.Contains(first, "a is recursive (a -> b -> a)") {
+		t.Errorf("the mutual cycle is not reported from its first member:\n%s", first)
+	}
+	if !strings.Contains(first, "c is recursive (c -> c)") {
+		t.Errorf("the direct cycle is not reported:\n%s", first)
+	}
+}
