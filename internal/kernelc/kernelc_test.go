@@ -45,8 +45,16 @@ func TestCommittedFileIsFresh(t *testing.T) {
 	if results[0].Written {
 		t.Error("check mode wrote a file")
 	}
-	if len(results[0].Kernels) != 1 || results[0].Kernels[0] != "Scale" {
-		t.Errorf("kernels = %v, want [Scale]", results[0].Kernels)
+	// Sorted, so adding a kernel to the corpus does not reorder this.
+	want := []string{"CountAbove", "Scale", "SegmentSum"}
+	if len(results[0].Kernels) != len(want) {
+		t.Fatalf("kernels = %v, want %v", results[0].Kernels, want)
+	}
+	for i := range want {
+		if results[0].Kernels[i] != want[i] {
+			t.Errorf("kernels = %v, want %v", results[0].Kernels, want)
+			break
+		}
 	}
 }
 
@@ -140,7 +148,7 @@ func TestRejectedKernelIsAnError(t *testing.T) {
 	}
 	broken := strings.Replace(string(b),
 		"i := t.GlobalID().X",
-		"i := t.GlobalID().X\n\tfor {\n\t\tbreak\n\t}", 1)
+		"i := t.GlobalID().X\n\tswitch {\n\t}", 1)
 	if err := os.WriteFile(src, []byte(broken), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +157,7 @@ func TestRejectedKernelIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("a rejected kernel produced no error")
 	}
-	if !strings.Contains(err.Error(), "loops are out of scope") {
+	if !strings.Contains(err.Error(), "outside the closed IR node set") {
 		t.Errorf("the error does not carry the rejection: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "kernels", kernelc.GeneratedFile)); statErr == nil {

@@ -76,10 +76,14 @@ func preimage(k *ir.Func) string {
 		fmt.Fprintf(&b, "intrinsic\t%s\n", in)
 	}
 
-	// Empty at spec 012. Spec 013 adds one line per transitive helper, with its
-	// own source digest, so that editing a helper without regenerating its
-	// callers is caught.
-	fmt.Fprintf(&b, "helpers\t%d\n", 0)
+	// One line per helper the body reaches, with its own source digest, so that
+	// editing a helper without regenerating its callers is caught. That is the
+	// case a digest over the kernel's own source alone would miss entirely: the
+	// caller is untouched and what it compiles to is not.
+	fmt.Fprintf(&b, "helpers\t%d\n", len(k.Helpers))
+	for _, h := range k.Helpers {
+		fmt.Fprintf(&b, "helper\t%s\t%s\n", h.Name, digestOf(h.Source))
+	}
 
 	// The normalized source last, because it is the largest part and the one a
 	// reader scrolls past.

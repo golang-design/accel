@@ -111,7 +111,13 @@ func Load(dir string, patterns ...string) ([]*packages.Package, error) {
 // sequence of round trips, and reporting none of the kernels when one is wrong
 // makes an unrelated typo hide a working corpus.
 func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
-	c := &checker{pkg: pkg, fset: pkg.Fset, info: pkg.TypesInfo}
+	c := &checker{
+		pkg: pkg, fset: pkg.Fset, info: pkg.TypesInfo,
+		helpers: map[types.Object]*ir.Func{},
+		calls:   map[*ir.Func][]*ir.Func{},
+	}
+
+	var decls []declaration
 
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
@@ -123,16 +129,48 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 			if !ok {
 				continue
 			}
-			if kind == HelperDirective {
-				c.errorf(fn.Pos(), "%s is out of scope for now: helper functions arrive with "+
-					"spec 013 (specs/013-kernel-subset.md)", HelperDirective)
-				continue
+			decls = append(decls, declaration{fn: fn, kind: kind, extent: extent})
+		}
+	}
+
+	// Helpers are collected before any kernel is built, because a kernel may
+	// call a helper declared after it. Go has no forward declarations and this
+	// walk is source-ordered, so a single pass would reject a perfectly ordinary
+	// file for the order its author chose.
+	for _, d := range decls {
+		if d.kind == HelperDirective {
+			if h := c.helper(d.fn); h != nil {
+				c.helpers[c.info.Defs[d.fn.Name]] = h
 			}
-			if k := c.kernel(fn, extent); k != nil {
+		}
+	}
+	// Signatures before bodies, and both before any kernel. A helper that calls
+	// another helper needs the callee's parameters to check the call against, and
+	// building bodies in declaration order would leave the first helper checking
+	// a call to a signature that does not exist yet. Three passes rather than
+	// one is what makes the order a file is written in stop mattering.
+	for _, d := range decls {
+		if d.kind == HelperDirective {
+			if h := c.helpers[c.info.Defs[d.fn.Name]]; h != nil {
+				c.helperSignature(h, d.fn)
+			}
+		}
+	}
+	for _, d := range decls {
+		if d.kind == HelperDirective {
+			if h := c.helpers[c.info.Defs[d.fn.Name]]; h != nil {
+				c.helperBody(h, d.fn)
+			}
+		}
+	}
+	for _, d := range decls {
+		if d.kind == KernelDirective {
+			if k := c.kernel(d.fn, d.extent); k != nil {
 				c.funcs = append(c.funcs, k)
 			}
 		}
 	}
+	c.checkRecursion()
 
 	sort.Slice(c.diags, func(i, j int) bool {
 		if c.diags[i].Pos.Filename != c.diags[j].Pos.Filename {
@@ -144,6 +182,14 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 		return c.diags[i].Pos.Column < c.diags[j].Pos.Column
 	})
 	return c.funcs, c.diags
+}
+
+// declaration is one directive-carrying function, collected before anything is
+// built so that declaration order in the file does not decide what compiles.
+type declaration struct {
+	fn     *ast.FuncDecl
+	kind   string
+	extent [3]uint32
 }
 
 // checker holds one package's state.
@@ -160,6 +206,15 @@ type checker struct {
 	current *ir.Func
 	locals  map[types.Object]*ir.Local
 	nextID  int
+
+	// loops is the current loop nesting depth, so break and continue can be
+	// rejected where they have nothing to bind to.
+	loops int
+
+	// helpers maps a declared helper to its IR, and calls records the call graph
+	// the recursion check runs over.
+	helpers map[types.Object]*ir.Func
+	calls   map[*ir.Func][]*ir.Func
 }
 
 // normalize prints a declaration back from its AST.
@@ -272,6 +327,7 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 	c.current = k
 	c.locals = map[types.Object]*ir.Local{}
 	c.nextID = 0
+	c.loops = 0
 	body := c.block(fn.Body)
 	c.current = nil
 	if body == nil {
@@ -290,6 +346,189 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 		}
 	}
 	return k
+}
+
+// helper declares a //accel:helper function, without building its body.
+//
+// Declaring first and building second is what lets a helper call another helper
+// declared later in the file. Go has no forward declarations, and rejecting a
+// file for the order its author chose would be a rule about this compiler
+// rather than about the subset.
+func (c *checker) helper(fn *ast.FuncDecl) *ir.Func {
+	name := fn.Name.Name
+	if fn.Recv != nil {
+		c.errorf(fn.Pos(), "helper %s is a method: a helper is a package-level function", name)
+		return nil
+	}
+	if fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 {
+		c.errorf(fn.Type.TypeParams.Pos(), "helper %s is generic: generic helpers are out of "+
+			"scope for v0 (specs/004-kernel-authoring.md)", name)
+		return nil
+	}
+	if fn.Body == nil {
+		c.errorf(fn.Pos(), "helper %s has no body", name)
+		return nil
+	}
+	// One result or none. Multiple results are sequencing rather than a wall:
+	// no target spells a tuple return, and the workaround is an out parameter,
+	// which the subset has no pointer to express yet.
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 1 {
+		c.errorf(fn.Type.Results.Pos(), "helper %s returns %d values: multiple helper results "+
+			"are out of scope for v0 (specs/004-kernel-authoring.md)", name, len(fn.Type.Results.List))
+		return nil
+	}
+
+	h := &ir.Func{Name: name, Thread: -1}
+	h.P = fn.Pos()
+	h.Source = c.normalize(fn)
+
+	if fn.Type.Results != nil && len(fn.Type.Results.List) == 1 {
+		rt, err := c.irType(c.info.TypeOf(fn.Type.Results.List[0].Type))
+		if err != nil {
+			c.errorf(fn.Type.Results.Pos(), "helper %s returns %s", name, err)
+			return nil
+		}
+		h.Result = rt
+	}
+	return h
+}
+
+// helperSignature fills in a declared helper's parameters.
+func (c *checker) helperSignature(h *ir.Func, fn *ast.FuncDecl) {
+	index := 0
+	for _, field := range fn.Type.Params.List {
+		if len(field.Names) == 0 {
+			c.errorf(field.Pos(), "helper %s: every parameter needs a name", h.Name)
+			return
+		}
+		for _, id := range field.Names {
+			obj := c.info.Defs[id]
+			if obj == nil {
+				return
+			}
+			p, ok := c.helperParam(h, index, id, obj)
+			if !ok {
+				return
+			}
+			h.Params = append(h.Params, p)
+			index++
+		}
+	}
+	h.SignatureBuilt = true
+}
+
+// helperBody builds a declared helper's body, with its signature already known.
+func (c *checker) helperBody(h *ir.Func, fn *ast.FuncDecl) {
+	if !h.SignatureBuilt {
+		return
+	}
+	c.current = h
+	c.locals = map[types.Object]*ir.Local{}
+	c.nextID = 0
+	c.loops = 0
+	defer func() { c.current = nil }()
+
+	for _, p := range h.Params {
+		_ = p // parameters resolve through h.Params in ident
+	}
+
+	body := c.block(fn.Body)
+	if body == nil {
+		return
+	}
+	h.Body = body
+	inferAccess(h)
+}
+
+// helperParam classifies one helper parameter.
+//
+// A helper takes scalars and resource slices, and it may take the Thread. It
+// takes a slice by the same rule a kernel does, and the access it makes is a
+// property of the call site rather than of the helper, which is why the
+// inferred mode is recorded per binding and merged into the caller's.
+func (c *checker) helperParam(h *ir.Func, index int, id *ast.Ident, obj types.Object) (*ir.Param, bool) {
+	t := obj.Type()
+
+	if isThread(t) {
+		if h.Thread >= 0 {
+			c.errorf(id.Pos(), "helper %s takes accel.Thread twice", h.Name)
+			return nil, false
+		}
+		h.Thread = index
+		return ir.NewParam(id.Pos(), &ir.Type{Kind: ir.Struct, Name: "Thread"}, index, id.Name, obj), true
+	}
+
+	it, err := c.irType(t)
+	if err != nil {
+		c.errorf(id.Pos(), "helper %s: parameter %q is %s", h.Name, id.Name, err)
+		return nil, false
+	}
+	if it.Kind == ir.Slice {
+		h.Bindings = append(h.Bindings, &ir.Binding{Name: id.Name, Index: index, Type: it})
+	}
+	return ir.NewParam(id.Pos(), it, index, id.Name, obj), true
+}
+
+// checkRecursion rejects a cycle in the call graph.
+//
+// No target can express recursion: there is no call stack to grow, so this is a
+// wall rather than a schedule. It is checked over the IR's call graph rather
+// than the AST, because a helper reached only through another helper is still
+// in the cycle and an AST walk per function would not see it.
+func (c *checker) checkRecursion() {
+	const (
+		unvisited = 0
+		onStack   = 1
+		done      = 2
+	)
+	state := map[*ir.Func]int{}
+	var path []*ir.Func
+
+	var walk func(f *ir.Func) bool
+	walk = func(f *ir.Func) bool {
+		switch state[f] {
+		case done:
+			return false
+		case onStack:
+			// Name the cycle rather than the function: "h calls itself" and
+			// "a calls b calls a" are different bugs and the second is the one a
+			// reader cannot see from one declaration.
+			names := []string{f.Name}
+			for i := len(path) - 1; i >= 0; i-- {
+				names = append(names, path[i].Name)
+				if path[i] == f {
+					break
+				}
+			}
+			reverse(names)
+			c.errorf(f.Pos(), "%s is recursive (%s): no target has a call stack to grow, so "+
+				"recursion is not expressible rather than merely unscheduled",
+				f.Name, strings.Join(names, " -> "))
+			return true
+		}
+		state[f] = onStack
+		path = append(path, f)
+		for _, callee := range c.calls[f] {
+			if walk(callee) {
+				state[f] = done
+				path = path[:len(path)-1]
+				return true
+			}
+		}
+		path = path[:len(path)-1]
+		state[f] = done
+		return false
+	}
+
+	for f := range c.calls {
+		walk(f)
+	}
+}
+
+func reverse[T any](s []T) {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
 }
 
 // signature maps parameters onto bindings. The signature is the binding layout,

@@ -413,6 +413,21 @@ type Func struct {
 	// Digest identifies everything this kernel's generated form depends on, not
 	// only its source. Filled in by the generator.
 	Digest string
+
+	// Result is a helper's return type, or nil for a kernel and for a helper
+	// that returns nothing. A kernel never returns: it writes through its
+	// bindings.
+	Result *Type
+
+	// SignatureBuilt reports whether this function's parameters are known. A
+	// helper's signature is built before any body, so that a helper calling
+	// another can be checked whatever order the file declares them in.
+	SignatureBuilt bool
+
+	// Helpers are the helpers this function's body reaches, transitively, in a
+	// stable order. The digest records them so that editing a helper without
+	// regenerating its callers is caught.
+	Helpers []*Func
 }
 
 // Builders. Constructing nodes through functions rather than literals keeps the

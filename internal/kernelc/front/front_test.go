@@ -27,12 +27,17 @@ func TestChecksTheCorpusKernel(t *testing.T) {
 
 	kernels, diags := front.Check(pkgs[0])
 	if len(diags) > 0 {
-		t.Fatalf("the corpus kernel was rejected:\n%v", diags)
+		t.Fatalf("the corpus was rejected:\n%v", diags)
 	}
-	if len(kernels) != 1 {
-		t.Fatalf("found %d kernels, want 1", len(kernels))
+	var k *ir.Func
+	for _, c := range kernels {
+		if c.Name == "Scale" {
+			k = c
+		}
 	}
-	k := kernels[0]
+	if k == nil {
+		t.Fatalf("the corpus has no Scale among %d kernels", len(kernels))
+	}
 
 	if k.Name != "Scale" {
 		t.Errorf("name is %q", k.Name)
@@ -127,23 +132,13 @@ func K[T any](t accel.Thread, out []float32) { _ = t }`,
 			line: 2, want: "generic kernels are out of scope for v0",
 		},
 		{
-			name: "loop",
-			body: `//accel:kernel workgroup=64
-func K(t accel.Thread, out []float32) {
-	for i := 0; i < 4; i++ {
-		out[i] = 1
-	}
-}`,
-			line: 3, want: "loops are out of scope for now",
-		},
-		{
 			name: "range",
 			body: `//accel:kernel workgroup=64
 func K(t accel.Thread, out []float32) {
 	for range out {
 	}
 }`,
-			line: 3, want: "out of scope for now",
+			line: 3, want: "write a three-clause loop",
 		},
 		{
 			name: "switch",
@@ -232,15 +227,6 @@ func K(t accel.Thread, out []float32) {
 			line: 3, want: "cooperative kernels arrive at M4",
 		},
 		{
-			name: "helper directive",
-			body: `//accel:helper
-func h(x float32) float32 { return x }
-
-//accel:kernel workgroup=64
-func K(t accel.Thread, out []float32) { out[0] = 1 }`,
-			line: 2, want: "helper functions arrive with spec 013",
-		},
-		{
 			name: "unbound binding",
 			body: `//accel:kernel workgroup=64
 func K(t accel.Thread, in []float32, out []float32) { out[0] = 1 }`,
@@ -272,7 +258,7 @@ func K(t accel.Thread, out []float32) {
 func K(t accel.Thread, out []float32) {
 	out[other(0)] = 1
 }`,
-			line: 5, want: "is not an intrinsic",
+			line: 5, want: "is not marked //accel:helper",
 		},
 		{
 			name: "reslice",
@@ -485,6 +471,124 @@ func K(t accel.Thread, out []float32) { out[0] = 1 }`,
 		line: 2, want: "needs a workgroup extent",
 	},
 	{
+		name: "break outside a loop",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	break
+	out[0] = 1
+}`,
+		line: 3, want: "break is outside a loop",
+	},
+	{
+		name: "continue outside a loop",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	continue
+}`,
+		line: 3, want: "continue is outside a loop",
+	},
+	{
+		name: "labelled break",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+outer:
+	for {
+		break outer
+	}
+}`,
+		line: 3, want: "labels have no structured control-flow lowering",
+	},
+	{
+		name: "goto",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	goto done
+done:
+	out[0] = 1
+}`,
+		line: 3, want: "a labelled goto has no structured control-flow lowering",
+	},
+	{
+		name: "non-bool loop condition",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	for i := uint32(0); i; {
+		out[i] = 1
+	}
+}`,
+		line: 3, want: "loop condition is a bool",
+	},
+	{
+		name: "expression as a loop post",
+		body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	for i := uint32(0); i < 4; len(out) {
+		out[i] = 1
+	}
+}`,
+		line: 3, want: "post takes an assignment or an increment",
+	},
+	{
+		name: "direct recursion",
+		body: `//accel:helper
+func f(x float32) float32 { return f(x) }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) { out[0] = f(1) }`,
+		line: 2, want: "f is recursive (f -> f)",
+	},
+	{
+		name: "mutual recursion",
+		body: `//accel:helper
+func a(x float32) float32 { return b(x) }
+
+//accel:helper
+func b(x float32) float32 { return a(x) }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) { out[0] = a(1) }`,
+		line: 2, want: "recursive (a -> b -> a)",
+	},
+	{
+		name: "generic helper",
+		body: `//accel:helper
+func f[T any](x T) T { return x }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) { out[0] = 1 }`,
+		line: 2, want: "generic helpers are out of scope for v0",
+	},
+	{
+		name: "helper with two results",
+		body: `//accel:helper
+func f(x float32) (float32, float32) { return x, x }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) { out[0] = 1 }`,
+		line: 2, want: "multiple helper results are out of scope for v0",
+	},
+	{
+		name: "helper as a method",
+		body: `type R struct{}
+
+//accel:helper
+func (R) f(x float32) float32 { return x }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) { out[0] = 1 }`,
+		line: 4, want: "a helper is a package-level function",
+	},
+	{
+		name: "call to another package",
+		body: `import "math"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	out[0] = float32(math.Abs(1))
+}`,
+		line: 5, want: "there is no body to lower",
+	},
+	{
 		name: "boolean binding element",
 		body: `//accel:kernel workgroup=64
 func K(t accel.Thread, out []float32, flags []bool) {
@@ -620,6 +724,165 @@ func K(t accel.Thread, out []int32) {
 	n >>= 1
 	if uint32(n) < uint32(len(out)) {
 		out[n] = n
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "three-clause loop with break and continue",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, in []float32, out []float32) {
+	total := float32(0)
+	for i := uint32(0); i < uint32(len(in)); i++ {
+		if in[i] < 0 {
+			continue
+		}
+		if in[i] > 100 {
+			break
+		}
+		total += in[i]
+	}
+	out[t.GlobalID().X] = total
+}`,
+			read: []string{"in"}, write: []string{"out"},
+		},
+		{
+			name: "condition-only loop",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := uint32(0)
+	for i < uint32(len(out)) {
+		out[i] = 1
+		i++
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "infinite loop with a break",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := uint32(0)
+	for {
+		if i >= uint32(len(out)) {
+			break
+		}
+		out[i] = 1
+		i++
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "nested loops",
+			body: `//accel:kernel workgroup=8,8
+func K(t accel.Thread, out []float32) {
+	for y := uint32(0); y < 4; y++ {
+		for x := uint32(0); x < 4; x++ {
+			i := y*4 + x
+			if i < uint32(len(out)) {
+				out[i] = float32(i)
+			}
+		}
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "loop with an assignment init",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := uint32(0)
+	for i = 0; i < uint32(len(out)); i++ {
+		out[i] = 2
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "helper called by a kernel",
+			body: `//accel:helper
+func square(x float32) float32 { return x * x }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, in []float32, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		out[i] = square(in[i])
+	}
+}`,
+			read: []string{"in"}, write: []string{"out"},
+		},
+		{
+			name: "helper declared after its caller",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, in []float32, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		out[i] = twice(in[i])
+	}
+}
+
+//accel:helper
+func twice(x float32) float32 { return x + x }`,
+			read: []string{"in"}, write: []string{"out"},
+		},
+		{
+			name: "helper calling a helper",
+			body: `//accel:helper
+func a(x float32) float32 { return b(x) + 1 }
+
+//accel:helper
+func b(x float32) float32 { return x * 2 }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	out[t.GlobalID().X] = a(1)
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "helper taking a binding infers the caller's access",
+			body: `//accel:helper
+func store(buf []float32, i uint32, v float32) {
+	buf[i] = v
+}
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		store(out, i, 1)
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "helper taking the thread",
+			body: `//accel:helper
+func index(t accel.Thread) uint32 { return t.GlobalID().X }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := index(t)
+	if i < uint32(len(out)) {
+		out[i] = 1
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "helper with no result",
+			body: `//accel:helper
+func clear(buf []float32, i uint32) {
+	buf[i] = 0
+}
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		clear(out, i)
 	}
 }`,
 			write: []string{"out"},

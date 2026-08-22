@@ -66,25 +66,24 @@ func (c *checker) stmt(s ast.Stmt) ir.Stmt {
 		return ir.NewExprStmt(s.Pos(), v)
 
 	case *ast.ReturnStmt:
-		if len(s.Results) > 0 {
-			c.errorf(s.Pos(), "a kernel returns nothing: it writes through its bindings")
-			return nil
-		}
-		return ir.NewReturn(s.Pos(), nil)
+		return c.returnStmt(s)
 
 	case *ast.IncDecStmt:
 		return c.incDec(s)
 
-	// Out of scope for this milestone rather than unrepresentable, so the
-	// message says which, per spec 004's distinction between a wall and a
-	// schedule.
-	case *ast.ForStmt, *ast.RangeStmt:
-		c.errorf(s.Pos(), "loops are out of scope for now: they arrive with spec 013 "+
-			"(specs/013-kernel-subset.md)")
-		return nil
+	case *ast.ForStmt:
+		return c.forStmt(s)
+
 	case *ast.BranchStmt:
-		c.errorf(s.Pos(), "%s is out of scope for now: it arrives with loops in spec 013 "+
-			"(specs/013-kernel-subset.md)", s.Tok)
+		return c.branch(s)
+
+	// range is outside the closed node set rather than merely unscheduled.
+	// `for range n` would lower to a three-clause loop mechanically and is
+	// spec 013's open question, but admitting it is an amendment to spec 004's
+	// node set and not a decision to take in passing.
+	case *ast.RangeStmt:
+		c.errorf(s.Pos(), "range is outside the closed IR node set: write a three-clause loop "+
+			"(specs/004-kernel-authoring.md)")
 		return nil
 
 	// Permanently outside the subset. Each names the reason, because a reader
@@ -368,6 +367,119 @@ func inferAccess(k *ir.Func) {
 	walkStmt(k.Body)
 }
 
+// returnStmt builds a return, which a kernel and a helper mean differently.
+//
+// A kernel returns nothing: it writes through its bindings, and a value would
+// have nowhere to go. A helper returns one value or none, and the two have to
+// agree with the signature go/types already checked, so the only thing left to
+// reject here is a kernel that tries.
+func (c *checker) returnStmt(s *ast.ReturnStmt) ir.Stmt {
+	if c.current != nil && c.current.Kernel && len(s.Results) > 0 {
+		c.errorf(s.Pos(), "a kernel returns nothing: it writes through its bindings")
+		return nil
+	}
+	if len(s.Results) > 1 {
+		c.errorf(s.Pos(), "a helper returns one value or none")
+		return nil
+	}
+	if len(s.Results) == 0 {
+		return ir.NewReturn(s.Pos(), nil)
+	}
+	v := c.value(s.Results[0])
+	if v == nil {
+		return nil
+	}
+	return ir.NewReturn(s.Pos(), v)
+}
+
+// forStmt builds a loop in any of Go's three forms.
+//
+// All three, because they are one node with optional parts rather than three
+// constructs: an omitted condition is an infinite loop and an omitted init and
+// post is the while form. Every target spells that the same way, and SPIR-V
+// wants the structure declared rather than recovered.
+func (c *checker) forStmt(s *ast.ForStmt) ir.Stmt {
+	var init, post ir.Stmt
+	if s.Init != nil {
+		init = c.simple(s.Init, "a loop's init")
+		if init == nil {
+			return nil
+		}
+	}
+	if s.Post != nil {
+		post = c.simple(s.Post, "a loop's post")
+		if post == nil {
+			return nil
+		}
+	}
+
+	var cond ir.Value
+	if s.Cond != nil {
+		cond = c.value(s.Cond)
+		if cond == nil {
+			return nil
+		}
+		if cond.Type().Kind != ir.Bool {
+			c.errorf(s.Cond.Pos(), "a loop condition is a bool, and this is %v", cond.Type())
+			return nil
+		}
+	}
+
+	c.loops++
+	body := c.block(s.Body)
+	c.loops--
+	if body == nil {
+		return nil
+	}
+	return ir.NewFor(s.Pos(), init, cond, post, body)
+}
+
+// simple builds the statement forms a loop clause admits.
+//
+// A loop clause takes a simple statement, and the subset narrows that further:
+// no short variable declaration of several names, no send, no bare expression.
+// Naming what is allowed rather than filtering what is not keeps this in step
+// with the closed node set.
+func (c *checker) simple(s ast.Stmt, where string) ir.Stmt {
+	switch s := s.(type) {
+	case *ast.AssignStmt:
+		return c.assign(s)
+	case *ast.IncDecStmt:
+		return c.incDec(s)
+	}
+	c.errorf(s.Pos(), "%s takes an assignment or an increment, and this is not one", where)
+	return nil
+}
+
+// branch builds break and continue.
+//
+// Neither carries a label, because the subset admits none: a labelled branch
+// has no structured control-flow lowering, which is the same reason goto is
+// permanently out. Outside a loop they have nothing to bind to, and Go's own
+// checker permits `break` inside a switch, which the subset does not have.
+func (c *checker) branch(s *ast.BranchStmt) ir.Stmt {
+	if s.Label != nil {
+		c.errorf(s.Pos(), "a labelled %s has no structured control-flow lowering", s.Tok)
+		return nil
+	}
+	switch s.Tok {
+	case token.BREAK:
+		if c.loops == 0 {
+			c.errorf(s.Pos(), "break is outside a loop")
+			return nil
+		}
+		return ir.NewBreak(s.Pos())
+	case token.CONTINUE:
+		if c.loops == 0 {
+			c.errorf(s.Pos(), "continue is outside a loop")
+			return nil
+		}
+		return ir.NewContinue(s.Pos())
+	}
+	c.errorf(s.Pos(), "%s has no lowering: the subset has no labels and no goto", s.Tok)
+	return nil
+}
+
 // ifStmt builds a conditional.
 func (c *checker) ifStmt(s *ast.IfStmt) ir.Stmt {
 	if s.Init != nil {
@@ -591,9 +703,7 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 
 	in, ok := intrin.Lookup(fn)
 	if !ok {
-		c.errorf(e.Pos(), "%s is not an intrinsic: a kernel calls intrinsics and helpers, and "+
-			"helpers arrive with spec 013 (specs/013-kernel-subset.md)", fn.Name())
-		return nil
+		return c.helperCall(e, fn)
 	}
 	if in.Stage == intrin.Cooperative {
 		c.errorf(e.Pos(), "%s is out of scope for now: cooperative kernels arrive at M4 "+
@@ -601,6 +711,76 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 		return nil
 	}
 	return c.intrinsicCall(e, fn, in)
+}
+
+// helperCall builds a call to a //accel:helper in the same package.
+//
+// Same package, because a helper is compiled from source and the compiler loads
+// one package. A call to anything else has no body to lower, and the message
+// says which of the two it is: an undirected function in this package is a
+// missing directive, and one from elsewhere is not compilable at all.
+func (c *checker) helperCall(e *ast.CallExpr, fn *types.Func) ir.Value {
+	obj := types.Object(fn)
+	h, ok := c.helpers[obj]
+	if !ok {
+		if fn.Pkg() != nil && c.pkg.Types != nil && fn.Pkg().Path() == c.pkg.Types.Path() {
+			c.errorf(e.Pos(), "%s is in this package but is not marked %s, so it has no "+
+				"lowering: a kernel calls intrinsics and helpers", fn.Name(), HelperDirective)
+			return nil
+		}
+		c.errorf(e.Pos(), "%s is not an intrinsic and not a helper in this package: a kernel "+
+			"is compiled from one package's source, so there is no body to lower", fn.Name())
+		return nil
+	}
+
+	if len(e.Args) != len(h.Params) {
+		c.errorf(e.Pos(), "%s takes %d arguments and got %d", h.Name, len(h.Params), len(e.Args))
+		return nil
+	}
+	args := make([]ir.Value, 0, len(e.Args))
+	for _, a := range e.Args {
+		v := c.value(a)
+		if v == nil {
+			return nil
+		}
+		args = append(args, v)
+	}
+
+	if c.current != nil {
+		c.calls[c.current] = append(c.calls[c.current], h)
+		if !slices.Contains(c.current.Helpers, h) {
+			c.current.Helpers = append(c.current.Helpers, h)
+		}
+		// A helper's own accesses become the caller's, mapped through the
+		// argument list. The access is a property of the call site rather than
+		// of the helper, which is why it is merged here and not recorded once.
+		c.propagateAccess(h, args)
+	}
+
+	result := h.Result
+	if result == nil {
+		result = &ir.Type{Kind: ir.Invalid}
+	}
+	return ir.NewCall(e.Pos(), result, h, args)
+}
+
+// propagateAccess maps a helper's parameter accesses onto the caller's bindings.
+func (c *checker) propagateAccess(h *ir.Func, args []ir.Value) {
+	for _, hb := range h.Bindings {
+		if hb.Index >= len(args) {
+			continue
+		}
+		p, ok := args[hb.Index].(*ir.Param)
+		if !ok {
+			continue
+		}
+		for _, cb := range c.current.Bindings {
+			if cb.Index == p.Index {
+				cb.Read = cb.Read || hb.Read
+				cb.Write = cb.Write || hb.Write
+			}
+		}
+	}
 }
 
 // calleeFunc resolves a call target to the function object go/types found.

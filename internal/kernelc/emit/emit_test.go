@@ -135,7 +135,7 @@ func TestGeneratedShape(t *testing.T) {
 // anything: an input that changes what the generated file should contain must
 // change the digest, even when the authored source is untouched.
 func TestDigestCoversMoreThanSource(t *testing.T) {
-	base := loadCorpus(t)[0]
+	base := corpusKernel(t, "Scale")
 	baseline := emit.Digest(base)
 
 	if emit.Digest(base) != baseline {
@@ -156,7 +156,7 @@ func TestDigestCoversMoreThanSource(t *testing.T) {
 		{"thread position", func(k *ir.Func) { k.Thread = 1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			k := loadCorpus(t)[0]
+			k := corpusKernel(t, "Scale")
 			tc.mutate(k)
 			if got := emit.Digest(k); got == baseline {
 				t.Errorf("changing the %s left the digest unchanged, so a generated file "+
@@ -170,7 +170,7 @@ func TestDigestCoversMoreThanSource(t *testing.T) {
 // input moved. "The digest differs" leaves a reader guessing between half a
 // dozen possibilities.
 func TestPreimageExplainsAMismatch(t *testing.T) {
-	k := loadCorpus(t)[0]
+	k := corpusKernel(t, "Scale")
 	p := emit.Preimage(k)
 
 	for _, want := range []string{
@@ -196,7 +196,21 @@ func TestPreimageExplainsAMismatch(t *testing.T) {
 	// The helpers section exists and is empty, so spec 013 adds lines rather
 	// than changing the format and reissuing every committed generated file.
 	if !strings.Contains(p, "helpers\t0\n") {
-		t.Error("the preimage has no helpers section, so adding helpers would change its format")
+		t.Error("Scale reaches no helper, so its preimage says so")
+	}
+
+	// A kernel that does reach one records it by name and by its own source
+	// digest, which is what catches a helper edited without its callers being
+	// regenerated: the caller's source is untouched and what it compiles to is
+	// not.
+	withHelpers := emit.Preimage(corpusKernel(t, "SegmentSum"))
+	if !strings.Contains(withHelpers, "helpers\t2\n") {
+		t.Errorf("SegmentSum reaches two helpers and its preimage does not say so:\n%s", withHelpers)
+	}
+	for _, name := range []string{"helper\tclampIndex\t", "helper\taccumulate\t"} {
+		if !strings.Contains(withHelpers, name) {
+			t.Errorf("the preimage omits %q:\n%s", name, withHelpers)
+		}
 	}
 }
 
@@ -273,6 +287,22 @@ func generateCorpus(t testing.TB) []byte {
 		t.Fatalf("Generate: %v", err)
 	}
 	return out
+}
+
+// corpusKernel builds the corpus and returns one kernel by name.
+//
+// By name rather than by index: the corpus has more than one kernel now, and a
+// test that reached for the first would start asserting about a different one
+// the moment somebody added a file.
+func corpusKernel(t testing.TB, name string) *ir.Func {
+	t.Helper()
+	for _, k := range loadCorpus(t) {
+		if k.Name == name {
+			return k
+		}
+	}
+	t.Fatalf("the corpus has no kernel named %q", name)
+	return nil
 }
 
 // loadCorpus type-checks and builds the corpus kernels, freshly each call so a

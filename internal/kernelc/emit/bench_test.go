@@ -34,7 +34,7 @@ func BenchmarkGenerate(b *testing.B) {
 // BenchmarkDigest measures the freshness check's cost, which is paid once per
 // kernel per generate and once per kernel per build.
 func BenchmarkDigest(b *testing.B) {
-	k := loadCorpus(b)[0]
+	k := corpusKernel(b, "Scale")
 	b.ReportAllocs()
 	for b.Loop() {
 		if emit.Digest(k) == "" {
@@ -46,7 +46,7 @@ func BenchmarkDigest(b *testing.B) {
 // BenchmarkGenerateManyKernels measures how emission scales with a corpus,
 // since spec 010's inventory is what this will really be run over.
 func BenchmarkGenerateManyKernels(b *testing.B) {
-	one := loadCorpus(b)[0]
+	one := corpusKernel(b, "Scale")
 	one.Digest = emit.Digest(one)
 
 	kernels := make([]*ir.Func, 64)

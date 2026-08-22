@@ -59,6 +59,19 @@ func Generate(p Package) ([]byte, error) {
 	fmt.Fprintf(&b, "import %q\n\n", "golang.design/x/accel")
 
 	e := &emitter{buf: &b}
+
+	// Helpers first, and each one once however many kernels reach it. Every
+	// target that requires declaration before use gets it for free, and the Go
+	// lowering does not care but reads the same way as the others.
+	seen := map[*ir.Func]bool{}
+	for _, k := range p.Kernels {
+		for _, h := range k.Helpers {
+			if !seen[h] {
+				seen[h] = true
+				e.helper(h)
+			}
+		}
+	}
 	for _, k := range p.Kernels {
 		e.kernel(k)
 	}
@@ -133,6 +146,26 @@ func (e *emitter) kernel(k *ir.Func) {
 	}
 	e.printf(")\n")
 	e.printf("\t},\n")
+	e.printf("}\n\n")
+}
+
+// helper emits one helper's lowering.
+func (e *emitter) helper(h *ir.Func) {
+	name := lowerName(h.Name)
+	e.printf("// %s is the generated lowering of the helper %s.\n", name, h.Name)
+	e.printf("func %s(", name)
+	for i, p := range h.Params {
+		if i > 0 {
+			e.printf(", ")
+		}
+		e.printf("%s %s", p.Name, e.goType(p.Type()))
+	}
+	e.printf(")")
+	if h.Result != nil {
+		e.printf(" %s", e.goType(h.Result))
+	}
+	e.printf(" {\n")
+	e.block(h.Body, 1)
 	e.printf("}\n\n")
 }
 
@@ -219,7 +252,13 @@ func (e *emitter) stmt(s ir.Stmt, depth int) {
 		e.printf("%scontinue\n", indent(depth))
 
 	case *ir.Return:
-		e.printf("%sreturn\n", indent(depth))
+		if s.Value == nil {
+			e.printf("%sreturn\n", indent(depth))
+			return
+		}
+		e.printf("%sreturn ", indent(depth))
+		e.rounded(s.Value)
+		e.printf("\n")
 
 	default:
 		e.fail("no lowering for statement %T", s)

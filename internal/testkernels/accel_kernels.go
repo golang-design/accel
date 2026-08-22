@@ -4,6 +4,110 @@ package testkernels
 
 import "golang.design/x/accel"
 
+// clampIndexFlat is the generated lowering of the helper clampIndex.
+func clampIndexFlat(i uint32, n uint32) uint32 {
+	if n == uint32(0) {
+		return uint32(0)
+	}
+	if i >= n {
+		return (n - uint32(1))
+	}
+	return i
+}
+
+// accumulateFlat is the generated lowering of the helper accumulate.
+func accumulateFlat(in []float32, from uint32, to uint32) float32 {
+	var total float32 = float32(0)
+	{
+		var i uint32 = from
+		for ; i < to; i = (i + uint32(1)) {
+			total = float32(total + in[i])
+		}
+	}
+	return total
+}
+
+// segmentSumFlat is the generated flat lowering of SegmentSum.
+//
+// It is what the CPU backend runs. The authored SegmentSum is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func segmentSumFlat(t accel.Thread, in []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	var n uint32 = uint32(int32(len(out)))
+	if i >= n {
+		return
+	}
+	var width uint32 = uint32(4)
+	var from uint32 = clampIndexFlat((i * width), uint32(int32(len(in))))
+	var to uint32 = clampIndexFlat((from + width), uint32(int32(len(in))))
+	out[i] = accumulateFlat(in, from, to)
+}
+
+// SegmentSumKernel is the compiled form of SegmentSum.
+var SegmentSumKernel = accel.Kernel{
+	Name:          "SegmentSum",
+	WorkgroupSize: accel.ID3{X: 32, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "e936475f267d2754fb83522211a333d3",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		segmentSumFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
+	},
+}
+
+// countAboveFlat is the generated flat lowering of CountAbove.
+//
+// It is what the CPU backend runs. The authored CountAbove is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func countAboveFlat(t accel.Thread, in []float32, out []int32) {
+	var i uint32 = t.GlobalID().X
+	if i >= uint32(int32(len(out))) {
+		return
+	}
+	var count int32 = int32(0)
+	var limit uint32 = uint32(int32(len(in)))
+	{
+		var j uint32 = uint32(0)
+		for ; j < limit; j = (j + uint32(1)) {
+			if in[j] <= float32(0) {
+				continue
+			}
+			count = (count + int32(1))
+		}
+	}
+	var j uint32 = uint32(0)
+	for j < limit {
+		j = (j + uint32(1))
+	}
+	for {
+		if j >= limit {
+			break
+		}
+		j = (j + uint32(1))
+	}
+	out[i] = count
+}
+
+// CountAboveKernel is the compiled form of CountAbove.
+var CountAboveKernel = accel.Kernel{
+	Name:          "CountAbove",
+	WorkgroupSize: accel.ID3{X: 16, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelI32, Access: accel.KernelWrite},
+	},
+	Digest:    "bbbc44d1fd8d83367e2a6d3a04e9e771",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		countAboveFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[int32](a, 1))
+	},
+}
+
 // scaleFlat is the generated flat lowering of Scale.
 //
 // It is what the CPU backend runs. The authored Scale is never registered as
