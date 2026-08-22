@@ -432,6 +432,12 @@ func TestAllocationIsConstantTime(t *testing.T) {
 	// Ten times the work in far less than a hundred times the time. A quadratic
 	// allocator lands near 100x; the generous bound keeps a loaded CI machine
 	// from failing a correct implementation.
+	//
+	// This is a ratio and not a measurement, which is what makes it meaningful
+	// under the race detector. Go 1.27's size-specialized malloc is disabled
+	// whenever -race, -asan, or -msan is on, so the absolute numbers here are
+	// not representative of a normal build; both sides of the ratio pay the same
+	// tax, so the shape it is asserting survives.
 	if ratio := float64(large) / float64(small+1); ratio > 30 {
 		t.Errorf("10,000 allocations took %v against %v for 1,000, a ratio of %.1f: "+
 			"placement is not O(1)", large, small, ratio)

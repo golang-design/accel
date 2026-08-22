@@ -1,9 +1,9 @@
 # Contributing
 
-Thanks for looking. This project is at the design stage, which is an unusually
-good time to get involved: the decisions that are hardest to change later are
-being made right now, and an argument against one of them is worth more than a
-patch.
+Thanks for looking. This project is early: two of eight milestones are built and
+the decisions that are hardest to change later are being made right now, which
+makes this an unusually good time to get involved. An argument against one of
+those decisions is worth more than a patch.
 
 ## What is most useful right now
 
@@ -58,6 +58,22 @@ Every design document here states what its choice gives up, not just what it
 buys. If you add a feature with a real tradeoff, write the tradeoff down. This is
 a house style and reviewers will ask for it.
 
+### Do not run `go fix` unreviewed
+
+Go 1.27's `go fix` modernizers are on by default and two of them rewrite exactly
+the code that is hardest to get right here.
+
+`atomictypes` turns a raw `atomic.AddInt32(&x, 1)` into an `atomic.Int32`. That
+is usually an improvement and is wrong for a packed allocator header:
+`atomic.Int32` and `atomic.Int64` carry a `noCopy` marker and, on the 64-bit
+form, alignment padding, so the rewrite changes a struct's size and makes it
+non-copyable. `unsafefuncs` turns `unsafe.Pointer(uintptr(p) + n)` into
+`unsafe.Add`, which is the correct idiom and is still a mechanical edit to the
+one part of the code where a mistake is not a panic.
+
+Neither fires on the current tree and neither runs under `go test`, so CI cannot
+be surprised by them. Run `go fix -diff` and read the diff.
+
 ### Style
 
 - `gofmt`, and CI checks it.
@@ -78,8 +94,22 @@ CGO_ENABLED=0 go test ./...
 Requires Go 1.27 or later. There is nothing to install and no GPU required,
 which is deliberate and should stay true.
 
-Everything currently returns `ErrNotImplemented`. That is expected: the API
-surface exists so the design can be read as Go and checked by the compiler.
+M0 and M1 are built: a CPU device opens, pooled memory allocates and
+suballocates, buffers slice into views, and bytes move to the device and back.
+Everything past that still returns `ErrNotImplemented`, which is expected: the
+API surface exists so the design can be read as Go and checked by the compiler.
+[`specs/009-sequencing.md`](specs/009-sequencing.md) is the order the rest
+arrives in.
+
+The coverage gate is per package rather than one repository average, and it
+excludes design-stage stubs by a checked rule so the number means something
+while most of the surface is still unbuilt:
+
+```sh
+go test -race ./...
+go test -coverprofile=cover.out -coverpkg=./... ./...
+go run ./internal/conformance/cover/covercheck -profile=cover.out
+```
 
 ## How the repository is organised
 
@@ -87,7 +117,16 @@ surface exists so the design can be read as Go and checked by the compiler.
 | --- | --- | --- |
 | `docs/` | Documentation | People using or contributing to accel |
 | `specs/` | Internal design specs and decisions | People building or reviewing accel |
-| `*.go` | The device layer API surface | Compiles, does nothing yet |
+| `*.go` | The device layer's public API and its policy | Callers, and everyone |
+| `internal/driver/` | The backend contract | Anyone adding a backend |
+| `internal/cpu/` | The pure-Go backend and oracle | Anyone adding a backend |
+| `internal/alloc/` | Suballocation inside a pool | Nobody, ideally |
+| `internal/conformance/` | Test machinery: profiles, comparisons, coverage | People writing tests |
+
+Policy lives in the public package and only what a backend alone can answer
+crosses into `internal/driver`. accel links its backends in, so a backend cannot
+import accel: anything crossing that seam is declared below both, and the two
+declarations are kept in step by the compiler rather than by a test.
 
 If you change behaviour that a spec describes, update the spec in the same
 change. A spec that no longer matches reality is worse than no spec.
