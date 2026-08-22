@@ -121,8 +121,8 @@ checked exclusions: `accel` 95.6%, `internal/alloc` 99.0%, `internal/cpu` 98.6%.
 `go test -race`, `go vet`, gofmt, and the cgo-free gate all run on every commit,
 which they did not before this milestone despite being named above since M0.
 
-Two bugs are worth recording because neither was a coding slip and both were
-found by a test written to the spec rather than to the code:
+Four bugs are worth recording because none was a coding slip and each was found
+by a test written to the spec rather than to the code:
 
 - The TLSF size classes indexed the exponent over **bytes**, so a block spanning
   fewer bits than the mantissa shifted by a negative amount. Unreachable at the
@@ -133,6 +133,23 @@ found by a test written to the spec rather than to the code:
   children and rolled back. Both violate [001](001-device-resources.md) §1.2's
   concurrency contract, and both were found by writing §11.7's case as it is
   actually specified: the operations *together* rather than one at a time.
+- `Device.Close` then reintroduced the second of those in the branch that had no
+  test. A buffer from the implicit pool is not in the explicit pool list, so
+  `Close` decided it could proceed, marked the handle dead, and only then met a
+  pool that refused. Corrected after this milestone was first recorded complete:
+  the implicit pool's children are counted like any other, per §7.2's rule that a
+  live handle means report and free nothing.
+- Every element offset was scaled to bytes before being bounded, so a large one
+  wrapped, landed back inside the buffer, and addressed element zero. It applied
+  to `Queue.WriteBuffer`, `Queue.ReadBuffer`, `Buffer.View`, `Buffer.ViewAs`, and
+  a hand-constructed `BufferView`, and §7.3 promises the worst outcome there is a
+  rejection. Also corrected after the fact. The lesson generalizes: every offset
+  this design carries is in elements and every device address is in bytes, so the
+  scaling between them is a validation boundary and not arithmetic.
+
+The last two landed after M1 was first recorded complete. They are corrections
+to the outcome rather than edits to it, because the maintenance rule below
+exists to keep this file a build history and not a tidied one.
 
 **The package split.** The backend contract is `internal/driver`, the pure-Go
 backend is `internal/cpu`, and the reusable allocator machinery will be

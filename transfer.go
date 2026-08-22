@@ -178,11 +178,19 @@ func (q *Queue) checkRange(op string, b *Buffer, offset, length int) (int, error
 	if offset < 0 {
 		return 0, fmt.Errorf("accel: %s %q: element offset %d is negative", op, b.desc.Label, offset)
 	}
-	byteOffset := offset * b.desc.DType.Size()
+	elem := b.desc.DType.Size()
+	// The offset is bounded in elements before it is scaled to bytes. Scaling an
+	// unbounded one wraps, lands back inside the buffer, and writes at an address
+	// nobody asked for.
+	if outOfRange(offset, (length+elem-1)/elem, elem, b.bytes) {
+		return 0, fmt.Errorf("accel: %s %q: elements [%d, %d) of %v are outside the buffer's "+
+			"%d elements", op, b.desc.Label, offset, offset+(length+elem-1)/elem, b.desc.DType, b.desc.Count)
+	}
+	byteOffset := offset * elem
 	if byteOffset+length > b.bytes {
 		return 0, fmt.Errorf("accel: %s %q: elements [%d, %d) of %v are bytes [%d, %d), "+
 			"outside the buffer's %d", op, b.desc.Label, offset,
-			offset+length/b.desc.DType.Size(), b.desc.DType, byteOffset, byteOffset+length, b.bytes)
+			offset+length/elem, b.desc.DType, byteOffset, byteOffset+length, b.bytes)
 	}
 	return byteOffset, nil
 }

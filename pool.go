@@ -398,6 +398,28 @@ func (p *Pool) Close() error {
 	return nil
 }
 
+// liveChildren counts the buffers this pool has handed out and not taken back.
+func (p *Pool) liveChildren() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.live)
+}
+
+// liveChildren counts the buffers the implicit pool has handed out.
+//
+// They have handles, so they are live children of the device exactly as a buffer
+// from an explicit pool is. Leaving them out would let Device.Close decide it
+// can close, mark the handle dead, and only then discover a pool that refuses.
+func (s *blockSet) liveChildren() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, p := range s.blocks {
+		n += p.liveChildren()
+	}
+	return n
+}
+
 // forget drops a buffer's accounting from its pool once its memory is back.
 func (p *Pool) forget(b *Buffer) {
 	p.mu.Lock()

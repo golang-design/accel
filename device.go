@@ -332,6 +332,14 @@ func (d *Device) Close() error {
 	}
 	d.mu.Unlock()
 
+	// A buffer from the implicit pool has a handle, so it is a live child exactly
+	// as one from an explicit pool is. Counting only d.pools would let Close
+	// decide it can proceed, mark the handle dead, and only then discover a pool
+	// that refuses, leaving a device that reports closed and never closed.
+	for _, set := range implicit {
+		live += set.liveChildren()
+	}
+
 	// Close does not hide asynchronous work: an unflushed batch is reported as a
 	// live child, so orderly teardown is Flush().Wait(), then resource closes,
 	// then this. A device that silently dropped queued writes would turn a

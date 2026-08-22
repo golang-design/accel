@@ -59,7 +59,7 @@ func (b *Buffer) ViewAs(d DType, offset, count int) (BufferView, error) {
 		return BufferView{}, fmt.Errorf("accel: ViewAs(%v) on %q: offset %d and count %d must not be negative",
 			d, b.desc.Label, offset, count)
 	}
-	if (offset+count)*elem > b.bytes {
+	if outOfRange(offset, count, elem, b.bytes) {
 		return BufferView{}, fmt.Errorf("accel: ViewAs(%v) on %q (%v, %d elements): elements "+
 			"[%d, %d) are bytes [%d, %d), past the buffer's %d",
 			d, b.desc.Label, b.desc.DType, b.desc.Count,
@@ -141,12 +141,27 @@ func (v BufferView) check(op string) error {
 	if elem == 0 {
 		return fmt.Errorf("accel: %s on %q: %v is not a dtype", op, v.Buffer.desc.Label, v.DType)
 	}
-	if v.Offset < 0 || v.Count < 0 || (v.Offset+v.Count)*elem > v.Buffer.bytes {
+	if v.Offset < 0 || v.Count < 0 || outOfRange(v.Offset, v.Count, elem, v.Buffer.bytes) {
 		return fmt.Errorf("accel: %s on %q: elements [%d, %d) of %v are bytes [%d, %d), "+
 			"outside the buffer's %d", op, v.Buffer.desc.Label, v.Offset, v.Offset+v.Count,
 			v.DType, v.Offset*elem, (v.Offset+v.Count)*elem, v.Buffer.bytes)
 	}
 	return nil
+}
+
+// outOfRange reports whether count elements of elem bytes starting at element
+// offset run past a buffer of the given byte length.
+//
+// The comparison stays in elements until it is known to be safe. Multiplying
+// first is the bug: a large offset times an element size wraps, lands back
+// inside the buffer, and turns a rejection into a silent write at the wrong
+// address. Spec 001 section 7.3 promises a hand-constructed view's worst
+// outcome is a rejection, and a wrapped offset is not that.
+//
+// offset and count must already be non-negative.
+func outOfRange(offset, count, elem, bytes int) bool {
+	limit := bytes / elem
+	return offset > limit || count > limit-offset
 }
 
 // byteRange reports the view's extent relative to the start of its buffer.
