@@ -247,6 +247,7 @@ func violatesLimits(c LimitConstraints, have Limits) string {
 func newDevice(token [16]byte, dev driver.Device) *Device {
 	d := &Device{dev: dev}
 	d.info = infoFrom(token, dev.Info())
+	d.state.init(d.info.Name)
 	// At v0 both backends report exactly one queue: Metal has one general queue
 	// and the CPU backend has one by construction. Every multi-queue path in this
 	// design is specified and unexercised until Vulkan or D3D12 lands, so the
@@ -312,15 +313,42 @@ func (d *Device) QueueFor(kind QueueKind) *Queue {
 }
 
 // Close releases the device. Resources created from it must be closed first.
+//
+// Closing is ordered rather than recursive: a device with live pools reports a
+// *LifetimeError counting them and frees nothing. The API could close children
+// on the caller's behalf and deliberately does not, because a caller who closed
+// a device out from under a pool they still hold has a bug, and turning that
+// bug into a silent success makes the next use of the pool undefined instead of
+// reported.
+//
+// The implicit pool behind [Device.NewBuffer] is the exception, because the
+// caller never named it: it has no handle to close, so the device owns it.
 func (d *Device) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
+	if !d.state.beginClose() {
 		return nil
 	}
-	if err := d.dev.Close(); err != nil {
-		return err
+
+	d.mu.Lock()
+	live := len(d.pools)
+	implicit := make([]*blockSet, 0, len(d.implicit))
+	for _, set := range d.implicit {
+		implicit = append(implicit, set)
 	}
-	d.closed = true
-	return nil
+	d.mu.Unlock()
+
+	if live > 0 {
+		d.state.closed.Store(false) // the device is still usable; nothing was released
+		return &LifetimeError{Op: "Close", Resource: d.info.Name, Reason: reasonChildren, Children: live}
+	}
+	for _, set := range implicit {
+		if err := set.close(); err != nil {
+			d.state.closed.Store(false)
+			return err
+		}
+	}
+	d.mu.Lock()
+	d.implicit = nil
+	d.mu.Unlock()
+
+	return d.dev.Close()
 }

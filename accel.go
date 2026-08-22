@@ -185,8 +185,11 @@ type Device struct {
 	queue     *Queue
 	selection *SelectionReport
 
-	mu     sync.Mutex
-	closed bool
+	state resourceState
+
+	mu       sync.Mutex
+	pools    []*Pool
+	implicit map[MemoryKind]*blockSet
 }
 
 // QueueKind is what a queue accepts.
@@ -204,30 +207,6 @@ type QueueInfo struct {
 	Kind  QueueKind
 	Index int
 	Label string // the backend's own name for it, for logs
-}
-
-// NewPool allocates a memory pool of the given kind and size, from which buffers
-// are suballocated. See specs/001-device-resources.md for why allocation is
-// pooled rather than per resource.
-//
-// It is [Device.NewPoolWith] with the general-purpose policy. A pool never grows:
-// a pool is one device allocation, no backend can resize one in place, and moving
-// it would invalidate every address already handed out.
-func (d *Device) NewPool(kind MemoryKind, bytes int) (*Pool, error) {
-	panic(ErrNotImplemented)
-}
-
-// NewPoolWith allocates a pool with an explicit policy, which is how a caller
-// asks for a linear pool or reserves one for textures.
-func (d *Device) NewPoolWith(desc PoolDescriptor) (*Pool, error) {
-	panic(ErrNotImplemented)
-}
-
-// NewBuffer allocates a single buffer from an implicit pool. It is a convenience
-// for callers with a handful of buffers; anything allocating at scale should use
-// [Device.NewPool].
-func (d *Device) NewBuffer(desc BufferDescriptor) (*Buffer, error) {
-	panic(ErrNotImplemented)
 }
 
 // NewTexture creates a texture. Bytes per pixel always derives from the format,

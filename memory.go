@@ -4,7 +4,14 @@
 
 package accel
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+	"sync"
+
+	"golang.design/x/accel/internal/alloc"
+	"golang.design/x/accel/internal/driver"
+)
 
 // MemoryKind is where a pool's memory lives and who can reach it. It is the
 // property that actually decides performance, so it is chosen explicitly rather
@@ -28,6 +35,21 @@ const (
 	// from the platform: check Capabilities.SharedMemoryKind.
 	MemoryShared
 )
+
+// String returns the memory kind's name.
+func (k MemoryKind) String() string {
+	switch k {
+	case MemoryDevice:
+		return "Device"
+	case MemoryUpload:
+		return "Upload"
+	case MemoryReadback:
+		return "Readback"
+	case MemoryShared:
+		return "Shared"
+	}
+	return "MemoryKind(" + strconv.Itoa(int(k)) + ")"
+}
 
 // PoolPolicy selects how a pool carves itself up. See specs/001-device-resources.md.
 type PoolPolicy int
@@ -69,29 +91,24 @@ type PoolDescriptor struct {
 // with a handful and wrong for a model with thousands: allocation is expensive,
 // drivers cap how many you may hold, and per-resource allocation forecloses the
 // transient aliasing a [Graph] does when it plans memory.
-type Pool struct{ _ noCopy }
+type Pool struct {
+	_ noCopy
 
-// Alloc suballocates a buffer from the pool.
-func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error) { panic(ErrNotImplemented) }
+	dev   *Device
+	desc  PoolDescriptor
+	block driver.Block
+	alloc alloc.Allocator
+	state resourceState
+
+	mu   sync.Mutex
+	live []*Buffer
+}
 
 // AllocTexture suballocates a texture from a pool created with Textures set.
 // Buffer pools reject it, and texture pools reject [Pool.Alloc].
 func (p *Pool) AllocTexture(desc TextureDescriptor) (*Texture, error) {
 	panic(ErrNotImplemented)
 }
-
-// Reset releases every allocation in a linear pool at once. It rejects general
-// pools and a linear pool with resources retained by an in-flight submission.
-func (p *Pool) Reset() error { panic(ErrNotImplemented) }
-
-// Stats reports the pool's size, how much is in use, and how much is free.
-func (p *Pool) Stats() PoolStats { panic(ErrNotImplemented) }
-
-// Close releases the pool. Buffers suballocated from it must be closed first:
-// closing a pool with live buffers reports a *LifetimeError and frees nothing,
-// because closing children out from under a caller who still holds them turns a
-// bug into a silent success.
-func (p *Pool) Close() error { panic(ErrNotImplemented) }
 
 // PoolStats reports a pool's occupancy.
 type PoolStats struct {
@@ -188,6 +205,28 @@ const (
 	UsageCopyDst
 )
 
+// usageNames is the declaration order of the usage bits, for String.
+var usageNames = []string{"UsageStorage", "UsageUniform", "UsageIndex", "UsageVertex",
+	"UsageIndirect", "UsageCopySrc", "UsageCopyDst"}
+
+// String returns the usage set as a |-separated list, which is how validation
+// errors name what a buffer declared against what it needs.
+func (u BufferUsage) String() string {
+	if u == 0 {
+		return "no usage"
+	}
+	var parts []string
+	for i, name := range usageNames {
+		if u&(1<<uint(i)) != 0 {
+			parts = append(parts, name)
+		}
+	}
+	if rest := u &^ (1<<uint(len(usageNames)) - 1); rest != 0 {
+		parts = append(parts, "BufferUsage("+strconv.FormatUint(uint64(rest), 10)+")")
+	}
+	return strings.Join(parts, "|")
+}
+
 // BufferDescriptor describes a buffer to create.
 type BufferDescriptor struct {
 	// DType and Count give the buffer's element type and length. Size in bytes is
@@ -203,32 +242,15 @@ type BufferDescriptor struct {
 }
 
 // Buffer is a typed, sized range of device memory.
-type Buffer struct{ _ noCopy }
+type Buffer struct {
+	_ noCopy
 
-// DType reports the buffer's element type.
-func (b *Buffer) DType() DType { panic(ErrNotImplemented) }
-
-// Count reports the buffer's element count.
-func (b *Buffer) Count() int { panic(ErrNotImplemented) }
-
-// View returns a sub-range of the buffer as a [BufferView].
-//
-// Views are what let a caller slice a KV cache or address one attention head
-// without copying. A view does not own memory and must not outlive its buffer.
-func (b *Buffer) View(offset, count int) (BufferView, error) { panic(ErrNotImplemented) }
-
-// ViewAs is [Buffer.View] with a reinterpreted element type. It reports an error
-// if the byte ranges do not divide evenly at the new dtype.
-func (b *Buffer) ViewAs(d DType, offset, count int) (BufferView, error) {
-	panic(ErrNotImplemented)
+	pool  *Pool
+	desc  BufferDescriptor
+	alloc *alloc.Allocation
+	bytes int
+	state resourceState
 }
-
-// Close releases the buffer.
-//
-// Closing while a submission using this buffer is in flight is reported rather
-// than crashing: the implementation keeps a submission's resources alive until
-// its fence signals.
-func (b *Buffer) Close() error { panic(ErrNotImplemented) }
 
 // BufferView is a sub-range of a [Buffer], possibly at a different dtype. It is a
 // value: copying it is fine and does not copy any memory.

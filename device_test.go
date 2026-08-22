@@ -498,8 +498,8 @@ func TestErrNotImplementedStillCovers(t *testing.T) {
 	defer func() {
 		r := recover()
 		if err, ok := r.(error); !ok || !errors.Is(err, accel.ErrNotImplemented) {
-			t.Errorf("NewPool panicked with %v, want ErrNotImplemented", r)
+			t.Errorf("NewTexture panicked with %v, want ErrNotImplemented", r)
 		}
 	}()
-	d.NewPool(accel.MemoryDevice, 1<<20)
+	d.NewTexture(accel.TextureDescriptor{})
 }
