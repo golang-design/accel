@@ -329,8 +329,14 @@ type, source position, and referenced `go/types.Object`; resource accesses also
 carry binding identity and inferred access mode.
 
 Intrinsic identity is likewise closed and versioned. Thread IDs, barriers,
-atomics, conversions, and `FMA` are functions or methods in the root `accel`
-package. Bounded scalar math (`Sqrt`, `RSqrt`, `Exp`, `Log`, `Sin`, `Cos`,
+atomics, conversions, and `FMA` are functions or methods a kernel author spells
+on the root `accel` package. Some of those names are aliases of types declared
+below it, because the CPU backend has to construct a `Thread` and cannot import
+`accel`; [012](012-kernel-pipeline.md) §3 has the argument. The table therefore
+resolves on the identity `go/types` reports, which for a method is **(package
+path, receiver type name, method name)** and never (package path, method name),
+while the digest records the authored spelling so that relocating a type does
+not invalidate every committed digest. Bounded scalar math (`Sqrt`, `RSqrt`, `Exp`, `Log`, `Sin`, `Cos`,
 `Tanh`) lives in `accel/kmath`. `internal/kernelc` builds a table from the exact
 import-path/name objects and rejects a same-named function from any other
 package. The table records IR opcode, uniformity effect, capability requirement,

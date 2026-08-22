@@ -43,13 +43,17 @@ One entry function, whose body is straight-line arithmetic and `if`:
 
 ```go
 //accel:kernel workgroup=64
-func Scale(in []float32, out []float32) {
-	i := accel.GlobalID().X
+func Scale(t accel.Thread, in []float32, out []float32) {
+	i := t.GlobalID().X
 	if i < uint32(len(out)) {
 		out[i] = in[i] * 2
 	}
 }
 ```
+
+The first parameter is `accel.Thread` and the ids come off it, per
+[004](004-kernel-authoring.md)'s binding table. An earlier draft of this spec
+wrote `accel.GlobalID()`, which is not the authored spelling.
 
 Everything needed to take that from source to a checked result:
 
@@ -64,14 +68,26 @@ Everything needed to take that from source to a checked result:
   operations, explicit conversion, block, local declaration, assignment, and
   `if`. The remaining nodes are declared and unreachable, because the set is
   closed by design and adding to it later is what this child exists to prevent.
-- **The intrinsic table.** Keyed by `(package path, object name)` resolved
-  through `go/types`, carrying opcode, uniformity effect, capability
-  requirement, numeric class, and target lowering. At this scope it holds the
-  thread-id accessors and nothing else, and it rejects a same-named function
-  from any other package.
+- **The intrinsic table.** Keyed by the identity `go/types` resolves, which for
+  a method is (package path, receiver type name, method name); see §3. It
+  carries opcode, uniformity effect, capability requirement, numeric class, and
+  target lowering. At this scope it holds the thread-id accessors and nothing
+  else, and it rejects a same-named method on any other type and a same-named
+  function in any other package.
 - **The generated artifacts.** The flat Go lowering, the `Kernel` record with
   binding metadata and inferred access modes, registration, the source digest,
   and the generator/IR ABI version.
+
+  The bound arguments are validated **once against the declared bindings before
+  the invocation loop**, not per invocation. The signature is the binding
+  layout, so a dtype mismatch is something generation already proved; checking
+  it again inside the loop would reopen at runtime what the compiler settled,
+  and would report it 64 times instead of once with the binding's name.
+
+  The digest's preimage is versioned and line-oriented, and it carries a helpers
+  section that is empty in this child. [013](013-kernel-subset.md) adds lines to
+  it rather than changing its format, which it would otherwise have to do while
+  also reissuing every committed generated file.
 - **The direct flat executor.** Test infrastructure and compiler bring-up, not a
   public submission API: it invokes the generated adapter over independent
   invocations with no `Graph`. Its restricted descriptor rejects shared
@@ -88,7 +104,37 @@ are M4 and are rejected here with a position rather than ignored. No GPU target
 is emitted: MSL arrives with Metal at M6, and emitting an artifact no compiler
 consumes would be golden output nobody can falsify.
 
-## 3. The intrinsic table is not separable, and why
+## 3. Where `Thread` lives, and what that does to the table
+
+`accel.Thread` and `accel.ID3` are aliases of types in `internal/kernel`. This
+is not a style choice, it is forced by who has to construct a `Thread`.
+
+At M3 and after, the CPU backend executes generated kernels, and the CPU backend
+is `internal/cpu`, which cannot import `accel` because `accel` links it in. A
+`Thread` therefore has to be constructible from below `accel`, which means the
+type lives below `accel` and the root package aliases it. The authored spelling
+stays `accel.Thread`, a kernel author never names an internal package, and the
+generated code in an author's package refers to `accel.Thread` while the
+`Kernel` record's entry point is typed `kernel.Thread`. The alias makes those
+one type, which is what lets the two compose at all.
+
+It has one consequence that has to be decided rather than discovered.
+`go/types` reports a method's package as the *resolved* one, so `t.GlobalID()`
+resolves to `internal/kernel`, and [004](004-kernel-authoring.md)'s "functions
+or methods in the root `accel` package" is no longer literally where the object
+lives. So:
+
+- **Resolution keys on the resolved identity**, which for a method is (package
+  path, receiver type name, method name). The receiver type name is not
+  optional: without it the key is (package path, method name), which is the
+  predecessor's bare-name bug wearing a package prefix, and a user type with its
+  own `GlobalID` method would lower to the builtin.
+- **The digest records the authored spelling**, `accel.Thread.GlobalID`. Keeping
+  the two independent is what stops a later relocation of `Thread` from
+  invalidating every committed digest, and a relocation is exactly the kind of
+  thing that happens when M4 grows the rendezvous state.
+
+## 4. The intrinsic table is not separable, and why
 
 It would be natural to defer the table until there are intrinsics worth
 tabulating. It is here instead because the failure it prevents is
@@ -106,7 +152,7 @@ never the parser's: a front end that inherits an upstream tool's refusals has an
 unstated dependency on that tool's release, and Go 1.27's generic methods are
 the live example.
 
-## 4. Testing
+## 5. Testing
 
 **Level 5 from [004](004-kernel-authoring.md) §Testing is mandatory here**, not
 deferred. The authored `Scale` is called directly over the same buffers and
@@ -134,7 +180,15 @@ discovery, source-position negative assertions, the exact and primitive-bounded
 comparison contexts, generated-source freshness, and the flat direct-execution
 adapter.
 
-## 5. Open questions
+**The rejection corpus needs no second module and no `replace`.**
+`packages.Config.Overlay` creates packages that do not exist on disk, inside
+this module, resolving imports of the real `accel` and type-checking normally,
+and one `packages.Load` takes every case at once. That matters because
+[013](013-kernel-subset.md) makes the corpus the executable form of the subset:
+a corpus that costs a module resolution per case is one nobody runs, and one
+that needs a toolchain per case cannot run where the rest of the suite does.
+
+## 6. Open questions
 
 - **Whether the direct executor should survive M3.** [009](009-sequencing.md)
   says it disappears behind the common harness once graphs exist. Keeping it
