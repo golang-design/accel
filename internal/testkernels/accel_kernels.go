@@ -2,7 +2,10 @@
 
 package testkernels
 
-import "golang.design/x/accel"
+import (
+	"golang.design/x/accel"
+	"golang.design/x/accel/kmath"
+)
 
 // clampIndexFlat is the generated lowering of the helper clampIndex.
 func clampIndexFlat(i uint32, n uint32) uint32 {
@@ -52,7 +55,7 @@ var SegmentSumKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "e936475f267d2754fb83522211a333d3",
+	Digest:    "477e2a9a314673b1a980b020f3dc68ec",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		segmentSumFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
@@ -101,10 +104,42 @@ var CountAboveKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelI32, Access: accel.KernelWrite},
 	},
-	Digest:    "bbbc44d1fd8d83367e2a6d3a04e9e771",
+	Digest:    "5ad2dbd0fd90561622cedabdd265bd18",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		countAboveFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[int32](a, 1))
+	},
+}
+
+// normalizeFlat is the generated flat lowering of Normalize.
+//
+// It is what the CPU backend runs. The authored Normalize is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func normalizeFlat(t accel.Thread, in []accel.Float16, out []float32, scratch []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= uint32(int32(len(out))) {
+		return
+	}
+	var x float32 = in[i].F32()
+	var magnitude float32 = kmath.Sqrt(float32(kmath.Abs(x) + float32(1)))
+	scratch[i] = magnitude
+	out[i] = float32(x * kmath.RSqrt(float32(magnitude*magnitude)))
+}
+
+// NormalizeKernel is the compiled form of Normalize.
+var NormalizeKernel = accel.Kernel{
+	Name:          "Normalize",
+	WorkgroupSize: accel.ID3{X: 32, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+		{Name: "scratch", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "f8dc2fa112e32b880d444e8b40c5dc32",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		normalizeFlat(t, accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
 	},
 }
 
@@ -128,7 +163,7 @@ var ScaleKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "2b1b0e080c7382f150150b81e24eafed",
+	Digest:    "90a4e63995b835b3310099c4e49d6b56",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		scaleFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))

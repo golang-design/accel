@@ -77,20 +77,24 @@ func TestGeneratedSourceTypeChecks(t *testing.T) {
 		t.Fatalf("the generated source does not parse: %v\n%s", err, out)
 	}
 
-	// The authored source is type-checked alongside it, because the two share a
-	// package and the generated lowering names types the authored file imports.
-	authored, err := os.ReadFile(filepath.Join("..", "..", "testkernels", "scale.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	af, err := parser.ParseFile(fset, "scale.go", authored, parser.ParseComments)
-	if err != nil {
-		t.Fatal(err)
+	// The authored sources are type-checked alongside it, because they share a
+	// package: the generated lowering calls the helpers they declare and names
+	// the types they import.
+	files := []*ast.File{f}
+	for _, name := range []string{"scale.go", "reduce.go"} {
+		authored, err := os.ReadFile(filepath.Join("..", "..", "testkernels", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		af, err := parser.ParseFile(fset, name, authored, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, af)
 	}
 
 	conf := types.Config{Importer: importerFor(t)}
-	if _, err := conf.Check("golang.design/x/accel/internal/testkernels", fset,
-		[]*ast.File{af, f}, nil); err != nil {
+	if _, err := conf.Check("golang.design/x/accel/internal/testkernels", fset, files, nil); err != nil {
 		t.Fatalf("the generated source does not type-check: %v\n%s", err, out)
 	}
 }
@@ -333,7 +337,7 @@ func importerFor(t testing.TB) types.Importer {
 	t.Helper()
 	importerOnce.Do(func() {
 		cfg := &packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedDeps | packages.NeedImports}
-		pkgs, err := packages.Load(cfg, "golang.design/x/accel")
+		pkgs, err := packages.Load(cfg, "golang.design/x/accel", "golang.design/x/accel/kmath")
 		if err != nil {
 			t.Fatalf("loading accel: %v", err)
 		}

@@ -48,3 +48,36 @@ func loadKernelPackage(t *testing.T) *types.Package {
 	}
 	return kernelPkg
 }
+
+var (
+	kmathPkgOnce sync.Once
+	kmathPkg     *types.Package
+	kmathPkgErr  error
+)
+
+// loadKMathPackage type-checks the real accel/kmath package, for the same
+// reason loadKernelPackage exists: a table checked against a restatement of its
+// own contents is checking the test.
+func loadKMathPackage(t *testing.T) *types.Package {
+	t.Helper()
+	kmathPkgOnce.Do(func() {
+		cfg := &packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedDeps | packages.NeedImports}
+		pkgs, err := packages.Load(cfg, "golang.design/x/accel/kmath")
+		if err != nil {
+			kmathPkgErr = err
+			return
+		}
+		for _, p := range pkgs {
+			if p.Types != nil && p.PkgPath == "golang.design/x/accel/kmath" {
+				kmathPkg = p.Types
+			}
+		}
+	})
+	if kmathPkgErr != nil {
+		t.Fatalf("loading accel/kmath: %v", kmathPkgErr)
+	}
+	if kmathPkg == nil {
+		t.Fatal("accel/kmath did not load")
+	}
+	return kmathPkg
+}

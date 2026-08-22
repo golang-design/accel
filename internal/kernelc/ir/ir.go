@@ -343,6 +343,29 @@ const (
 	OpLocalIndex
 	OpGroupIndex
 
+	// Bounded scalar math from accel/kmath. Each has a normative per-operation
+	// domain and error ceiling in spec 008 section 6; an operation with no bound
+	// is not admitted rather than admitted with a tuned tolerance.
+	OpSqrt
+	OpRSqrt
+	OpExp
+	OpLog
+	OpSin
+	OpCos
+	OpTanh
+	OpAbs
+	OpMin
+	OpMax
+
+	// Conversions between narrow storage and f32. They are intrinsics rather
+	// than IR conversions because every target spells them differently: a native
+	// instruction where the format exists, and a bit-packing sequence where it
+	// does not.
+	OpF16ToF32
+	OpBF16ToF32
+	OpF32ToF16
+	OpF32ToBF16
+
 	// Cooperative. Recognized so that a kernel using one is rejected by name
 	// with a position, rather than failing as an unknown call. See
 	// specs/012-kernel-pipeline.md.
@@ -357,6 +380,20 @@ var opcodeNames = [...]string{
 	OpGlobalIndex: "GlobalIndex",
 	OpLocalIndex:  "LocalIndex",
 	OpGroupIndex:  "GroupIndex",
+	OpSqrt:        "Sqrt",
+	OpRSqrt:       "RSqrt",
+	OpExp:         "Exp",
+	OpLog:         "Log",
+	OpSin:         "Sin",
+	OpCos:         "Cos",
+	OpTanh:        "Tanh",
+	OpAbs:         "Abs",
+	OpMin:         "Min",
+	OpMax:         "Max",
+	OpF16ToF32:    "Float16.F32",
+	OpBF16ToF32:   "BFloat16.F32",
+	OpF32ToF16:    "ToFloat16",
+	OpF32ToBF16:   "ToBFloat16",
 	OpBarrier:     "Barrier",
 }
 

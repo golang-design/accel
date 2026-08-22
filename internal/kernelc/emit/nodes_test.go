@@ -152,8 +152,8 @@ func TestEmitsEveryBindingType(t *testing.T) {
 		{ir.U32, "[]uint32", "accel.KernelU32"},
 		{ir.I8, "[]int8", "accel.KernelI8"},
 		{ir.U8, "[]uint8", "accel.KernelU8"},
-		{ir.F16, "[]uint16", "accel.KernelF16"},
-		{ir.BF16, "[]uint16", "accel.KernelBF16"},
+		{ir.F16, "[]accel.Float16", "accel.KernelF16"},
+		{ir.BF16, "[]accel.BFloat16", "accel.KernelBF16"},
 	} {
 		t.Run(tc.kind.String(), func(t *testing.T) {
 			elem := &ir.Type{Kind: tc.kind}
@@ -177,12 +177,13 @@ func TestEmitsEveryBindingType(t *testing.T) {
 			if !strings.Contains(string(got), "accel.KernelRead | accel.KernelWrite") {
 				t.Errorf("a read-write binding is not spelled as both:\n%s", got)
 			}
-			// The narrow floats bind to a 16-bit host slice, because they are
-			// storage formats: Go has no float16 and arithmetic on one is not in
-			// the subset.
+			// The narrow floats bind to their own storage types rather than to a
+			// bare uint16. A defined integer type would carry integer operators,
+			// so adding two narrow values would compile and add their bit
+			// patterns, with no diagnostic anywhere.
 			if tc.kind == ir.F16 || tc.kind == ir.BF16 {
-				if !strings.Contains(string(got), "accel.KernelSlice[uint16]") {
-					t.Errorf("a narrow float does not bind to []uint16:\n%s", got)
+				if !strings.Contains(string(got), "accel.KernelSlice["+tc.goType[2:]+"]") {
+					t.Errorf("a narrow float does not bind to %s:\n%s", tc.goType, got)
 				}
 			}
 		})

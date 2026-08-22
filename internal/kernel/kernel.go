@@ -222,8 +222,11 @@ func matches(v any, d DType) bool {
 	case F32:
 		_, ok := v.([]float32)
 		return ok
-	case F16, BF16:
-		_, ok := v.([]uint16)
+	case F16:
+		_, ok := v.([]Float16)
+		return ok
+	case BF16:
+		_, ok := v.([]BFloat16)
 		return ok
 	case I32:
 		_, ok := v.([]int32)
@@ -246,8 +249,10 @@ func goTypeFor(d DType) string {
 	switch d {
 	case F32:
 		return "[]float32"
-	case F16, BF16:
-		return "[]uint16"
+	case F16:
+		return "[]accel.Float16"
+	case BF16:
+		return "[]accel.BFloat16"
 	case I32:
 		return "[]int32"
 	case U32:

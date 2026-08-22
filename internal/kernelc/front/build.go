@@ -592,10 +592,21 @@ func (c *checker) ident(e *ast.Ident) ir.Value {
 // selector builds a field selection, which at this milestone is an ID3
 // component or an intrinsic's receiver.
 func (c *checker) selector(e *ast.SelectorExpr) ir.Value {
-	// A method value used as anything but a call has no lowering.
+	// A method value used as anything but a call has no lowering. A call reaches
+	// this only through the call path, which handles the receiver itself.
 	if sel, ok := c.info.Selections[e]; ok && sel.Kind() == types.MethodVal {
 		c.errorf(e.Pos(), "a method value has no lowering: call %s instead", e.Sel.Name)
 		return nil
+	}
+
+	// A package-qualified name that is not a call has no lowering either, and
+	// saying so beats walking a package identifier as though it were a value.
+	if id, ok := e.X.(*ast.Ident); ok {
+		if _, isPkg := c.info.Uses[id].(*types.PkgName); isPkg {
+			c.errorf(e.Pos(), "%s.%s is not something a kernel reads: a kernel calls intrinsics "+
+				"and helpers", id.Name, e.Sel.Name)
+			return nil
+		}
 	}
 
 	x := c.value(e.X)
@@ -710,7 +721,14 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 			"(specs/009-sequencing.md)", in.Authored)
 		return nil
 	}
-	return c.intrinsicCall(e, fn, in)
+	// The caller decides whether there is a receiver, because it is the only
+	// place that has both the selector and the type information to tell a method
+	// call from a package-qualified one. They are the same AST shape.
+	var recv ast.Expr
+	if sel, ok := e.Fun.(*ast.SelectorExpr); ok && isMethodCall(c.info, sel) {
+		recv = sel.X
+	}
+	return c.intrinsicCall(e, recv, in)
 }
 
 // helperCall builds a call to a //accel:helper in the same package.
@@ -783,6 +801,13 @@ func (c *checker) propagateAccess(h *ir.Func, args []ir.Value) {
 	}
 }
 
+// isMethodCall reports whether a selector names a method on a value rather than
+// a function in a package.
+func isMethodCall(info *types.Info, sel *ast.SelectorExpr) bool {
+	s, ok := info.Selections[sel]
+	return ok && s.Kind() == types.MethodVal
+}
+
 // calleeFunc resolves a call target to the function object go/types found.
 func (c *checker) calleeFunc(fun ast.Expr) *types.Func {
 	switch f := fun.(type) {
@@ -805,10 +830,10 @@ func (c *checker) calleeFunc(fun ast.Expr) *types.Func {
 }
 
 // intrinsicCall builds a resolved intrinsic.
-func (c *checker) intrinsicCall(e *ast.CallExpr, fn *types.Func, in *intrin.Intrinsic) ir.Value {
+func (c *checker) intrinsicCall(e *ast.CallExpr, recvExpr ast.Expr, in *intrin.Intrinsic) ir.Value {
 	var recv ir.Value
-	if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
-		recv = c.value(sel.X)
+	if recvExpr != nil {
+		recv = c.value(recvExpr)
 		if recv == nil {
 			return nil
 		}
@@ -831,7 +856,6 @@ func (c *checker) intrinsicCall(e *ast.CallExpr, fn *types.Func, in *intrin.Intr
 	if c.current != nil && !slices.Contains(c.current.Intrinsics, in.Authored) {
 		c.current.Intrinsics = append(c.current.Intrinsics, in.Authored)
 	}
-	_ = fn
 	return ir.NewIntrinsic(e.Pos(), &ir.Type{Kind: in.Result}, in.Op, recv, args)
 }
 
@@ -885,6 +909,12 @@ func (c *checker) irType(t types.Type) (*ir.Type, error) {
 	}
 	if isThread(t) {
 		return &ir.Type{Kind: ir.Struct, Name: "Thread"}, nil
+	}
+	if isKernelType(t, "Float16") {
+		return &ir.Type{Kind: ir.F16}, nil
+	}
+	if isKernelType(t, "BFloat16") {
+		return &ir.Type{Kind: ir.BF16}, nil
 	}
 	// A comparison has type untyped bool until something gives it one, so the
 	// untyped form is defaulted rather than rejected. Defaulting is also what

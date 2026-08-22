@@ -446,11 +446,13 @@ func TestIntrinsicCallArity(t *testing.T) {
 		t.Error("an intrinsic with an unbuildable argument was accepted")
 	}
 
-	// A receiver that cannot be built declines too.
+	// A receiver that cannot be built declines too. It is passed explicitly
+	// rather than dug out of the selector, because whether a call has one is
+	// something only the caller can tell: a method call and a package-qualified
+	// call are the same AST shape.
 	c = newChecker(t)
 	in = &intrin.Intrinsic{Authored: "x", Op: ir.OpGlobalIndex, Result: ir.U32}
-	recvCall := &ast.CallExpr{Fun: &ast.SelectorExpr{X: &ast.BadExpr{From: 1}, Sel: &ast.Ident{NamePos: 1, Name: "M"}}, Lparen: 1}
-	if got := c.intrinsicCall(recvCall, nil, in); got != nil {
+	if got := c.intrinsicCall(&ast.CallExpr{Lparen: 1}, &ast.BadExpr{From: 1}, in); got != nil {
 		t.Error("an intrinsic with an unbuildable receiver was accepted")
 	}
 }

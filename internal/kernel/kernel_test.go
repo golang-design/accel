@@ -164,8 +164,8 @@ func TestBindNamesEveryDTypesHostSlice(t *testing.T) {
 		want string
 	}{
 		{kernel.F32, "[]float32"},
-		{kernel.F16, "[]uint16"},
-		{kernel.BF16, "[]uint16"},
+		{kernel.F16, "[]accel.Float16"},
+		{kernel.BF16, "[]accel.BFloat16"},
 		{kernel.I32, "[]int32"},
 		{kernel.U32, "[]uint32"},
 		{kernel.I8, "[]int8"},

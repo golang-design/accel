@@ -80,6 +80,28 @@ const (
 	PerWorkgroup
 )
 
+// Class is what an intrinsic's result may be compared as.
+//
+// It is recorded here rather than derived at the test, because it is a property
+// of the operation and not of the case: asserting a tolerance where bits are
+// guaranteed hides a real difference, and asserting bits where only a bound
+// holds produces a flaky test on the first backend that rounds differently.
+type Class int
+
+const (
+	// ClassExact moves bits or does arithmetic every target agrees on exactly.
+	ClassExact Class = iota
+	// ClassBounded has a normative per-operation ceiling in spec 008 section 6.
+	ClassBounded
+)
+
+func (c Class) String() string {
+	if c == ClassBounded {
+		return "bounded"
+	}
+	return "exact"
+}
+
 // Intrinsic is one table entry.
 type Intrinsic struct {
 	// Authored is what a kernel author wrote, and what the digest records.
@@ -91,6 +113,9 @@ type Intrinsic struct {
 
 	// Result is the kind the call produces.
 	Result ir.Kind
+
+	// Class is how a result may be compared. See [Class].
+	Class Class
 
 	// Params is how many arguments the call takes, not counting the receiver.
 	Params int
@@ -109,6 +134,15 @@ func (k key) String() string {
 // kernelPkg is where the aliased types actually live. The authored spelling
 // differs, which is the whole point of recording both.
 const kernelPkg = "golang.design/x/accel/internal/kernel"
+
+// kmathPkg is where the bounded scalar math lives. It is a real import path a
+// kernel author writes, not an alias target, so the authored and resolved
+// spellings agree here where they do not for Thread.
+const kmathPkg = "golang.design/x/accel/kmath"
+
+// accelPkg is the root package, where the narrowing conversions live as
+// ordinary functions rather than as aliases.
+const accelPkg = "golang.design/x/accel"
 
 var table = map[key]*Intrinsic{
 	{kernelPkg, "Thread", "GlobalID"}: {
@@ -134,6 +168,40 @@ var table = map[key]*Intrinsic{
 	{kernelPkg, "Thread", "GroupIndex"}: {
 		Authored: "accel.Thread.GroupIndex", Op: ir.OpGroupIndex,
 		Uniformity: PerWorkgroup, Result: ir.U32,
+	},
+
+	// accel/kmath, the bounded scalar math. Free functions rather than methods,
+	// because they do not depend on the invocation, and in their own package so
+	// that the key rejects a same-named function from anywhere else.
+	{kmathPkg, "", "Sqrt"}:  {Authored: "accel/kmath.Sqrt", Op: ir.OpSqrt, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "RSqrt"}: {Authored: "accel/kmath.RSqrt", Op: ir.OpRSqrt, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Exp"}:   {Authored: "accel/kmath.Exp", Op: ir.OpExp, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Log"}:   {Authored: "accel/kmath.Log", Op: ir.OpLog, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Sin"}:   {Authored: "accel/kmath.Sin", Op: ir.OpSin, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Cos"}:   {Authored: "accel/kmath.Cos", Op: ir.OpCos, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Tanh"}:  {Authored: "accel/kmath.Tanh", Op: ir.OpTanh, Result: ir.F32, Params: 1, Class: ClassBounded},
+
+	// Exact rather than bounded: these move bits and do no arithmetic, so they
+	// have no error to bound. Recording the class is what keeps a test from
+	// asserting a tolerance where bits are guaranteed.
+	{kmathPkg, "", "Abs"}: {Authored: "accel/kmath.Abs", Op: ir.OpAbs, Result: ir.F32, Params: 1, Class: ClassExact},
+	{kmathPkg, "", "Min"}: {Authored: "accel/kmath.Min", Op: ir.OpMin, Result: ir.F32, Params: 2, Class: ClassExact},
+	{kmathPkg, "", "Max"}: {Authored: "accel/kmath.Max", Op: ir.OpMax, Result: ir.F32, Params: 2, Class: ClassExact},
+
+	// Conversions between narrow storage and f32. Exact by spec 008 section 4:
+	// widening cannot round, and narrowing has a stated rule rather than a
+	// tolerance.
+	{kernelPkg, "Float16", "F32"}: {
+		Authored: "accel.Float16.F32", Op: ir.OpF16ToF32, Result: ir.F32, Class: ClassExact,
+	},
+	{kernelPkg, "BFloat16", "F32"}: {
+		Authored: "accel.BFloat16.F32", Op: ir.OpBF16ToF32, Result: ir.F32, Class: ClassExact,
+	},
+	{accelPkg, "", "ToFloat16"}: {
+		Authored: "accel.ToFloat16", Op: ir.OpF32ToF16, Result: ir.F16, Params: 1, Class: ClassExact,
+	},
+	{accelPkg, "", "ToBFloat16"}: {
+		Authored: "accel.ToBFloat16", Op: ir.OpF32ToBF16, Result: ir.BF16, Params: 1, Class: ClassExact,
 	},
 
 	// Recognized and not available. Being in the table is what makes the
@@ -207,8 +275,8 @@ func Digest() string {
 	fmt.Fprintf(&b, "intrin/%d\n", ABIVersion)
 	for _, k := range keys {
 		in := table[k]
-		fmt.Fprintf(&b, "%s\t%s\t%v\t%v\t%v\t%d\n",
-			in.Authored, k, in.Op, in.Stage, in.Result, in.Params)
+		fmt.Fprintf(&b, "%s\t%s\t%v\t%v\t%v\t%d\t%v\n",
+			in.Authored, k, in.Op, in.Stage, in.Result, in.Params, in.Class)
 	}
 	return b.String()
 }

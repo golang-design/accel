@@ -4,7 +4,10 @@
 
 package testkernels
 
-import "golang.design/x/accel"
+import (
+	"golang.design/x/accel"
+	"golang.design/x/accel/kmath"
+)
 
 // clampIndex keeps an index inside a binding.
 //
@@ -96,4 +99,27 @@ func CountAbove(t accel.Thread, in []float32, out []int32) {
 	}
 
 	out[i] = count
+}
+
+// Normalize scales each element by the reciprocal square root of a magnitude,
+// which is the shape an RMS normalization takes.
+//
+// It exists to exercise what the rest of spec 013 adds: narrow storage on the
+// way in, a bounded scalar intrinsic, and the explicit conversions Go forces
+// because accel.Float16 carries no arithmetic operators at all.
+//
+//accel:kernel workgroup=32
+func Normalize(t accel.Thread, in []accel.Float16, out []float32, scratch []float32) {
+	i := t.GlobalID().X
+	if i >= uint32(len(out)) {
+		return
+	}
+
+	// The conversion is not a convention, it is the only thing that compiles:
+	// a narrow value has no arithmetic operators, so it has to widen first.
+	x := in[i].F32()
+
+	magnitude := kmath.Sqrt(kmath.Abs(x) + 1)
+	scratch[i] = magnitude
+	out[i] = x * kmath.RSqrt(magnitude*magnitude)
 }

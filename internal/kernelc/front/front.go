@@ -675,6 +675,16 @@ func scalarKind(t types.Type) (ir.Kind, error) {
 // width differs between the CPU oracle and every GPU, which is a wrong-answer
 // bug rather than a compile error.
 func elementKind(t types.Type) (ir.Kind, error) {
+	// The narrow storage types are named structs rather than basics, which is
+	// what stops arithmetic on them from compiling. They are still scalars as
+	// far as a binding is concerned.
+	if isKernelType(t, "Float16") {
+		return ir.F16, nil
+	}
+	if isKernelType(t, "BFloat16") {
+		return ir.BF16, nil
+	}
+
 	b, ok := types.Unalias(t).Underlying().(*types.Basic)
 	if !ok {
 		return ir.Invalid, fmt.Errorf("its element is not a scalar the subset admits")
@@ -692,5 +702,5 @@ func elementKind(t types.Type) (ir.Kind, error) {
 		return ir.U8, nil
 	}
 	return ir.Invalid, fmt.Errorf("its element type %s is not one of float32, int32, uint32, "+
-		"int8, or uint8", b)
+		"int8, uint8, accel.Float16, or accel.BFloat16", b)
 }

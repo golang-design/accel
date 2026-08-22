@@ -211,6 +211,8 @@ func (*Thread) GlobalID() uint32 { return 0 }
 func TestNamesAndDigestAreStable(t *testing.T) {
 	names := intrin.Names()
 	want := []string{
+		"accel.BFloat16.F32",
+		"accel.Float16.F32",
 		"accel.Thread.Barrier",
 		"accel.Thread.GlobalID",
 		"accel.Thread.GlobalIndex",
@@ -218,6 +220,18 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel.Thread.GroupIndex",
 		"accel.Thread.LocalID",
 		"accel.Thread.LocalIndex",
+		"accel.ToBFloat16",
+		"accel.ToFloat16",
+		"accel/kmath.Abs",
+		"accel/kmath.Cos",
+		"accel/kmath.Exp",
+		"accel/kmath.Log",
+		"accel/kmath.Max",
+		"accel/kmath.Min",
+		"accel/kmath.RSqrt",
+		"accel/kmath.Sin",
+		"accel/kmath.Sqrt",
+		"accel/kmath.Tanh",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
@@ -254,5 +268,94 @@ func TestStageString(t *testing.T) {
 	}
 	if got := intrin.Cooperative.String(); got != "cooperative" {
 		t.Errorf("Cooperative = %q", got)
+	}
+}
+
+// TestKMathResolvesAndCarriesItsClass checks the free-function half of the
+// table against the real package, and the class each entry records.
+//
+// The class is not decoration. A test that asserts bits where only a bound
+// holds is flaky on the first backend that rounds differently, and one that
+// asserts a tolerance where bits are guaranteed hides a real difference. Which
+// of the two applies is a property of the operation, so it lives here.
+func TestKMathResolvesAndCarriesItsClass(t *testing.T) {
+	pkg := loadKMathPackage(t)
+
+	for _, tc := range []struct {
+		name   string
+		op     ir.Opcode
+		params int
+		class  intrin.Class
+	}{
+		{"Sqrt", ir.OpSqrt, 1, intrin.ClassBounded},
+		{"RSqrt", ir.OpRSqrt, 1, intrin.ClassBounded},
+		{"Exp", ir.OpExp, 1, intrin.ClassBounded},
+		{"Log", ir.OpLog, 1, intrin.ClassBounded},
+		{"Sin", ir.OpSin, 1, intrin.ClassBounded},
+		{"Cos", ir.OpCos, 1, intrin.ClassBounded},
+		{"Tanh", ir.OpTanh, 1, intrin.ClassBounded},
+		{"Abs", ir.OpAbs, 1, intrin.ClassExact},
+		{"Min", ir.OpMin, 2, intrin.ClassExact},
+		{"Max", ir.OpMax, 2, intrin.ClassExact},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := pkg.Scope().Lookup(tc.name)
+			if obj == nil {
+				t.Fatalf("accel/kmath has no %s, so the table names something that is not there", tc.name)
+			}
+			fn, ok := obj.(*types.Func)
+			if !ok {
+				t.Fatalf("%s is %T, not a function", tc.name, obj)
+			}
+			got, ok := intrin.Lookup(fn)
+			if !ok {
+				t.Fatalf("kmath.%s did not resolve to an intrinsic", tc.name)
+			}
+			if got.Op != tc.op {
+				t.Errorf("Op = %v, want %v", got.Op, tc.op)
+			}
+			if got.Params != tc.params {
+				t.Errorf("Params = %d, want %d", got.Params, tc.params)
+			}
+			if got.Class != tc.class {
+				t.Errorf("Class = %v, want %v", got.Class, tc.class)
+			}
+			if got.Stage != intrin.Flat {
+				t.Errorf("Stage = %v: scalar math needs no rendezvous", got.Stage)
+			}
+			if got.Result != ir.F32 {
+				t.Errorf("Result = %v, want f32: narrow types are storage and convert on load", got.Result)
+			}
+		})
+	}
+}
+
+// TestEveryKMathExportIsAnIntrinsic is the check that keeps the package and the
+// table from drifting apart.
+//
+// A function exported from accel/kmath that the table does not know is one a
+// kernel can call and the compiler cannot lower, and the failure lands on
+// whoever writes the kernel rather than on whoever added the function.
+func TestEveryKMathExportIsAnIntrinsic(t *testing.T) {
+	pkg := loadKMathPackage(t)
+	for _, name := range pkg.Scope().Names() {
+		obj := pkg.Scope().Lookup(name)
+		fn, ok := obj.(*types.Func)
+		if !ok || !obj.Exported() {
+			continue
+		}
+		if _, ok := intrin.Lookup(fn); !ok {
+			t.Errorf("accel/kmath exports %s and the intrinsic table does not know it: a kernel "+
+				"could call it and the compiler could not lower it", name)
+		}
+	}
+}
+
+func TestClassString(t *testing.T) {
+	if got := intrin.ClassExact.String(); got != "exact" {
+		t.Errorf("ClassExact = %q", got)
+	}
+	if got := intrin.ClassBounded.String(); got != "bounded" {
+		t.Errorf("ClassBounded = %q", got)
 	}
 }

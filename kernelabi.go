@@ -55,6 +55,39 @@ const (
 // running differently.
 const KernelABIVersion = kernel.ABIVersion
 
+// Narrow storage types.
+//
+// A kernel parameter of `[]accel.Float16` is a binding of 16-bit floats. The
+// types carry no arithmetic operators at all, which is not an omission: it is
+// what forces `f.F32()` on the way in and [ToFloat16] on the way out, so f32
+// accumulation is the only thing that compiles rather than a convention an
+// author has to remember. Native narrow arithmetic is a separate capability
+// (spec 002's CapF16Arithmetic) and arrives as explicit intrinsics later.
+//
+// They are not named F16 and BF16 because those are the [DType] constants for
+// the same formats. A dtype is metadata a descriptor carries and a storage type
+// is what a parameter is made of; both wanted the short name and the constants
+// shipped first.
+type (
+	Float16  = kernel.Float16
+	BFloat16 = kernel.BFloat16
+)
+
+// ToFloat16 converts an f32 to 16-bit storage, rounding to nearest with ties to
+// even and overflowing to a signed infinity. A NaN becomes the canonical quiet
+// encoding, per specs/008-numerics.md section 4.
+func ToFloat16(x float32) Float16 { return kernel.ToFloat16(x) }
+
+// ToBFloat16 converts an f32 to bf16 storage, rounding to nearest with ties to
+// even. Truncating the low bits instead would be round-toward-zero, which
+// biases every value in one direction and compounds over a reduction.
+func ToBFloat16(x float32) BFloat16 { return kernel.ToBFloat16(x) }
+
+// Float16FromBits and BFloat16FromBits reinterpret storage bits without
+// converting, for a caller who already has encoded data.
+func Float16FromBits(b uint16) Float16   { return kernel.Float16FromBits(b) }
+func BFloat16FromBits(b uint16) BFloat16 { return kernel.BFloat16FromBits(b) }
+
 // KernelSlice recovers one bound argument for a generated entry point.
 //
 // It is a function rather than an alias because Go has no function aliases. The
