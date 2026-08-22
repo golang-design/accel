@@ -18,7 +18,12 @@
 // lifetimes, and the immediate transfer path ([Queue.WriteBuffer],
 // [Queue.ReadBuffer], [Queue.Flush]).
 //
-// Not implemented, and reporting [ErrNotImplemented]: textures, kernels and
+// Kernels are compiled ahead of time by cmd/accel-kernel, run under go
+// generate. A generated file carries one [Kernel] record per kernel and the
+// lowering it names; nothing here compiles a kernel at runtime, because type
+// checking needs the go tool and a deployed binary does not have it.
+//
+// Not implemented, and reporting [ErrNotImplemented]: textures, compute
 // pipelines, [Recorder] and [Graph], and [Queue.Submit]. specs/009-sequencing.md
 // is the order they arrive in.
 //

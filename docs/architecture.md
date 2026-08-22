@@ -4,8 +4,9 @@ A tour of the design, written for someone who wants to understand or contribute
 to it. If you are looking for the formal decision record instead, that lives in
 [`specs/`](../specs/).
 
-Most of this is not implemented yet. Two of eight milestones are built: the CPU
-backend opens a device, reports what it can do, and moves memory. Everything
+Most of this is not implemented yet. The CPU backend opens a device, reports
+what it can do, moves memory, and compiles a kernel written in the Go subset
+into a lowering it runs. Everything
 below that describes what is being built and why, so that when you read the code
 it makes sense, and [what is built](#what-is-built-so-far) says which parts you
 can run today.
@@ -211,7 +212,7 @@ If you contribute a backend, that file is the contract.
 | --- | --- |
 | M0, the cgo-free build gate | done |
 | M1, memory on the CPU backend | done |
-| M2, the minimum kernel compiler and flat CPU execution | next |
+| M2, the minimum kernel compiler and flat CPU execution | in progress: the pipeline is built for straight-line kernels |
 | M3 to M7, graphs, cooperative execution, GEMM, Metal, tensors | specified, not started |
 
 M1 built the bottom of the device layer: enumeration and device open, the
@@ -241,6 +242,23 @@ close, and so does a device with live pools; both report and free nothing, and
 the children keep working. Closing a child out from under a caller who still
 holds it turns their bug into a silent success and makes the next use undefined
 instead of reported.
+
+M2's first child built the compiler pipeline end to end for one kernel, and two
+things about it decide how the rest of the compiler reads.
+
+**The authored function is not what runs.** The CPU backend executes a generated
+lowering built from the same typed IR every GPU artifact comes from, with an
+explicit rounding point at each arithmetic operation. That is what makes the CPU
+backend an oracle rather than a second implementation: two implementations of
+the same maths disagree in ways nobody can attribute, and one IR lowered twice
+disagrees only where the hardware does. The cost is a bug class where a mistake
+in IR construction is wrong identically everywhere, so the authored function is
+still run, by a test that compares the two.
+
+**Nothing resolves by name.** Intrinsics are matched on the identity `go/types`
+resolved, including the receiver's type. The predecessor keyed its builtin table
+by bare name, so a user function called `Dot` lowered to the GPU builtin: nothing
+errors, and the kernel computes something else.
 
 The milestone list, what done means for each, and the deviations taken so far
 are in [`../specs/009-sequencing.md`](../specs/009-sequencing.md).

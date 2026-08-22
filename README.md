@@ -16,11 +16,11 @@
 ---
 
 > [!IMPORTANT]
-> **Early, and mostly still a design.** Two of eight milestones are built: the
-> CPU backend can open a device and move memory. Kernels, graphs, and every GPU
-> backend are specified and unimplemented, and calling into them reports
-> `ErrNotImplemented`. The API will change. Feedback on the design is still the
-> most useful thing you can give it.
+> **Early, and mostly still a design.** The CPU backend can open a device, move
+> memory, and compile a kernel written in the Go subset into a lowering it then
+> runs. Graphs, uniforms, and every GPU backend are specified and unimplemented,
+> and calling into them reports `ErrNotImplemented`. The API will change.
+> Feedback on the design is still the most useful thing you can give it.
 
 ## What it is
 
@@ -72,6 +72,24 @@ defer w.Close()
 dev.Queue().WriteBuffer(w, 0, hostData) // returns once your slice is free
 head, err := w.View(0, 128)             // a slice, in elements, with no copy
 ```
+
+Kernels are written in a subset of Go and compiled by a generator, not by a
+driver at runtime:
+
+```go
+//accel:kernel workgroup=64
+func Scale(t accel.Thread, in []float32, out []float32) {
+    i := t.GlobalID().X
+    if i < uint32(len(out)) {
+        out[i] = in[i] * 2
+    }
+}
+```
+
+`go generate` turns that into a lowering with an explicit rounding point at
+every arithmetic operation, plus a record carrying the workgroup extent and the
+bindings with the read and write accesses **inferred from the body**. Anything
+outside the subset is rejected with a source position and a reason.
 
 Two layers. The **device layer** gives you buffers, kernels, and recorded command
 graphs, for renderers and simulations. The **tensor layer** gives you dtypes,
@@ -133,7 +151,8 @@ bindings are the better choice.
 | Pools, suballocation, buffers, views, lifetime | **Built** on the CPU backend |
 | Host and device transfers | **Built** on the CPU backend |
 | Textures and formats | Specified, deferred until graphics |
-| Kernel compiler | Specified, next |
+| Kernel compiler: subset checking, IR, Go lowering, generator | **Built** for straight-line kernels |
+| Kernel compiler: loops, helpers, uniforms | Specified, next |
 | Command graphs | Specified, not started |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |
@@ -141,9 +160,9 @@ bindings are the better choice.
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 Built means it has tests that fail without it, greater than 90% statement
-coverage on its package, and an end-to-end case through the public API. The
-milestone that produced the three rows above is
-[M1](specs/009-sequencing.md), and the next one is the kernel compiler.
+coverage on its package, and an end-to-end case through the public API. Those
+rows came from [M1 and M2](specs/009-sequencing.md); the next step is the rest
+of the kernel language.
 
 **v0 is compute only, on the CPU backend and Metal.** The other backends and the
 graphics half are designed and normative so their shape cannot break callers
