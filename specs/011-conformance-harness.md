@@ -28,7 +28,7 @@ must not become a second implementation of device or tensor semantics.
 ```
 internal/conformance/
   device/       discovery, profiles, modes, skips
-  compare/      008 comparison API and budget traces
+  numeq/        008 comparison API and budget traces
   oracle/       exact/high-precision references and committed corpora
   graphcheck/   naive plan, plan normalization, graph fuzz
   kernelcheck/  generated 010 manifest and per-variant runner
@@ -94,7 +94,7 @@ scoped to one test and restored automatically.
 
 ## 4. Comparisons
 
-The comparison package implements 008's explicit context API. It has no function
+The `numeq` comparison package implements 008's explicit context API. It has no function
 that accepts an arbitrary absolute/relative tolerance.
 
 Required comparison forms:

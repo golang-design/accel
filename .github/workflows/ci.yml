@@ -29,7 +29,7 @@ jobs:
         go-version: '1.27.x'
         check-latest: true
 
-    # CGO_ENABLED=0 is the point, not an optimization: design.md decision 2 makes
+    # CGO_ENABLED=0 is the point, not an optimization: specs/000-decisions.md decision 2 makes
     # cgo-free a hard requirement, so the build that must pass is the one without it.
     - name: Build
       env:
@@ -57,7 +57,7 @@ jobs:
     - name: Reject import "C"
       run: |
         if grep -rn --include='*.go' '^import "C"\|^\s*"C"$' . ; then
-          echo "::error::found cgo usage; design.md decision 2 makes cgo-free a hard requirement"
+          echo "::error::found cgo usage; specs/000-decisions.md decision 2 makes cgo-free a hard requirement"
           exit 1
         fi
         echo "no cgo found"

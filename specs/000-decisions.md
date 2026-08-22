@@ -228,6 +228,20 @@ primitive could move to a capability. The GEMM is the arbiter.
 
 ### 5. Kernels are authored once in Go and lowered from one typed IR
 
+**Revised 2026-08-21.** This decision previously read "Kernels are authored in
+Go", and its mechanism was that the CPU backend *called the authored function*
+through a generated adapter, with one goroutine per invocation and a barrier
+implemented as a rendezvous between them. What changed is the mechanism, not the
+principle: the authored function is still the single source of truth and there is
+still one text rather than two. What it bought is a CPU lowering that can insert
+explicit rounding points, track shared-memory definition per element, and report
+non-uniform arrival and conflicting accesses deterministically, none of which a
+call adapter around an ordinary Go function can supply. What it cost is that
+agreement between the authored Go and the executed Go stopped being a tautology
+and became a test ([004](004-kernel-authoring.md)'s fifth testing level). The
+revision procedure at the end of this document requires the old text to survive
+its replacement, and this paragraph is that record.
+
 A restricted subset of Go is type-checked once and lowered into one typed IR.
 That IR produces an instrumented Go runner for the CPU backend and native shader
 code for each GPU backend. The authored function is the single source of truth;
@@ -254,7 +268,7 @@ an independent algorithm oracle. See decision 3.
 | Alternative | Why not |
 | --- | --- |
 | Callers write native shader source per backend | No compiler to build, and full access to each language. It also means writing every kernel four times, and it makes decision 3's oracle impossible, since the CPU backend would have no common program to lower. |
-| A new DSL, not Go | Free to design for GPUs, with no Go semantics to honour. But it cannot run as Go on the CPU, so the oracle goes; it needs its own parser, type checker, and tooling; and the predecessor's DSL overloaded operators, which is exactly what made `go/types` unusable there. |
+| A new DSL, not Go | Free to design for GPUs, with no Go semantics to honour. It needs its own parser, type checker, and tooling, where Go gives us `go/types` for nothing, and the predecessor's DSL overloaded operators, which is exactly what made `go/types` unusable there. Note that one argument against a DSL weakened with this decision's revision: a DSL could also be lowered to a Go runner, so "it cannot run as Go on the CPU" is no longer the objection. What survives is the front end we do not have to write and the tooling authors already have. |
 | Go, but transpiled from an AST walk rather than `go/types` | Simpler to start, which is why the predecessor did it. It resolves identifiers by name instead of by object identity, cannot disambiguate a conversion from a call, and cannot resolve untyped constants, each of which surfaces later as a confusing miscompile. |
 | WGSL as the source language | Already portable, already specified, with tooling. It is not Go, so the oracle goes, and it drags in a WGSL front end for no gain over emitting to it. |
 

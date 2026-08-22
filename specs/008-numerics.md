@@ -71,7 +71,7 @@ hold:
 5. contraction is forbidden; and
 6. both backend probes have established round-to-nearest-even for the operation.
 
-If any condition is absent, the test is Special or Bounded; `cmp.Exact` refuses
+If any condition is absent, the test is Special or Bounded; `numeq.Exact` refuses
 the comparison. Exactness is a property of `(class, domain, backend profile)`,
 not of the Go operator spelling.
 
@@ -241,7 +241,11 @@ tolerance.
 
 ## 9. Comparison API
 
-The harness makes class, backend profile, and reference domain explicit:
+The harness makes class, backend profile, and reference domain explicit. The
+package is `numeq`, not `cmp`: a conformance file comparing numbers is exactly
+the file most likely to also want the standard library's `cmp` or `go-cmp`, and a
+shadowed import in a test that is already about subtle numeric differences is a
+bad trade for three saved characters.
 
 ```go
 type Context struct {
@@ -249,17 +253,17 @@ type Context struct {
 	Oracle  OracleID
 }
 
-cmp.Exact(t, ctx, cmp.ClassA, got, want, domain)
-cmp.Special(t, ctx, caseID, got, wantCategory)
-cmp.Division(t, ctx, got, highPrecisionWant)
-cmp.Primitive(t, ctx, cmp.Exp, got, highPrecisionWant)
-cmp.Reduction(t, ctx, got, reference, cmp.Sequential(K), magnitudes)
-cmp.Operator(t, ctx, got, reference, budgetTrace)
+numeq.Exact(t, ctx, numeq.ClassA, got, want, domain)
+numeq.Special(t, ctx, caseID, got, wantCategory)
+numeq.Division(t, ctx, got, highPrecisionWant)
+numeq.Primitive(t, ctx, numeq.Exp, got, highPrecisionWant)
+numeq.Reduction(t, ctx, got, reference, numeq.Sequential(K), magnitudes)
+numeq.Operator(t, ctx, got, reference, budgetTrace)
 ```
 
 There is no public tolerance parameter. Every failure reports backend/device,
 class, input index, got/reference bits, absolute and ULP error, allowed budget,
-and the budget trace. `cmp.Exact` fails immediately if the backend profile has
+and the budget trace. `numeq.Exact` fails immediately if the backend profile has
 not proved that class/domain exact.
 
 A static check rejects direct approximate-comparison helpers and numeric
@@ -297,12 +301,12 @@ sites rather than banning every float literal.
 - For positive normal-reference `sqrt` cases, assert that `r` and each finite
   adjacent f32 value pass and that the second representable value on either side
   fails. Assert `sqrt(+0)` is exactly `+0` and all other excluded cases route to
-  `cmp.Special`. Include a committed adversarial input for which an
+  `numeq.Special`. Include a committed adversarial input for which an
   `x * rsqrt(x)` lowering exceeds the one-step ceiling.
 - Inspect the generated Metal artifact and compile options: `sqrt` must remain a
   precise operation, fast-math transformations must be disabled, and no
   reciprocal-square-root sequence may replace it.
-- Force a backend profile without class-A proof and assert `cmp.Exact` refuses.
+- Force a backend profile without class-A proof and assert `numeq.Exact` refuses.
 - Ensure composed Softmax, RMSNorm, MatMul, Attention, and golden-model budget
   traces are stable and every injected primitive error is attributed.
 - Mechanically reject ad hoc tolerance APIs in the conformance corpus.

@@ -430,6 +430,17 @@ plane sizes and packing order, scale/zero-point semantics, import/repacking
 ownership, legal views, quantizer rounding/clamping, kernel variants, and derived
 scheme error bounds. No three-scheme commitment is made by v0.
 
+One constraint on that design is already fixed by layer 1 and is recorded here so
+it is not re-derived from scratch: **001 types every buffer by dtype, and an
+interleaved block struct has no dtype.** A GGML-style buffer of quant-plus-scale
+blocks could only be smuggled through as an opaque byte buffer, giving up the
+size and type validation 003 performs at build. So a quantized tensor is a small
+set of separately typed plane buffers rather than one block-structured buffer,
+which also keeps each plane naturally aligned for coalesced loads and lets a
+per-layer slab stay an ordinary 001 view of each plane. The costs are equally
+fixed: a tensor is no longer one buffer view, and importing a file whose weights
+are stored as blocks requires a repacking pass at load.
+
 ## Open questions
 
 - Whether post-v0 GEMM should accept a strided K axis or require explicit
