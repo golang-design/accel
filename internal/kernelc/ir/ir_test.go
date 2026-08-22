@@ -193,7 +193,7 @@ func TestNarrowKindsCarryNoArithmetic(t *testing.T) {
 			t.Errorf("%v is not numeric", k)
 		}
 	}
-	for _, k := range []ir.Kind{ir.F16, ir.BF16, ir.Bool, ir.ID3Kind, ir.Slice, ir.Array, ir.Struct, ir.Invalid} {
+	for _, k := range []ir.Kind{ir.F16, ir.BF16, ir.I8, ir.U8, ir.Bool, ir.ID3Kind, ir.Slice, ir.Array, ir.Struct, ir.Invalid} {
 		if k.Numeric() {
 			t.Errorf("%v reports arithmetic; narrow dtypes are storage and the rest are not scalars", k)
 		}

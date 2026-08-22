@@ -52,6 +52,10 @@ const (
 	I32
 	U32
 	F32
+	// I8 and U8 are storage and conversion types, for quantized weights. Like
+	// the narrow floats they are storage rather than arithmetic kinds.
+	I8
+	U8
 	// F16 and BF16 are storage kinds. They carry no arithmetic: a value converts
 	// to F32 on load and back on store, which is what makes narrow dtypes work
 	// on every backend rather than only where native narrow arithmetic exists.
@@ -70,7 +74,7 @@ const (
 
 var kindNames = [...]string{
 	Invalid: "invalid", Bool: "bool", I32: "i32", U32: "u32", F32: "f32",
-	F16: "f16", BF16: "bf16", ID3Kind: "ID3", Struct: "struct", Array: "array", Slice: "slice",
+	I8: "i8", U8: "u8", F16: "f16", BF16: "bf16", ID3Kind: "ID3", Struct: "struct", Array: "array", Slice: "slice",
 }
 
 func (k Kind) String() string {

@@ -314,13 +314,19 @@ them or duplicating them.
 
 The structured IR has this closed v0 node set:
 
-- types: bool, i32, u32, f32, the f16/bf16 storage wrappers, `ID3`, structs,
-  fixed shared arrays, and typed resource slices;
+- types: bool, i32, u32, f32, i8, u8, the f16/bf16 storage wrappers, `ID3`,
+  structs, fixed shared arrays, and typed resource slices;
 - values: constants, parameters, locals, field selection, indexing, unary and
   binary operations, explicit conversion, helper call, and intrinsic call; and
 - statements: block, local declaration, assignment, expression statement, `if`,
   three-clause/condition/infinite `for`, `break`, `continue`, and single-value or
   empty `return`.
+
+`i8` and `u8` were missing from this list in the first draft while the binding
+table above admitted `int8` and `uint8`, so the two halves of this spec
+disagreed about whether a quantized plane had a type. Found while implementing
+[012](012-kernel-pipeline.md) and resolved here rather than by adding a kind in
+passing, which is the rule [013](013-kernel-subset.md) states.
 
 There is deliberately no generic “AST escape” node. Encountering `range`,
 `switch`, `select`, a labeled branch, or any construct outside the list is a
