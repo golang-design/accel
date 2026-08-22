@@ -1,6 +1,6 @@
 ---
 title: "Sequencing: what gets built, in what order, and what done means"
-status: drafted
+status: in progress
 layer: process
 depends_on:
   - 000-decisions.md

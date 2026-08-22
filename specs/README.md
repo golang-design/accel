@@ -41,6 +41,19 @@ not the order these files are numbered in.
 For implementation, [010](010-kernel-corpus.md) is the exact unquantized kernel
 inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 
+## Where the work stands
+
+| | |
+| --- | --- |
+| Done | M0's cgo-free gate, M1's memory on the CPU backend |
+| Next | M2, the minimum kernel compiler and flat direct CPU execution |
+| Blocked on nothing | M2's inputs are 002, 004, and 011, all of which are drafted or in progress |
+
+[009](009-sequencing.md) has the milestone list, what done means for each, and
+the deviations taken so far. It is the file to read before picking anything up,
+because the order things can be demonstrated in is not the order these files are
+numbered in.
+
 ## Decisions
 
 | Spec | Status | Covers |
@@ -70,8 +83,8 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
-| [009-sequencing.md](009-sequencing.md) | Drafted | What gets built in what order, what done means per milestone, the work no spec owns, and the risks with what retires each |
-| [011-conformance-harness.md](011-conformance-harness.md) | Drafted | Profiles, comparisons, oracles, fuzzing, E2E scenarios, diagnostics, and greater-than-90% coverage gates |
+| [009-sequencing.md](009-sequencing.md) | In progress | What gets built in what order, what done means per milestone, the work no spec owns, and the risks with what retires each |
+| [011-conformance-harness.md](011-conformance-harness.md) | In progress | Profiles, comparisons, oracles, fuzzing, E2E scenarios, diagnostics, and greater-than-90% coverage gates |
 
 This is the one spec here that is expected to change as work lands. Read it
 before picking anything up: the `depends_on` graph is a graph of documents, and
@@ -83,7 +96,11 @@ the order things can actually be demonstrated in is different.
   once assigned; a retired spec keeps its number.
 - **Frontmatter** carries `title`, `status`, `layer`, and `depends_on`; 000 is the
   intentionally frontmatter-free normative decision record.
-- **Status** is one of drafted, in progress, implemented, or superseded.
+- **Status** is one of drafted, in progress, implemented, or superseded. *In
+  progress* means some of the spec has shipped, and the spec says which parts.
+  A spec does not reach *implemented* while any section it owns is unbuilt, so
+  001 stays in progress with textures and device loss outstanding even though
+  everything M1 promised is done.
 - Every implementation-bearing spec states its **testing strategy**. Genuine
   unresolved decisions stay under **open questions**; resolved questions are
   removed rather than kept as stale history.

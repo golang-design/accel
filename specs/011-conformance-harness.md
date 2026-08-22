@@ -1,6 +1,6 @@
 ---
 title: "Conformance harness: profiles, comparisons, fuzzing, E2E, and coverage"
-status: drafted
+status: in progress
 layer: process
 depends_on:
   - 001-device-resources.md
