@@ -329,6 +329,7 @@ func TestAGraphIsSubmittedOneAtATime(t *testing.T) {
 					refusals.Add(1)
 				default:
 					wrong.Add(1)
+					t.Error(err)
 				}
 			}
 		}()

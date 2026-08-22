@@ -42,11 +42,24 @@ type executable struct {
 	dev  *device
 	plan *driver.Plan
 
-	mu       sync.Mutex
-	bound    []driver.SlotBinding // indexed by one-based slot; index 0 unused
-	inFlight bool
-	closed   bool
+	mu     sync.Mutex
+	bound  []driver.SlotBinding // indexed by one-based slot; index 0 unused
+	closed bool
+
+	// cur is the most recent submission, and "in flight" is derived from it
+	// rather than tracked alongside it.
+	//
+	// The two-piece version -- a bool cleared by the completion goroutine and a
+	// fence signalled by it -- has to keep them in agreement, and it did not: it
+	// signalled first, so a caller who waited on the fence and resubmitted was
+	// refused by a flag nobody had got round to clearing. Deriving the answer
+	// from the fence removes the disagreement rather than ordering it, which is
+	// the difference between a fixed race and a narrower one.
+	cur *fence
 }
+
+// busy reports whether a submission is still running. e.mu is held.
+func (e *executable) busy() bool { return e.cur != nil && !e.cur.Done() }
 
 func (e *executable) Rebind(binds []driver.SlotBinding) error {
 	// Validated in full before anything is written, so a batch containing one
@@ -72,7 +85,7 @@ func (e *executable) Rebind(binds []driver.SlotBinding) error {
 	if e.closed {
 		return fmt.Errorf("accel: rebind: the executable is closed")
 	}
-	if e.inFlight {
+	if e.busy() {
 		return fmt.Errorf("accel: rebind while a submission is in flight")
 	}
 	for _, b := range staged {
@@ -95,31 +108,28 @@ func (e *executable) Submit() (driver.Fence, error) {
 		e.mu.Unlock()
 		return nil, fmt.Errorf("accel: submit: the executable is closed")
 	}
-	if e.inFlight {
+	if e.busy() {
 		e.mu.Unlock()
 		return nil, fmt.Errorf("accel: submit while a submission is in flight")
 	}
-	// Resolve every operand under the same lock that sets inFlight, so a rebind
-	// racing a submit either fully precedes it or is rejected. There is no
-	// window in which half the plan sees the new binding.
+	// Resolve every operand under the same lock that records the fence, so a
+	// rebind racing a submit either fully precedes it or is rejected. There is
+	// no window in which half the plan sees the new binding.
 	nodes, err := e.resolve()
 	if err != nil {
 		e.mu.Unlock()
 		return nil, err
 	}
-	e.inFlight = true
+	f := &fence{done: make(chan struct{})}
+	e.cur = f
 	e.mu.Unlock()
 
-	f := &fence{done: make(chan struct{})}
 	go func() {
 		f.err = run(nodes)
 		if lost := e.dev.Lost(); lost != nil {
 			f.err = lost
 		}
 		close(f.done)
-		e.mu.Lock()
-		e.inFlight = false
-		e.mu.Unlock()
 	}()
 	return f, nil
 }
@@ -161,9 +171,9 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 func (e *executable) bytes(o driver.Operand) ([]byte, error) {
 	switch o.Kind() {
 	case driver.OperandBlock:
-		mem := o.Block().Bytes()
-		if mem == nil {
-			return nil, fmt.Errorf("a %s operand is not host-visible", o)
+		mem, err := backing(o.Block())
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", o, err)
 		}
 		return mem[o.Offset() : o.Offset()+o.Size()], nil
 	case driver.OperandSlot:
@@ -174,14 +184,32 @@ func (e *executable) bytes(o driver.Operand) ([]byte, error) {
 		if o.Offset() > b.Size || o.Size() > b.Size-o.Offset() {
 			return nil, fmt.Errorf("%s is outside the %d bytes bound to it", o, b.Size)
 		}
-		mem := b.Block.Bytes()
-		if mem == nil {
-			return nil, fmt.Errorf("slot %d's resource is not host-visible", o.Slot())
+		mem, err := backing(b.Block)
+		if err != nil {
+			return nil, fmt.Errorf("slot %d: %w", o.Slot(), err)
 		}
 		off := b.Offset + o.Offset()
 		return mem[off : off+o.Size()], nil
 	}
 	return nil, fmt.Errorf("%s", o)
+}
+
+// backing is this backend reaching into its own allocation.
+//
+// Deliberately not [driver.Block.Bytes], which is the *host* mapping and is nil
+// for MemoryDevice on every backend including this one: a device-local pool is
+// unmappable by contract (specs/006-backends.md section 1), and a transient
+// pool is device-local. A backend executing a copy between its own allocations
+// is not mapping them, so it uses the concrete type it created.
+func backing(b driver.Block) ([]byte, error) {
+	blk, ok := b.(*block)
+	if !ok {
+		return nil, fmt.Errorf("a %T was not allocated by the CPU backend", b)
+	}
+	if blk.mem == nil {
+		return nil, fmt.Errorf("the block has been freed")
+	}
+	return blk.mem, nil
 }
 
 // run executes resolved nodes in order.
@@ -211,7 +239,7 @@ func (e *executable) Close() error {
 	if e.closed {
 		return nil
 	}
-	if e.inFlight {
+	if e.busy() {
 		return fmt.Errorf("accel: close: a submission is in flight")
 	}
 	e.closed = true

@@ -283,20 +283,56 @@ func TestRebindRejectsMalformedBindings(t *testing.T) {
 	}
 }
 
-// Device memory has no host mapping, so a plan touching it must fail with a
-// reason rather than by indexing a nil slice.
-func TestDeviceMemoryIsNotReachableFromAPlanYet(t *testing.T) {
+// Device-local memory is unmappable by contract and a transient pool is
+// device-local, so a plan must still be able to touch it: a backend copying
+// between its own allocations is not mapping them. If this ever regresses to
+// using the host mapping, every graph with a transient breaks.
+func TestPlansReachDeviceLocalMemory(t *testing.T) {
 	dev, c := open(t, cpu.Options{})
 	priv := block(t, dev, driver.MemoryDevice, 16)
+	if priv.Bytes() != nil {
+		t.Fatal("device-local memory must have no host mapping")
+	}
+	out := block(t, dev, driver.MemoryShared, 16)
+
 	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{
-		{Op: driver.OpHostWrite, Dst: blockOperand(t, priv, 0, 4), Data: []byte{1, 2, 3, 4}},
+		{ID: 0, Op: driver.OpHostWrite, Dst: blockOperand(t, priv, 0, 4), Data: []byte{1, 2, 3, 4}},
+		{ID: 1, Op: driver.OpCopy, Dst: blockOperand(t, out, 0, 4), Src: blockOperand(t, priv, 0, 4)},
 	}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 	defer exe.Close()
-	if _, err := exe.Submit(); err == nil || !strings.Contains(err.Error(), "not host-visible") {
-		t.Fatalf("expected a host-visibility rejection, got %v", err)
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := f.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if got := out.Bytes()[:4]; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Errorf("got %v through device-local memory, want 1..4", got)
+	}
+}
+
+// A block freed while a plan still names it must be reported, not read as a
+// nil slice.
+func TestAFreedBlockIsReported(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	b, err := dev.Alloc(driver.MemoryShared, 16, "freed")
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{
+		{Op: driver.OpHostWrite, Dst: blockOperand(t, b, 0, 4), Data: []byte{1, 2, 3, 4}},
+	}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+	b.Free()
+	if _, err := exe.Submit(); err == nil || !strings.Contains(err.Error(), "freed") {
+		t.Fatalf("expected a freed-block rejection, got %v", err)
 	}
 }
 
@@ -413,5 +449,82 @@ func BenchmarkSubmit(b *testing.B) {
 		if err := f.Wait(); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// A fence signalling means the submission finished, so resubmitting the instant
+// it signals must work.
+//
+// This was a race between two pieces of state that had to agree: a bool cleared
+// by the completion goroutine and the fence it signalled. It signalled first,
+// so a caller who waited and resubmitted was refused by a flag nobody had got
+// round to clearing.
+//
+// Worth being precise about what this test is and is not. The window between
+// those two statements is a few nanoseconds, and no version of this test
+// reproduced the old behaviour reliably -- it took a hundred concurrent
+// submissions through the graph layer to see it once. So this is a smoke check
+// on the invariant, not the regression guard. The guard is that "in flight" is
+// now derived from the fence rather than tracked beside it, which leaves no two
+// pieces of state to disagree.
+func TestResubmittingTheInstantAFenceSignalsWorks(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	dst := block(t, dev, driver.MemoryShared, 1<<16)
+	nodes := make([]driver.PlanNode, 64)
+	payload := make([]byte, 1024)
+	for i := range nodes {
+		nodes[i] = driver.PlanNode{ID: i, Op: driver.OpHostWrite,
+			Dst: blockOperand(t, dst, i*1024, 1024), Data: payload}
+	}
+	exe, err := c.Compile(&driver.Plan{Nodes: nodes})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+
+	for i := range 500 {
+		f, err := exe.Submit()
+		if err != nil {
+			t.Fatalf("submission %d was refused although the previous fence had already "+
+				"reported done: %v", i, err)
+		}
+		// Spin on Done rather than blocking on Wait, then submit on the next
+		// statement: blocking hands the scheduler an opportunity that hides the
+		// window, and the point is that there is no window to hide.
+		for !f.Done() {
+		}
+		if err := f.Wait(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Closing while a submission runs is refused rather than freeing state the
+// executing goroutine still reads.
+func TestCloseDuringASubmissionIsRefused(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	dst := block(t, dev, driver.MemoryShared, 1<<20)
+	nodes := make([]driver.PlanNode, 1024)
+	payload := make([]byte, 1024)
+	for i := range nodes {
+		nodes[i] = driver.PlanNode{ID: i, Op: driver.OpHostWrite,
+			Dst: blockOperand(t, dst, i*1024, 1024), Data: payload}
+	}
+	exe, err := c.Compile(&driver.Plan{Nodes: nodes})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := exe.Close(); err != nil && !strings.Contains(err.Error(), "in flight") {
+		t.Errorf("close during a submission should be refused as in-flight, got %v", err)
+	}
+	if err := f.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if err := exe.Close(); err != nil {
+		t.Errorf("close after the fence signalled: %v", err)
 	}
 }
