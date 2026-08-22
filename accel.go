@@ -11,9 +11,9 @@
 //
 // # Status
 //
-// Design stage. Every function here reports [ErrNotImplemented]. The API surface
-// exists so the design can be read as Go and can be checked by the compiler, and
-// it will change.
+// Under construction, and the API will change. Device open, enumeration, and
+// selection are implemented; everything past them still reports
+// [ErrNotImplemented]. specs/009-sequencing.md is the order the rest arrives in.
 //
 // # The model
 //
@@ -34,7 +34,12 @@
 // specs/001-device-resources.md.
 package accel
 
-import "errors"
+import (
+	"errors"
+	"sync"
+
+	"golang.design/x/accel/internal/driver"
+)
 
 // ErrNotImplemented is reported by every operation while this package is at the
 // design stage.
@@ -61,9 +66,6 @@ const (
 	BackendD3D12
 	BackendOpenGL
 )
-
-// String returns the backend's name.
-func (b Backend) String() string { panic(ErrNotImplemented) }
 
 // AdapterID identifies one enumerated adapter for this process. It is opaque,
 // comparable, stable across repeated enumerations while the adapter is present,
@@ -107,20 +109,6 @@ type Enumeration struct {
 	Devices     []DeviceInfo
 	Diagnostics []ProbeDiagnostic
 }
-
-// Enumerate reports every openable synchronous adapter and all probe failures.
-func Enumerate() Enumeration { panic(ErrNotImplemented) }
-
-// OpenDevice opens exactly the enumerated adapter id names.
-//
-// It never falls back to another adapter or backend. Use [OpenBest] to ask for
-// automatic selection explicitly.
-func OpenDevice(id AdapterID) (*Device, error) { panic(ErrNotImplemented) }
-
-// OpenBest opens the best available device under an explicit policy. Unlike
-// [OpenDevice] this is a request to choose, and the policy is what it chooses by: it
-// fails rather than descending into something the caller did not sanction.
-func OpenBest(p Policy) (*Device, error) { panic(ErrNotImplemented) }
 
 // AdapterRejection explains why automatic selection skipped one adapter.
 type AdapterRejection struct {
@@ -183,42 +171,23 @@ type CPUOptions struct {
 	ShuffleSeed   uint64
 }
 
-// OpenCPU opens the CPU backend with an explicit oracle profile.
-func OpenCPU(opts CPUOptions) (*Device, error) { panic(ErrNotImplemented) }
-
 // Device is an opened accelerator.
 //
 // A Device is safe for concurrent use. A [Recorder] obtained from it is not; see
 // [Device.NewRecorder].
-type Device struct{ _ noCopy }
+type Device struct {
+	_ noCopy
 
-// Info reports what this device is and what it can do.
-func (d *Device) Info() DeviceInfo { panic(ErrNotImplemented) }
+	dev       driver.Device
+	info      DeviceInfo
+	queues    []QueueInfo
+	handles   []*Queue
+	queue     *Queue
+	selection *SelectionReport
 
-// SelectionReport reports how OpenBest selected this device. The bool is false
-// for a device opened explicitly with OpenDevice or OpenCPU.
-func (d *Device) SelectionReport() (SelectionReport, bool) { panic(ErrNotImplemented) }
-
-// Queue returns the device's default queue, which is always [QueueUniversal].
-func (d *Device) Queue() *Queue { panic(ErrNotImplemented) }
-
-// Queues reports every queue this device exposes, in a stable order whose first
-// entry is what [Device.Queue] returns.
-//
-// Queue topology is reported rather than inferred from the platform, because the
-// backends disagree completely: Vulkan exposes queue families with capability
-// bits, D3D12 has typed command queues, and Metal, GL and the CPU backend have
-// exactly one. Ordering between submissions depends on which queue they went to,
-// so a caller who cannot enumerate them cannot use that rule.
-func (d *Device) Queues() []QueueInfo { panic(ErrNotImplemented) }
-
-// QueueFor returns a queue able to run kind.
-//
-// It never fails and never invents a queue: on a device with one universal queue
-// it returns that queue, and the caller sees which one they got through
-// [Device.Queues]. That is not the silent substitution [OpenDevice] refuses, because
-// nothing about the result is weaker than what was asked for, only less parallel.
-func (d *Device) QueueFor(kind QueueKind) *Queue { panic(ErrNotImplemented) }
+	mu     sync.Mutex
+	closed bool
+}
 
 // QueueKind is what a queue accepts.
 type QueueKind int
@@ -282,9 +251,6 @@ func (d *Device) NewComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 // A Recorder belongs to one goroutine. The [Graph] it produces is immutable but
 // permits only one in-flight submission; build one graph per concurrent user.
 func (d *Device) NewRecorder() *Recorder { panic(ErrNotImplemented) }
-
-// Close releases the device. Resources created from it must be closed first.
-func (d *Device) Close() error { panic(ErrNotImplemented) }
 
 // noCopy makes `go vet` complain about copying a value that owns device state.
 type noCopy struct{}

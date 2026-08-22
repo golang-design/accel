@@ -4,6 +4,8 @@
 
 package accel
 
+import "strconv"
+
 // MemoryKind is where a pool's memory lives and who can reach it. It is the
 // property that actually decides performance, so it is chosen explicitly rather
 // than inferred. See specs/001-device-resources.md.
@@ -136,11 +138,38 @@ const (
 	U8
 )
 
+// dtypeInfo is the one place a dtype's width and name are written down. A
+// storage buffer is a tightly packed array of one dtype, so this size is also
+// its element stride: there is no padding anywhere, ever. See
+// specs/001-device-resources.md section 3.2.
+var dtypeInfo = [...]struct {
+	name string
+	size int
+}{
+	F32:  {"f32", 4},
+	F16:  {"f16", 2},
+	BF16: {"bf16", 2},
+	I32:  {"i32", 4},
+	U32:  {"u32", 4},
+	I8:   {"i8", 1},
+	U8:   {"u8", 1},
+}
+
 // Size returns the dtype's size in bytes.
-func (d DType) Size() int { panic(ErrNotImplemented) }
+func (d DType) Size() int {
+	if d < 0 || int(d) >= len(dtypeInfo) {
+		return 0
+	}
+	return dtypeInfo[d].size
+}
 
 // String returns the dtype's name.
-func (d DType) String() string { panic(ErrNotImplemented) }
+func (d DType) String() string {
+	if d < 0 || int(d) >= len(dtypeInfo) {
+		return "DType(" + strconv.Itoa(int(d)) + ")"
+	}
+	return dtypeInfo[d].name
+}
 
 // BufferUsage declares how a buffer will be used.
 //

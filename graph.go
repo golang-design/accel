@@ -236,7 +236,12 @@ type GraphMemory struct {
 }
 
 // Queue accepts submitted work.
-type Queue struct{ _ noCopy }
+type Queue struct {
+	_ noCopy
+
+	dev  *Device
+	info QueueInfo
+}
 
 // WriteBuffer copies data into queue-owned staging and appends the transfer to
 // this queue's next submission prologue. It returns once data no longer aliases

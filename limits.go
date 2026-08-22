@@ -73,9 +73,6 @@ type Limits struct {
 	MaxSubgroupSize int
 }
 
-// Limits reports the device's numeric bounds.
-func (d *Device) Limits() Limits { panic(ErrNotImplemented) }
-
 // FormatInfo describes what a [Format] is and what a device can do with it.
 //
 // Capability is per device, not per format: a format that is renderable on one

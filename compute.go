@@ -4,6 +4,8 @@
 
 package accel
 
+import "golang.design/x/accel/internal/driver"
+
 // Capabilities is what a device can actually do.
 //
 // It is queried before use so an absent feature is a typed answer rather than a
@@ -76,14 +78,19 @@ type WorkgroupSize struct{ X, Y, Z int }
 
 // SubgroupOpSet reports which subgroup operations a device provides. Vulkan
 // exposes these independently, so presence of one does not imply the others.
-type SubgroupOpSet uint32
+//
+// It is an alias rather than its own type so that [Capabilities] and the
+// backend-facing struct it is converted from have identical field types, which
+// makes that conversion a compile-time check on the two staying in step. See
+// internal/driver.
+type SubgroupOpSet = driver.SubgroupOpSet
 
 const (
-	SubgroupBasic SubgroupOpSet = 1 << iota
-	SubgroupVote
-	SubgroupBallot
-	SubgroupShuffle
-	SubgroupArithmetic
+	SubgroupBasic      = driver.SubgroupBasic
+	SubgroupVote       = driver.SubgroupVote
+	SubgroupBallot     = driver.SubgroupBallot
+	SubgroupShuffle    = driver.SubgroupShuffle
+	SubgroupArithmetic = driver.SubgroupArithmetic
 )
 
 // Capability names something a kernel can require and a device may lack. It is a
