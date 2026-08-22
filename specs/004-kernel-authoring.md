@@ -394,7 +394,7 @@ running `go generate`:
 //go:generate go run ./cmd/accel-kernel -targets=cpu,metal .
 ```
 
-`cpu` is mandatory. M2 permits `cpu`; M5 adds `metal`, and the v0 release corpus
+`cpu` is mandatory. M2 permits `cpu`; M6 adds `metal`, and the v0 release corpus
 is generated for exactly `cpu,metal`. Later milestones admit `vulkan`, `d3d12`,
 `gles`, and `webgpu` only when their emitter and conformance gate exist.
 Requesting an unknown or not-yet-admitted target fails generation instead of

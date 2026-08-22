@@ -215,8 +215,8 @@ registered v0 variant lacks a reference, numeric recipe, CPU case, or required
 Metal case. The kernel packages collectively exceed 90% statement coverage on
 the CPU path.
 
-Plan-level E2Es in 011 must exercise every semantic ID at least once. M4's GEMM
-E2E exercises the tiled family; M6's two-layer model and prefill/decode parity
+Plan-level E2Es in 011 must exercise every semantic ID at least once. M5's GEMM
+E2E exercises the tiled family; M7's two-layer model and prefill/decode parity
 exercise all tensor-required families and both fused-attention selection paths.
 
 ## 9. Post-v0 extensions

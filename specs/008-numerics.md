@@ -270,7 +270,7 @@ sites rather than banning every float literal.
 ## 10. Open measurements
 
 - Verify contraction control and class-A rounding on CPU arm64, CPU amd64, and
-  Metal before M4/M5 claim their respective exact domains.
+  Metal before M4 and M6 claim their respective exact domains.
 - Measure v0 division and transcendental primitives across the required corpus;
   a miss changes the lowering or supported domain, not the ceiling.
 - Establish a domain and normative ceiling for `pow` before a kernel corpus adds

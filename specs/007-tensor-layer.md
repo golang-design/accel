@@ -468,4 +468,4 @@ tensor-layer cases are:
 
 Every v0 operator has unit coverage in the corpus and is exercised through at
 least one plan-level E2E. The package must exceed 90% statement coverage under
-the CPU backend before M6 is complete.
+the CPU backend before M7 is complete.

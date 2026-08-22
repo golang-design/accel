@@ -146,7 +146,7 @@ It supports three execution stages:
 
 1. M2 direct flat CPU adapter execution;
 2. M3+ public CPU graph execution; and
-3. M5+ public execution on every accepted GPU backend.
+3. M6+ public execution on every accepted GPU backend.
 
 The same logical case and reference feed every stage. Cooperative variants are
 ineligible for stage 1. Target acceptance compiles emitted source through the
@@ -180,11 +180,12 @@ cleanup. Required milestone scenarios are:
 | M1 | Open CPU → allocate → write → read → close |
 | M2 | Kernel source → generator → direct flat adapter → checked output |
 | M3 | Upload → flat Add graph → readback → rebind and replay |
-| M4 | Upload → portable tiled GEMM graph → readback in strict mode |
-| M5 | M4 scenario selected explicitly on Metal |
-| M6 | Allocate model/KV/IO → compile explicit prefill/decode plans → prefill → repeated decode → logits |
+| M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised |
+| M5 | Upload → portable tiled GEMM graph → readback in strict mode |
+| M6 | M5 scenario selected explicitly on Metal |
+| M7 | Allocate model/KV/IO → compile explicit prefill/decode plans → prefill → repeated decode → logits |
 
-M6 additionally runs fused Attention present and absent, incremental-decode
+M7 additionally runs fused Attention present and absent, incremental-decode
 versus minimal-prefill parity, and a two-layer golden model on CPU and Metal.
 Each scenario asserts selected backend/kernel IDs and the derived budget, not
 only the final value.
@@ -251,10 +252,11 @@ unordered map output. Stable ordering is part of every serializer.
 - M1: device runner, exact bytes, profiles, allocator fuzz, coverage.
 - M2: compare context, flat runner, generator negatives/freshness.
 - M3: normalized plan goldens, naive oracle, graph fuzz, replay E2E.
-- M4: numeric probes/budgets, cooperative diagnostics, GEMM E2E.
-- M5: target acceptance, Metal profiles, cross-backend entry gate.
-- M6: operator/model composition, kernel-manifest completeness, tensor E2Es.
+- M4: numeric probes/budgets, cooperative diagnostics, reduction budgets.
+- M5: dot-product budgets and the GEMM E2E.
+- M6: target acceptance, Metal profiles, cross-backend entry gate.
+- M7: operator/model composition, kernel-manifest completeness, tensor E2Es.
 
-The harness is complete for v0 when every M6 manifest obligation is green on CPU
-and Metal and no production package included in M1–M6 is at or below 90%
+The harness is complete for v0 when every M7 manifest obligation is green on CPU
+and Metal and no production package included in M1–M7 is at or below 90%
 statement coverage.

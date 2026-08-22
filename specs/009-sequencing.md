@@ -146,38 +146,80 @@ Done:
 - E2E: public recorder with upload → flat Add dispatch → readback, retained and
   replayed with a rebound input.
 
-### M4. Cooperative compute model and GEMM on CPU
+### M4. Cooperative execution model on the CPU
+
+The cooperative lowering is a compiler pass, not a runtime option, so it is its
+own milestone rather than a line item under the GEMM. 004 replaces
+goroutine-per-invocation with a generated resumable lowering: the structured IR
+is split at barriers and subgroup rendezvous into states, each invocation carries
+a program counter and its locals, and a workgroup scheduler advances every active
+invocation to its next suspension point. That transform, its instrumentation, and
+the analyses that decide when it is required are the work here. Splitting it out
+keeps a compiler pass from being estimated as part of a kernel.
+
+The transform is bounded by a rule this design already imposes: 002 §3.1 requires
+every barrier to sit in uniform control flow, so suspension points form a
+sequence rather than an arbitrary graph and no relooper is needed. That is why
+this is a milestone and not a project.
 
 Build:
 
-- cooperative and flat execution strategies;
-- shared memory, barriers, non-uniform-arrival detection, poison, and `-race`
-  visibility;
-- atomics, emulated subgroups, and the CPU strict/permissive/mimic modes;
-- uniformity and capability inference over the IR; and
-- 010's reduction and portable tiled GEMM kernels.
+- the resumable cooperative lowering and the flat lowering, both generated from
+  one IR, with the flat path selected when no shared memory, barrier, or subgroup
+  operation appears;
+- shared-memory definition tracking (a shadow initialized bit per element), the
+  deterministic barrier-generation check, and deterministic conflicting-access
+  reporting;
+- atomics, emulated subgroups, and the CPU developer/strict/mimic modes; and
+- uniformity and capability inference over the IR.
 
-Implements: 002, remaining CPU requirements in 006 §5, 008's CPU numeric
-profile, and the cooperative CPU subset of 010.
+Implements: 002, the CPU requirements in 006 §5, 008's CPU numeric profile, and
+010's `reduce_sum`.
 
-Harness increment: reduction/composition budgets, contraction/rounding probes,
-subgroup sweeps, shared poison/barrier diagnostics, and GEMM cases.
+Harness increment: cooperative diagnostics, subgroup sweeps, contraction and
+rounding probes, and reduction budgets.
 
 Done:
 
 - CPU arm64 and amd64 numeric probes establish the available exact domain before
-  it is used by another test;
-- the tiled f16-storage/f32-accumulate GEMM matches the higher-precision
-  reference under 008 at non-multiples of every tile dimension;
-- removing either GEMM barrier fails, one under `-race` and one under poison or
-  sentinel checking;
-- subgroup paths and fallbacks agree at sizes 1, 4, 32, and 64; and
+  another test relies on it;
+- `reduce_sum` matches its higher-precision reference under 008 at lengths that
+  are not multiples of the workgroup size;
+- a kernel reading shared memory it never wrote fails for **every** stored bit
+  pattern, so the test cannot pass because a sentinel happened to compare
+  unequal;
+- non-uniform arrival, two invocations reaching different barrier IDs, and an
+  unordered conflicting access pair are each reported deterministically with
+  source position, workgroup, and invocation, on the first offending run rather
+  than on an unlucky interleaving;
+- the flat and cooperative lowerings agree on every kernel eligible for both; and
+- subgroup paths and their fallbacks agree at sizes 1, 4, 32, and 64.
+
+`go test -race` runs over this milestone, and it checks the CPU **runtime**, not
+the kernel. Kernel races are found by the instrumentation above, which is why
+they are found deterministically.
+
+### M5. The portable tiled GEMM on the CPU
+
+Build: 010's `matmul` tiled variant and the guarded-tail machinery it needs.
+
+Implements: 002 §7 and the tiled family of 010.
+
+Done:
+
+- the tiled f16-storage, f32-accumulate GEMM matches an independently written
+  higher-precision reference under 008's per-output dot-product budget, at
+  dimensions that are not multiples of any tile dimension;
+- removing either of its two barriers fails: the first through conflicting-access
+  reporting, the second through definition tracking or the in-band sentinel
+  kernel; and
 - E2E: public graph submission runs upload → portable tiled GEMM → readback in
   strict mode.
 
-This is the first point at which the portable compute model is proven.
+This is the first point at which the portable compute model is proven, and it is
+000's second v0 proof obligation.
 
-### M5. Metal
+### M6. Metal
 
 Build:
 
@@ -203,7 +245,7 @@ The numeric probes run before the GEMM. If Metal misses a normative ceiling, the
 lowering or supported domain changes; tests are not widened. Completion-handler
 lifetime is exercised under repeated early closes and asynchronous completion.
 
-### M6. Tensor decode plus minimal prefill
+### M7. Tensor decode plus minimal prefill
 
 Prerequisites: 007's v0 API is stable, 010's complete unquantized v0 tensor
 kernel list is implemented on CPU and Metal, and 011's operator/model budget and
@@ -219,7 +261,7 @@ Build:
 - the exact-shape minimal prefill plan needed for parity.
 
 No automatic plan cache, quantization, sampling, production prefill buckets, or
-multi-sequence scheduler is in M6.
+multi-sequence scheduler is in M7.
 
 Done:
 
@@ -236,7 +278,7 @@ Done:
 This completes the v0 proof in 000. It is an unquantized correctness milestone,
 not a production model-runtime claim.
 
-### M7 and later
+### M8 and later
 
 Independently scoped later work includes:
 
@@ -256,11 +298,12 @@ vendor/API opinion and pays the cost of the real SPIR-V IR.
 | Risk | Retired by | Failure response |
 | --- | --- | --- |
 | Compiler scope is underestimated | M2's direct flat E2E and explicit IR/intrinsic decisions | Split M2; do not hide compiler design in M3/M4. |
-| MSL cannot meet exact/contraction or primitive ceilings | M5 probes before other Metal numeric tests | Change lowering/domain or reject primitive; never widen from observation. |
+| The cooperative resumable transform is larger than one milestone | M4's flat-versus-cooperative agreement and diagnostic gates | Split M4 again; do not fold the remainder into M5's GEMM. |
+| MSL cannot meet exact/contraction or primitive ceilings | M6 probes before other Metal numeric tests | Change lowering/domain or reject primitive; never widen from observation. |
 | Uniformity analysis rejects correct cooperative code | M4 negative/positive corpus | Specify a CPU-checked assertion intrinsic in a later scoped change. |
 | Graph aliasing is unsound | M3 naive-plan fuzz and diamond golden | Block later milestones until fixed. |
-| Metal objects outlive autorelease ownership incorrectly | M5 close/completion stress E2E | Fix retain-set ownership before backend acceptance. |
-| Tensor state mutation escapes graph hazards | M6 versioned-state negatives and prefill/decode parity | Fix State lowering; never add an untracked in-place escape hatch. |
+| Metal objects outlive autorelease ownership incorrectly | M6 close/completion stress E2E | Fix retain-set ownership before backend acceptance. |
+| Tensor state mutation escapes graph hazards | M7 versioned-state negatives and prefill/decode parity | Fix State lowering; never add an untracked in-place escape hatch. |
 | CPU oracle has no second opinion | Vulkan after v0 | Keep strict portable mode conservative and state the limitation. |
 
 ## Maintenance rule
