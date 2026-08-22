@@ -130,9 +130,20 @@ func FuzzRecordAndBuild(f *testing.F) {
 		if m.PeakBytes > m.TransientBytes {
 			t.Fatalf("peak %d exceeds the pool %d", m.PeakBytes, m.TransientBytes)
 		}
-		if g.Barriers() != len(g.Nodes()) {
-			t.Fatalf("the record-order plan barriers every node: %d barriers, %d nodes",
-				g.Barriers(), len(g.Nodes()))
+		nodes := g.Nodes()
+		if g.Barriers() > len(nodes) {
+			t.Fatalf("%d barriers for %d nodes: at most one is emitted per node",
+				g.Barriers(), len(nodes))
+		}
+		// Record order must be a topological order of the inferred DAG. That is
+		// what makes the conservative plan of specs/015-graph-recording.md
+		// correct, and it is what specs/017-graph-aliasing.md's oracle rests on.
+		for from, succ := range g.Edges() {
+			for _, to := range succ {
+				if int(to) <= from {
+					t.Fatalf("edge %d -> %d runs backwards in record order", from, int(to))
+				}
+			}
 		}
 
 		// It must also run, or refuse for a reason. Unbound slots are the

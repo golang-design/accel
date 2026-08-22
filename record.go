@@ -45,6 +45,10 @@ type recNode struct {
 	// order rather than a map, because the barrier plan and the diagnostics
 	// derived from it must not depend on iteration order.
 	accesses []access
+
+	// stage is the part of the pipeline this node runs in, which is what a
+	// barrier names on each side.
+	stage stage
 }
 
 // access is one resource range one node touches, in bytes.
@@ -130,8 +134,18 @@ func (r *Recorder) node(kind NodeKind, label string, accesses []access, data []b
 	id := NodeID(len(r.state.nodes))
 	r.state.nodes = append(r.state.nodes, recNode{
 		id: id, kind: kind, label: label, accesses: accesses, data: data,
+		stage: stageFor(kind),
 	})
 	return id
+}
+
+// stageFor is which part of the pipeline a node kind runs in.
+func stageFor(k NodeKind) stage {
+	switch k {
+	case NodeDispatch, NodeDispatchIndirect:
+		return stageCompute
+	}
+	return stageTransfer
 }
 
 // declare turns a view into an access declaration, reporting why it cannot.

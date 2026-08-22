@@ -61,6 +61,13 @@ func (r *Recorder) Build() (*Graph, error) {
 	if err := g.placeTransients(); err != nil {
 		return nil, err
 	}
+	g.inferEdges()
+	if err := g.assertAcyclic(); err != nil {
+		g.releaseTransients()
+		return nil, err
+	}
+	g.reachability()
+	g.planBarriers()
 	if err := g.lower(); err != nil {
 		g.releaseTransients()
 		return nil, err
@@ -158,7 +165,7 @@ func (g *Graph) lower() error {
 	plan := &driver.Plan{Slots: len(g.slots), Transients: g.pool, Label: "graph"}
 	for i := range g.nodes {
 		n := &g.nodes[i]
-		node := driver.PlanNode{ID: int(n.id), BarrierBefore: true}
+		node := driver.PlanNode{ID: int(n.id), BarrierBefore: g.barriersBefore[i] != nil}
 		switch n.kind {
 		case NodeHostWrite:
 			node.Op = driver.OpHostWrite
@@ -191,7 +198,6 @@ func (g *Graph) lower() error {
 		return err
 	}
 	g.plan, g.exe = plan, exe
-	g.barriers = len(plan.Nodes)
 	return nil
 }
 

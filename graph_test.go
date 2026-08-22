@@ -178,10 +178,10 @@ func TestMemoryReportsAllThreeFields(t *testing.T) {
 	}
 }
 
-// The record-order plan puts a barrier before every node. That is its
-// definition, not an incidental fact, so it is asserted directly: 016 lowering
-// the count has to be a visible change.
-func TestTheRecordOrderPlanBarriersEveryNode(t *testing.T) {
+// A barrier is emitted where a hazard needs one, not before every node. Four
+// writes to one buffer are four write-after-write hazards, so each gets one and
+// the head-of-submission barrier absorbs the first.
+func TestSerialWritesEachNeedABarrier(t *testing.T) {
 	d := openDevice(t)
 	dst := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
 
@@ -196,18 +196,46 @@ func TestTheRecordOrderPlanBarriersEveryNode(t *testing.T) {
 	defer g.Close()
 
 	if got := g.Barriers(); got != 4 {
-		t.Errorf("got %d barriers for 4 nodes, want 4", got)
+		t.Errorf("got %d barriers for four dependent writes, want 4", got)
 	}
-	nodes := g.Nodes()
-	if len(nodes) != 4 {
-		t.Fatalf("got %d nodes, want 4", len(nodes))
+	if got := g.Hazards(); got != 3 {
+		t.Errorf("got %d hazards, want 3 write-after-write", got)
 	}
-	for i, n := range nodes {
+	for i, n := range g.Nodes() {
 		if n.BarriersBefore != 1 {
 			t.Errorf("node %d has %d barriers before it, want 1", i, n.BarriersBefore)
 		}
-		if n.Kind != accel.NodeHostWrite {
-			t.Errorf("node %d is %v, want a host write", i, n.Kind)
+	}
+}
+
+// Independent nodes get no barrier between them, which is the whole reason for
+// inferring edges rather than assuming them all. Four writes to four different
+// buffers have no hazard at all, so only the head-of-submission barrier is
+// emitted.
+func TestIndependentNodesAreNotSeparated(t *testing.T) {
+	d := openDevice(t)
+
+	r := d.NewRecorder()
+	for i := range 4 {
+		b := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
+		_ = i
+		r.CopyToBuffer(whole(t, b), []float32{1, 2, 3, 4})
+	}
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	if got := g.Hazards(); got != 0 {
+		t.Errorf("four writes to four buffers have no hazard, got %d", got)
+	}
+	if got := g.Barriers(); got != 1 {
+		t.Errorf("got %d barriers, want only the head-of-submission one", got)
+	}
+	for i, e := range g.Edges() {
+		if len(e) != 0 {
+			t.Errorf("node %d has edges %v and should have none", i, e)
 		}
 	}
 }

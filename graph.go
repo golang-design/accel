@@ -291,6 +291,17 @@ type Graph struct {
 
 	memory   GraphMemory
 	barriers int
+	hazards  int
+
+	// succ and pred are the inferred dependency DAG, and reach is its transitive
+	// closure packed as reachWords uint64s per node.
+	succ, pred [][]NodeID
+	reach      []uint64
+	reachWords int
+
+	// barriersBefore is the plan: entry i is the barrier emitted immediately
+	// before node i, or nil.
+	barriersBefore []*barrier
 
 	state resourceState
 
@@ -345,10 +356,11 @@ func (g *Graph) NodeStats(id NodeID) NodeStats {
 		return NodeStats{Node: id}
 	}
 	n := &g.nodes[id]
-	// Every node carries a barrier at this milestone, which is the definition of
-	// the record-order plan rather than an incidental fact. Asserting it is what
-	// makes specs/016-graph-execution.md lowering the count a visible change.
-	return NodeStats{Node: n.id, Kind: n.kind, Label: n.label, BarriersBefore: 1}
+	before := 0
+	if g.barriersBefore[id] != nil {
+		before = 1
+	}
+	return NodeStats{Node: n.id, Kind: n.kind, Label: n.label, BarriersBefore: before}
 }
 
 func (g *Graph) Nodes() []NodeStats {
@@ -362,9 +374,32 @@ func (g *Graph) Nodes() []NodeStats {
 // Barriers is how many barriers the plan emits in total.
 //
 // It is reported separately from the per-node count because the number a reader
-// wants first is the whole-graph one, and because it is the single figure
-// specs/016-graph-execution.md changes.
+// wants first is the whole-graph one. It is far below [Graph.Hazards] because a
+// barrier is queue-wide: one emitted for a hazard on one resource also orders
+// every earlier write on every other.
 func (g *Graph) Barriers() int { return g.barriers }
+
+// Hazards is how many read-after-write, write-after-write, and write-after-read
+// dependencies the declared accesses imply.
+//
+// Reported alongside [Graph.Barriers] because the gap between them is what
+// batching bought, and a caller asking why a graph does not overlap wants both
+// numbers rather than either alone.
+func (g *Graph) Hazards() int { return g.hazards }
+
+// Edges reports the inferred dependency DAG as one successor list per node, in
+// record order within each list.
+//
+// It is exposed because a plan is the thing worth asserting on: a test that
+// only compares results cannot tell a graph that overlapped correctly from one
+// that serialized and got the same answer.
+func (g *Graph) Edges() [][]NodeID {
+	out := make([][]NodeID, len(g.succ))
+	for i, s := range g.succ {
+		out[i] = append([]NodeID(nil), s...)
+	}
+	return out
+}
 
 // NodeStats is one node's plan-time facts.
 type NodeStats struct {
