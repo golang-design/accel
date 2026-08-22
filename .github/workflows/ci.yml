@@ -79,6 +79,34 @@ jobs:
         go test -race -run=xxx -fuzz=FuzzTLSF -fuzztime=60s ./internal/alloc/
         go test -race -run=xxx -fuzz=FuzzBump -fuzztime=30s ./internal/alloc/
 
+  generate:
+    name: generated files are fresh
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # A kernel edited without regenerating leaves a source and a generated file
+    # that disagree, and nothing else notices: both halves still compile, and
+    # the backend runs the stale one. The generated files are committed so this
+    # comparison can exist at all.
+    - name: Check generated kernels
+      run: go run ./cmd/accel-kernel -check ./...
+
+    # Belt and braces: regenerating must also leave the tree unchanged, which
+    # catches a generator whose output depends on something the digest does not
+    # cover.
+    - name: Regenerate and diff
+      run: |
+        go generate ./...
+        if ! git diff --exit-code; then
+          echo "::error::go generate changed files that are committed; commit the result"
+          exit 1
+        fi
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest

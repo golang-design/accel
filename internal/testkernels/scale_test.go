@@ -5,10 +5,13 @@
 package testkernels_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/conformance/direct"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"golang.design/x/accel/internal/kernel"
 	"golang.design/x/accel/internal/testkernels"
 )
@@ -95,5 +98,97 @@ func runGrid(invocations uint32, in, out []float32, _ int) {
 			)
 			testkernels.Scale(accel.Thread(t), in, out)
 		}
+	}
+}
+
+// TestGeneratedMatchesAuthored is spec 004's fifth testing level, and the only
+// check that the generated lowering means what the authored source says.
+//
+// Since the authored function is no longer what a backend executes, a mistake
+// in IR construction produces a CPU runner and every GPU artifact identically
+// wrong, all derived from the same wrong IR, and differential execution across
+// backends cannot see it: it is wrong the same way everywhere. Running the
+// authored Go directly and comparing is what closes that hole.
+//
+// The comparison is under spec 008 rather than bit-for-bit, and the reason is
+// the point of the exercise: the generated lowering emits an explicit float32
+// at every rounding point and the authored function does not, so on a host with
+// FMA the two may legitimately differ in the last bit. Here the expression is a
+// single multiplication with no intermediate to widen, so the bound collapses to
+// equality and the test asserts bits. A kernel with an accumulation would not.
+func TestGeneratedMatchesAuthored(t *testing.T) {
+	for _, n := range []int{0, 1, 63, 64, 65, 130, 1000} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			in := make([]float32, n)
+			for i := range in {
+				in[i] = float32(i)*0.375 - 7
+			}
+
+			authored := make([]float32, n)
+			runGrid(uint32(n), in, authored, n)
+
+			generated := make([]float32, n)
+			if err := direct.Run(&testkernels.ScaleKernel,
+				direct.Cover(&testkernels.ScaleKernel, n),
+				accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+				t.Fatalf("direct.Run: %v", err)
+			}
+
+			if r := numeq.ExactBits(generated, authored, func(f float32) uint64 {
+				return uint64(math.Float32bits(f))
+			}); !r.Equal {
+				t.Errorf("the generated lowering and the authored function disagree: %v", r)
+			}
+		})
+	}
+}
+
+// TestGeneratedRecordDescribesTheSource checks that what the generator inferred
+// is what the signature and body say, since every caller and every backend is
+// told this rather than reading the source.
+func TestGeneratedRecordDescribesTheSource(t *testing.T) {
+	k := &testkernels.ScaleKernel
+
+	if k.Name != "Scale" {
+		t.Errorf("Name = %q", k.Name)
+	}
+	if k.WorkgroupSize != (accel.ID3{X: 64, Y: 1, Z: 1}) {
+		t.Errorf("WorkgroupSize = %+v, want 64,1,1", k.WorkgroupSize)
+	}
+	if k.Generator != accel.KernelABIVersion {
+		t.Errorf("Generator = %d, want %d", k.Generator, accel.KernelABIVersion)
+	}
+	if k.Digest == "" {
+		t.Error("the record carries no digest, so nothing can check it is fresh")
+	}
+	if len(k.Bindings) != 2 {
+		t.Fatalf("%d bindings, want 2", len(k.Bindings))
+	}
+	// The accesses are inferred from the body. in is read, out is written, and
+	// len(out) is not an element read.
+	if got := k.Bindings[0]; got.Name != "in" || got.Access != accel.KernelRead {
+		t.Errorf("binding 0 = %+v, want in/read", got)
+	}
+	if got := k.Bindings[1]; got.Name != "out" || got.Access != accel.KernelWrite {
+		t.Errorf("binding 1 = %+v, want out/write", got)
+	}
+}
+
+// TestBindRejectsTheWrongBuffers checks that the argument set is validated
+// against the record before anything runs.
+func TestBindRejectsTheWrongBuffers(t *testing.T) {
+	k := &testkernels.ScaleKernel
+	for _, tc := range []struct {
+		name string
+		args accel.KernelArgs
+	}{
+		{"too few", accel.KernelArgs{Slices: []any{make([]float32, 4)}}},
+		{"wrong dtype", accel.KernelArgs{Slices: []any{make([]float32, 4), make([]int32, 4)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := direct.Run(k, direct.Cover(k, 4), tc.args); err == nil {
+				t.Error("was accepted")
+			}
+		})
 	}
 }

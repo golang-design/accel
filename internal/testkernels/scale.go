@@ -11,6 +11,8 @@ package testkernels
 
 import "golang.design/x/accel"
 
+//go:generate go run golang.design/x/accel/cmd/accel-kernel -C ../.. ./internal/testkernels
+
 // Scale multiplies every element of in by two into out.
 //
 // It is spec 012's kernel, and it is deliberately the smallest body that is
