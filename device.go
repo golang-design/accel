@@ -336,6 +336,14 @@ func (d *Device) Close() error {
 	}
 	d.mu.Unlock()
 
+	// Close does not hide asynchronous work: an unflushed batch is reported as a
+	// live child, so orderly teardown is Flush().Wait(), then resource closes,
+	// then this. A device that silently dropped queued writes would turn a
+	// missing flush into missing data rather than into an error.
+	for _, q := range d.handles {
+		live += q.pendingCount()
+	}
+
 	if live > 0 {
 		d.state.closed.Store(false) // the device is still usable; nothing was released
 		return &LifetimeError{Op: "Close", Resource: d.info.Name, Reason: reasonChildren, Children: live}

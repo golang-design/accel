@@ -4,6 +4,8 @@
 
 package accel
 
+import "sync"
+
 // Recorder accumulates nodes for a [Graph]. It executes nothing.
 //
 // A Recorder belongs to one goroutine. The [Graph] it builds is immutable, but
@@ -241,19 +243,10 @@ type Queue struct {
 
 	dev  *Device
 	info QueueInfo
-}
 
-// WriteBuffer copies data into queue-owned staging and appends the transfer to
-// this queue's next submission prologue. It returns once data no longer aliases
-// the caller's value, not when the device has consumed it.
-func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
-	panic(ErrNotImplemented)
-}
-
-// ReadBuffer flushes this queue's pending writes, waits for prior work on the
-// queue, and copies a buffer range into host memory.
-func (q *Queue) ReadBuffer(src *Buffer, offset int, into any) error {
-	panic(ErrNotImplemented)
+	mu      sync.Mutex
+	pending []pendingWrite
+	stats   QueueStats
 }
 
 // ReadTexture flushes this queue's pending writes, waits for prior work, and
@@ -261,10 +254,6 @@ func (q *Queue) ReadBuffer(src *Buffer, offset int, into any) error {
 func (q *Queue) ReadTexture(src *Texture, into []byte) error {
 	panic(ErrNotImplemented)
 }
-
-// Flush submits this queue's pending immediate writes without a graph. When no
-// writes are pending it returns an already-signalled fence.
-func (q *Queue) Flush() *Fence { panic(ErrNotImplemented) }
 
 // Submit submits a graph and returns immediately with a [Fence]. Nothing in this
 // API blocks implicitly.
@@ -280,10 +269,6 @@ func (q *Queue) SubmitAfter(g *Graph, after ...*Fence) *Fence { panic(ErrNotImpl
 // a graph every call, so it is the wrong choice in a hot loop.
 func (q *Queue) Run(record func(*Recorder)) error { panic(ErrNotImplemented) }
 
-// Stats reports cumulative queue counters since device open. They are counters,
-// not a profiler: nothing here is per node and nothing here costs a readback.
-func (q *Queue) Stats() QueueStats { panic(ErrNotImplemented) }
-
 // QueueStats are cumulative since device open.
 type QueueStats struct {
 	Submissions    int64
@@ -294,16 +279,11 @@ type QueueStats struct {
 }
 
 // Fence reports the completion of a submission.
-type Fence struct{ _ noCopy }
+type Fence struct {
+	_ noCopy
 
-// Wait blocks until the submission completes, reporting its error if it failed.
-func (f *Fence) Wait() error { panic(ErrNotImplemented) }
-
-// Done reports whether the submission has completed, without blocking.
-func (f *Fence) Done() bool { panic(ErrNotImplemented) }
-
-// C returns a channel closed when the submission completes, for selecting on it.
-func (f *Fence) C() <-chan struct{} { panic(ErrNotImplemented) }
+	state *fenceState
+}
 
 // Stats reports what the device counted during this submission. It is valid only
 // after the fence has signalled, and calling it earlier is an error rather than a
