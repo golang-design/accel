@@ -11,9 +11,16 @@
 //
 // # Status
 //
-// Under construction, and the API will change. Device open, enumeration, and
-// selection are implemented; everything past them still reports
-// [ErrNotImplemented]. specs/009-sequencing.md is the order the rest arrives in.
+// Under construction, and the API will change.
+//
+// Implemented on the CPU backend: enumeration, device open and selection,
+// capabilities and limits, pools and suballocation, buffers and views,
+// lifetimes, and the immediate transfer path ([Queue.WriteBuffer],
+// [Queue.ReadBuffer], [Queue.Flush]).
+//
+// Not implemented, and reporting [ErrNotImplemented]: textures, kernels and
+// pipelines, [Recorder] and [Graph], and [Queue.Submit]. specs/009-sequencing.md
+// is the order they arrive in.
 //
 // # The model
 //
