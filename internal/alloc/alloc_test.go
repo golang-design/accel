@@ -405,42 +405,70 @@ func TestExhaustion(t *testing.T) {
 // TestAllocationIsConstantTime is spec 001 section 11.4: allocating 10,000
 // buffers takes time linear in the count, not quadratic. This is the property
 // that rules out the first-fit free list, so it is measured rather than assumed.
+//
+// It compares the cost *per allocation* at two pool populations rather than two
+// total times, which is the property stated directly: placement must not get
+// more expensive as a pool fills. An O(1) allocator holds the per-allocation
+// cost roughly flat; a first-fit list makes it grow with the live count, so the
+// ratio lands near ten.
 func TestAllocationIsConstantTime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-sensitive")
 	}
 
-	run := func(n int) time.Duration {
-		a, err := alloc.NewTLSF(n*granularity*2, granularity)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Warm the allocator so the first measurement is not paying for growth
-		// in the free-list slices.
+	// perAlloc times enough independent runs to clear the clock's granularity,
+	// then divides by the allocations performed.
+	//
+	// Repeating is not about noise, it is about resolution. Windows advances
+	// time.Now in steps of up to about 15ms, so one run of a few thousand fast
+	// allocations measures as exactly zero, and any ratio taken from a zero is
+	// meaningless rather than merely imprecise. The loop is bounded by wall
+	// clock, so a coarse timer makes it do more repetitions rather than spin.
+	perAlloc := func(n int) (time.Duration, int) {
+		const floor = 50 * time.Millisecond
 		start := time.Now()
-		for range n {
-			if _, err := a.Alloc(granularity, 4); err != nil {
+		reps := 0
+		for time.Since(start) < floor {
+			a, err := alloc.NewTLSF(n*granularity*2, granularity)
+			if err != nil {
 				t.Fatal(err)
 			}
+			for range n {
+				if _, err := a.Alloc(granularity, 4); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reps++
 		}
-		return time.Since(start)
+		return time.Since(start) / time.Duration(n*reps), reps
 	}
 
-	small := run(1000)
-	large := run(10000)
+	const factor = 10
+	small, smallReps := perAlloc(1000)
+	large, largeReps := perAlloc(1000 * factor)
+	t.Logf("%v per allocation at 1,000 live (%d runs), %v at %d live (%d runs)",
+		small, smallReps, large, 1000*factor, largeReps)
 
-	// Ten times the work in far less than a hundred times the time. A quadratic
-	// allocator lands near 100x; the generous bound keeps a loaded CI machine
-	// from failing a correct implementation.
+	// The guard the first version of this test did not have. A zero baseline is
+	// a clock too coarse to measure with, not an infinitely fast allocator, and
+	// dividing by it reports a ratio in the millions.
+	if small <= 0 {
+		t.Fatalf("the baseline measured as %v: the clock is too coarse to compare against", small)
+	}
+
+	// Ten times the live allocations for no more than three times the
+	// per-allocation cost. A quadratic allocator lands near ten; the generous
+	// bound keeps a loaded CI machine from failing a correct implementation.
 	//
 	// This is a ratio and not a measurement, which is what makes it meaningful
 	// under the race detector. Go 1.27's size-specialized malloc is disabled
 	// whenever -race, -asan, or -msan is on, so the absolute numbers here are
-	// not representative of a normal build; both sides of the ratio pay the same
-	// tax, so the shape it is asserting survives.
-	if ratio := float64(large) / float64(small+1); ratio > 30 {
-		t.Errorf("10,000 allocations took %v against %v for 1,000, a ratio of %.1f: "+
-			"placement is not O(1)", large, small, ratio)
+	// not representative of a normal build; both sides pay the same tax, so the
+	// shape being asserted survives.
+	if ratio := float64(large) / float64(small); ratio > 3 {
+		t.Errorf("placement costs %v per allocation at %d live against %v at 1,000, "+
+			"a ratio of %.1f: cost grows with the pool's population, so this is not O(1)",
+			large, 1000*factor, small, ratio)
 	}
 }
 
