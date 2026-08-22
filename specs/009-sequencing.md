@@ -241,6 +241,34 @@ Done:
 table, and internal corpus package boundary. M2 implements those decisions; it
 does not reopen them inside the estimate.
 
+#### M2 is split, per the risk table below
+
+| Child | Scope |
+| --- | --- |
+| [012](012-kernel-pipeline.md) | The whole pipeline for one straight-line kernel: tool, front end, IR, intrinsic table, generated adapter, registration, digests, freshness, direct flat executor |
+| [013](013-kernel-subset.md) | The rest of the authored subset: all three `for` forms, `break`/`continue`, helpers, the full scalar set, and the positioned rejection corpus |
+| [014](014-kernel-uniforms.md) | Uniform structs: std140 codecs, `UniformBuffer[T]`, typed bindings, and the device-side layout check |
+
+The cut is vertical: each child ends with source → generator → execution →
+independently checked output. A horizontal cut, front end and IR first and the
+lowering second, was rejected because the front end's only possible evidence is
+a golden of the IR it produced, and a wrong IR passes its own golden. That is
+[011](011-conformance-harness.md) §6's argument for why the generated lowering
+is compared against the authored function, applied one level up. Repairing the
+horizontal cut means giving the front end a second independent consumer of the
+IR to check against, and that consumer is an interpreter over the typed IR,
+which is the direct flat executor: pulling it in produces this split. The
+vertical cut is where the horizontal one lands once its evidence has to be able
+to fail.
+
+**The order inside the split is forced, not chosen.** Uniforms cannot be first,
+because [001](001-device-resources.md) §11.2 requires std140 to be checked
+against the device rather than against the encoder, which needs kernel
+execution. They cannot be second, because the uniform that matters is a loop
+bound, and a storage-buffer substitute would make it appear non-uniform to the
+barrier analysis. So 014 lands after 013 because the only honest test of it
+requires control flow to exist.
+
 ### M3. Graph planning and flat compute/transfer submission
 
 Build:
@@ -420,7 +448,7 @@ vendor/API opinion and pays the cost of the real SPIR-V IR.
 
 | Risk | Retired by | Failure response |
 | --- | --- | --- |
-| Compiler scope is underestimated | M2's direct flat E2E and explicit IR/intrinsic decisions | Split M2; do not hide compiler design in M3/M4. |
+| Compiler scope is underestimated | M2's direct flat E2E and explicit IR/intrinsic decisions | Split M2; do not hide compiler design in M3/M4. **Split taken 2026-08-22 into 012, 013, and 014**, before implementation rather than after the estimate slipped. |
 | The cooperative resumable transform is larger than one milestone | M4's flat-versus-cooperative agreement and diagnostic gates | Split M4 again; do not fold the remainder into M5's GEMM. |
 | MSL cannot meet exact/contraction or primitive ceilings | M6 probes before other Metal numeric tests | Change lowering/domain or reject primitive; never widen from observation. |
 | Uniformity analysis rejects correct cooperative code | M4 negative/positive corpus | Specify a CPU-checked assertion intrinsic in a later scoped change. |
