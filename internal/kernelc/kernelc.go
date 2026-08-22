@@ -135,7 +135,12 @@ func compile(pkg *packages.Package, name string, check bool) (*Result, front.Dia
 	r := &Result{Package: pkg.PkgPath, Path: path, Kernels: names(kernels)}
 
 	existing, readErr := os.ReadFile(path)
-	same := readErr == nil && bytes.Equal(existing, out)
+
+	// Line endings are a property of the checkout, not of the content. A
+	// .gitattributes pins these files to LF, and comparing normalized as well
+	// means a checkout configured otherwise reports "fresh" rather than
+	// reporting every kernel stale with a diff that looks identical.
+	same := readErr == nil && bytes.Equal(normalizeEOL(existing), normalizeEOL(out))
 
 	if check {
 		if !same {
@@ -177,6 +182,9 @@ func explain(path string, existing, want []byte, missing bool, kernels []*ir.Fun
 	}
 	return b.String()
 }
+
+// normalizeEOL removes carriage returns so a comparison is about text.
+func normalizeEOL(b []byte) []byte { return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")) }
 
 func indentLines(s, prefix string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
