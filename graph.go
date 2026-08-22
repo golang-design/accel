@@ -306,6 +306,10 @@ type Graph struct {
 	// poolAlign is the alignment every transient placement respects.
 	poolAlign int
 
+	// naive reports that this graph was built under the conservative plan. See
+	// [Recorder.BuildNaive].
+	naive bool
+
 	state resourceState
 
 	// concrete, slotWriter and spans are V24's inputs, computed once at Build

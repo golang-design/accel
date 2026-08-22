@@ -64,7 +64,12 @@ func worked(t *testing.T, d *accel.Device) workedGraph {
 	t1 := transient("t1", n) // q
 	t2 := transient("t2", n) // k
 	t3 := transient("t3", n) // q after rope
-	t4 := transient("t4", n/2)
+	// The spec's t4 is half the width of the others. Here every transient is
+	// full width, because Add indexes its three bindings together and needs
+	// them equal; the differing sizes are what specs/017-graph-aliasing.md's
+	// packing assertions are about, and the shape this test asserts -- the
+	// diamond, the edges, the barrier positions -- is identical either way.
+	t4 := transient("t4", n)
 	t5 := transient("t5", n) // attn out
 
 	wQ := newBuffer(t, d, "wQ", n, storage)
@@ -84,12 +89,10 @@ func worked(t *testing.T, d *accel.Device) workedGraph {
 	dispatch(accel.Binding{Buffer: t0}, accel.Binding{Buffer: whole(t, wK)}, accel.Binding{Buffer: t2})
 	// n4: t3 = rope(t1, params), extending one arm.
 	dispatch(accel.Binding{Buffer: t1}, accel.Binding{Slot: params}, accel.Binding{Buffer: t3})
-	// n5: t4 = scores(t3, t2), where the arms join. t4 is half-width, so it
-	// reads only half of each input.
-	dispatch(accel.Binding{Buffer: halfOf(t, t3)}, accel.Binding{Buffer: halfOf(t, t2)},
-		accel.Binding{Buffer: t4})
+	// n5: t4 = scores(t3, t2), where the arms join.
+	dispatch(accel.Binding{Buffer: t3}, accel.Binding{Buffer: t2}, accel.Binding{Buffer: t4})
 	// n6: t5 = attend(t4, kv)
-	dispatch(accel.Binding{Buffer: t4}, accel.Binding{Slot: kv}, accel.Binding{Buffer: halfOf(t, t5)})
+	dispatch(accel.Binding{Buffer: t4}, accel.Binding{Slot: kv}, accel.Binding{Buffer: t5})
 	// n7: y = x + t5
 	dispatch(accel.Binding{Buffer: t5}, accel.Binding{Slot: x}, accel.Binding{Slot: y})
 
@@ -99,13 +102,6 @@ func worked(t *testing.T, d *accel.Device) workedGraph {
 	}
 	t.Cleanup(func() { _ = g.Close() })
 	return workedGraph{g: g, x: x, kv: kv, y: y, prms: params}
-}
-
-func halfOf(t *testing.T, v accel.BufferView) accel.BufferView {
-	t.Helper()
-	out := v
-	out.Count = v.Count / 2
-	return out
 }
 
 // The inferred edge set, asserted against specs/003-command-graph.md's table.
@@ -266,7 +262,7 @@ func TestWorkedGraphRuns(t *testing.T) {
 	// meaningful as the chain, and a reader who cannot check it cannot tell a
 	// correct result from one a mis-ordered graph produced.
 	got := readback(t, d, y)
-	for i, v := range got[:n/2] {
+	for i, v := range got {
 		if v != 6 {
 			t.Fatalf("element %d is %v, want 6", i, v)
 		}

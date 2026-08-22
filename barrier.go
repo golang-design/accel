@@ -199,3 +199,23 @@ func (g *Graph) labelOf(r resourceRef) string {
 	}
 	return "an unknown resource"
 }
+
+// planSerialBarriers is the conservative plan: a barrier before every node.
+//
+// Correct rather than merely safe. Every inferred edge runs from a lower node
+// id to a strictly higher one, because inference walks nodes in record order
+// and links each access against state left by earlier ones. Record order is
+// therefore a topological order of the DAG, so a serial execution respects
+// every edge, and a full barrier between consecutive nodes covers every
+// read-after-write, write-after-write, and write-after-read the inference could
+// classify. See specs/015-graph-recording.md section 3.
+func (g *Graph) planSerialBarriers() {
+	g.barriersBefore = make([]*barrier, len(g.nodes))
+	for i := range g.nodes {
+		g.barriersBefore[i] = &barrier{
+			src: stageTransfer | stageCompute, dst: stageTransfer | stageCompute, memory: true,
+			reasons: []barrierReason{{from: -1, label: "the conservative plan"}},
+		}
+	}
+	g.barriers = len(g.nodes)
+}

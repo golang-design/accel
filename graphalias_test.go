@@ -365,9 +365,11 @@ func TestV20RejectsAnOversizedPool(t *testing.T) {
 	r := d.NewRecorder()
 	dst := newBuffer(t, d, "dst", 4096, accel.UsageStorage|accel.UsageCopyDst)
 	v := r.Transient(accel.BufferDescriptor{
-		DType: accel.F32, Count: 4096, Usage: accel.UsageStorage | accel.UsageCopySrc,
+		DType: accel.F32, Count: 4096,
+		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
 		Label: "big",
 	})
+	r.CopyToBuffer(v, make([]float32, 4096))
 	r.CopyBuffer(whole(t, dst), v)
 	_, err = r.Build()
 	if err == nil {
@@ -376,6 +378,233 @@ func TestV20RejectsAnOversizedPool(t *testing.T) {
 	for _, want := range []string{"after aliasing", "pool budget"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should say %q, got:\n%v", want, err)
+		}
+	}
+}
+
+// The reads the builder refuses, each found by the whole-plan oracle rather
+// than predicted. A transient's memory belongs to the builder, which may hand
+// the same bytes to another transient, so a read of bytes nothing wrote returns
+// whatever that other one last held: a wrong answer whose value depends on the
+// packer, and therefore on an unrelated transient's size.
+func TestReadingAnUnwrittenTransientIsRefused(t *testing.T) {
+	const n = 32
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+
+	cases := []struct {
+		name string
+		says string
+		rec  func(t *testing.T, d *accel.Device, r *accel.Recorder, p *accel.ComputePipeline)
+	}{{
+		name: "nothing writes it at all",
+		says: `reads bytes [0, 128) of transient "t"`,
+		rec: func(t *testing.T, d *accel.Device, r *accel.Recorder, p *accel.ComputePipeline) {
+			dst := newBuffer(t, d, "dst", n, storage)
+			v := r.Transient(accel.BufferDescriptor{
+				DType: accel.F32, Count: n, Usage: storage, Label: "t",
+			})
+			r.CopyBuffer(whole(t, dst), v)
+		},
+	}, {
+		name: "only part of it is written",
+		says: "nothing writes [64, 128) first",
+		rec: func(t *testing.T, d *accel.Device, r *accel.Recorder, p *accel.ComputePipeline) {
+			dst := newBuffer(t, d, "dst", n, storage)
+			v := r.Transient(accel.BufferDescriptor{
+				DType: accel.F32, Count: n, Usage: storage, Label: "t",
+			})
+			half := v
+			half.Count = n / 2
+			r.CopyToBuffer(half, make([]float32, n/2))
+			r.CopyBuffer(whole(t, dst), v)
+		},
+	}, {
+		name: "the writer is unordered against the reader",
+		says: "nothing writes [0, 128) first",
+		rec: func(t *testing.T, d *accel.Device, r *accel.Recorder, p *accel.ComputePipeline) {
+			dst := newBuffer(t, d, "dst", n, storage)
+			src := newBuffer(t, d, "src", n, storage)
+			v := r.Transient(accel.BufferDescriptor{
+				DType: accel.F32, Count: n, Usage: storage, Label: "t",
+			})
+			// The read is recorded first, so nothing orders the write before it.
+			// Record-order position is not evidence: an unordered write may run
+			// after the read.
+			r.CopyBuffer(whole(t, dst), v)
+			r.CopyBuffer(v, whole(t, src))
+		},
+	}, {
+		name: "a node reads and writes it as its first user",
+		says: `node 0 reads bytes [0, 128) of transient "t"`,
+		rec: func(t *testing.T, d *accel.Device, r *accel.Recorder, p *accel.ComputePipeline) {
+			in := newBuffer(t, d, "in", n, storage)
+			v := r.Transient(accel.BufferDescriptor{
+				DType: accel.F32, Count: n, Usage: storage, Label: "t",
+			})
+			// t = t + in, with nothing having written t. It reads what was there
+			// when it started, which is nothing.
+			r.Dispatch(p, []accel.Binding{
+				{Index: 0, Buffer: v}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
+			}, accel.WorkgroupCount{X: 1})
+		},
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := openDevice(t)
+			p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+				Kernel: &testkernels.AddKernel, Label: "op",
+			})
+			if err != nil {
+				t.Fatalf("pipeline: %v", err)
+			}
+			defer p.Close()
+
+			r := d.NewRecorder()
+			c.rec(t, d, r, p)
+			_, err = r.Build()
+			if err == nil {
+				t.Fatal("expected a rejection")
+			}
+			if !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("the message should say %q, got:\n%v", c.says, err)
+			}
+		})
+	}
+}
+
+// In-place work on a transient is fine as soon as an earlier node writes it,
+// which is what makes it an update rather than a read of nothing. Without this
+// the rejections above would be passing against a rule that simply forbids a
+// node from reading and writing one transient.
+func TestInPlaceWorkOnAWrittenTransientIsFine(t *testing.T) {
+	const n = 32
+	d := openDevice(t)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "op",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	in := newBuffer(t, d, "in", n, storage)
+	out := newBuffer(t, d, "out", n, storage)
+	ones := make([]float32, n)
+	for i := range ones {
+		ones[i] = 1
+	}
+	if err := d.Queue().WriteBuffer(in, 0, ones); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	r := d.NewRecorder()
+	v := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: n, Usage: storage, Label: "t",
+	})
+	r.CopyBuffer(v, whole(t, in))  // t = 1
+	r.Dispatch(p, []accel.Binding{ // t = t + in = 2
+		{Index: 0, Buffer: v}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
+	}, accel.WorkgroupCount{X: 1})
+	r.CopyBuffer(whole(t, out), v)
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	for i, val := range readback(t, d, out) {
+		if val != 2 {
+			t.Fatalf("element %d is %v, want 2", i, val)
+		}
+	}
+}
+
+// A transient whose whole lifetime sits between two users of another must not
+// share its bytes.
+//
+// Every pair of their users is individually ordered, which is exactly what spec
+// 003's per-pair formula asks for and what the whole-plan oracle proved
+// insufficient: the direction has to be uniform. Here long is written at n0 and
+// read at n4, mid is written at n2, and n0 reaches n2 reaches n4 — so the
+// per-pair rule aliases them and n2 overwrites long before n4 reads it.
+//
+// The chain runs through a scratch buffer rather than through the transients
+// themselves, because a node touching both would make them incompatible for
+// the simpler reason and the test would stop distinguishing the two rules.
+func TestATransientLivingBetweenTwoUsersDoesNotAlias(t *testing.T) {
+	const n = 32
+	d := openDevice(t)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "op",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	in := newBuffer(t, d, "in", n, storage)
+	scratch := newBuffer(t, d, "scratch", n, storage)
+	out := newBuffer(t, d, "out", n, storage)
+	fill := func(b *accel.Buffer, v float32) {
+		vals := make([]float32, n)
+		for i := range vals {
+			vals[i] = v
+		}
+		if err := d.Queue().WriteBuffer(b, 0, vals); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	fill(in, 1)
+	fill(scratch, 3)
+
+	r := d.NewRecorder()
+	mk := func(l string) accel.BufferView {
+		return r.Transient(accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: storage, Label: l,
+		})
+	}
+	long, mid := mk("long"), mk("mid")
+
+	r.CopyBuffer(long, whole(t, in))              // n0: long = 1, and reads in
+	r.CopyBuffer(whole(t, in), whole(t, scratch)) // n1: in = 3, ordered after n0 (write after read)
+	r.CopyBuffer(mid, whole(t, in))               // n2: mid = 3, ordered after n1
+	r.CopyBuffer(whole(t, in), whole(t, scratch)) // n3: ordered after n2
+	r.Dispatch(p, []accel.Binding{                // n4: out = long + in, ordered after n3
+		{Index: 0, Buffer: long}, {Index: 1, Buffer: whole(t, in)},
+		{Index: 2, Buffer: whole(t, out)},
+	}, accel.WorkgroupCount{X: 1})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	place := map[string]accel.TransientPlacement{}
+	for _, pl := range g.TransientPlacement() {
+		place[pl.Label] = pl
+	}
+	a, b := place["long"], place["mid"]
+	if a.Offset < b.Offset+b.Bytes && b.Offset < a.Offset+a.Bytes {
+		t.Fatalf("long at [%d, %d) and mid at [%d, %d) share bytes: mid's whole "+
+			"lifetime sits between long's write and long's read, so mid's write "+
+			"lands in long's bytes while long is still live",
+			a.Offset, a.Offset+a.Bytes, b.Offset, b.Offset+b.Bytes)
+	}
+
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	for i, v := range readback(t, d, out) {
+		if v != 4 { // long stays 1, in is 3, so out = 4; aliased it would be 6
+			t.Fatalf("element %d is %v, want 4: long was overwritten between its "+
+				"write and its read", i, v)
 		}
 	}
 }

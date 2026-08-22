@@ -330,7 +330,7 @@ func run(nodes []resolvedNode) error {
 		case driver.OpHostWrite:
 			copy(n.dst, n.data)
 		case driver.OpDispatch:
-			if err := kernel.Dispatch(n.dispatch.Kernel, n.dispatch.Count, n.args); err != nil {
+			if err := dispatch(n); err != nil {
 				return err
 			}
 		default:
@@ -338,6 +338,28 @@ func run(nodes []resolvedNode) error {
 		}
 	}
 	return nil
+}
+
+// dispatch runs one kernel, turning a panic inside it into an error.
+//
+// A kernel that indexes past a binding is a kernel bug, and on a GPU it is an
+// out-of-bounds access the hardware clamps or leaves undefined. On this backend
+// it is a Go panic, which without this would take the caller's process down
+// from inside a goroutine they did not start and cannot recover in.
+//
+// specs/006-backends.md section 5 makes this backend the oracle: its job is to
+// fail loudly where another backend would silently do something else. Loudly
+// means a reported error naming the kernel, not an abort.
+func dispatch(n *resolvedNode) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("accel: kernel %q panicked at node %d: %v; on a GPU backend this "+
+				"would be an out-of-bounds access with undefined results rather than a "+
+				"crash, so it is a kernel bug either way",
+				n.dispatch.Kernel.Name, n.id, r)
+		}
+	}()
+	return kernel.Dispatch(n.dispatch.Kernel, n.dispatch.Count, n.args)
 }
 
 func (e *executable) Close() error {

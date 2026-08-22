@@ -746,3 +746,51 @@ func TestADispatchFailureReachesTheFence(t *testing.T) {
 		t.Fatalf("the fence should report the stale record, got %v", err)
 	}
 }
+
+// A kernel that panics reports through the fence rather than taking the
+// process down. On a GPU an out-of-bounds access is clamped or undefined; here
+// it is a Go panic, and it would otherwise abort from inside a goroutine the
+// caller did not start and cannot recover in.
+func TestAPanickingKernelReachesTheFence(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	b := block(t, dev, driver.MemoryShared, 16)
+	k := &kernel.Kernel{
+		Name: "Overrun", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1}, Generator: kernel.ABIVersion,
+		Bindings: []kernel.Binding{{Name: "b", DType: kernel.F32, Access: kernel.Write}},
+		Flat: func(_ kernel.Thread, a kernel.Args) {
+			s := a.Slices[0].([]float32)
+			s[len(s)+1] = 1 // out of bounds, as a real kernel bug would be
+		},
+	}
+	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		ID: 3, Op: driver.OpDispatch,
+		Dispatch: &driver.Dispatch{
+			Kernel: k, Count: kernel.ID3{X: 1},
+			Bindings: []driver.Operand{blockOperand(t, b, 0, 16)},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	err = f.Wait()
+	if err == nil {
+		t.Fatal("a panicking kernel should report through the fence")
+	}
+	for _, want := range []string{"Overrun", "node 3", "out-of-bounds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message should say %q, got:\n%v", want, err)
+		}
+	}
+
+	// And the executable is usable afterwards: the panic did not leave it
+	// believing a submission is still in flight.
+	if _, err := exe.Submit(); err != nil {
+		t.Errorf("the executable should still be usable: %v", err)
+	}
+}

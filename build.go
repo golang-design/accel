@@ -30,7 +30,28 @@ import (
 // away when they land: it is what 017's differential fuzz compares against, and
 // an oracle that already existed before the optimizer cannot have inherited the
 // optimizer's bugs.
-func (r *Recorder) Build() (*Graph, error) {
+// BuildNaive builds the graph under the conservative plan of
+// specs/015-graph-recording.md: nodes in record order, a barrier before each,
+// and no transient aliasing.
+//
+// It exists so that an optimized plan has something to be compared against.
+// specs/003-command-graph.md defines the whole-plan oracle as executing a graph
+// a second time under exactly this plan and comparing results, and any
+// disagreement is a planner or barrier bug localized to the builder rather than
+// to a kernel, because both sides ran the same kernels over the same inputs.
+//
+// This is not scaffolding written alongside the optimizer. It is what
+// [Recorder.Build] produced before edge inference existed, retained: an oracle
+// written after the thing it checks, by whoever just wrote it, is under
+// constant pressure to share its reachability code and therefore its mistakes.
+//
+// It is exported for testing and for a caller who suspects a planning bug. It
+// is slower by construction and never the right choice otherwise.
+func (r *Recorder) BuildNaive() (*Graph, error) { return r.build(true) }
+
+func (r *Recorder) Build() (*Graph, error) { return r.build(false) }
+
+func (r *Recorder) build(naive bool) (*Graph, error) {
 	if r.state.dev == nil {
 		return nil, errors.New("accel: Build: this Recorder was not created by Device.NewRecorder")
 	}
@@ -58,19 +79,29 @@ func (r *Recorder) Build() (*Graph, error) {
 		slots:      r.state.slots,
 		transients: r.state.transients,
 	}
+	g.naive = naive
 	g.inferEdges()
 	if err := g.assertAcyclic(); err != nil {
 		return nil, err
 	}
 	g.reachability()
-	g.planBarriers()
+	if err := g.checkTransientsAreWritten(); err != nil {
+		return nil, err
+	}
+	if naive {
+		g.planSerialBarriers()
+	} else {
+		g.planBarriers()
+	}
 	// Packing needs the DAG, because compatibility is reachability rather than
 	// record-order position, so transients are placed after inference rather
 	// than before it.
 	if err := g.placeTransients(); err != nil {
 		return nil, err
 	}
-	g.planHandovers()
+	if !naive {
+		g.planHandovers()
+	}
 	if err := g.lower(); err != nil {
 		g.releaseTransients()
 		return nil, err
@@ -103,7 +134,21 @@ func (g *Graph) placeTransients() error {
 	for _, t := range g.transients {
 		g.memory.UnaliasedBytes += alignUp(t.bytes, align)
 	}
-	total := g.packTransients(align)
+	total := g.memory.UnaliasedBytes
+	if g.naive {
+		// No aliasing: consecutive placement, each transient its own bytes. This
+		// is half of what makes the naive plan an oracle, the other half being
+		// the barrier before every node.
+		at := 0
+		for _, t := range g.transients {
+			t.offset = at
+			t.placed = true
+			at += alignUp(t.bytes, align)
+		}
+		total = alignUp(at, align)
+	} else {
+		total = g.packTransients(align)
+	}
 	g.memory.TransientBytes = total
 	g.memory.PeakBytes = g.peakBytes(align)
 
