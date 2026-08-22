@@ -300,12 +300,6 @@ func (g *Graph) reaches(a, b NodeID) bool {
 	return row[int(b)/64]&(1<<(uint(b)%64)) != 0
 }
 
-// ordered reports whether two nodes are ordered in either direction. It is what
-// specs/017-graph-aliasing.md's interference relation is built on.
-func (g *Graph) ordered(a, b NodeID) bool {
-	return a == b || g.reaches(a, b) || g.reaches(b, a)
-}
-
 // popcount reports how many nodes a node reaches, for statistics and tests.
 func (g *Graph) reachCount(a NodeID) int {
 	if g.reachWords == 0 {

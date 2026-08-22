@@ -303,6 +303,9 @@ type Graph struct {
 	// before node i, or nil.
 	barriersBefore []*barrier
 
+	// poolAlign is the alignment every transient placement respects.
+	poolAlign int
+
 	state resourceState
 
 	// concrete, slotWriter and spans are V24's inputs, computed once at Build
@@ -416,6 +419,42 @@ type NodeStats struct {
 	// node. It is here so a caller can ask why a graph does not overlap, and so the
 	// builder's own tests can assert on the plan rather than on results.
 	BarriersBefore int
+}
+
+// TransientPlacement is where one builder-owned intermediate landed in the
+// graph's transient pool.
+type TransientPlacement struct {
+	Label string
+
+	// Offset and Bytes are its extent in the pool. Two placements sharing bytes
+	// is aliasing, and it is only sound when every user of one is ordered
+	// against every user of the other.
+	Offset int
+	Bytes  int
+
+	// Users are the nodes that touch it, in record order. Reported because the
+	// interference relation quantifies over exactly this set, so a caller
+	// checking a placement by hand needs it.
+	Users []NodeID
+}
+
+// TransientPlacement reports the pool layout the builder chose.
+//
+// It is exposed because a placement is the thing worth asserting on: an output
+// comparison can pass on a backend that executes serially while the layout is
+// unsound, since such a backend cannot observe the race the layout would create
+// on one that overlaps. See specs/017-graph-aliasing.md.
+func (g *Graph) TransientPlacement() []TransientPlacement {
+	out := make([]TransientPlacement, len(g.transients))
+	for i, t := range g.transients {
+		out[i] = TransientPlacement{
+			Label:  t.buf.desc.Label,
+			Offset: t.offset,
+			Bytes:  alignUp(t.bytes, g.poolAlign),
+			Users:  append([]NodeID(nil), t.users...),
+		}
+	}
+	return out
 }
 
 // Memory reports what the graph needs to run: its transient pool size and its

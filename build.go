@@ -58,16 +58,19 @@ func (r *Recorder) Build() (*Graph, error) {
 		slots:      r.state.slots,
 		transients: r.state.transients,
 	}
-	if err := g.placeTransients(); err != nil {
-		return nil, err
-	}
 	g.inferEdges()
 	if err := g.assertAcyclic(); err != nil {
-		g.releaseTransients()
 		return nil, err
 	}
 	g.reachability()
 	g.planBarriers()
+	// Packing needs the DAG, because compatibility is reachability rather than
+	// record-order position, so transients are placed after inference rather
+	// than before it.
+	if err := g.placeTransients(); err != nil {
+		return nil, err
+	}
+	g.planHandovers()
 	if err := g.lower(); err != nil {
 		g.releaseTransients()
 		return nil, err
@@ -96,23 +99,22 @@ func (r *Recorder) Build() (*Graph, error) {
 // change than it is.
 func (g *Graph) placeTransients() error {
 	align := g.dev.allocAlignment(UsageStorage | UsageCopySrc | UsageCopyDst)
-	total := 0
+	g.poolAlign = align
 	for _, t := range g.transients {
-		t.offset = alignUp(total, align)
-		next := t.offset + t.bytes
-		if next < t.offset {
-			return fmt.Errorf("accel: Build: the transient pool overflows at %q", t.buf.desc.Label)
-		}
-		total = next
 		g.memory.UnaliasedBytes += alignUp(t.bytes, align)
 	}
-	// The pool is rounded up like every transient in it. Without that the last
-	// transient is the one that is not padded, so the pool disagrees with the
-	// unaliased total it is supposed to equal at this milestone -- which is
-	// exactly what the build fuzzer reported.
-	total = alignUp(total, align)
+	total := g.packTransients(align)
 	g.memory.TransientBytes = total
 	g.memory.PeakBytes = g.peakBytes(align)
+
+	// V20: the planned pool against the device's reported budget. It is checked
+	// after packing rather than before, because packing is what decides the
+	// number, and reporting the unaliased total here would refuse graphs that
+	// fit.
+	if budget := g.dev.info.Limits.MaxPoolBytes; budget > 0 && total > budget {
+		return fmt.Errorf("accel: Build: the graph's transients need %s after aliasing and %q "+
+			"reports a %s pool budget", humanBytes(total), g.dev.info.Name, humanBytes(budget))
+	}
 	if total == 0 {
 		return nil
 	}

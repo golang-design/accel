@@ -104,15 +104,29 @@ type transient struct {
 	// at Build.
 	pool driver.Block
 
-	// offset within the graph's transient pool, assigned at Build. At this
-	// milestone every transient gets its own bytes and offsets are simply
-	// consecutive; specs/017-graph-aliasing.md packs them.
+	// offset within the graph's transient pool, assigned at Build, and placed
+	// once packing has run.
 	offset int
+	placed bool
 
 	// first and last are the record-order positions of this transient's first
 	// and last user, which is what PeakBytes is defined over. They are -1 until
 	// a node uses it.
+	//
+	// They are the *interval*, and the interval is not what aliasing may use:
+	// see [Graph.compatible]. They are kept because PeakBytes is defined over
+	// the record-order linearization, and the gap between it and the packed
+	// pool is exactly what DAG-safe aliasing costs.
 	first, last int
+
+	// users are the nodes that touch this transient, in record order and
+	// without duplicates. This is what the interference relation quantifies
+	// over, and record order is what makes the packing deterministic.
+	users []NodeID
+
+	// writer is the first node to write this transient, or -1. It is the
+	// packing order's tie break.
+	writer int
 }
 
 // Recorder state.
@@ -257,7 +271,7 @@ func (r *Recorder) transientImpl(desc BufferDescriptor) BufferView {
 		return BufferView{}
 	}
 
-	t := &transient{bytes: bytes, first: -1, last: -1, owner: r}
+	t := &transient{bytes: bytes, first: -1, last: -1, writer: -1, owner: r}
 	// The Buffer exists now and its memory arrives at Build. Nothing else in
 	// this package builds a Buffer without a pool, so the transient pointer is
 	// what every path keys on to know the difference.
@@ -292,6 +306,15 @@ func (r *Recorder) touch(id NodeID, a access) {
 		t.first = int(id)
 	}
 	t.last = int(id)
+	if a.writes() && t.writer < 0 {
+		t.writer = int(id)
+	}
+	// One entry per node, not per access: a node reading and writing one
+	// transient is one user, and counting it twice would make the interference
+	// quantifier do redundant work without changing its answer.
+	if n := len(t.users); n == 0 || t.users[n-1] != id {
+		t.users = append(t.users, id)
+	}
 }
 
 // transientOf reports the transient a buffer belongs to, or nil.
