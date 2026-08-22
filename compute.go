@@ -5,6 +5,8 @@
 package accel
 
 import (
+	"fmt"
+
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
 )
@@ -215,6 +217,18 @@ const (
 	AccessWrite
 	AccessReadWrite
 )
+
+func (a Access) String() string {
+	switch a {
+	case AccessRead:
+		return "read"
+	case AccessWrite:
+		return "write"
+	case AccessReadWrite:
+		return "read-write"
+	}
+	return fmt.Sprintf("Access(%d)", int(a))
+}
 
 // BindingKind is what sort of resource fills a slot.
 type BindingKind int

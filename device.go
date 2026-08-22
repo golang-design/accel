@@ -99,9 +99,10 @@ func OpenDevice(id AdapterID) (*Device, error) {
 // OpenCPU opens the CPU backend with an explicit oracle profile.
 func OpenCPU(opts CPUOptions) (*Device, error) {
 	o := cpu.Options{
-		Mode:         cpu.Mode(opts.Mode),
-		SubgroupSize: opts.SubgroupSize,
-		ShuffleSeed:  opts.ShuffleSeed,
+		Mode:             cpu.Mode(opts.Mode),
+		SubgroupSize:     opts.SubgroupSize,
+		ShuffleSeed:      opts.ShuffleSeed,
+		LoseAtSubmission: opts.LoseAtSubmission,
 	}
 	for _, t := range opts.StrictTargets {
 		o.StrictTargets = append(o.StrictTargets, driver.Backend(t))

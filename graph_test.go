@@ -6,6 +6,7 @@ package accel_test
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -516,5 +517,272 @@ func TestAHostWriteIsOrderedAgainstSubmissions(t *testing.T) {
 			t.Fatalf("element %d is %v: a later write reached memory the submission was reading",
 				i, got[i])
 		}
+	}
+}
+
+// Rebinding is the hot path a replayable graph exists for, so its cost must not
+// scale with the graph's size. specs/003-command-graph.md is explicit that a
+// backend does not validate, plan, or scan per submission.
+//
+// The assertion is on scaling rather than on an absolute count, because a count
+// test passes against an implementation that rebuilds a small fixed structure
+// and against one that rescans every node in a two-node graph.
+func TestRebindDoesNotScaleWithGraphSize(t *testing.T) {
+	d := openDevice(t)
+	src := newBuffer(t, d, "src", 64, accel.UsageStorage|accel.UsageCopySrc)
+
+	cost := func(nodes int) float64 {
+		dst := newBuffer(t, d, "dst", 64, accel.UsageStorage|accel.UsageCopyDst)
+		r := d.NewRecorder()
+		in := r.Slot(readSlot(64))
+		for range nodes {
+			r.CopyFromSlot(whole(t, dst), in, 0, 64)
+		}
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+
+		bind := []accel.Binding{{Slot: in, Buffer: whole(t, src)}}
+		if err := g.Rebind(bind); err != nil {
+			t.Fatalf("rebind: %v", err)
+		}
+		return testing.AllocsPerRun(200, func() {
+			if err := g.Rebind(bind); err != nil {
+				t.Fatalf("rebind: %v", err)
+			}
+		})
+	}
+
+	small, large := cost(2), cost(200)
+	if large > small+1 {
+		t.Errorf("rebinding a 200-node graph allocates %v and a 2-node graph %v: "+
+			"the cost scales with the node count", large, small)
+	}
+}
+
+// The same for submission: replaying a built graph does not allocate in
+// proportion to its nodes, which is the plan-once saving the whole model exists
+// for.
+//
+// Bytes rather than allocation count, and the distinction is the whole test: a
+// backend that resolves every node into one freshly made slice allocates a
+// single object whatever the node count, so a count-based version of this
+// passes against exactly the implementation it is meant to catch.
+func TestSubmissionDoesNotScaleWithGraphSize(t *testing.T) {
+	d := openDevice(t)
+	q := d.Queue()
+	src := newBuffer(t, d, "src", 64, accel.UsageStorage|accel.UsageCopySrc)
+
+	cost := func(nodes int) uint64 {
+		dst := newBuffer(t, d, "dst", 64, accel.UsageStorage|accel.UsageCopyDst)
+		r := d.NewRecorder()
+		for range nodes {
+			r.CopyBuffer(whole(t, dst), whole(t, src))
+		}
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("warm-up submit: %v", err)
+		}
+
+		const runs = 100
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for range runs {
+			if err := q.Submit(g).Wait(); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+		}
+		runtime.ReadMemStats(&after)
+		return (after.TotalAlloc - before.TotalAlloc) / runs
+	}
+
+	small, large := cost(2), cost(200)
+	// A hundredfold more nodes must not mean meaningfully more bytes. The slack
+	// covers the fence and channel every submission allocates regardless.
+	if large > small*2+512 {
+		t.Errorf("submitting a 200-node graph allocates %d bytes and a 2-node graph %d: "+
+			"the backend is allocating per node", large, small)
+	}
+}
+
+// Run records, submits and waits in one call. It carries the full cost of
+// building a graph every time, so it is the wrong choice in a hot loop and the
+// right one for a script.
+func TestQueueRunBuildsSubmitsAndWaits(t *testing.T) {
+	d := openDevice(t)
+	out := newBuffer(t, d, "out", 4, accel.UsageStorage|accel.UsageCopyDst)
+
+	if err := d.Queue().Run(func(r *accel.Recorder) {
+		r.CopyToBuffer(whole(t, out), []float32{7, 8, 9, 10})
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := readback(t, d, out)
+	for i, want := range []float32{7, 8, 9, 10} {
+		if got[i] != want {
+			t.Fatalf("got %v, want 7..10", got)
+		}
+	}
+
+	// A recording that cannot build reports the build error rather than
+	// submitting nothing and reporting success.
+	err := d.Queue().Run(func(r *accel.Recorder) {
+		r.CopyToBuffer(accel.BufferView{}, []float32{1})
+	})
+	if err == nil || !strings.Contains(err.Error(), "names no buffer") {
+		t.Fatalf("expected the build error, got %v", err)
+	}
+}
+
+// A host write into a slot: the destination arrives before submission, so it
+// cannot be spelled as a view.
+func TestCopyToBufferSlot(t *testing.T) {
+	d := openDevice(t)
+	dst := newBuffer(t, d, "dst", 8, accel.UsageStorage|accel.UsageCopyDst)
+
+	r := d.NewRecorder()
+	out := r.Slot(accel.SlotDescriptor{
+		Name: "out", Kind: accel.BindingStorageBuffer,
+		DType: accel.F32, Access: accel.AccessWrite, MinCount: 8,
+	})
+	r.CopyToBufferSlot(out, 2, 4, []float32{1, 2, 3, 4})
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	if err := g.Bind(accel.Binding{Slot: out, Buffer: whole(t, dst)}); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := readback(t, d, dst)
+	for i, want := range []float32{0, 0, 1, 2, 3, 4, 0, 0} {
+		if got[i] != want {
+			t.Fatalf("got %v, want the payload at elements 2..5", got)
+		}
+	}
+}
+
+func TestRecordingRejectionsThatCannotReachBuild(t *testing.T) {
+	d := openDevice(t)
+	cases := []struct {
+		name string
+		rec  func(r *accel.Recorder)
+		says string
+	}{
+		{"an undeclared slot", func(r *accel.Recorder) {
+			r.CopyToBufferSlot(accel.Slot(7), 0, 1, []float32{1})
+		}, "was not declared by this recorder"},
+		{"a host slice of the wrong type for a slot", func(r *accel.Recorder) {
+			s := r.Slot(readSlot(4))
+			r.CopyToBufferSlot(s, 0, 4, []int32{1, 2, 3, 4})
+		}, "must be []float32"},
+		{"a payload the slot range cannot hold", func(r *accel.Recorder) {
+			s := r.Slot(accel.SlotDescriptor{
+				Name: "out", Kind: accel.BindingStorageBuffer,
+				DType: accel.F32, Access: accel.AccessWrite, MinCount: 8,
+			})
+			r.CopyToBufferSlot(s, 0, 2, []float32{1, 2, 3, 4})
+		}, "the range holds 8 bytes and src has 16"},
+		{"a slot with a dtype outside the set", func(r *accel.Recorder) {
+			r.Slot(accel.SlotDescriptor{Name: "bad", DType: accel.DType(99), MinCount: 4})
+		}, "is not a dtype"},
+		{"a slot with a negative size", func(r *accel.Recorder) {
+			r.Slot(accel.SlotDescriptor{Name: "bad", DType: accel.F32, MinCount: -1})
+		}, "MinCount is -1"},
+		{"a transient with no elements", func(r *accel.Recorder) {
+			r.Transient(accel.BufferDescriptor{DType: accel.F32, Count: 0, Label: "empty"})
+		}, ""},
+		{"a transient with a dtype outside the set", func(r *accel.Recorder) {
+			r.Transient(accel.BufferDescriptor{DType: accel.DType(99), Count: 4, Label: "bad"})
+		}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := d.NewRecorder()
+			c.rec(r)
+			_, err := r.Build()
+			if err == nil {
+				t.Fatal("expected a rejection")
+			}
+			if c.says != "" && !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("the message should say %q, got:\n%v", c.says, err)
+			}
+		})
+	}
+}
+
+func TestSubmitRejectsAGraphItCannotRun(t *testing.T) {
+	d := openDevice(t)
+	other := openDevice(t)
+
+	if err := d.Queue().Submit(nil).Wait(); err == nil ||
+		!strings.Contains(err.Error(), "nil graph") {
+		t.Errorf("submitting nil should be reported, got %v", err)
+	}
+
+	r := other.NewRecorder()
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err == nil ||
+		!strings.Contains(err.Error(), "different device") {
+		t.Errorf("submitting another device's graph should be reported, got %v", err)
+	}
+}
+
+func TestNodeStatsForAnUnknownNode(t *testing.T) {
+	d := openDevice(t)
+	r := d.NewRecorder()
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	// Out of range is reported as a zero-valued entry naming the id asked for,
+	// not a panic: NodeStats is a reporting call and a caller holding a stale id
+	// should get an answer they can see is empty.
+	if s := g.NodeStats(accel.NodeID(9)); s.Node != 9 || s.BarriersBefore != 0 {
+		t.Errorf("got %+v for an unknown node", s)
+	}
+	if s := g.NodeStats(accel.NodeID(-1)); s.BarriersBefore != 0 {
+		t.Errorf("got %+v for a negative node id", s)
+	}
+}
+
+// A recorder that was never made by NewRecorder has no device, and Build says
+// so rather than dereferencing one.
+func TestAZeroRecorderIsRejected(t *testing.T) {
+	var r accel.Recorder
+	if _, err := r.Build(); err == nil ||
+		!strings.Contains(err.Error(), "Device.NewRecorder") {
+		t.Fatalf("expected a rejection naming NewRecorder, got %v", err)
+	}
+}
+
+func TestBuildOnAClosedDeviceFails(t *testing.T) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	r := d.NewRecorder()
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := r.Build(); err == nil {
+		t.Error("Build on a closed device should fail")
 	}
 }

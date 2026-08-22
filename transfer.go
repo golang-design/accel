@@ -247,6 +247,16 @@ func (q *Queue) checkRange(op string, b *Buffer, offset, length int) (int, error
 	if err := b.state.checkOpen(op); err != nil {
 		return 0, err
 	}
+	// A transient has no pool: its memory belongs to the graph that declared it
+	// and arrives at Build. Every path that reaches for pool and alloc has to
+	// check here first, and this is the one a *Buffer entry point takes -- the
+	// view-level guard in BufferView.check cannot see it, because these two take
+	// a buffer rather than a view.
+	if b.transient != nil {
+		return 0, fmt.Errorf("accel: %s on %q: it is a graph transient, whose memory the "+
+			"builder owns and may reuse between nodes, so only the graph that declared it "+
+			"may touch it", op, b.desc.Label)
+	}
 	if offset < 0 {
 		return 0, fmt.Errorf("accel: %s %q: element offset %d is negative", op, b.desc.Label, offset)
 	}

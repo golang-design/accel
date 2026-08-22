@@ -187,3 +187,114 @@ func BenchmarkOpenCPU(b *testing.B) {
 		}
 	}
 }
+
+// Build cost and submit cost are separated because specs/003-command-graph.md's
+// claim is that the second is small: validation, planning and lowering happen
+// once, and a submission after that is replay. A number for each is what makes
+// specs/016-graph-execution.md's added planning cost visible rather than
+// absorbed.
+func BenchmarkGraphBuild(b *testing.B) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	dst, src := benchBuffer(b, d, "dst"), benchBuffer(b, d, "src")
+
+	b.ReportAllocs()
+	for b.Loop() {
+		r := d.NewRecorder()
+		for range 32 {
+			r.CopyBuffer(benchView(b, dst), benchView(b, src))
+		}
+		g, err := r.Build()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := g.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGraphSubmit(b *testing.B) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	dst, src := benchBuffer(b, d, "dst"), benchBuffer(b, d, "src")
+
+	r := d.NewRecorder()
+	for range 32 {
+		r.CopyBuffer(benchView(b, dst), benchView(b, src))
+	}
+	g, err := r.Build()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer g.Close()
+
+	q := d.Queue()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := q.Submit(g).Wait(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Rebinding is the hot path a replayable graph exists for, so its cost is
+// measured rather than assumed cheap.
+func BenchmarkGraphRebind(b *testing.B) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	dst, src := benchBuffer(b, d, "dst"), benchBuffer(b, d, "src")
+
+	r := d.NewRecorder()
+	in := r.Slot(accel.SlotDescriptor{
+		Name: "in", Kind: accel.BindingStorageBuffer,
+		DType: accel.F32, Access: accel.AccessRead, MinCount: 1024,
+	})
+	for range 8 {
+		r.CopyFromSlot(benchView(b, dst), in, 0, 1024)
+	}
+	g, err := r.Build()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer g.Close()
+
+	bind := []accel.Binding{{Slot: in, Buffer: benchView(b, src)}}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := g.Rebind(bind); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchBuffer(b *testing.B, d *accel.Device, label string) *accel.Buffer {
+	b.Helper()
+	buf, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: 1024, Label: label,
+		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+	})
+	if err != nil {
+		b.Fatalf("buffer %q: %v", label, err)
+	}
+	b.Cleanup(func() { _ = buf.Close() })
+	return buf
+}
+
+func benchView(b *testing.B, buf *accel.Buffer) accel.BufferView {
+	b.Helper()
+	v, err := buf.View(0, buf.Count())
+	if err != nil {
+		b.Fatalf("view: %v", err)
+	}
+	return v
+}

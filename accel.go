@@ -184,6 +184,16 @@ type CPUOptions struct {
 	Mimic         *DeviceProfile
 	SubgroupSize  int
 	ShuffleSeed   uint64
+
+	// LoseAtSubmission marks the device lost when it reaches this submission,
+	// counting from one. Zero never loses.
+	//
+	// It is fault injection, and it is here rather than in a test helper because
+	// specs/001-device-resources.md section 7.4 requires it: the CPU backend
+	// cannot lose a device and Metal rarely does, so without a way to ask for it
+	// the whole terminal-loss path is code nobody runs until a caller's driver
+	// restarts in production. It has no effect on any other backend.
+	LoseAtSubmission int
 }
 
 // Device is an opened accelerator.

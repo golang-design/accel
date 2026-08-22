@@ -67,6 +67,15 @@ func (r *Recorder) Build() (*Graph, error) {
 	}
 	g.state.init("graph")
 	g.bound = make([]Binding, len(g.slots)+1)
+	// Computed once. The ranges a graph names through resources it already holds
+	// cannot change, and rebuilding them per rebind would put a scan of every
+	// node on the path specs/003-command-graph.md promises stays cheap.
+	g.concrete = g.concreteSpans()
+	g.slotWriter = make([]bool, len(g.slots)+1)
+	for s := 1; s <= len(g.slots); s++ {
+		g.slotWriter[s] = g.slotWrites(Slot(s))
+	}
+	g.spans = make([]span, 0, len(g.slots))
 	g.dev.countGraphs(1)
 	return g, nil
 }
@@ -90,6 +99,11 @@ func (g *Graph) placeTransients() error {
 		total = next
 		g.memory.UnaliasedBytes += alignUp(t.bytes, align)
 	}
+	// The pool is rounded up like every transient in it. Without that the last
+	// transient is the one that is not padded, so the pool disagrees with the
+	// unaliased total it is supposed to equal at this milestone -- which is
+	// exactly what the build fuzzer reported.
+	total = alignUp(total, align)
 	g.memory.TransientBytes = total
 	g.memory.PeakBytes = g.peakBytes(align)
 	if total == 0 {

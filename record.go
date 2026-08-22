@@ -55,18 +55,20 @@ type access struct {
 	mode Access
 }
 
-func (a access) reads() bool  { return a.mode == AccessRead || a.mode == AccessReadWrite }
 func (a access) writes() bool { return a.mode == AccessWrite || a.mode == AccessReadWrite }
 
 // resourceRef names either a resource known now or one supplied before
-// submission. Exactly one field is set; [resourceRef.valid] is what says so,
-// because a struct with two pointer-ish fields cannot.
+// submission. Exactly one field is set, and the two constructors that build one
+// -- [Recorder.declare] and [Recorder.slotAccess] -- each set exactly one.
+//
+// It is not the closed shape [driver.Operand] uses, because unlike an operand a
+// resourceRef never leaves this package and never crosses a build boundary: it
+// is built and consumed within one Build. The operand is the one that has to
+// defend itself.
 type resourceRef struct {
 	buf  *Buffer
 	slot Slot
 }
-
-func (r resourceRef) valid() bool { return (r.buf != nil) != (r.slot != 0) }
 
 func (r resourceRef) String() string {
 	switch {

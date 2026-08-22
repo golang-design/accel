@@ -294,6 +294,12 @@ type Graph struct {
 
 	state resourceState
 
+	// concrete, slotWriter and spans are V24's inputs, computed once at Build
+	// because nothing in them varies per rebind. See [Graph.checkOverlaps].
+	concrete   []span
+	slotWriter []bool // by one-based slot: does any node write through it
+	spans      []span // scratch, reused per rebind; guarded by mu
+
 	mu       sync.Mutex
 	bound    []Binding // by one-based slot; index 0 unused
 	inFlight bool

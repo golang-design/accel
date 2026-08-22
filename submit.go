@@ -161,38 +161,37 @@ func (g *Graph) checkOverlaps(updates []Binding) error {
 	// The prospective binding set: what is already bound, with this batch
 	// applied. Checking the batch against the old state would let a batch that
 	// swaps two slots pass while leaving them overlapping.
-	next := make([]Binding, len(g.bound))
-	copy(next, g.bound)
-	for _, b := range updates {
-		next[b.Slot] = b
-	}
-
-	var slots []span
-	for s := 1; s < len(next); s++ {
-		v := next[s].Buffer
+	slots := g.spans[:0]
+	for s := 1; s <= len(g.slots); s++ {
+		v := g.bound[s].Buffer
+		for _, u := range updates {
+			if u.Slot == Slot(s) {
+				v = u.Buffer
+			}
+		}
 		if v.Buffer == nil {
 			continue
 		}
 		off, size := v.byteRange()
 		base := v.Buffer.alloc.Offset + off
 		slots = append(slots, span{
-			what:  fmt.Sprintf("slot %q", g.slots[s-1].Name),
+			slot:  Slot(s),
 			buf:   v.Buffer,
 			lo:    base,
 			hi:    base + size,
-			write: g.slotWrites(Slot(s)),
+			write: g.slotWriter[s],
 		})
 	}
-	concrete := g.concreteSpans()
+	g.spans = slots
 
 	for i := range slots {
 		for j := i + 1; j < len(slots); j++ {
-			if err := conflict(slots[i], slots[j]); err != nil {
+			if err := g.conflict(slots[i], slots[j]); err != nil {
 				return err
 			}
 		}
-		for j := range concrete {
-			if err := conflict(slots[i], concrete[j]); err != nil {
+		for j := range g.concrete {
+			if err := g.conflict(slots[i], g.concrete[j]); err != nil {
 				return err
 			}
 		}
@@ -201,16 +200,28 @@ func (g *Graph) checkOverlaps(updates []Binding) error {
 }
 
 // span is one byte range a graph reaches, with its graph-wide access union.
+//
+// It names its origin by slot or by node rather than carrying a formatted
+// string, because a span is built on the rebind path and formatting one costs
+// an allocation per binding whether or not anything is wrong.
 type span struct {
-	what  string
+	slot  Slot   // non-zero for a dynamic span
+	node  NodeID // meaningful when slot is zero
 	buf   *Buffer
 	lo    int
 	hi    int
 	write bool
 }
 
+func (g *Graph) describe(s span) string {
+	if s.slot != 0 {
+		return fmt.Sprintf("slot %q", g.slots[s.slot-1].Name)
+	}
+	return fmt.Sprintf("node %d's use of %q", int(s.node), s.buf.desc.Label)
+}
+
 // conflict reports an overlap that at least one side writes.
-func conflict(a, b span) error {
+func (g *Graph) conflict(a, b span) error {
 	if a.buf != b.buf || !(a.write || b.write) {
 		return nil
 	}
@@ -219,7 +230,7 @@ func conflict(a, b span) error {
 	}
 	return fmt.Errorf("%w: %s and %s both name bytes [%d, %d) of %q, and at least "+
 		"one of them writes: the inferred hazards treated them as independent",
-		ErrRebindOverlap, a.what, b.what,
+		ErrRebindOverlap, g.describe(a), g.describe(b),
 		max(a.lo, b.lo), min(a.hi, b.hi), a.buf.desc.Label)
 }
 
@@ -253,8 +264,7 @@ func (g *Graph) concreteSpans() []span {
 			}
 			base := b.alloc.Offset + a.off
 			out = append(out, span{
-				what: fmt.Sprintf("node %d's use of %q", n.id, b.desc.Label),
-				buf:  b, lo: base, hi: base + a.size, write: a.writes(),
+				node: n.id, buf: b, lo: base, hi: base + a.size, write: a.writes(),
 			})
 		}
 	}
