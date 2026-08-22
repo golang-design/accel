@@ -357,11 +357,23 @@ resolves on the identity `go/types` reports, which for a method is **(package
 path, receiver type name, method name)** and never (package path, method name),
 while the digest records the authored spelling so that relocating a type does
 not invalidate every committed digest. Bounded scalar math (`Sqrt`, `RSqrt`, `Exp`, `Log`, `Sin`, `Cos`,
-`Tanh`) lives in `accel/kmath`. `internal/kernelc` builds a table from the exact
+`Tanh`) lives in `accel/kmath`, along with three that are **exact rather than
+bounded** and are there for the same reason the bounded ones are: `Abs`, `Min`,
+and `Max`.
+
+Those three earn their place by having contracts rather than error ceilings.
+`Abs` clears a sign bit and touches nothing else, so it has no error to bound.
+`Min` and `Max` propagate a NaN, which is a contract and not a consequence:
+every comparison with a NaN is false, so an if-based implementation returns
+whichever operand the comparison happened to favour, silently. Each entry
+records its class, so a test cannot assert a tolerance where bits are guaranteed
+nor bits where only a bound holds. `internal/kernelc` builds a table from the exact
 import-path/name objects and rejects a same-named function from any other
 package. The table records IR opcode, uniformity effect, capability requirement,
-numeric class, and target lowering; its ABI version participates in the kernel
-digest. The ordinary Go bodies exist only so authored packages type-check and
+numeric class, and target lowering; its ABI version and its full contents
+participate in the kernel digest, so adding or retyping an entry makes every
+generated file stale rather than depending on somebody remembering to bump a
+version. The ordinary Go bodies exist only so authored packages type-check and
 are never the registered CPU implementation.
 
 The v0 corpus lives at `tensor/internal/kernels/...`, imports only the root

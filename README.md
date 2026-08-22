@@ -91,6 +91,12 @@ every arithmetic operation, plus a record carrying the workgroup extent and the
 bindings with the read and write accesses **inferred from the body**. Anything
 outside the subset is rejected with a source position and a reason.
 
+The subset has loops, helpers, the scalar math in
+[`kmath`](https://pkg.go.dev/golang.design/x/accel/kmath), and 16-bit storage
+types that deliberately carry no arithmetic operators, so a narrow value has to
+widen before it can be used and f32 accumulation is the only thing that
+compiles rather than a rule to remember.
+
 Two layers. The **device layer** gives you buffers, kernels, and recorded command
 graphs, for renderers and simulations. The **tensor layer** gives you dtypes,
 shapes, operators, and a computation graph, for inference, and never asks you to
@@ -151,8 +157,9 @@ bindings are the better choice.
 | Pools, suballocation, buffers, views, lifetime | **Built** on the CPU backend |
 | Host and device transfers | **Built** on the CPU backend |
 | Textures and formats | Specified, deferred until graphics |
-| Kernel compiler: subset checking, IR, Go lowering, generator | **Built** for straight-line kernels |
-| Kernel compiler: loops, helpers, uniforms | Specified, next |
+| Kernel compiler: subset checking, IR, Go lowering, generator | **Built** |
+| Kernel language: loops, helpers, narrow storage, scalar math | **Built** |
+| Kernel uniforms: std140 codecs and typed binding | Specified, next |
 | Command graphs | Specified, not started |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |

@@ -212,7 +212,7 @@ If you contribute a backend, that file is the contract.
 | --- | --- |
 | M0, the cgo-free build gate | done |
 | M1, memory on the CPU backend | done |
-| M2, the minimum kernel compiler and flat CPU execution | in progress: the pipeline is built for straight-line kernels |
+| M2, the minimum kernel compiler and flat CPU execution | in progress: the pipeline and the kernel language are built; uniforms remain |
 | M3 to M7, graphs, cooperative execution, GEMM, Metal, tensors | specified, not started |
 
 M1 built the bottom of the device layer: enumeration and device open, the

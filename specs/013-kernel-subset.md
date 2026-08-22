@@ -24,8 +24,14 @@ The rest of [004](004-kernel-authoring.md)'s subset, which is:
   wrappers with their conversions;
 - struct field selection on non-uniform structs, compound assignment, and
   explicit conversions across the scalar set; and
-- the bounded scalar math intrinsics in `accel/kmath`, each carrying its numeric
-  class from [008](008-numerics.md).
+- the scalar math intrinsics in `accel/kmath`, each carrying its numeric class
+  from [008](008-numerics.md): `Sqrt`, `RSqrt`, `Exp`, `Log`, `Sin`, `Cos`, and
+  `Tanh` bounded, and `Abs`, `Min`, and `Max` exact; and
+- the conversion intrinsics between narrow storage and f32, which are
+  `Float16.F32` and `BFloat16.F32` widening and `accel.ToFloat16` and
+  `accel.ToBFloat16` narrowing. They are intrinsics rather than IR conversions
+  because every target spells them differently: a native instruction where the
+  format exists, and a bit-packing sequence where it does not.
 
 The IR node set does not grow. [004](004-kernel-authoring.md) closed it and
 [012](012-kernel-pipeline.md) declared it whole; this child makes the remaining
