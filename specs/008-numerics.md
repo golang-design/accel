@@ -31,6 +31,29 @@ inventing a separate tolerance.
 There is no “close enough” tier. A primitive without an exact proof or normative
 ceiling cannot be used by a conformance-tested kernel.
 
+```mermaid
+flowchart LR
+    START{{"what does this<br/>operation do?"}}
+    A["integers, loads, stores, indexing<br/>f32 + - *"]
+    D["conversions between<br/>supported dtypes"]
+    B["a*b+c a target may contract"]
+    C["/ sqrt rsqrt exp log sin cos tanh"]
+    R["a reduction over K terms"]
+    E["atomic float add"]
+    SP["NaN, infinity, subnormal,<br/>overflow, excluded edges"]
+    EX["<b>Exact</b><br/>numeq.Exact, bit patterns"]
+    BD["<b>Bounded</b><br/>the harness derives the budget"]
+    SS["<b>Special</b><br/>named category, never a finite bound"]
+
+    START --> A -- "only inside a proved<br/>(class, domain, profile), section 3" --> EX
+    START --> D -- "canonical bits, section 4" --> EX
+    START --> B -- "expression DAG budget, section 5" --> BD
+    START --> C -- "normative ceilings, section 6" --> BD
+    START --> R -- "gamma from actual depth, section 7" --> BD
+    START --> E -- "section 7, not reproducible against itself" --> BD
+    START --> SP --> SS
+```
+
 ## 2. Operation classes
 
 The letters retain 004's meanings, narrowed where 004's summary was too broad.
@@ -179,16 +202,19 @@ never used to make the same run pass. Results belong in generated test artifacts
 
 ## 7. Reductions and dot products
 
-For f32 summation of K finite terms with unit roundoff `u = 2^-24`, a sequential
-path uses
+For f32 summation of $K$ finite terms with unit roundoff $u = 2^{-24}$, a
+sequential path uses
 
-```
-gamma(n) = n*u / (1 - n*u)
-budget = gamma(K-1) * sum(abs(x_i))
-```
+$$
+\gamma(n) = \frac{n u}{1 - n u},
+\qquad
+\text{budget} = \gamma(K-1) \sum_{i=1}^{K} |x_i|
+$$
 
-provided `(K-1)*u < 1` and no intermediate overflows. A balanced pairwise tree
-of maximum path depth d uses `gamma(d)`. The kernel metadata records its maximum
+provided $(K-1)u < 1$ and no intermediate overflows. The count is $K-1$ because
+$K$ terms take $K-1$ additions. A balanced pairwise tree of maximum path depth
+$d$ uses $\gamma(d)$, which is why a workgroup tree reduction is more accurate
+than a sequential loop rather than less. The kernel metadata records its maximum
 actual addition depth; the harness does not infer “tree” from a name.
 
 A dot product adds multiplication error for every product unless the product is

@@ -41,6 +41,27 @@ consumer lands.
 
 ## Milestones
 
+```mermaid
+flowchart TD
+    M0["<b>M0</b> cgo-free build gate<br/><i>complete 2026-08-21</i>"]
+    M1["<b>M1</b> memory on CPU<br/>pools, TLSF, buffers, views, lifetime"]
+    M2["<b>M2</b> minimum compiler, flat direct execution<br/>go/types, IR, generator, std140"]
+    M3["<b>M3</b> graph planning, flat submission<br/>edges, interference, packing, barriers"]
+    M4["<b>M4</b> cooperative execution model<br/>resumable lowering, definition tracking,<br/>deterministic conflict reporting"]
+    M5["<b>M5</b> portable tiled GEMM<br/>the model is proven sufficient"]
+    M6["<b>M6</b> Metal<br/>purego objc shim, MSL target, probes first"]
+    M7["<b>M7</b> tensor decode plus minimal prefill<br/>one token, end to end"]
+    M8["<b>M8+</b> quantization, textures, Vulkan,<br/>graphics, remaining backends"]
+
+    M0 --> M1 --> M2 --> M3 --> M4 --> M5 --> M6 --> M7 --> M8
+    M2 -. "the GEMM's uniform needs a generated codec,<br/>so M5 is behind M2 and not merely after it" .-> M5
+    M4 -. "a compiler pass, not a runtime option:<br/>estimated on its own or it hides inside the kernel" .-> M5
+    M5 -. "the GEMM is every backend's entry gate (006 §7)" .-> M6
+```
+
+The dotted edges are the ones the numbering does not show, and they are why §1
+exists.
+
 ### M0. The cgo-free build gate — complete 2026-08-21
 
 Shipped: `.github/workflows/ci.yml` builds, vets, and tests with
