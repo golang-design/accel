@@ -136,14 +136,22 @@ func (d *Device) removePool(p *Pool) {
 
 // livePools counts every device allocation this device holds, explicit and
 // implicit alike, because the driver's cap does not distinguish them.
+//
+// The implicit count is a counter on the device rather than a walk over the
+// block sets. A block set is guarded by its own lock and takes the device lock
+// underneath it, so reaching the other way to read its slice would both race
+// and invert the lock order.
 func (d *Device) livePools() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	n := len(d.pools)
-	for _, set := range d.implicit {
-		n += len(set.blocks)
-	}
-	return n
+	return len(d.pools) + d.implicitBlocks
+}
+
+// countImplicit adjusts the device's implicit block count.
+func (d *Device) countImplicit(delta int) {
+	d.mu.Lock()
+	d.implicitBlocks += delta
+	d.mu.Unlock()
 }
 
 // NewBuffer allocates a single buffer from an implicit pool. It is a convenience
@@ -215,10 +223,11 @@ func (s *blockSet) alloc(d *Device, desc BufferDescriptor, size int) (*Buffer, e
 		return nil, err
 	}
 	s.blocks = append(s.blocks, p)
+	d.countImplicit(1)
 	return p.Alloc(desc)
 }
 
-func (s *blockSet) close() error {
+func (s *blockSet) close(d *Device) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var first error
@@ -227,6 +236,7 @@ func (s *blockSet) close() error {
 			first = err
 		}
 	}
+	d.countImplicit(-len(s.blocks))
 	s.blocks = nil
 	return first
 }
@@ -332,8 +342,10 @@ func (p *Pool) Reset() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, b := range p.live {
+		// At M1 the only hold on a buffer is a queue write waiting for a flush;
+		// a submission's retain set joins it at M3 and will need telling apart.
 		if n := b.state.holds() - 1; n > 0 {
-			return &LifetimeError{Op: "Reset", Resource: p.desc.Label, Reason: reasonInFlight, InFlight: n}
+			return &LifetimeError{Op: "Reset", Resource: p.desc.Label, Reason: reasonPending, InFlight: n}
 		}
 	}
 	// After a successful reset every child handle allocated from the pool is

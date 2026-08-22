@@ -187,9 +187,10 @@ type Device struct {
 
 	state resourceState
 
-	mu       sync.Mutex
-	pools    []*Pool
-	implicit map[MemoryKind]*blockSet
+	mu             sync.Mutex
+	pools          []*Pool
+	implicit       map[MemoryKind]*blockSet
+	implicitBlocks int
 }
 
 // QueueKind is what a queue accepts.

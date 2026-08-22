@@ -324,10 +324,6 @@ func (d *Device) QueueFor(kind QueueKind) *Queue {
 // The implicit pool behind [Device.NewBuffer] is the exception, because the
 // caller never named it: it has no handle to close, so the device owns it.
 func (d *Device) Close() error {
-	if !d.state.beginClose() {
-		return nil
-	}
-
 	d.mu.Lock()
 	live := len(d.pools)
 	implicit := make([]*blockSet, 0, len(d.implicit))
@@ -344,13 +340,19 @@ func (d *Device) Close() error {
 		live += q.pendingCount()
 	}
 
+	// The children are counted before the handle is marked dead, so a device that
+	// refuses to close stays fully usable: marking first and rolling back would
+	// give a concurrent NewPool a spurious closed error, and would let a
+	// concurrent second Close report success for a device that never closed.
 	if live > 0 {
-		d.state.closed.Store(false) // the device is still usable; nothing was released
 		return &LifetimeError{Op: "Close", Resource: d.info.Name, Reason: reasonChildren, Children: live}
 	}
+	if !d.state.beginClose() {
+		return nil
+	}
+
 	for _, set := range implicit {
-		if err := set.close(); err != nil {
-			d.state.closed.Store(false)
+		if err := set.close(d); err != nil {
 			return err
 		}
 	}

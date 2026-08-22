@@ -413,6 +413,55 @@ func TestClosingIsOrderedNotRecursive(t *testing.T) {
 		t.Errorf("device close error is %v, want a LifetimeError counting one live pool", err)
 	}
 
+	// A device that refused to close is still fully open. It must not have
+	// marked itself closed and rolled back, because a concurrent caller would
+	// then see a closed device that never closed.
+	probe, err := d.NewPool(accel.MemoryUpload, 1<<20)
+	if err != nil {
+		t.Fatalf("the device stopped working after refusing to close: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// And a second Close still refuses, rather than reporting the success an
+	// already-marked handle would.
+	if err := d.Close(); err == nil {
+		t.Error("a second Close on a device with a live pool reported success")
+	}
+
+	// The refusal must never be observable as a closed device, not even for the
+	// instant between deciding to close and discovering the children. A Close
+	// that marks the handle dead and rolls back opens exactly that window, and a
+	// concurrent caller falls into it.
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				if err := d.Close(); err == nil {
+					t.Error("Close succeeded on a device with a live pool")
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				q, err := d.NewPool(accel.MemoryUpload, 1<<16)
+				if err != nil {
+					t.Errorf("NewPool raced Close and saw: %v", err)
+					return
+				}
+				if err := q.Close(); err != nil {
+					t.Errorf("Pool.Close: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -624,5 +673,145 @@ func TestPoolIsSafeForConcurrentUse(t *testing.T) {
 
 	if s := p.Stats(); s.Used != 0 || s.Allocations != 0 {
 		t.Errorf("after closing everything concurrently: %+v", s)
+	}
+}
+
+// TestDeviceIsSafeForConcurrentUse is spec 001 section 11.7's concurrency case,
+// which asks for the operations together rather than one at a time: many
+// goroutines allocating from one pool, writing disjoint ranges through one
+// queue, and creating pools and buffers, all at once, with no reported race and
+// no lost allocation.
+//
+// Running them together is the point. Creating a pool counts the device's live
+// allocations while NewBuffer's implicit pool is adding one, and closing races
+// both, so the interesting failures are between operations rather than inside
+// any one of them. This is a test that only fails when it matters, which is why
+// it runs in the ordinary suite rather than as a stress target.
+func TestDeviceIsSafeForConcurrentUse(t *testing.T) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shared := newPool(t, d, accel.MemoryDevice, 8<<20)
+	q := d.Queue()
+
+	const width = 64
+	target := alloc(t, shared, accel.BufferDescriptor{
+		DType: accel.U32, Count: width * 8,
+		Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "target",
+	})
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		buffers []*accel.Buffer
+		pools   []*accel.Pool
+	)
+	keep := func(b *accel.Buffer) {
+		mu.Lock()
+		buffers = append(buffers, b)
+		mu.Unlock()
+	}
+
+	for g := range 8 {
+		wg.Add(4)
+
+		// Suballocate from one shared pool.
+		go func() {
+			defer wg.Done()
+			for i := range 16 {
+				b, err := shared.Alloc(accel.BufferDescriptor{
+					DType: accel.F32, Count: 8, Usage: accel.UsageStorage,
+					Label: fmt.Sprintf("sub-g%d-%d", g, i),
+				})
+				if err != nil {
+					t.Errorf("Alloc: %v", err)
+					return
+				}
+				keep(b)
+			}
+		}()
+
+		// Write a disjoint range through the one queue.
+		go func() {
+			defer wg.Done()
+			chunk := make([]uint32, width)
+			for i := range chunk {
+				chunk[i] = uint32(g*width + i)
+			}
+			if err := q.WriteBuffer(target, g*width, chunk); err != nil {
+				t.Errorf("WriteBuffer: %v", err)
+			}
+		}()
+
+		// Create a pool, which counts the device's live allocations.
+		go func() {
+			defer wg.Done()
+			p, err := d.NewPool(accel.MemoryUpload, 1<<20)
+			if err != nil {
+				t.Errorf("NewPool: %v", err)
+				return
+			}
+			mu.Lock()
+			pools = append(pools, p)
+			mu.Unlock()
+		}()
+
+		// Allocate from the implicit pool, which adds to that same count.
+		go func() {
+			defer wg.Done()
+			b, err := d.NewBuffer(accel.BufferDescriptor{
+				DType: accel.U8, Count: 4096, Label: fmt.Sprintf("implicit-g%d", g),
+			})
+			if err != nil {
+				t.Errorf("NewBuffer: %v", err)
+				return
+			}
+			keep(b)
+		}()
+	}
+	wg.Wait()
+
+	// Nothing was lost: every write landed in its own range.
+	got := make([]uint32, width*8)
+	if err := q.ReadBuffer(target, 0, got); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range got {
+		if v != uint32(i) {
+			t.Fatalf("element %d is %d, want %d: a concurrent write was lost", i, v, i)
+		}
+	}
+	if want := 8 * 16; shared.Stats().Allocations != want+1 {
+		t.Errorf("the shared pool counts %d allocations, want %d",
+			shared.Stats().Allocations, want+1)
+	}
+
+	// Teardown is concurrent too, since Close races everything above.
+	for _, b := range buffers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := b.Close(); err != nil {
+				t.Errorf("Buffer.Close: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pools {
+		if err := p.Close(); err != nil {
+			t.Errorf("Pool.Close: %v", err)
+		}
+	}
+	if err := shared.Close(); err != nil {
+		t.Fatalf("Close the shared pool: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Device.Close: %v", err)
 	}
 }

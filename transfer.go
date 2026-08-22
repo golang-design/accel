@@ -62,17 +62,19 @@ func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
 	staged := make([]byte, len(src))
 	copy(staged, src)
 
-	q.mu.Lock()
-	q.stats.BytesStaged += int64(len(staged))
-	q.mu.Unlock()
-
 	if mapped := dst.mapping(); mapped != nil {
 		// Host-visible memory takes the bytes now: there is no staging block and
-		// no copy to schedule. The ordering obligation does not vanish with the
-		// copy, and accel does not detect a host write racing a device read.
+		// no copy to schedule, which is the entire point of MemoryShared on
+		// unified hardware. Nothing is counted as staged, because nothing was.
+		// The ordering obligation does not vanish with the copy, and accel does
+		// not detect a host write racing a device read.
 		copy(mapped[byteOffset:], staged)
 		return nil
 	}
+
+	q.mu.Lock()
+	q.stats.BytesStaged += int64(len(staged))
+	q.mu.Unlock()
 
 	// Otherwise the destination is memory the device does not map, so the bytes
 	// wait for a flush. The destination is retained until then: closing it now
