@@ -161,8 +161,27 @@ type Limits struct {
 }
 
 // Limits reports this device's numeric constraints.
-func (d *Device) Limits() Limits { panic(ErrNotImplemented) }
+func (d *Device) Limits() Limits
+
+// LimitValue is one bound from Limits, named.
+type LimitValue struct {
+	Name  string
+	Value int
+}
+
+// LimitValues flattens Limits into a stable, named sequence, expanding a
+// per-axis limit into one entry per axis. The order is Limits' declaration
+// order and is part of the contract, so two calls are index-comparable.
+func LimitValues(l Limits) []LimitValue
 ```
+
+`LimitValues` is not in the original draft of this section and is here because a
+limit is one kind of thing repeated twenty-odd times, and every consumer wants
+them uniformly: `Policy` filters on them, diagnostics print them, and the rule
+below that an opened device has no zero-valued limit is one loop rather than one
+assertion per field. Adding a limit to the struct extends every one of those
+without touching them, which is the property that makes the rule enforceable
+rather than aspirational.
 
 Splitting `Limits` from `Capabilities` is not tidiness. A caller writes
 `if caps.Subgroups` and writes `round(n, lim.MinStorageBufferOffsetAlignment)`,
@@ -307,6 +326,9 @@ func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error)
 func (p *Pool) AllocTexture(desc TextureDescriptor) (*Texture, error)
 func (p *Pool) Reset() error
 ```
+
+`Pool.Kind()` reports the memory kind, because an error a caller catches from
+`Alloc` names the kind and the caller may be holding several pools.
 
 `Alloc` rejects a texture pool and `AllocTexture` rejects a buffer pool. `Reset`
 is public because callers may create `PoolLinear`; it rejects `PoolGeneral` and
@@ -1074,6 +1096,20 @@ decides alignment, and alignment is decided before placement.
 | `UsageIndirect` | source of dispatch or draw arguments | 4 |
 | `UsageCopySrc` | source of a transfer | `MinBufferCopyOffsetAlignment` |
 | `UsageCopyDst` | destination of a transfer, and of `Queue.WriteBuffer` | `MinBufferCopyOffsetAlignment` |
+
+A buffer reports what it was made from, since every later validation error
+quotes those numbers back at the caller:
+
+```go
+func (b *Buffer) DType() DType
+func (b *Buffer) Count() int
+func (b *Buffer) Usage() BufferUsage
+func (b *Buffer) Bytes() int // DType.Size() * Count
+```
+
+`Bytes` is the caller's number from 3.4 and is never rounded. The allocation
+size, which includes the alignment padding, is visible in `PoolStats.Used`
+instead, so the two cannot be confused for one another.
 
 Declaring a usage a buffer does not need costs alignment and possibly a stricter
 memory type. Declaring one it does need late is a build error naming the buffer,

@@ -27,13 +27,32 @@ must not become a second implementation of device or tensor semantics.
 
 ```
 internal/conformance/
-  device/       discovery, profiles, modes, skips
-  numeq/        008 comparison API and budget traces
+  device/       discovery, profiles, modes, skips            [M1]
+  numeq/        008 comparison API and budget traces          [M1]
+  cover/        per-package coverage under section 10's rules [M1]
   oracle/       exact/high-precision references and committed corpora
   graphcheck/   naive plan, plan normalization, graph fuzz
   kernelcheck/  generated 010 manifest and per-variant runner
   scenarios/    public-API E2E scenarios
 ```
+
+A bracketed milestone means the package exists. Everything else is a name
+reserved for the milestone that needs it, so that a later increment adds a
+directory rather than arguing about where something goes.
+
+`cover/` was not in the first draft of this list and is here because §10 needs a
+program to be a checked rule rather than a claim. It ships with `covercheck`, a
+command CI runs after `go test -coverprofile`, and it is the only entry here
+with an executable: the rest are libraries the tests call.
+
+Allocator fuzzing is in `internal/alloc` beside the allocators rather than here.
+§13's M1 line names it because it is an M1 obligation, not because it is harness
+machinery: a fuzz target belongs with the thing it fuzzes, and moving it here
+would separate a failing seed from the code that has to explain it.
+
+E2E scenarios are in the package whose public API they exercise until there is
+more than one such package. `scenarios/` arrives when 007 gives the tensor layer
+a second one.
 
 Production packages expose only the introspection already required by their
 specs (`Capabilities`, graph plan statistics, plan ports/selections). The harness
@@ -43,14 +62,17 @@ classes, but GPU behavior is measured through public APIs.
 ## 2. Device matrix and profiles
 
 ```go
-type BackendProfile struct {
+// device.Profile, as built at M1. Driver, Arch, and Numeric are named by the
+// draft below and are not here yet: the first two have no answer on the CPU
+// backend and arrive with Metal at M6, and NumericProfile is 008's and arrives
+// with the numeric probes at M4.
+type Profile struct {
 	Backend      accel.Backend
 	DeviceName   string
-	Driver       string
-	Arch         string
 	Mode         Mode
+	Targets      []accel.Backend // the strict target set, when Mode is StrictPortable
 	Capabilities accel.Capabilities
-	Numeric      NumericProfile
+	Limits       accel.Limits
 }
 
 type Mode int
@@ -60,6 +82,12 @@ const (
 	Mimic
 )
 ```
+
+Two fields the draft did not have. `Targets` is required rather than optional:
+"strict" alone does not say what a kernel that builds under it is portable to,
+so a profile that cannot name its target set cannot report what a failure means.
+`Limits` is here for the same reason `Capabilities` is, since §3's forced
+profiles lower both.
 
 Every test receives a profile explicitly. Logs and failures include the complete
 identity, mode, capabilities relevant to the case, numeric probe revision, and
@@ -187,7 +215,7 @@ cleanup. Required milestone scenarios are:
 
 | Milestone | Scenario |
 | --- | --- |
-| M1 | Open CPU → allocate → write → read → close |
+| M1 | Open CPU → allocate → write → read → close — **done 2026-08-22** |
 | M2 | Kernel source → generator → direct flat adapter → checked output |
 | M3 | Upload → flat Add graph → readback → rebind and replay |
 | M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised |
@@ -291,7 +319,12 @@ unordered map output. Stable ordering is part of every serializer.
 
 ## 13. Implementation sequence
 
-- M1: device runner, exact bytes, profiles, allocator fuzz, coverage.
+- M1: device runner, exact bytes, profiles, allocator fuzz, coverage. **Done
+  2026-08-22.** `device` runs every case under a named profile, `numeq` compares
+  exactly and by float encodings, `cover` gates each package independently, and
+  the allocator fuzz lives with the allocators. The comparison package has no
+  tolerance parameter and will not grow one; §4's derived-bound forms arrive at
+  M4 as new functions, each naming its budget.
 - M2: compare context, flat runner, generator negatives/freshness.
 - M3: normalized plan goldens, naive oracle, graph fuzz, replay E2E.
 - M4: numeric probes/budgets, cooperative diagnostics, reduction budgets.
