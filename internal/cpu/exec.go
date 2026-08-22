@@ -56,6 +56,14 @@ type executable struct {
 	// from the fence removes the disagreement rather than ordering it, which is
 	// the difference between a fixed race and a narrower one.
 	cur *fence
+
+	// scratch is the resolved node list, reused across submissions.
+	//
+	// specs/003-command-graph.md is explicit that no backend validates, plans,
+	// or *allocates* per submission -- that is the plan-once saving the whole
+	// model exists for -- and a fresh slice per Submit is exactly that
+	// allocation. Only one submission runs at a time, so one buffer suffices.
+	scratch []resolvedNode
 }
 
 // busy reports whether a submission is still running. e.mu is held.
@@ -143,7 +151,10 @@ type resolvedNode struct {
 }
 
 func (e *executable) resolve() ([]resolvedNode, error) {
-	out := make([]resolvedNode, len(e.plan.Nodes))
+	if cap(e.scratch) < len(e.plan.Nodes) {
+		e.scratch = make([]resolvedNode, len(e.plan.Nodes))
+	}
+	out := e.scratch[:len(e.plan.Nodes)]
 	for i := range e.plan.Nodes {
 		n := &e.plan.Nodes[i]
 		dst, err := e.bytes(n.Dst)
