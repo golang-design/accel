@@ -608,3 +608,53 @@ func TestATransientLivingBetweenTwoUsersDoesNotAlias(t *testing.T) {
 		}
 	}
 }
+
+// A node that writes one part of a transient and reads another is accepted when
+// an earlier node wrote the part it reads.
+//
+// The rule that refuses an unwritten read discriminates on whether the *range*
+// was covered by a strictly earlier writer, not on whether the reader happens
+// also to be a writer. Those two are easy to conflate, and conflating them
+// rejects this graph, which is legitimate: n0 writes the upper half, n1 writes
+// the lower half from the upper one.
+func TestANodeMayWriteOnePartAndReadAnother(t *testing.T) {
+	const n = 32
+	d := openDevice(t)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	src := newBuffer(t, d, "src", n/2, storage)
+	dst := newBuffer(t, d, "dst", n, storage)
+
+	vals := make([]float32, n/2)
+	for i := range vals {
+		vals[i] = 7
+	}
+	if err := d.Queue().WriteBuffer(src, 0, vals); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	r := d.NewRecorder()
+	v := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: n, Usage: storage, Label: "t",
+	})
+	hi, lo := v, v
+	hi.Offset, hi.Count = n/2, n/2
+	lo.Count = n / 2
+
+	r.CopyBuffer(hi, whole(t, src)) // n0 writes the upper half
+	r.CopyBuffer(lo, hi)            // n1 writes the lower half and reads the upper
+	r.CopyBuffer(whole(t, dst), v)  // n2 reads the whole
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("this graph is legitimate and was rejected: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	for i, got := range readback(t, d, dst) {
+		if got != 7 {
+			t.Fatalf("element %d is %v, want 7", i, got)
+		}
+	}
+}
