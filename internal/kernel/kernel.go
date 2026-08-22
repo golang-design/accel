@@ -91,6 +91,17 @@ func (t Thread) GroupIndex() uint32 {
 	return t.group.X + t.groupCount.X*(t.group.Y+t.groupCount.Y*t.group.Z)
 }
 
+// Barrier synchronises a workgroup.
+//
+// It exists at M2 so that a kernel using it is rejected by name and position,
+// saying when barriers arrive, rather than failing as a call to a method that
+// plainly exists. Its body is never what runs: a barrier's meaning is the
+// workgroup scheduler's, and a flat kernel has no scheduler to rendezvous with.
+func (t Thread) Barrier() {
+	panic("accel: a barrier only has meaning inside a kernel executed by a backend; " +
+		"cooperative kernels arrive at M4 (specs/009-sequencing.md)")
+}
+
 // linear is an extent's invocation count.
 func linear(e ID3) uint32 { return max(e.X, 1) * max(e.Y, 1) * max(e.Z, 1) }
 

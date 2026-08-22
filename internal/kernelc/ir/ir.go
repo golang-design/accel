@@ -1,0 +1,472 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+// Package ir is the typed structured IR every target is emitted from.
+//
+// # Why an IR and not an AST walk per target
+//
+// The predecessor emitted GLSL and MSL by walking the Go AST with a `glsl bool`
+// threaded through every method, and ran a separate inspection pass per target
+// to find written buffers. That is the two-target shape of a problem that is
+// quadratic in targets. Every analysis here (recursion, access inference,
+// capability requirements, and at M4 barrier divergence) runs once, on one
+// representation.
+//
+// SPIR-V is the argument that makes it mandatory rather than tidy. It is a
+// binary SSA format with explicit result ids and structured control flow
+// declared through OpSelectionMerge and OpLoopMerge, which you do not print by
+// walking an AST, and there is no cgo-free path from GLSL text to SPIR-V
+// because glslang and shaderc are C++. Vulkan consumes SPIR-V only.
+//
+// # Why structured control flow, and why not go/ssa
+//
+// The IR is a tree of typed statements with `if` and `for` as nodes, not a
+// general CFG. Three of the four GPU targets are structured source languages
+// and SPIR-V demands structured control flow anyway, so golang.org/x/tools/go/ssa
+// is rejected: it discards exactly the structure every target needs back, and
+// recovering it means writing a relooper to undo work nobody needed done.
+// Because the Go subset excludes goto and arbitrary labeled jumps, the structure
+// survives for free.
+//
+// # The set is closed
+//
+// There is deliberately no generic AST escape node. A construct outside this
+// set is a source-positioned subset error, never a passthrough. See
+// specs/004-kernel-authoring.md.
+package ir
+
+import (
+	"fmt"
+	"go/constant"
+	"go/token"
+	"go/types"
+)
+
+// Kind is a type's shape in the IR.
+type Kind int
+
+const (
+	Invalid Kind = iota
+	Bool
+	I32
+	U32
+	F32
+	// F16 and BF16 are storage kinds. They carry no arithmetic: a value converts
+	// to F32 on load and back on store, which is what makes narrow dtypes work
+	// on every backend rather than only where native narrow arithmetic exists.
+	F16
+	BF16
+	// ID3Kind is the three-component id struct, which is a distinct kind rather
+	// than an ordinary struct because every target has a native spelling for it.
+	ID3Kind
+	Struct
+	// Array is a fixed-extent workgroup-shared array, whose extent go/types
+	// reads off the type so the IR never invents const generics.
+	Array
+	// Slice is a storage-buffer binding.
+	Slice
+)
+
+var kindNames = [...]string{
+	Invalid: "invalid", Bool: "bool", I32: "i32", U32: "u32", F32: "f32",
+	F16: "f16", BF16: "bf16", ID3Kind: "ID3", Struct: "struct", Array: "array", Slice: "slice",
+}
+
+func (k Kind) String() string {
+	if k < 0 || int(k) >= len(kindNames) {
+		return fmt.Sprintf("Kind(%d)", int(k))
+	}
+	return kindNames[k]
+}
+
+// Numeric reports whether arithmetic is expressible on this kind directly.
+// F16 and BF16 are excluded on purpose: they are storage formats and Go itself
+// forces the conversion, so f32 accumulation is not a convention but the only
+// thing that compiles.
+func (k Kind) Numeric() bool { return k == I32 || k == U32 || k == F32 }
+
+// Type is a resolved IR type.
+type Type struct {
+	Kind   Kind
+	Elem   *Type   // Array and Slice
+	Len    int     // Array
+	Name   string  // Struct
+	Fields []Field // Struct
+}
+
+// Field is one member of a struct type.
+type Field struct {
+	Name string
+	Type *Type
+}
+
+func (t *Type) String() string {
+	switch t.Kind {
+	case Array:
+		return fmt.Sprintf("[%d]%s", t.Len, t.Elem)
+	case Slice:
+		return "[]" + t.Elem.String()
+	case Struct:
+		return t.Name
+	}
+	return t.Kind.String()
+}
+
+// Node is anything in the IR, which is everything carrying a source position.
+// A diagnostic that cannot name a line is one a reader cannot act on.
+type Node interface {
+	Pos() token.Pos
+}
+
+// pos is embedded by every node.
+type pos struct{ P token.Pos }
+
+func (p pos) Pos() token.Pos { return p.P }
+
+// Value produces a value. The set is closed: the unexported method is what
+// makes adding a case outside this file impossible rather than merely
+// discouraged.
+type Value interface {
+	Node
+	Type() *Type
+	isValue()
+}
+
+type value struct {
+	pos
+	T *Type
+}
+
+func (v value) Type() *Type { return v.T }
+func (value) isValue()      {}
+
+// Const is a compile-time constant with its resolved type and value.
+//
+// Resolved, which is where the GLSL integer-literal divergence is settled: the
+// emitter knows whether the 2 in gid*2 is u32, i32, or f32 and spells it
+// accordingly, instead of coercing the id to int to keep literals legal.
+type Const struct {
+	value
+	Val constant.Value
+}
+
+// Param is a kernel or helper parameter, addressed by index because the
+// signature is the binding layout.
+type Param struct {
+	value
+	Index int
+	Name  string
+	Obj   types.Object
+}
+
+// Local is a declared local variable.
+type Local struct {
+	value
+	Name string
+	ID   int
+	Obj  types.Object
+}
+
+// FieldSel is a struct or ID3 field selection.
+type FieldSel struct {
+	value
+	X     Value
+	Index int
+	Name  string
+}
+
+// IndexExpr is an index into a slice or a shared array.
+type IndexExpr struct {
+	value
+	X     Value
+	Index Value
+
+	// Binding is the parameter index of the resource this reaches, or -1 when
+	// the indexed value is not a binding. Access inference reads it, which is
+	// why an access is a property of the IR rather than of a second AST pass.
+	Binding int
+}
+
+// Unary is a unary operation.
+type Unary struct {
+	value
+	Op token.Token
+	X  Value
+}
+
+// Binary is a binary operation.
+type Binary struct {
+	value
+	Op   token.Token
+	X, Y Value
+}
+
+// Convert is an explicit conversion. There are no implicit ones: Go's own rules
+// already forbid them between the numeric types here, which is what keeps a
+// narrow dtype from silently participating in arithmetic.
+type Convert struct {
+	value
+	X Value
+}
+
+// Call is a call to a helper in the same compilation.
+type Call struct {
+	value
+	Callee *Func
+	Args   []Value
+}
+
+// IntrinsicCall is a call to a known intrinsic, identified by opcode rather
+// than by name. Resolution happens in the front end against object identity;
+// by the time it reaches the IR the name is gone and cannot be confused with a
+// user function that shares it.
+type IntrinsicCall struct {
+	value
+	Op   Opcode
+	Recv Value // the Thread receiver, or nil for a free function
+	Args []Value
+}
+
+// Len is the length of a slice binding. It is a node rather than an intrinsic
+// because every target spells it differently and none of them spells it as a
+// call.
+type Len struct {
+	value
+	X Value
+}
+
+func (Const) isValue()         {}
+func (Param) isValue()         {}
+func (Local) isValue()         {}
+func (FieldSel) isValue()      {}
+func (IndexExpr) isValue()     {}
+func (Unary) isValue()         {}
+func (Binary) isValue()        {}
+func (Convert) isValue()       {}
+func (Call) isValue()          {}
+func (IntrinsicCall) isValue() {}
+func (Len) isValue()           {}
+
+// Stmt is a statement. Closed, for the same reason [Value] is.
+type Stmt interface {
+	Node
+	isStmt()
+}
+
+type stmt struct{ pos }
+
+func (stmt) isStmt() {}
+
+// Block is a statement sequence.
+type Block struct {
+	stmt
+	List []Stmt
+}
+
+// Declare introduces a local, with its initializer.
+type Declare struct {
+	stmt
+	Local *Local
+	Init  Value
+}
+
+// Assign stores to a local, an index, or a field.
+type Assign struct {
+	stmt
+	LHS Value
+	RHS Value
+}
+
+// ExprStmt is a call evaluated for its effect.
+type ExprStmt struct {
+	stmt
+	X Value
+}
+
+// If is a conditional. Else is nil, a *Block, or another *If.
+type If struct {
+	stmt
+	Cond Value
+	Then *Block
+	Else Stmt
+}
+
+// For covers all three Go loop forms: Init and Post are nil for the
+// condition-only form, and Cond is nil for the infinite form.
+type For struct {
+	stmt
+	Init Stmt
+	Cond Value
+	Post Stmt
+	Body *Block
+}
+
+// Break and Continue carry no label, because the subset admits none.
+type Break struct{ stmt }
+
+// Continue leaves the current iteration.
+type Continue struct{ stmt }
+
+// Return is single-value or empty.
+type Return struct {
+	stmt
+	Value Value
+}
+
+func (Block) isStmt()    {}
+func (Declare) isStmt()  {}
+func (Assign) isStmt()   {}
+func (ExprStmt) isStmt() {}
+func (If) isStmt()       {}
+func (For) isStmt()      {}
+func (Break) isStmt()    {}
+func (Continue) isStmt() {}
+func (Return) isStmt()   {}
+
+// Opcode identifies an intrinsic. It is versioned as part of the intrinsic
+// table's ABI, which participates in the kernel digest.
+type Opcode int
+
+const (
+	OpInvalid Opcode = iota
+
+	// Thread ids. Available to a flat kernel.
+	OpGlobalID
+	OpLocalID
+	OpGroupID
+	OpGlobalIndex
+	OpLocalIndex
+	OpGroupIndex
+
+	// Cooperative. Recognized so that a kernel using one is rejected by name
+	// with a position, rather than failing as an unknown call. See
+	// specs/012-kernel-pipeline.md.
+	OpBarrier
+)
+
+var opcodeNames = [...]string{
+	OpInvalid:     "invalid",
+	OpGlobalID:    "GlobalID",
+	OpLocalID:     "LocalID",
+	OpGroupID:     "GroupID",
+	OpGlobalIndex: "GlobalIndex",
+	OpLocalIndex:  "LocalIndex",
+	OpGroupIndex:  "GroupIndex",
+	OpBarrier:     "Barrier",
+}
+
+func (o Opcode) String() string {
+	if o < 0 || int(o) >= len(opcodeNames) {
+		return fmt.Sprintf("Opcode(%d)", int(o))
+	}
+	return opcodeNames[o]
+}
+
+// Binding is one resource parameter, as the IR sees it.
+type Binding struct {
+	Name  string
+	Index int
+	Type  *Type
+
+	// Read and Write are inferred from the body rather than declared. A caller
+	// who could declare them would be a second source of truth for something the
+	// compiler already knows, and one that can be wrong.
+	Read, Write bool
+}
+
+// Func is a kernel or a helper.
+type Func struct {
+	pos
+	Name   string
+	Kernel bool
+
+	// Workgroup is the extent from the //accel:kernel directive. Zero for a
+	// helper.
+	Workgroup [3]uint32
+
+	// Thread is the index of the accel.Thread parameter, or -1 for a helper that
+	// does not take one.
+	Thread   int
+	Params   []*Param
+	Bindings []*Binding
+	Body     *Block
+
+	// Intrinsics is every intrinsic the body reaches, in first-use order, by its
+	// authored spelling. The digest records these rather than resolved package
+	// paths, so relocating a type does not invalidate a committed digest.
+	Intrinsics []string
+}
+
+// Builders. Constructing nodes through functions rather than literals keeps the
+// position and the type mandatory: a node with a zero position produces a
+// diagnostic pointing at the top of the file, which is worse than none.
+
+func NewConst(p token.Pos, t *Type, v constant.Value) *Const {
+	return &Const{value: value{pos{p}, t}, Val: v}
+}
+
+func NewParam(p token.Pos, t *Type, i int, name string, obj types.Object) *Param {
+	return &Param{value: value{pos{p}, t}, Index: i, Name: name, Obj: obj}
+}
+
+func NewLocal(p token.Pos, t *Type, id int, name string, obj types.Object) *Local {
+	return &Local{value: value{pos{p}, t}, ID: id, Name: name, Obj: obj}
+}
+
+func NewFieldSel(p token.Pos, t *Type, x Value, i int, name string) *FieldSel {
+	return &FieldSel{value: value{pos{p}, t}, X: x, Index: i, Name: name}
+}
+
+func NewIndex(p token.Pos, t *Type, x, idx Value, binding int) *IndexExpr {
+	return &IndexExpr{value: value{pos{p}, t}, X: x, Index: idx, Binding: binding}
+}
+
+func NewUnary(p token.Pos, t *Type, op token.Token, x Value) *Unary {
+	return &Unary{value: value{pos{p}, t}, Op: op, X: x}
+}
+
+func NewBinary(p token.Pos, t *Type, op token.Token, x, y Value) *Binary {
+	return &Binary{value: value{pos{p}, t}, Op: op, X: x, Y: y}
+}
+
+func NewConvert(p token.Pos, t *Type, x Value) *Convert {
+	return &Convert{value: value{pos{p}, t}, X: x}
+}
+
+func NewCall(p token.Pos, t *Type, callee *Func, args []Value) *Call {
+	return &Call{value: value{pos{p}, t}, Callee: callee, Args: args}
+}
+
+func NewIntrinsic(p token.Pos, t *Type, op Opcode, recv Value, args []Value) *IntrinsicCall {
+	return &IntrinsicCall{value: value{pos{p}, t}, Op: op, Recv: recv, Args: args}
+}
+
+func NewLen(p token.Pos, t *Type, x Value) *Len {
+	return &Len{value: value{pos{p}, t}, X: x}
+}
+
+func NewBlock(p token.Pos, list ...Stmt) *Block { return &Block{stmt: stmt{pos{p}}, List: list} }
+
+func NewDeclare(p token.Pos, l *Local, init Value) *Declare {
+	return &Declare{stmt: stmt{pos{p}}, Local: l, Init: init}
+}
+
+func NewAssign(p token.Pos, lhs, rhs Value) *Assign {
+	return &Assign{stmt: stmt{pos{p}}, LHS: lhs, RHS: rhs}
+}
+
+func NewExprStmt(p token.Pos, x Value) *ExprStmt { return &ExprStmt{stmt: stmt{pos{p}}, X: x} }
+
+func NewIf(p token.Pos, cond Value, then *Block, els Stmt) *If {
+	return &If{stmt: stmt{pos{p}}, Cond: cond, Then: then, Else: els}
+}
+
+func NewFor(p token.Pos, init Stmt, cond Value, post Stmt, body *Block) *For {
+	return &For{stmt: stmt{pos{p}}, Init: init, Cond: cond, Post: post, Body: body}
+}
+
+func NewBreak(p token.Pos) *Break       { return &Break{stmt{pos{p}}} }
+func NewContinue(p token.Pos) *Continue { return &Continue{stmt{pos{p}}} }
+
+func NewReturn(p token.Pos, v Value) *Return { return &Return{stmt: stmt{pos{p}}, Value: v} }
