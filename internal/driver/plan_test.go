@@ -11,6 +11,7 @@ import (
 
 	"golang.design/x/accel/internal/cpu"
 	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/kernel"
 )
 
 func openCPU(t *testing.T, o cpu.Options) driver.Device {
@@ -225,5 +226,82 @@ func TestLossCanBeInjectedAtALaterSubmission(t *testing.T) {
 	}
 	if _, err := exe.Submit(); !errors.Is(err, driver.ErrDeviceLost) {
 		t.Fatalf("the second submission should report loss, got %v", err)
+	}
+}
+
+func TestValidateRejectsMalformedDispatches(t *testing.T) {
+	dev := openCPU(t, cpu.Options{})
+	b := alloc(t, dev, 64)
+	op, err := driver.BlockOperand(b, 0, 16)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	k := &kernel.Kernel{
+		Name: "K", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1},
+		Bindings: []kernel.Binding{{Name: "in", DType: kernel.F32, Access: kernel.Read}},
+		Flat:     func(kernel.Thread, kernel.Args) {},
+	}
+	coop := *k
+	coop.Flat = nil
+
+	cases := []struct {
+		name string
+		node driver.PlanNode
+		says string
+	}{
+		{"no payload", driver.PlanNode{Op: driver.OpDispatch}, "no payload"},
+		{"no kernel", driver.PlanNode{Op: driver.OpDispatch, Dispatch: &driver.Dispatch{}}, "dispatches no kernel"},
+		{"cooperative", driver.PlanNode{Op: driver.OpDispatch,
+			Dispatch: &driver.Dispatch{Kernel: &coop}}, "cooperative"},
+		{"wrong binding count", driver.PlanNode{Op: driver.OpDispatch,
+			Dispatch: &driver.Dispatch{Kernel: k}}, "binds 0 resources"},
+		{"unset binding operand", driver.PlanNode{Op: driver.OpDispatch,
+			Dispatch: &driver.Dispatch{Kernel: k, Bindings: []driver.Operand{{}}}}, `no "in" operand`},
+		{"slot out of range", driver.PlanNode{Op: driver.OpDispatch,
+			Dispatch: &driver.Dispatch{Kernel: k, Bindings: []driver.Operand{mustSlot(t, 3, 0, 16)}}},
+			"names slot 3 of 0"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := driver.Plan{Nodes: []driver.PlanNode{c.node}}
+			err := p.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("the message should say %q, got %v", c.says, err)
+			}
+		})
+	}
+
+	// A well-formed one is accepted, so the rows above are rejections rather
+	// than a validator that refuses every dispatch.
+	ok := driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpDispatch,
+		Dispatch: &driver.Dispatch{Kernel: k, Bindings: []driver.Operand{op}}}}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("a well-formed dispatch should validate: %v", err)
+	}
+	if driver.OpDispatch.String() != "dispatch" {
+		t.Errorf("OpDispatch should name itself, got %q", driver.OpDispatch.String())
+	}
+}
+
+func mustSlot(t *testing.T, slot, off, size int) driver.Operand {
+	t.Helper()
+	o, err := driver.SlotOperand(slot, off, size)
+	if err != nil {
+		t.Fatalf("slot operand: %v", err)
+	}
+	return o
+}
+
+// SlotOperand checks the shape it can check without a resource: the range must
+// be non-negative, and the rest waits for Rebind, which is the earliest point
+// the bound size is known.
+func TestSlotOperandChecksWhatItCan(t *testing.T) {
+	for _, c := range []struct{ off, size int }{{-1, 4}, {0, -1}} {
+		if _, err := driver.SlotOperand(1, c.off, c.size); err == nil {
+			t.Errorf("slot range [%d, %d) should be rejected", c.off, c.off+c.size)
+		}
+	}
+	if _, err := driver.SlotOperand(1, 1<<40, 8); err != nil {
+		t.Errorf("a large offset is legal until a resource is bound: %v", err)
 	}
 }

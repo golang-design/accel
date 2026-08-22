@@ -350,7 +350,9 @@ func (p *Plan) checkDispatch(node int, n *PlanNode) error {
 			node, len(d.Bindings), d.Kernel.Name, len(d.Kernel.Bindings))
 	}
 	for i, o := range d.Bindings {
-		if err := p.checkOperand(node, d.Kernel.Bindings[i].Name, o); err != nil {
+		// Quoted, because a binding name lands inside prose: "has no in operand"
+		// reads as a typo where "has no \"in\" operand" reads as a name.
+		if err := p.checkOperand(node, fmt.Sprintf("%q", d.Kernel.Bindings[i].Name), o); err != nil {
 			return err
 		}
 	}

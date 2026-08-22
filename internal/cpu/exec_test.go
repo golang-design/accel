@@ -12,6 +12,7 @@ import (
 
 	"golang.design/x/accel/internal/cpu"
 	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/kernel"
 )
 
 func open(t *testing.T, o cpu.Options) (driver.Device, driver.GraphCompiler) {
@@ -526,5 +527,222 @@ func TestCloseDuringASubmissionIsRefused(t *testing.T) {
 	}
 	if err := exe.Close(); err != nil {
 		t.Errorf("close after the fence signalled: %v", err)
+	}
+}
+
+// Every binding element type reaches its kernel as the right Go slice. The
+// bytes are the device's representation already, so this is a reinterpretation,
+// and getting the element width wrong silently gives a kernel a slice of the
+// wrong length over the right memory.
+func TestEveryBindingTypeReachesTheKernel(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+
+	cases := []struct {
+		dtype kernel.DType
+		elems int
+		check func(t *testing.T, args kernel.Args)
+	}{
+		{kernel.F32, 4, func(t *testing.T, a kernel.Args) {
+			s, ok := a.Slices[0].([]float32)
+			if !ok || len(s) != 4 {
+				t.Fatalf("got %T of len %d", a.Slices[0], reflectLen(a.Slices[0]))
+			}
+			s[0] = 1.5
+		}},
+		{kernel.U32, 4, func(t *testing.T, a kernel.Args) {
+			s, ok := a.Slices[0].([]uint32)
+			if !ok || len(s) != 4 {
+				t.Fatalf("got %T of len %d", a.Slices[0], reflectLen(a.Slices[0]))
+			}
+		}},
+		{kernel.I32, 4, func(t *testing.T, a kernel.Args) {
+			if s, ok := a.Slices[0].([]int32); !ok || len(s) != 4 {
+				t.Fatalf("got %T", a.Slices[0])
+			}
+		}},
+		{kernel.U8, 16, func(t *testing.T, a kernel.Args) {
+			if s, ok := a.Slices[0].([]byte); !ok || len(s) != 16 {
+				t.Fatalf("got %T", a.Slices[0])
+			}
+		}},
+		{kernel.I8, 16, func(t *testing.T, a kernel.Args) {
+			if s, ok := a.Slices[0].([]int8); !ok || len(s) != 16 {
+				t.Fatalf("got %T", a.Slices[0])
+			}
+		}},
+		{kernel.F16, 8, func(t *testing.T, a kernel.Args) {
+			if s, ok := a.Slices[0].([]kernel.Float16); !ok || len(s) != 8 {
+				t.Fatalf("got %T", a.Slices[0])
+			}
+		}},
+		{kernel.BF16, 8, func(t *testing.T, a kernel.Args) {
+			if s, ok := a.Slices[0].([]kernel.BFloat16); !ok || len(s) != 8 {
+				t.Fatalf("got %T", a.Slices[0])
+			}
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.dtype.String(), func(t *testing.T) {
+			b := block(t, dev, driver.MemoryShared, 16)
+			ran := false
+			k := &kernel.Kernel{
+				Name: "K", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1},
+				Generator: kernel.ABIVersion,
+				Bindings:  []kernel.Binding{{Name: "b", DType: tc.dtype, Access: kernel.Write}},
+				Flat: func(_ kernel.Thread, a kernel.Args) {
+					ran = true
+					tc.check(t, a)
+				},
+			}
+			exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+				Op: driver.OpDispatch,
+				Dispatch: &driver.Dispatch{
+					Kernel: k, Count: kernel.ID3{X: 1},
+					Bindings: []driver.Operand{blockOperand(t, b, 0, 16)},
+				},
+			}}})
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			defer exe.Close()
+
+			f, err := exe.Submit()
+			if err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+			if err := f.Wait(); err != nil {
+				t.Fatalf("wait: %v", err)
+			}
+			if !ran {
+				t.Fatal("the kernel did not run")
+			}
+		})
+	}
+}
+
+func reflectLen(v any) int {
+	switch s := v.(type) {
+	case []float32:
+		return len(s)
+	case []uint32:
+		return len(s)
+	case []int32:
+		return len(s)
+	case []byte:
+		return len(s)
+	case []int8:
+		return len(s)
+	}
+	return -1
+}
+
+// A binding whose byte range is not a whole number of elements is refused
+// rather than truncated: truncation hides a range computed with the wrong
+// element size, and the kernel then runs over one element fewer than the caller
+// believes it bound.
+func TestAPartialElementIsRefused(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	b := block(t, dev, driver.MemoryShared, 16)
+	k := &kernel.Kernel{
+		Name: "K", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1}, Generator: kernel.ABIVersion,
+		Bindings: []kernel.Binding{{Name: "b", DType: kernel.F32, Access: kernel.Read}},
+		Flat:     func(kernel.Thread, kernel.Args) {},
+	}
+	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpDispatch,
+		Dispatch: &driver.Dispatch{
+			Kernel: k, Count: kernel.ID3{X: 1},
+			// Six bytes is one and a half float32s.
+			Bindings: []driver.Operand{blockOperand(t, b, 0, 6)},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+	if _, err := exe.Submit(); err == nil ||
+		!strings.Contains(err.Error(), "not a whole number of 4-byte elements") {
+		t.Fatalf("expected a partial-element rejection, got %v", err)
+	}
+}
+
+// A dispatch through a slot resolves like any other operand.
+func TestADispatchBindingCanComeFromASlot(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	b := block(t, dev, driver.MemoryShared, 16)
+	var saw []float32
+	k := &kernel.Kernel{
+		Name: "K", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1}, Generator: kernel.ABIVersion,
+		Bindings: []kernel.Binding{{Name: "b", DType: kernel.F32, Access: kernel.Write}},
+		Flat: func(_ kernel.Thread, a kernel.Args) {
+			saw = a.Slices[0].([]float32)
+			saw[0] = 7
+		},
+	}
+	exe, err := c.Compile(&driver.Plan{
+		Slots: 1,
+		Nodes: []driver.PlanNode{{
+			Op: driver.OpDispatch,
+			Dispatch: &driver.Dispatch{
+				Kernel: k, Count: kernel.ID3{X: 1},
+				Bindings: []driver.Operand{slotOperand(t, 1, 0, 16)},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+
+	if _, err := exe.Submit(); err == nil {
+		t.Fatal("dispatching through an unbound slot should fail")
+	}
+	if err := exe.Rebind([]driver.SlotBinding{{Slot: 1, Block: b, Size: 16}}); err != nil {
+		t.Fatalf("rebind: %v", err)
+	}
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := f.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if b.Bytes()[0] == 0 && b.Bytes()[1] == 0 && b.Bytes()[2] == 0 && b.Bytes()[3] == 0 {
+		t.Error("the kernel wrote nothing through the slot")
+	}
+}
+
+// A kernel whose dispatch fails reports through the fence rather than
+// panicking, so a caller learns rather than the process dying.
+func TestADispatchFailureReachesTheFence(t *testing.T) {
+	dev, c := open(t, cpu.Options{})
+	b := block(t, dev, driver.MemoryShared, 16)
+	k := &kernel.Kernel{
+		Name: "K", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1}, Generator: kernel.ABIVersion,
+		Bindings: []kernel.Binding{{Name: "b", DType: kernel.F32, Access: kernel.Read}},
+		Flat:     func(kernel.Thread, kernel.Args) {},
+	}
+	// Compile with a valid record, then make the record stale, which Bind
+	// refuses inside the dispatch loop.
+	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpDispatch,
+		Dispatch: &driver.Dispatch{
+			Kernel: k, Count: kernel.ID3{X: 1},
+			Bindings: []driver.Operand{blockOperand(t, b, 0, 16)},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+	k.Generator = kernel.ABIVersion + 1
+
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := f.Wait(); err == nil || !strings.Contains(err.Error(), "re-run go generate") {
+		t.Fatalf("the fence should report the stale record, got %v", err)
 	}
 }
