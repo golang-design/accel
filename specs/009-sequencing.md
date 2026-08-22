@@ -460,6 +460,33 @@ Done:
 the kernel. Kernel races are found by the instrumentation above, which is why
 they are found deterministically.
 
+#### M4 is split, per the risk table below
+
+| Child | Scope |
+| --- | --- |
+| [018](018-cooperative-lowering.md) | The uniformity analysis, shared memory and `Thread.Barrier` as authored constructs, the state split, the workgroup scheduler, and selection between the flat and cooperative lowerings |
+| [019](019-cooperative-diagnostics.md) | Shared-memory definition tracking, deterministic barrier-arrival checking, and deterministic conflicting-access reporting |
+| [020](020-cooperative-atomics.md) | Atomics, emulated subgroups and their sweeps, capability inference and the CPU modes, the numeric probes, and `reduce_sum` |
+
+The risk table's response to this risk is "split M4 again", so the split is
+taken before implementation rather than after an estimate slips, as it was for
+M2 and M3.
+
+**The uniformity analysis is in the first child, not with the other
+diagnostics**, and that placement is the whole reason this is a milestone rather
+than a project. 002 §3.1 requires every barrier to sit in uniform control flow,
+which is what makes suspension points a sequence rather than a graph; a sequence
+needs a program counter and a graph needs a relooper. So the analysis is the
+transform's *precondition*, not a check bolted on beside it.
+
+**M4's done criterion is a differential oracle**, and that is now an evidenced
+choice rather than a hopeful one. The risk row already named "flat-versus-
+cooperative agreement" as what retires it; what M3 added is direct evidence that
+the shape works, since 017's whole-plan oracle found three real bugs within
+minutes of first running — including one in a relation this repository had
+written down correctly and implemented wrongly. Both lowerings are generated
+from one IR, so a disagreement is the transform's and nothing else's.
+
 ### M5. The portable tiled GEMM on the CPU
 
 Build: 010's `matmul` tiled variant and the guarded-tail machinery it needs.
@@ -560,7 +587,7 @@ vendor/API opinion and pays the cost of the real SPIR-V IR.
 | --- | --- | --- |
 | Compiler scope is underestimated | M2's direct flat E2E and explicit IR/intrinsic decisions | Split M2; do not hide compiler design in M3/M4. **Split taken 2026-08-22 into 012, 013, and 014**, before implementation rather than after the estimate slipped. |
 | Graph planning scope is underestimated | M3's transfer E2E landing before any planning exists | Split M3. **Split taken 2026-08-22 into 015, 016, and 017**, on the same vertical rule and before implementation. |
-| The cooperative resumable transform is larger than one milestone | M4's flat-versus-cooperative agreement and diagnostic gates | Split M4 again; do not fold the remainder into M5's GEMM. |
+| The cooperative resumable transform is larger than one milestone | M4's flat-versus-cooperative agreement and diagnostic gates | Split M4 again; do not fold the remainder into M5's GEMM. **Split taken 2026-08-23 into 018, 019, and 020**, before implementation. |
 | MSL cannot meet exact/contraction or primitive ceilings | M6 probes before other Metal numeric tests | Change lowering/domain or reject primitive; never widen from observation. |
 | Uniformity analysis rejects correct cooperative code | M4 negative/positive corpus | Specify a CPU-checked assertion intrinsic in a later scoped change. |
 | Graph aliasing is unsound | M3 naive-plan fuzz and diamond golden, **both owned by [017](017-graph-aliasing.md)**, the child that introduces the aliasing | Block later milestones until fixed. |
