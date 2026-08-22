@@ -76,6 +76,9 @@ numbered in.
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
 | [013-kernel-subset.md](013-kernel-subset.md) | Implemented | M2 child: control flow, helpers, and the positioned rejection corpus |
 | [014-kernel-uniforms.md](014-kernel-uniforms.md) | Implemented | M2 child: std140 codecs, typed uniform binding, and the device-side layout check |
+| [015-graph-recording.md](015-graph-recording.md) | Drafted | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
+| [016-graph-execution.md](016-graph-execution.md) | Drafted | M3 child: edge inference, sub-range hazards, barrier planning, and the flat dispatch node |
+| [017-graph-aliasing.md](017-graph-aliasing.md) | Drafted | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
 
 ## Layer 2: the tensor
 

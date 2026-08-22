@@ -321,6 +321,49 @@ Done:
 - E2E: public recorder with upload → flat Add dispatch → readback, retained and
   replayed with a rebound input.
 
+#### M3 is split, on the same rule that split M2
+
+| Child | Scope |
+| --- | --- |
+| [015](015-graph-recording.md) | Recorder, node and payload IR, access declaration, slots and rebinding, build validation, submission, fences, device loss, per-use view checks, copy lowering, statistics. Plans conservatively: no aliasing, one barrier per node |
+| [016](016-graph-execution.md) | Edge inference, reachability, hazard classification, sub-ranges, the barrier state machine and batching, the flat dispatch node and its lowering. Carries M3's E2E and the barrier-position assertion |
+| [017](017-graph-aliasing.md) | Interference over reachability, greedy packing, `GraphMemory`'s three fields diverging, aliasing handovers, and the whole-plan differential fuzz |
+
+The cut is vertical: each child ends with something that records, plans,
+submits, and produces bytes, so each is evidenced by execution rather than by a
+golden of its own intermediate output. That is the rule M2's split settled, and
+re-deriving it per milestone is not worth the user's time.
+
+Two things about this cut were not obvious and are recorded because a later
+reader would otherwise read them as accidents.
+
+**The fuzz is not its own child.** The risk table below says graph aliasing is
+unsound until the naive-plan fuzz and the diamond golden retire it. A child that
+shipped aliasing and left the fuzz for a fourth would be recorded complete with
+that risk live, which is what the maintenance rule above exists to prevent. So
+the optimizer and the test that refutes it land together.
+
+**That is affordable because 015's plan *is* the oracle.** 003 defines the naive
+plan as no aliasing and a full barrier between consecutive nodes in record
+order, which is exactly what 015 produces, and 015 §3 proves it correct from the
+fact that record order is a topological order of any inferred DAG. 017 retains
+it rather than replacing it. The benefit is not only cost: an oracle written
+before the optimizer, under different constraints, cannot have inherited the
+optimizer's reachability bug, and an oracle written after it is under constant
+pressure to share exactly that code.
+
+**Two M3 obligations carried from 001 are homed rather than left implicit.**
+Device loss (001 §7.4) lands in 015 with the fence, since the fence is where a
+caller sees it; the per-use view check (001 §7.3) lands in 015 with the access
+declaration, since a graph's "use" is a declaration rather than a call. Neither
+is deferred.
+
+**"Every applicable validation row" is made concrete** in 015 §4, which maps all
+24 of 003's rows to a child or to a written deferral. V7 waits on textures and
+V12–V16 are 005; the rest are assigned. V24 is split across 015 and 017, because
+its "including a transient" term cannot exist before placements do, and a V24
+missing a term silently is a check passing for the wrong reason.
+
 ### M4. Cooperative execution model on the CPU
 
 The cooperative lowering is a compiler pass, not a runtime option, so it is its
@@ -473,10 +516,11 @@ vendor/API opinion and pays the cost of the real SPIR-V IR.
 | Risk | Retired by | Failure response |
 | --- | --- | --- |
 | Compiler scope is underestimated | M2's direct flat E2E and explicit IR/intrinsic decisions | Split M2; do not hide compiler design in M3/M4. **Split taken 2026-08-22 into 012, 013, and 014**, before implementation rather than after the estimate slipped. |
+| Graph planning scope is underestimated | M3's transfer E2E landing before any planning exists | Split M3. **Split taken 2026-08-22 into 015, 016, and 017**, on the same vertical rule and before implementation. |
 | The cooperative resumable transform is larger than one milestone | M4's flat-versus-cooperative agreement and diagnostic gates | Split M4 again; do not fold the remainder into M5's GEMM. |
 | MSL cannot meet exact/contraction or primitive ceilings | M6 probes before other Metal numeric tests | Change lowering/domain or reject primitive; never widen from observation. |
 | Uniformity analysis rejects correct cooperative code | M4 negative/positive corpus | Specify a CPU-checked assertion intrinsic in a later scoped change. |
-| Graph aliasing is unsound | M3 naive-plan fuzz and diamond golden | Block later milestones until fixed. |
+| Graph aliasing is unsound | M3 naive-plan fuzz and diamond golden, **both owned by [017](017-graph-aliasing.md)**, the child that introduces the aliasing | Block later milestones until fixed. |
 | Metal objects outlive autorelease ownership incorrectly | M6 close/completion stress E2E | Fix retain-set ownership before backend acceptance. |
 | Tensor state mutation escapes graph hazards | M7 versioned-state negatives and prefill/decode parity | Fix State lowering; never add an untracked in-place escape hatch. |
 | CPU oracle has no second opinion | Vulkan after v0 | Keep strict portable mode conservative and state the limitation. |
