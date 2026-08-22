@@ -415,6 +415,17 @@ func TestAllocationIsConstantTime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-sensitive")
 	}
+	// The race detector's cost is not a constant per allocation. It tracks
+	// happens-before state per memory word, so the work it adds grows with how
+	// much of the pool is live, which is exactly the axis this ratio measures.
+	// An earlier version of this comment claimed both sides paid the same tax
+	// and the shape survived; CI disproved it at a ratio of 3.2 on a correct
+	// allocator. The ratio is the allocator's only when nothing else scales with
+	// the same variable.
+	if raceEnabled {
+		t.Skip("the race detector's per-access cost grows with live state, which is the " +
+			"variable this ratio is measuring")
+	}
 
 	// perAlloc times enough independent runs to clear the clock's granularity,
 	// then divides by the allocations performed.
@@ -460,11 +471,11 @@ func TestAllocationIsConstantTime(t *testing.T) {
 	// per-allocation cost. A quadratic allocator lands near ten; the generous
 	// bound keeps a loaded CI machine from failing a correct implementation.
 	//
-	// This is a ratio and not a measurement, which is what makes it meaningful
-	// under the race detector. Go 1.27's size-specialized malloc is disabled
-	// whenever -race, -asan, or -msan is on, so the absolute numbers here are
-	// not representative of a normal build; both sides pay the same tax, so the
-	// shape being asserted survives.
+	// Go 1.27's size-specialized malloc is also disabled under -race, -asan, and
+	// -msan, so the absolute numbers under any of those are not representative
+	// of a normal build either. That one is harmless because it is a constant
+	// factor; the race detector's is not, which is why this test skips there
+	// rather than widening its bound.
 	if ratio := float64(large) / float64(small); ratio > 3 {
 		t.Errorf("placement costs %v per allocation at %d live against %v at 1,000, "+
 			"a ratio of %.1f: cost grows with the pool's population, so this is not O(1)",

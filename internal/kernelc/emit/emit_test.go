@@ -24,6 +24,9 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files")
 
+// normalizeEOL makes a comparison about text rather than about line endings.
+func normalizeEOL(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+
 // TestGoldenOutput is spec 004's first testing level: emitted text is
 // byte-stable for a fixed input.
 //
@@ -51,7 +54,12 @@ func TestGoldenOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\nrun: go test ./internal/kernelc/emit -update", err)
 	}
-	if string(out) != string(want) {
+	// Line endings are normalized before comparing. The golden is checked in
+	// with LF and .gitattributes keeps it that way, but a checkout configured
+	// otherwise would rewrite it and produce a failure whose diff shows nothing,
+	// which is a worse way to learn about a git setting than a one-line
+	// normalization.
+	if normalizeEOL(string(out)) != normalizeEOL(string(want)) {
 		t.Errorf("generated output changed. If the change is intended, rerun with -update "+
 			"and review the diff.\n--- got ---\n%s\n--- want ---\n%s", out, want)
 	}

@@ -1,0 +1,8 @@
+# Generated Go and golden files are compared byte for byte by tests, so their
+# line endings are part of their content. Without this, a Windows checkout
+# rewrites them to CRLF and the golden comparison fails with a diff nobody can
+# see, which is what happened before this file existed.
+*.go text eol=lf
+*.golden text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
