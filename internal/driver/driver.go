@@ -162,6 +162,16 @@ type Device interface {
 	// exactly one Block, which is why a pool cannot grow.
 	Alloc(kind MemoryKind, bytes int, label string) (Block, error)
 
+	// Lost reports whether the device has stopped being usable, and stays
+	// non-nil once it is: specs/001-device-resources.md section 7.4 makes loss
+	// terminal, so a backend that reported it once and then appeared to recover
+	// would leave a caller running on resources whose contents are undefined.
+	//
+	// It is in the core interface rather than discovered by assertion because
+	// every backend must be able to answer it. A backend that cannot lose a
+	// device answers nil forever, which is a real answer rather than a stub.
+	Lost() error
+
 	// Close releases the device. accel guarantees every Block is freed first.
 	Close() error
 }

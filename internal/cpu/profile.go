@@ -41,6 +41,16 @@ type Options struct {
 	Mimic         *driver.Info
 	SubgroupSize  int
 	ShuffleSeed   uint64
+
+	// LoseAtSubmission marks the device lost when it reaches this submission,
+	// counting from one. Zero never loses.
+	//
+	// specs/001-device-resources.md section 7.4 calls the loss path close to
+	// untestable at v0 -- the CPU backend cannot lose a device and Metal rarely
+	// does -- and requires this injection mode for exactly that reason. Without
+	// it, every error path behind ErrDeviceLost is code nobody runs until a
+	// caller's driver restarts in production.
+	LoseAtSubmission int
 }
 
 // backendNames are used in the errors this package reports. accel has its own

@@ -69,6 +69,7 @@ func (Adapter) Open(opts any) (driver.Device, error) {
 		info:         info,
 		subgroupSize: subgroupSize,
 		shuffleSeed:  o.ShuffleSeed,
+		loseAt:       o.LoseAtSubmission,
 	}, nil
 }
 
@@ -78,9 +79,15 @@ type device struct {
 	subgroupSize int
 	shuffleSeed  uint64
 
-	mu     sync.Mutex
-	blocks int // live allocations, so Close can refuse to strand them
-	closed bool
+	// loseAt is the submission number at which this device reports itself lost,
+	// or zero. See [Options].LoseAtSubmission.
+	loseAt int
+
+	mu          sync.Mutex
+	blocks      int // live allocations, so Close can refuse to strand them
+	closed      bool
+	submissions int
+	lost        error
 }
 
 func (d *device) Info() driver.Info { return d.info }
@@ -114,6 +121,10 @@ func (d *device) Alloc(kind driver.MemoryKind, bytes int, label string) (driver.
 	}
 
 	d.mu.Lock()
+	if d.lost != nil {
+		d.mu.Unlock()
+		return nil, fmt.Errorf("accel: allocation %q: %w", label, d.lost)
+	}
 	if d.closed {
 		d.mu.Unlock()
 		return nil, fmt.Errorf("accel: allocation %q: the device is closed", label)
@@ -131,6 +142,34 @@ func (d *device) Alloc(kind driver.MemoryKind, bytes int, label string) (driver.
 		hostVisible: kind != driver.MemoryDevice,
 		label:       label,
 	}, nil
+}
+
+// Lost reports terminal device loss. It is sticky by construction: nothing
+// clears d.lost once set.
+func (d *device) Lost() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lost
+}
+
+// beginSubmission counts a submission and reports the device lost once the
+// injected count is reached.
+//
+// The count is taken before the check so that LoseAtSubmission of one loses the
+// first submission rather than the second, which is what a test asking for
+// "lose immediately" means.
+func (d *device) beginSubmission() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lost != nil {
+		return d.lost
+	}
+	d.submissions++
+	if d.loseAt > 0 && d.submissions >= d.loseAt {
+		d.lost = driver.ErrDeviceLost
+		return d.lost
+	}
+	return nil
 }
 
 func (d *device) Close() error {
