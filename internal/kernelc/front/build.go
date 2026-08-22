@@ -757,9 +757,11 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 		return c.helperCall(e, fn)
 	}
 	if in.Stage == intrin.Cooperative {
-		c.errorf(e.Pos(), "%s is out of scope for now: cooperative kernels arrive at M4 "+
-			"(specs/009-sequencing.md)", in.Authored)
-		return nil
+		// A cooperative intrinsic makes the whole kernel cooperative, which
+		// selects the resumable lowering. Derived from the body rather than
+		// declared, because a declaration can be forgotten and the failure would
+		// be a kernel silently lowered the wrong way.
+		c.current.Cooperative = true
 	}
 	// The caller decides whether there is a receiver, because it is the only
 	// place that has both the selector and the type information to tell a method

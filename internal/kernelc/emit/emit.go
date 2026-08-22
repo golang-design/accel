@@ -52,6 +52,20 @@ type Package struct {
 
 // Generate produces the generated file's contents, gofmt'd.
 func Generate(p Package) ([]byte, error) {
+	// A cooperative kernel needs the resumable lowering, and until that exists
+	// the honest answer is a refusal here rather than a flat lowering that runs
+	// the barrier as a no-op. A no-op barrier does not fail: it produces a
+	// different program that happens to compile, which is the failure mode this
+	// project spends its diagnostics budget avoiding.
+	for _, k := range p.Kernels {
+		if k.Cooperative {
+			return nil, fmt.Errorf("accel: kernel %s is cooperative and the resumable "+
+				"lowering it needs is not built yet (specs/018-cooperative-lowering.md); "+
+				"the front end admits barriers so the uniformity analysis has something "+
+				"to check", k.Name)
+		}
+	}
+
 	// The body is emitted first and the header second, because which imports the
 	// file needs is only known once every kernel has been lowered.
 	var body bytes.Buffer

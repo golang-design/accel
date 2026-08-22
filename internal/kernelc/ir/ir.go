@@ -483,6 +483,12 @@ type Func struct {
 	Bindings []*Binding
 	Body     *Block
 
+	// Cooperative reports that the body reaches a barrier, shared memory, or a
+	// subgroup operation, so it needs the resumable lowering rather than the
+	// flat one. It is derived from the body, never declared: a declaration can
+	// be forgotten and the failure would be a kernel lowered the wrong way.
+	Cooperative bool
+
 	// Intrinsics is every intrinsic the body reaches, in first-use order, by its
 	// authored spelling. The digest records these rather than resolved package
 	// paths, so relocating a type does not invalidate a committed digest.

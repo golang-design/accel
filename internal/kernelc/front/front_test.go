@@ -210,15 +210,6 @@ func K(t accel.Thread, out []float64) { out[0] = 1 }`,
 			line: 2, want: "not one of float32, int32, uint32",
 		},
 		{
-			name: "barrier",
-			body: `//accel:kernel workgroup=64
-func K(t accel.Thread, out []float32) {
-	t.Barrier()
-	out[0] = 1
-}`,
-			line: 3, want: "cooperative kernels arrive at M4",
-		},
-		{
 			name: "unbound binding",
 			body: `//accel:kernel workgroup=64
 func K(t accel.Thread, in []float32, out []float32) { out[0] = 1 }`,
@@ -1148,5 +1139,62 @@ func K(t accel.Thread, unusedA []float32, unusedB []float32, out []float32) {
 	}
 	if !strings.Contains(first, "c is recursive (c -> c)") {
 		t.Errorf("the direct cycle is not reported:\n%s", first)
+	}
+}
+
+// A barrier is admitted by the front end and makes the kernel cooperative.
+//
+// It moved out of the rejection corpus when spec 018 opened the gate: rejecting
+// it here would mean the uniformity analysis had nothing to analyse. What
+// refuses a cooperative kernel now is the emitter, until the resumable lowering
+// exists, and that rejection has its own test.
+func TestABarrierMakesAKernelCooperative(t *testing.T) {
+	pkg := checkSource(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	t.Barrier()
+	out[0] = 1
+}
+`)
+	if pkg == nil {
+		t.Fatal("the source did not type-check")
+	}
+	fns, diags := front.Check(pkg)
+	if len(diags) > 0 {
+		t.Fatalf("a barrier should be admitted: %v", diags)
+	}
+	if len(fns) != 1 {
+		t.Fatalf("got %d kernels, want 1", len(fns))
+	}
+	if !fns[0].Cooperative {
+		t.Error("a kernel calling Barrier is cooperative, and the flag is what selects " +
+			"the resumable lowering")
+	}
+}
+
+// A kernel with no cooperative construct stays flat, or the selection would
+// send every kernel down the slower path.
+func TestAKernelWithoutABarrierIsFlat(t *testing.T) {
+	pkg := checkSource(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, in []float32, out []float32) {
+	out[t.GlobalID().X] = in[t.GlobalID().X]
+}
+`)
+	if pkg == nil {
+		t.Fatal("the source did not type-check")
+	}
+	fns, diags := front.Check(pkg)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if fns[0].Cooperative {
+		t.Error("a kernel with no barrier, shared memory, or subgroup operation is flat")
 	}
 }

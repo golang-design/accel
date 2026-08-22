@@ -193,6 +193,11 @@ func (in *Info) walkStmt(s ir.Stmt, ctrl Level) bool {
 		if n.Value != nil {
 			in.value(n.Value)
 		}
+
+	case *ir.Break, *ir.Continue:
+		// No values, and their control level is what [AcceptBarriers] reads to
+		// enforce the rule's third clause: a uniform loop that some invocations
+		// leave early does not have uniform arrival inside it.
 	}
 	return changed
 }

@@ -362,3 +362,24 @@ func (m mapImporter) Import(path string) (*types.Package, error) {
 type missingImport struct{ path string }
 
 func (e *missingImport) Error() string { return "no such import: " + e.path }
+
+// A cooperative kernel is refused at emission until the resumable lowering
+// exists.
+//
+// The alternative — lowering it flat and treating the barrier as a no-op — does
+// not fail. It produces a different program that compiles and runs, which is
+// the failure mode this project spends its diagnostics budget avoiding. The
+// front end admits barriers so the uniformity analysis has something to check;
+// this is what stops one reaching a backend.
+func TestACooperativeKernelIsRefused(t *testing.T) {
+	k := &ir.Func{Name: "Reduce", Kernel: true, Cooperative: true, Body: ir.NewBlock(0)}
+	_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+	if err == nil {
+		t.Fatal("a cooperative kernel should be refused")
+	}
+	for _, want := range []string{"Reduce", "resumable lowering", "018"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message should say %q, got:\n%v", want, err)
+		}
+	}
+}
