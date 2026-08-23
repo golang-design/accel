@@ -7,6 +7,7 @@ package emit_test
 import (
 	"flag"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -363,24 +364,28 @@ type missingImport struct{ path string }
 
 func (e *missingImport) Error() string { return "no such import: " + e.path }
 
-// A barrier the split cannot express is refused by position rather than
+// A barrier inside a conditional is refused by position rather than
 // mis-lowered.
 //
-// A barrier inside a loop is legal by spec 002 and is what a tree reduction is
-// made of, so this is a scheduling gap rather than a rule. Lowering it as a
-// no-op instead would produce a different program that compiles and runs, which
-// is the failure this project spends its diagnostics budget avoiding.
-func TestABarrierInsideALoopIsRefused(t *testing.T) {
-	body := ir.NewBlock(0, ir.NewFor(0, nil, nil, nil,
+// Loops lower now, because a loop has a back edge to hang a resumption state
+// on. A conditional does not: the machine would have to resume inside a branch
+// whose predicate it no longer knows. It is refused rather than lowered as a
+// no-op, because a no-op barrier is a different program that compiles -- and a
+// barrier must sit in workgroup-uniform control flow anyway, so hoisting it out
+// of the conditional is always available.
+func TestABarrierInsideAConditionalIsRefused(t *testing.T) {
+	body := ir.NewBlock(0, ir.NewIf(0,
+		ir.NewConst(0, &ir.Type{Kind: ir.Bool}, constant.MakeBool(true)),
 		ir.NewBlock(0, ir.NewExprStmt(0,
-			ir.NewIntrinsic(0, &ir.Type{Kind: ir.Invalid}, ir.OpBarrier, nil, nil)))))
-	k := &ir.Func{Name: "Reduce", Kernel: true, Cooperative: true, Body: body}
+			ir.NewIntrinsic(0, &ir.Type{Kind: ir.Invalid}, ir.OpBarrier, nil, nil))),
+		nil))
+	k := &ir.Func{Name: "Branchy", Kernel: true, Cooperative: true, Body: body}
 
 	_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
 	if err == nil {
-		t.Fatal("a barrier inside a loop should be refused")
+		t.Fatal("a barrier inside a conditional should be refused")
 	}
-	for _, want := range []string{"Reduce", "hoist it to the top level", "018"} {
+	for _, want := range []string{"Branchy", "hoist it out of", "018"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should say %q, got:\n%v", want, err)
 		}

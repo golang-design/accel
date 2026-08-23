@@ -229,12 +229,22 @@ func fill(threads []Thread, group, size, count ID3) {
 // runWorkgroup advances every invocation epoch by epoch until all have
 // finished.
 func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker) error {
-	// The bound is the number of suspension points plus one epoch to finish in.
-	// A kernel cannot suspend more often than it has barriers, so exceeding it
-	// means the generated lowering's program counter is not advancing -- a
-	// defect in the transform rather than in the kernel, which is why this
-	// reports rather than looping forever.
-	bound := k.Suspensions + 2
+	// The bound is a backstop against a generated program counter that does not
+	// advance, and it is deliberately loose.
+	//
+	// A tight bound is not available: a barrier inside a loop suspends once per
+	// iteration, and the trip count is data. Suspensions counts the barriers in
+	// the *source*, so a kernel with one barrier in a thousand-round loop needs
+	// a thousand epochs and is perfectly correct. Anything derived from the
+	// static count would refuse it.
+	//
+	// So this catches a machine that is stuck rather than one that is slow, and
+	// the number is large enough that no data-bounded loop reaches it. A stuck
+	// machine spins to the cap and reports, which is fast and terminates; the
+	// alternative is a hang, and a hang is what this whole backend exists to
+	// turn into a report.
+	const maxEpochs = 1 << 20
+	bound := maxEpochs
 	for epoch := 0; epoch < bound; epoch++ {
 		active := 0
 		for i := range threads {
@@ -259,6 +269,7 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 		// the window conflicting accesses are compared in.
 		tracker.Epoch()
 	}
-	return fmt.Errorf("accel: kernel %q did not finish within %d epochs for %d suspension "+
-		"points, so its generated program counter is not advancing", k.Name, bound, k.Suspensions)
+	return fmt.Errorf("accel: kernel %q did not finish within %d rendezvous epochs, so "+
+		"either its generated program counter is not advancing or a loop in it does not "+
+		"terminate", k.Name, bound)
 }

@@ -50,6 +50,47 @@ import (
 // analysis can shrink it later without changing anything a caller sees, which
 // is the argument for taking the correct-and-larger version first.
 
+// renumber puts the states in source order, with the entry first.
+//
+// They are *built* backwards, because a state has to know its successor's index
+// and the successor is created first. That leaves the entry state last, and a
+// machine whose program counter starts at zero would begin in the middle. The
+// build order is an implementation detail; the numbering is not, because it is
+// what a reader of the generated file sees.
+func renumber(segs []segment) []segment {
+	n := len(segs)
+	at := func(i int) int {
+		if i < 0 {
+			return -1
+		}
+		return n - 1 - i
+	}
+	out := make([]segment, n)
+	for i, s := range segs {
+		s.next = at(s.next)
+		s.bodyNext = at(s.bodyNext)
+		s.exitNext = at(s.exitNext)
+		out[at(i)] = s
+	}
+	return out
+}
+
+// countSuspensions is how many states end at a barrier, which bounds the
+// scheduler's epoch loop.
+//
+// The state count is not the answer: a loop's check and post states are states
+// that never suspend, so counting them would let a kernel that stopped
+// advancing run for extra epochs before being reported.
+func countSuspensions(segs []segment) int {
+	n := 0
+	for _, s := range segs {
+		if s.suspend {
+			n++
+		}
+	}
+	return n
+}
+
 // barrierPositions is each top-level barrier's source position, in order.
 //
 // The position rather than only an index, because a report saying two
@@ -93,41 +134,147 @@ func (e *emitter) paramType(t *ir.Type) string {
 	return e.goType(t)
 }
 
-// coopSegments splits a body at top-level barriers.
+// segment is one state of the generated machine: a run of statements ending in
+// a suspension, a jump, or the end of the kernel.
+type segment struct {
+	stmts []ir.Stmt
+
+	// next is the state to enter when this one falls off its end, or -1 for the
+	// end of the kernel. It is explicit because a loop's states do not run in
+	// numeric order: the state after a mid-loop barrier jumps back to the
+	// loop's condition rather than forward.
+	next int
+
+	// suspend reports that this state ends at a barrier, and pos is where.
+	suspend bool
+	pos     string
+
+	// loop, when non-nil, makes this state a loop check: evaluate the condition
+	// and enter body or exit accordingly.
+	loop     *ir.For
+	bodyNext int
+	exitNext int
+}
+
+// coopSplit turns a kernel body into the states of a resumable machine.
 //
-// Returns the segments and the number of suspension points, or an error naming
-// a barrier this split cannot express.
-func coopSegments(k *ir.Func) ([][]ir.Stmt, error) {
+// # Why loops need three states and straight-line code needs two
+//
+// A barrier between two top-level statements cuts the body in half and the
+// machine runs state 0 then state 1. A barrier *inside* a loop cannot: the
+// state after it has to reach the loop's post statement and then its condition
+// again, which is backwards in the numbering. So a loop containing a barrier
+// becomes a check state, a pre-barrier body state, and a post-barrier state
+// whose successor is the check.
+//
+// The induction variable needs no special handling, because every local already
+// lives in the frame. What is new here is only where each state goes next.
+func coopSplit(k *ir.Func) ([]segment, error) {
+	c := &splitter{fn: k}
 	if err := checkBarrierPlacement(k.Body, true); err != nil {
 		return nil, err
 	}
-	var segs [][]ir.Stmt
-	cur := []ir.Stmt{}
-	for _, s := range k.Body.List {
-		if isBarrier(s) {
-			segs = append(segs, cur)
-			cur = []ir.Stmt{}
-			continue
-		}
-		if loop, ok := s.(*ir.For); ok && blockHasBarrier(loop.Body) {
-			return nil, fmt.Errorf("a barrier inside a loop needs the state machine to " +
-				"resume in the middle of that loop, carrying its induction variable across " +
-				"the epoch; that is a numbering problem this split does not solve, and it " +
-				"is what a tree reduction is made of, so it arrives with " +
-				"specs/020-cooperative-atomics.md. Hoist the barrier out of the loop for now")
-		}
-		cur = append(cur, s)
+	end := c.emit(k.Body.List, -1)
+	// The entry state is the first one the body produced.
+	if len(c.segs) == 0 {
+		c.segs = []segment{{next: -1}}
 	}
-	segs = append(segs, cur)
-	return segs, nil
+	_ = end
+	return c.segs, nil
 }
 
-// checkBarrierPlacement refuses a barrier this transform cannot yet split at.
+type splitter struct {
+	fn   *ir.Func
+	segs []segment
+	pos  func(ir.Stmt) string
+}
+
+// emit lays out a statement list as states, and returns the index of the first.
 //
-// A barrier inside a conditional or a loop is legal by
-// specs/002-compute-model.md, so this is a scheduling gap rather than a rule,
-// and the message says which. It is refused by position rather than mis-lowered
-// because a barrier lowered as a no-op is a different program that compiles.
+// after is the state to enter once the list is exhausted. Building backwards
+// from it is what lets a loop's body know where to jump: the successor is
+// always already numbered when a state that needs it is created.
+func (c *splitter) emit(list []ir.Stmt, after int) int {
+	// Walk backwards, so each state's successor exists before it does.
+	next := after
+	run := []ir.Stmt{}
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		rev := make([]ir.Stmt, len(run))
+		for i := range run {
+			rev[i] = run[len(run)-1-i]
+		}
+		next = c.add(segment{stmts: rev, next: next})
+		run = run[:0]
+	}
+
+	for i := len(list) - 1; i >= 0; i-- {
+		s := list[i]
+		switch {
+		case isBarrier(s):
+			flush()
+			// The suspension is its own state boundary: everything before it
+			// runs, then the machine returns and resumes at what follows.
+			next = c.add(segment{next: next, suspend: true, pos: c.position(s)})
+
+		case hasLoopBarrier(s):
+			flush()
+			loop := s.(*ir.For)
+			// Three states: a check, the body, and whatever follows the loop.
+			// The check's index is reserved first so the body can jump back to
+			// it, which is the whole reason this is not a simple split.
+			check := c.add(segment{loop: loop, exitNext: next})
+			body := c.emit(loop.Body.List, c.postState(loop, check))
+			c.segs[check].bodyNext = body
+			next = check
+			if loop.Init != nil {
+				next = c.add(segment{stmts: []ir.Stmt{loop.Init}, next: check})
+			}
+
+		default:
+			run = append(run, s)
+		}
+	}
+	flush()
+	return next
+}
+
+// postState is the state that runs a loop's post statement and returns to its
+// check. A loop with no post goes straight back.
+func (c *splitter) postState(loop *ir.For, check int) int {
+	if loop.Post == nil {
+		return check
+	}
+	return c.add(segment{stmts: []ir.Stmt{loop.Post}, next: check})
+}
+
+func (c *splitter) add(s segment) int {
+	c.segs = append(c.segs, s)
+	return len(c.segs) - 1
+}
+
+func (c *splitter) position(s ir.Stmt) string {
+	if c.pos == nil {
+		return ""
+	}
+	return c.pos(s)
+}
+
+// hasLoopBarrier reports a loop whose body reaches a barrier.
+func hasLoopBarrier(s ir.Stmt) bool {
+	loop, ok := s.(*ir.For)
+	return ok && blockHasBarrier(loop.Body)
+}
+
+// checkBarrierPlacement refuses a barrier this transform cannot express.
+//
+// A barrier inside a conditional is legal by specs/002-compute-model.md and is
+// still refused: the state machine would have to resume inside the branch, and
+// unlike a loop the branch has no back edge to hang a state on. It is refused
+// by position rather than mis-lowered, because a barrier lowered as a no-op is
+// a different program that compiles.
 func checkBarrierPlacement(b *ir.Block, top bool) error {
 	if b == nil {
 		return nil
@@ -135,10 +282,10 @@ func checkBarrierPlacement(b *ir.Block, top bool) error {
 	for _, s := range b.List {
 		if isBarrier(s) {
 			if !top {
-				return fmt.Errorf("a barrier inside a loop or conditional needs the state " +
-					"machine to resume in the middle of that construct, which the current " +
-					"split does not express; hoist it to the top level of the kernel body " +
-					"for now (specs/018-cooperative-lowering.md)")
+				return fmt.Errorf("a barrier inside a conditional needs the state machine to " +
+					"resume inside that branch, which this split does not express; a barrier " +
+					"must sit in workgroup-uniform control flow anyway, so hoist it out of " +
+					"the conditional (specs/018-cooperative-lowering.md)")
 			}
 			continue
 		}
@@ -161,7 +308,9 @@ func checkNested(s ir.Stmt) error {
 			return checkNested(n.Else)
 		}
 	case *ir.For:
-		return checkBarrierPlacement(n.Body, false)
+		// A loop body is a new top level: its barriers become states of their
+		// own, which is what the three-state split is for.
+		return checkBarrierPlacement(n.Body, true)
 	}
 	return nil
 }
@@ -206,7 +355,7 @@ func isBarrier(s ir.Stmt) bool {
 }
 
 // coopLowering emits the frame type and the resumable function.
-func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt, barrierPos []string) {
+func (e *emitter) coopLowering(k *ir.Func, segs []segment) {
 	frame := frameName(k.Name)
 	lower := coopName(k.Name)
 
@@ -232,8 +381,9 @@ func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt, barrierPos []string
 	e.printf("// %s runs one invocation of %s to its next suspension point.\n", lower, k.Name)
 	e.printf("//\n")
 	e.printf("// It reports whether the invocation suspended. False means it finished, and\n")
-	e.printf("// the scheduler stops calling it. The switch is flat because every barrier\n")
-	e.printf("// sits in uniform control flow, so the suspension points are a sequence.\n")
+	e.printf("// the scheduler stops calling it. Each case is one state; the assignment to\n")
+	e.printf("// pc before continuing is the jump, which is explicit because a loop's states\n")
+	e.printf("// do not run in numeric order.\n")
 	e.printf("func %s(", lower)
 	for i, p := range k.Params {
 		if i > 0 {
@@ -242,29 +392,24 @@ func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt, barrierPos []string
 		e.printf("%s %s", p.Name, e.paramType(p.Type()))
 	}
 	e.printf(", f *%s, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {\n", frame)
-	e.printf("\tswitch f.pc {\n")
+
+	// A loop over a switch, so a state that jumps backwards is a `continue`
+	// rather than a recursive call: the machine's own control flow stays flat
+	// however deeply the kernel nested its loops.
+	e.printf("\tfor {\n")
+	e.printf("\t\tswitch f.pc {\n")
 	for i, seg := range segs {
-		e.printf("\tcase %d:\n", i)
-		e.coopSegment(seg, locals, 2)
-		if i < len(segs)-1 {
-			// The barrier's identity travels with the suspension, so the
-			// scheduler can say which two lines disagreed rather than only that
-			// they did. A count of arrivals could not: it would know that
-			// somebody was missing and not who, nor where they were instead.
-			e.printf("\t\tf.pc = %d\n", i+1)
-			e.printf("\t\tframe.Barrier = accel.KernelBarrierID{Index: %d, Pos: %q}\n",
-				i, barrierPos[i])
-			e.printf("\t\treturn true\n")
-		}
+		e.printf("\t\tcase %d:\n", i)
+		e.coopSegment(seg, k, locals, i, 3)
 	}
+	e.printf("\t\t}\n")
+	e.printf("\t\treturn false\n")
 	e.printf("\t}\n")
-	e.printf("\treturn false\n")
 	e.printf("}\n\n")
 }
 
-// coopSegment emits one segment's statements with locals redirected to the
-// frame.
-func (e *emitter) coopSegment(stmts []ir.Stmt, locals []*ir.Local, depth int) {
+// coopSegment emits one state.
+func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index, depth int) {
 	prev := e.frameLocals
 	e.frameLocals = map[*ir.Local]bool{}
 	for _, l := range locals {
@@ -272,14 +417,45 @@ func (e *emitter) coopSegment(stmts []ir.Stmt, locals []*ir.Local, depth int) {
 	}
 	defer func() { e.frameLocals = prev }()
 
-	if len(stmts) == 0 {
-		// A segment can be empty: two adjacent barriers, or a barrier first.
-		// Go needs no statement here, and emitting one would be noise.
+	pad := indent(depth)
+
+	if seg.loop != nil {
+		// A loop check: evaluate the condition and jump to the body or past it.
+		e.printf("%sif ", pad)
+		if seg.loop.Cond != nil {
+			e.value(seg.loop.Cond)
+		} else {
+			e.printf("true")
+		}
+		e.printf(" {\n")
+		e.jump(seg.bodyNext, depth+1)
+		e.printf("%s}\n", pad)
+		e.jump(seg.exitNext, depth)
 		return
 	}
-	for _, s := range stmts {
+
+	for _, s := range seg.stmts {
 		e.stmt(s, depth)
 	}
+	if seg.suspend {
+		e.printf("%sf.pc = %d\n", pad, seg.next)
+		e.printf("%sframe.Barrier = accel.KernelBarrierID{Index: %d, Pos: %q}\n",
+			pad, index, seg.pos)
+		e.printf("%sreturn true\n", pad)
+		return
+	}
+	e.jump(seg.next, depth)
+}
+
+// jump enters another state, or finishes.
+func (e *emitter) jump(to, depth int) {
+	pad := indent(depth)
+	if to < 0 {
+		e.printf("%sreturn false\n", pad)
+		return
+	}
+	e.printf("%sf.pc = %d\n", pad, to)
+	e.printf("%scontinue\n", pad)
 }
 
 // collectLocals is every local the body declares, in declaration order.
@@ -347,12 +523,17 @@ func localField(l *ir.Local) string { return fmt.Sprintf("%s%d", lowerFirst(l.Na
 // all: running its invocations one after another is a different program, not a
 // slower one, so there is nothing to fall back to.
 func (e *emitter) cooperativeKernel(k *ir.Func) {
-	segs, err := coopSegments(k)
-	if err != nil {
+	sp := &splitter{fn: k, pos: func(s ir.Stmt) string { return e.position(s.Pos()) }}
+	if err := checkBarrierPlacement(k.Body, true); err != nil {
 		e.fail("kernel %s: %v", k.Name, err)
 		return
 	}
-	e.coopLowering(k, segs, e.barrierPositions(k))
+	sp.emit(k.Body.List, -1)
+	segs := renumber(sp.segs)
+	if len(segs) == 0 {
+		segs = []segment{{next: -1}}
+	}
+	e.coopLowering(k, segs)
 
 	e.printf("// %s is the compiled form of %s.\n", k.Name+"Kernel", k.Name)
 	e.printf("var %s = accel.Kernel{\n", k.Name+"Kernel")
@@ -366,7 +547,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	e.printf("\t},\n")
 	e.printf("\tDigest: %q,\n", k.Digest)
 	e.printf("\tGenerator: accel.KernelABIVersion,\n")
-	e.printf("\tSuspensions: %d,\n", len(segs)-1)
+	e.printf("\tSuspensions: %d,\n", countSuspensions(segs))
 	if len(k.Shared) > 0 {
 		e.printf("\tSharedSizes: []int{")
 		for i, sh := range k.Shared {

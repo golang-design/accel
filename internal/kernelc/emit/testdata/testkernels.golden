@@ -111,28 +111,35 @@ type exchangeFrame struct {
 // exchangeCoop runs one invocation of Exchange to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
-// the scheduler stops calling it. The switch is flat because every barrier
-// sits in uniform control flow, so the suspension points are a sequence.
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
 func exchangeCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, f *exchangeFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
-	switch f.pc {
-	case 0:
-		f.lid0 = t.LocalID().X
-		f.gid1 = t.GlobalID().X
-		tr.Write(0, int(f.lid0))
-		sh[f.lid0] = in[f.gid1]
-		f.pc = 1
-		frame.Barrier = accel.KernelBarrierID{Index: 0, Pos: ""}
-		return true
-	case 1:
-		f.next2 = (f.lid0 + uint32(1))
-		if f.next2 == uint32(64) {
-			f.next2 = uint32(0)
+	for {
+		switch f.pc {
+		case 0:
+			f.lid0 = t.LocalID().X
+			f.gid1 = t.GlobalID().X
+			tr.Write(0, int(f.lid0))
+			sh[f.lid0] = in[f.gid1]
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.next2 = (f.lid0 + uint32(1))
+			if f.next2 == uint32(64) {
+				f.next2 = uint32(0)
+			}
+			if f.gid1 < uint32(int32(len(out))) {
+				out[f.gid1] = sh[tr.ReadAt(0, int(f.next2))]
+			}
+			return false
 		}
-		if f.gid1 < uint32(int32(len(out))) {
-			out[f.gid1] = sh[tr.ReadAt(0, int(f.next2))]
-		}
+		return false
 	}
-	return false
 }
 
 // ExchangeKernel is the compiled form of Exchange.
@@ -159,6 +166,235 @@ var ExchangeKernel = accel.Kernel{
 			slot.State = f
 		}
 		return exchangeCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// reduceLoopFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type reduceLoopFrame struct {
+	pc      int
+	lid0    uint32
+	gid1    uint32
+	stride2 uint32
+}
+
+// reduceLoopCoop runs one invocation of ReduceLoop to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func reduceLoopCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, f *reduceLoopFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lid0 = t.LocalID().X
+			f.gid1 = t.GlobalID().X
+			tr.Write(0, int(f.lid0))
+			sh[f.lid0] = in[f.gid1]
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.stride2 = uint32(32)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid0 < f.stride2 {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+f.stride2)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: ""}
+			return true
+		case 5:
+			f.stride2 = (f.stride2 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride2 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			if f.lid0 == uint32(0) {
+				out[t.GroupID().X] = sh[tr.ReadAt(0, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// ReduceLoopKernel is the compiled form of ReduceLoop.
+var ReduceLoopKernel = accel.Kernel{
+	Name:          "ReduceLoop",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "907a42f18d35da320df46565345842ec",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 2,
+	SharedSizes: []int{64},
+	NewShared: func() []any {
+		var s0 [64]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*reduceLoopFrame)
+		if f == nil {
+			f = &reduceLoopFrame{}
+			slot.State = f
+		}
+		return reduceLoopCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// reduceUnrolledFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type reduceUnrolledFrame struct {
+	pc   int
+	lid0 uint32
+	gid1 uint32
+}
+
+// reduceUnrolledCoop runs one invocation of ReduceUnrolled to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func reduceUnrolledCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, f *reduceUnrolledFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lid0 = t.LocalID().X
+			f.gid1 = t.GlobalID().X
+			tr.Write(0, int(f.lid0))
+			sh[f.lid0] = in[f.gid1]
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			if f.lid0 < uint32(32) {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+uint32(32))))])
+			}
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: ""}
+			return true
+		case 4:
+			if f.lid0 < uint32(16) {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+uint32(16))))])
+			}
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = accel.KernelBarrierID{Index: 5, Pos: ""}
+			return true
+		case 6:
+			if f.lid0 < uint32(8) {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+uint32(8))))])
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.pc = 8
+			frame.Barrier = accel.KernelBarrierID{Index: 7, Pos: ""}
+			return true
+		case 8:
+			if f.lid0 < uint32(4) {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+uint32(4))))])
+			}
+			f.pc = 9
+			continue
+		case 9:
+			f.pc = 10
+			frame.Barrier = accel.KernelBarrierID{Index: 9, Pos: ""}
+			return true
+		case 10:
+			if f.lid0 < uint32(2) {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+uint32(2))))])
+			}
+			f.pc = 11
+			continue
+		case 11:
+			f.pc = 12
+			frame.Barrier = accel.KernelBarrierID{Index: 11, Pos: ""}
+			return true
+		case 12:
+			if f.lid0 < uint32(1) {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+uint32(1))))])
+			}
+			f.pc = 13
+			continue
+		case 13:
+			f.pc = 14
+			frame.Barrier = accel.KernelBarrierID{Index: 13, Pos: ""}
+			return true
+		case 14:
+			if f.lid0 == uint32(0) {
+				out[t.GroupID().X] = sh[tr.ReadAt(0, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// ReduceUnrolledKernel is the compiled form of ReduceUnrolled.
+var ReduceUnrolledKernel = accel.Kernel{
+	Name:          "ReduceUnrolled",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "77b71e4f8838cb0c4cef05b6ccc26329",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 7,
+	SharedSizes: []int{64},
+	NewShared: func() []any {
+		var s0 [64]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*reduceUnrolledFrame)
+		if f == nil {
+			f = &reduceUnrolledFrame{}
+			slot.State = f
+		}
+		return reduceUnrolledCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f, slot, slot.Shared)
 	},
 }
 
