@@ -597,6 +597,14 @@ func (m *msl) dtype(t *ir.Type) string {
 		return "float"
 	case ir.F16:
 		return "half"
+	case ir.I8:
+		// char, not int8_t: MSL's char is signed 8-bit, and the narrow integer
+		// types exist here for the reason specs/001-device-resources.md gives
+		// -- a quantized plane is bytes, and float(x) on one is an ordinary
+		// conversion rather than an intrinsic.
+		return "char"
+	case ir.U8:
+		return "uchar"
 	}
 	m.fail("dtype %v has no MSL spelling in the subset of specs/021-metal-bringup.md", t.Kind)
 	return "void"
