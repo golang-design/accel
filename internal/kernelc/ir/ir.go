@@ -82,6 +82,23 @@ var kindNames = [...]string{
 // It exists so that access inference does not have to enumerate the set: an
 // atomic added to the table and forgotten here would be a binding that looks
 // untouched, which the graph builder turns into a missing barrier.
+// IsSubgroupRendezvous reports whether an opcode needs every lane's value at
+// the point of the call, and therefore suspends.
+//
+// The id accessors are excluded: they read this invocation's own position and
+// combine nothing, so making them suspend would cost an epoch for an answer
+// already in hand.
+func (o Opcode) IsSubgroupRendezvous() bool {
+	return o >= OpSubgroupAddF32 && o <= OpBallot
+}
+
+// IsSubgroup reports whether an opcode is any subgroup operation, rendezvous or
+// accessor. It is what capability inference and the uniformity requirement key
+// on.
+func (o Opcode) IsSubgroup() bool {
+	return o >= OpSubgroupSize && o <= OpBallot
+}
+
 func (o Opcode) IsAtomic() bool {
 	return o >= OpAtomicAddU32 && o <= OpAtomicAddF32
 }
@@ -399,6 +416,21 @@ const (
 	// order.
 	OpAtomicAddF32
 
+	// Subgroup operations. Each is a rendezvous in the generated lowering,
+	// because it needs every lane's contribution at the point of the call and
+	// the scheduler advances one invocation at a time.
+	OpSubgroupSize
+	OpSubgroupID
+	OpSubgroupInvocationID
+	OpSubgroupAddF32
+	OpSubgroupMinF32
+	OpSubgroupMaxF32
+	OpBroadcastFirstF32
+	OpElect
+	OpSubgroupAny
+	OpSubgroupAll
+	OpBallot
+
 	// Cooperative. Recognized so that a kernel using one is rejected by name
 	// with a position, rather than failing as an unknown call. See
 	// specs/012-kernel-pipeline.md.
@@ -444,6 +476,17 @@ var opcodeNames = [...]string{
 	OpAtomicCompareExchangeU32: "AtomicCompareExchangeU32",
 	OpAtomicCompareExchangeI32: "AtomicCompareExchangeI32",
 	OpAtomicAddF32:             "AtomicAddF32",
+	OpSubgroupSize:             "SubgroupSize",
+	OpSubgroupID:               "SubgroupID",
+	OpSubgroupInvocationID:     "SubgroupInvocationID",
+	OpSubgroupAddF32:           "SubgroupAddF32",
+	OpSubgroupMinF32:           "SubgroupMinF32",
+	OpSubgroupMaxF32:           "SubgroupMaxF32",
+	OpBroadcastFirstF32:        "BroadcastFirstF32",
+	OpElect:                    "Elect",
+	OpSubgroupAny:              "SubgroupAny",
+	OpSubgroupAll:              "SubgroupAll",
+	OpBallot:                   "Ballot",
 }
 
 func (o Opcode) String() string {

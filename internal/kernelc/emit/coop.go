@@ -91,21 +91,6 @@ func countSuspensions(segs []segment) int {
 	return n
 }
 
-// barrierPositions is each top-level barrier's source position, in order.
-//
-// The position rather than only an index, because a report saying two
-// invocations reached different barriers is only actionable if a reader can see
-// which two lines they are.
-func (e *emitter) barrierPositions(k *ir.Func) []string {
-	var out []string
-	for _, s := range k.Body.List {
-		if isBarrier(s) {
-			out = append(out, e.position(s.Pos()))
-		}
-	}
-	return out
-}
-
 // position resolves an IR position to a file name, line, and column.
 //
 // The base name rather than the full path, because this string is written into
@@ -139,6 +124,15 @@ func (e *emitter) paramType(t *ir.Type) string {
 type segment struct {
 	stmts []ir.Stmt
 
+	// sub is the subgroup operation this state takes part in, or SubNone.
+	// subContribute writes this lane's value into the frame and suspends;
+	// subResult reads the combined value back into the local.
+	sub           ir.Opcode
+	subCall       *ir.IntrinsicCall
+	subLocal      *ir.Local
+	subContribute bool
+	subResult     bool
+
 	// next is the state to enter when this one falls off its end, or -1 for the
 	// end of the kernel. It is explicit because a loop's states do not run in
 	// numeric order: the state after a mid-loop barrier jumps back to the
@@ -156,37 +150,66 @@ type segment struct {
 	exitNext int
 }
 
-// coopSplit turns a kernel body into the states of a resumable machine.
-//
-// # Why loops need three states and straight-line code needs two
-//
-// A barrier between two top-level statements cuts the body in half and the
-// machine runs state 0 then state 1. A barrier *inside* a loop cannot: the
-// state after it has to reach the loop's post statement and then its condition
-// again, which is backwards in the numbering. So a loop containing a barrier
-// becomes a check state, a pre-barrier body state, and a post-barrier state
-// whose successor is the check.
-//
-// The induction variable needs no special handling, because every local already
-// lives in the frame. What is new here is only where each state goes next.
-func coopSplit(k *ir.Func) ([]segment, error) {
-	c := &splitter{fn: k}
-	if err := checkBarrierPlacement(k.Body, true); err != nil {
-		return nil, err
-	}
-	end := c.emit(k.Body.List, -1)
-	// The entry state is the first one the body produced.
-	if len(c.segs) == 0 {
-		c.segs = []segment{{next: -1}}
-	}
-	_ = end
-	return c.segs, nil
-}
-
 type splitter struct {
 	fn   *ir.Func
 	segs []segment
 	pos  func(ir.Stmt) string
+	err  error
+}
+
+// nestedRendezvousIn reports a subgroup rendezvous buried in a statement's
+// expressions, which the split cannot express.
+func nestedRendezvousIn(s ir.Stmt) (*ir.IntrinsicCall, bool) {
+	var found *ir.IntrinsicCall
+	var walk func(ir.Value)
+	walk = func(v ir.Value) {
+		if found != nil || v == nil {
+			return
+		}
+		switch n := v.(type) {
+		case *ir.IntrinsicCall:
+			if n.Op.IsSubgroupRendezvous() {
+				found = n
+				return
+			}
+			walk(n.Recv)
+			for _, a := range n.Args {
+				walk(a)
+			}
+		case *ir.Binary:
+			walk(n.X)
+			walk(n.Y)
+		case *ir.Unary:
+			walk(n.X)
+		case *ir.Convert:
+			walk(n.X)
+		case *ir.IndexExpr:
+			walk(n.X)
+			walk(n.Index)
+		case *ir.Call:
+			for _, a := range n.Args {
+				walk(a)
+			}
+		case *ir.FieldSel:
+			walk(n.X)
+		case *ir.Len:
+			walk(n.X)
+		}
+	}
+	switch n := s.(type) {
+	case *ir.Declare:
+		walk(n.Init)
+	case *ir.Assign:
+		walk(n.LHS)
+		walk(n.RHS)
+	case *ir.ExprStmt:
+		walk(n.X)
+	case *ir.If:
+		walk(n.Cond)
+	case *ir.Return:
+		walk(n.Value)
+	}
+	return found, found != nil
 }
 
 // emit lays out a statement list as states, and returns the index of the first.
@@ -219,6 +242,21 @@ func (c *splitter) emit(list []ir.Stmt, after int) int {
 			// runs, then the machine returns and resumes at what follows.
 			next = c.add(segment{next: next, suspend: true, pos: c.position(s)})
 
+		case isSubgroupStmt(s):
+			flush()
+			local, call, _ := subgroupRendezvous(s)
+			// Two states, and the suspension sits *between* them: one
+			// contributes this lane's value and returns, the scheduler
+			// combines, and the other reads the result back. Suspending on the
+			// second instead would read a value nothing had written yet.
+			next = c.add(segment{
+				next: next, sub: call.Op, subLocal: local, subResult: true,
+			})
+			next = c.add(segment{
+				next: next, suspend: true, pos: c.position(s),
+				sub: call.Op, subCall: call, subContribute: true,
+			})
+
 		case hasLoopBarrier(s):
 			flush()
 			loop := s.(*ir.For)
@@ -234,6 +272,18 @@ func (c *splitter) emit(list []ir.Stmt, after int) int {
 			}
 
 		default:
+			// A rendezvous inside a larger expression cannot be split: the
+			// machine would have to suspend mid-evaluation and resume at a
+			// point Go has no way to name. Refused with the position rather
+			// than lowered as an ordinary call, which would combine nothing and
+			// return the lane's own value.
+			if v, bad := nestedRendezvousIn(s); bad {
+				c.err = fmt.Errorf("a subgroup operation may only be assigned directly to a "+
+					"local, as `v := t.SubgroupAddF32(x)`: this one is inside a larger "+
+					"expression, and the state machine would have to suspend part-way "+
+					"through evaluating it (%v at %s)", v.Op, c.position(s))
+				return next
+			}
 			run = append(run, s)
 		}
 	}
@@ -260,6 +310,12 @@ func (c *splitter) position(s ir.Stmt) string {
 		return ""
 	}
 	return c.pos(s)
+}
+
+// isSubgroupStmt reports a statement that is a subgroup rendezvous.
+func isSubgroupStmt(s ir.Stmt) bool {
+	_, _, ok := subgroupRendezvous(s)
+	return ok
 }
 
 // hasLoopBarrier reports a loop whose body reaches a barrier.
@@ -354,6 +410,30 @@ func isBarrier(s ir.Stmt) bool {
 	return ok && c.Op == ir.OpBarrier
 }
 
+// subgroupRendezvous reports a statement that is a subgroup operation whose
+// result is assigned to a local, which is the only shape the split handles.
+//
+// The restriction is what keeps the state machine flat. A rendezvous nested in
+// a larger expression would have to suspend in the middle of evaluating it, and
+// resuming would mean re-entering that expression at a point Go has no way to
+// name. `v := t.SubgroupAddF32(x)` is what a kernel writes anyway, and anything
+// else is refused with the position rather than lowered wrongly.
+func subgroupRendezvous(s ir.Stmt) (*ir.Local, *ir.IntrinsicCall, bool) {
+	switch n := s.(type) {
+	case *ir.Declare:
+		if c, ok := n.Init.(*ir.IntrinsicCall); ok && c.Op.IsSubgroupRendezvous() {
+			return n.Local, c, true
+		}
+	case *ir.Assign:
+		if c, ok := n.RHS.(*ir.IntrinsicCall); ok && c.Op.IsSubgroupRendezvous() {
+			if l, ok := n.LHS.(*ir.Local); ok {
+				return l, c, true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
 // coopLowering emits the frame type and the resumable function.
 func (e *emitter) coopLowering(k *ir.Func, segs []segment) {
 	frame := frameName(k.Name)
@@ -437,6 +517,35 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 	for _, s := range seg.stmts {
 		e.stmt(s, depth)
 	}
+
+	// A contribution state writes this lane's value into the frame and falls
+	// through to the suspending state; a result state reads the combined value
+	// back. They are separate states so the suspension sits between them, which
+	// is what gives the scheduler its chance to combine.
+	if seg.subContribute {
+		e.printf("%sframe.Sub = %s\n", pad, subOpName(seg.sub))
+		switch subCarrier(seg.sub) {
+		case carrierF32:
+			e.printf("%sframe.SubF32 = ", pad)
+			e.rounded(seg.subCall.Args[0])
+			e.printf("\n")
+		case carrierBool:
+			if len(seg.subCall.Args) == 1 {
+				e.printf("%sframe.SubBool = ", pad)
+				e.value(seg.subCall.Args[0])
+				e.printf("\n")
+			}
+		}
+	}
+	if seg.subResult {
+		switch subCarrier(seg.sub) {
+		case carrierF32:
+			e.printf("%s%s = frame.SubF32\n", pad, e.local(seg.subLocal))
+		case carrierBool:
+			e.printf("%s%s = frame.SubBool\n", pad, e.local(seg.subLocal))
+		}
+	}
+
 	if seg.suspend {
 		e.printf("%sf.pc = %d\n", pad, seg.next)
 		e.printf("%sframe.Barrier = accel.KernelBarrierID{Index: %d, Pos: %q}\n",
@@ -445,6 +554,46 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 		return
 	}
 	e.jump(seg.next, depth)
+}
+
+// The value a subgroup operation carries between a lane and the scheduler.
+type carrier int
+
+const (
+	carrierNone carrier = iota
+	carrierF32
+	carrierBool
+)
+
+func subCarrier(op ir.Opcode) carrier {
+	switch op {
+	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32, ir.OpBroadcastFirstF32:
+		return carrierF32
+	case ir.OpElect, ir.OpSubgroupAny, ir.OpSubgroupAll:
+		return carrierBool
+	}
+	return carrierNone
+}
+
+// subOpName is the runtime constant naming one subgroup rendezvous.
+func subOpName(op ir.Opcode) string {
+	switch op {
+	case ir.OpSubgroupAddF32:
+		return "accel.KernelSubAddF32"
+	case ir.OpSubgroupMinF32:
+		return "accel.KernelSubMinF32"
+	case ir.OpSubgroupMaxF32:
+		return "accel.KernelSubMaxF32"
+	case ir.OpBroadcastFirstF32:
+		return "accel.KernelSubBroadcastFirstF32"
+	case ir.OpElect:
+		return "accel.KernelSubElect"
+	case ir.OpSubgroupAny:
+		return "accel.KernelSubAny"
+	case ir.OpSubgroupAll:
+		return "accel.KernelSubAll"
+	}
+	return "accel.KernelSubNone"
 }
 
 // jump enters another state, or finishes.
@@ -529,6 +678,10 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 		return
 	}
 	sp.emit(k.Body.List, -1)
+	if sp.err != nil {
+		e.fail("kernel %s: %v", k.Name, sp.err)
+		return
+	}
 	segs := renumber(sp.segs)
 	if len(segs) == 0 {
 		segs = []segment{{next: -1}}

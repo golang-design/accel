@@ -90,7 +90,7 @@ var AddKernel = accel.Kernel{
 		{Name: "b", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "bc1d9d7941a91f3c93ce22c72010fd16",
+	Digest:    "1c1b9102edd59d8a729a05cc1ce492a7",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		addFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
@@ -126,7 +126,7 @@ var HistogramKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "counts", DType: accel.KernelU32, Access: accel.KernelRead | accel.KernelWrite},
 	},
-	Digest:    "d851599607e44d9bfe1fbce5a4f9c74a",
+	Digest:    "42b57e65e7c73a120a31d7b730210649",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		histogramFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1))
@@ -159,7 +159,7 @@ var AtomicOpsKernel = accel.Kernel{
 		{Name: "state", DType: accel.KernelU32, Access: accel.KernelRead | accel.KernelWrite},
 		{Name: "prev", DType: accel.KernelU32, Access: accel.KernelWrite},
 	},
-	Digest:    "54f1fe4319a5baa8cbcdbe7c14fc8b7a",
+	Digest:    "1c10a109c329670be02ff7e3902c57f2",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		atomicOpsFlat(t, accel.KernelSlice[uint32](a, 0), accel.KernelSlice[uint32](a, 1))
@@ -220,7 +220,7 @@ var ExchangeKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "eb2514c5a5bb7f335948966dddbaa9e5",
+	Digest:      "8fbafe502892895a36d26b891966beee",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 1,
 	SharedSizes: []int{64},
@@ -315,7 +315,7 @@ var ReduceLoopKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "af814c005e3a7ae9bbb9ad573ca1d846",
+	Digest:      "cd47629a5d0b137a4eb63cfe66e87bf2",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 2,
 	SharedSizes: []int{64},
@@ -449,7 +449,7 @@ var ReduceUnrolledKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "16c00cc62fd03e24db06f34e44eb4081",
+	Digest:      "872f9717e7294bd520cda7ef38cd4b34",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 7,
 	SharedSizes: []int{64},
@@ -493,7 +493,7 @@ var SegmentSumKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "461c19bbc5141409f8372a8208b156c0",
+	Digest:    "ece1409f99ec9848ed0055c27ca6268b",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		segmentSumFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
@@ -542,7 +542,7 @@ var CountAboveKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelI32, Access: accel.KernelWrite},
 	},
-	Digest:    "b2b295f68946e90c2fa1fb028e273a03",
+	Digest:    "d56dfd081a195284a7ad821f8d60d521",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		countAboveFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[int32](a, 1))
@@ -574,7 +574,7 @@ var NormalizeKernel = accel.Kernel{
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 		{Name: "scratch", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "e96ab10d6baf7dbbc825025ff0d89631",
+	Digest:    "7715f789607cc97e8f8efa2a27fa9302",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		normalizeFlat(t, accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
@@ -666,7 +666,7 @@ var ReduceSumKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "1621d408418e7125bd9890c9cfefb774",
+	Digest:      "9c1853e2164cfc8aec407d954cee51a5",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 2,
 	SharedSizes: []int{128},
@@ -705,7 +705,7 @@ var ScaleKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "1490559ec83d431fd65f2f5fd0ddc78f",
+	Digest:    "61408d149ab5bdfb1b1e24006bf2ea51",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		scaleFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
@@ -740,12 +740,141 @@ var TransformKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "ba9a981fc0e361bfd969c0ebac23b615",
+	Digest:    "2aa00445fb65b63d0082756f22afbf1e",
 	Generator: accel.KernelABIVersion,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "Params", Size: 96},
 	},
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		transformFlat(t, accel.KernelUniformValue[Params](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
+	},
+}
+
+// subgroupReduceFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type subgroupReduceFrame struct {
+	pc       int
+	gid0     uint32
+	v1       float32
+	total2   float32
+	elected3 bool
+	sid4     uint32
+}
+
+// subgroupReduceCoop runs one invocation of SubgroupReduce to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func subgroupReduceCoop(t accel.Thread, in []float32, out []float32, f *subgroupReduceFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.gid0 = t.GlobalID().X
+			f.v1 = float32(0)
+			if f.gid0 < uint32(int32(len(in))) {
+				f.v1 = in[f.gid0]
+			}
+			f.pc = 1
+			continue
+		case 1:
+			frame.Sub = accel.KernelSubAddF32
+			frame.SubF32 = f.v1
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.total2 = frame.SubF32
+			f.pc = 3
+			continue
+		case 3:
+			frame.Sub = accel.KernelSubElect
+			f.pc = 4
+			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: ""}
+			return true
+		case 4:
+			f.elected3 = frame.SubBool
+			f.pc = 5
+			continue
+		case 5:
+			if f.elected3 {
+				f.sid4 = t.SubgroupID()
+				if f.sid4 < uint32(int32(len(out))) {
+					out[f.sid4] = f.total2
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// SubgroupReduceKernel is the compiled form of SubgroupReduce.
+var SubgroupReduceKernel = accel.Kernel{
+	Name:          "SubgroupReduce",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "56d0d51a09e342dc439ece33449f4e21",
+	Generator:   accel.KernelABIVersion,
+	Caps:        17,
+	Suspensions: 2,
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*subgroupReduceFrame)
+		if f == nil {
+			f = &subgroupReduceFrame{}
+			slot.State = f
+		}
+		return subgroupReduceCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// subgroupReduceFallbackFlat is the generated flat lowering of SubgroupReduceFallback.
+//
+// It is what the CPU backend runs. The authored SubgroupReduceFallback is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func subgroupReduceFallbackFlat(t accel.Thread, in []float32, out []float32, width []uint32) {
+	var lid uint32 = t.LocalID().X
+	var gid uint32 = t.GlobalID().X
+	var w uint32 = width[int32(0)]
+	var sid uint32 = (lid / w)
+	var lane uint32 = (lid % w)
+	if lane == uint32(0) {
+		var acc float32 = float32(0)
+		{
+			var l uint32 = uint32(0)
+			for ; l < w; l = (l + uint32(1)) {
+				var idx uint32 = ((gid - lane) + l)
+				if idx < uint32(int32(len(in))) {
+					acc = float32(acc + in[idx])
+				}
+			}
+		}
+		if sid < uint32(int32(len(out))) {
+			out[sid] = acc
+		}
+	}
+}
+
+// SubgroupReduceFallbackKernel is the compiled form of SubgroupReduceFallback.
+var SubgroupReduceFallbackKernel = accel.Kernel{
+	Name:          "SubgroupReduceFallback",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+		{Name: "width", DType: accel.KernelU32, Access: accel.KernelRead},
+	},
+	Digest:    "9f364410e5d670883ceafb06b3a0c60d",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		subgroupReduceFallbackFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[uint32](a, 2))
 	},
 }

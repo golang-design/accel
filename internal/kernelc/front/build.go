@@ -789,11 +789,16 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 	if c.current != nil {
 		c.current.Caps |= uint32(in.Cap)
 	}
-	if in.Stage == intrin.Cooperative {
-		// A cooperative intrinsic makes the whole kernel cooperative, which
-		// selects the resumable lowering. Derived from the body rather than
-		// declared, because a declaration can be forgotten and the failure would
-		// be a kernel silently lowered the wrong way.
+	// A barrier or a subgroup rendezvous makes the whole kernel cooperative,
+	// which selects the resumable lowering. Both need something the flat path
+	// cannot give: a barrier needs every invocation to arrive, and a subgroup
+	// operation needs every lane's value at the point of the call.
+	//
+	// Derived from the body rather than declared, because a declaration can be
+	// forgotten and the failure would be a kernel silently lowered the wrong
+	// way -- which for a subgroup reduction means every lane receiving its own
+	// value instead of the total, a plausible number rather than an error.
+	if c.current != nil && (in.Stage == intrin.Cooperative || in.Op.IsSubgroupRendezvous()) {
 		c.current.Cooperative = true
 	}
 	// The caller decides whether there is a receiver, because it is the only

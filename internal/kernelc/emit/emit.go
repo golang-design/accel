@@ -770,6 +770,21 @@ func (e *emitter) intrinsic(v *ir.IntrinsicCall) {
 		return
 	}
 
+	// A subgroup id accessor is an ordinary method on the thread: it reads this
+	// invocation's own position and combines nothing, so it needs no
+	// rendezvous. The rendezvous operations never reach here -- the state split
+	// turns each into a pair of states.
+	switch v.Op {
+	case ir.OpSubgroupSize, ir.OpSubgroupID, ir.OpSubgroupInvocationID:
+		if v.Recv == nil {
+			e.fail("%v has no receiver at %v", v.Op, v.Pos())
+			return
+		}
+		e.value(v.Recv)
+		e.printf(".%v()", v.Op)
+		return
+	}
+
 	// Atomics lower to the same functions the authored kernel calls, so the two
 	// agree by construction on this backend. A GPU backend emits its own
 	// instruction instead, which is the whole reason these are intrinsics

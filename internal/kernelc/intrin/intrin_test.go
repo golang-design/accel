@@ -232,6 +232,14 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel.MaxI32", "accel.MaxU32", "accel.MinI32", "accel.MinU32",
 		"accel.SubI32", "accel.SubU32",
 
+		// Subgroup operations. The id accessors combine nothing; the rest are
+		// rendezvous, which is why they make a kernel cooperative.
+		"accel.Thread.SubgroupSize", "accel.Thread.SubgroupID",
+		"accel.Thread.SubgroupInvocationID",
+		"accel.Thread.SubgroupAddF32", "accel.Thread.SubgroupMinF32",
+		"accel.Thread.SubgroupMaxF32", "accel.Thread.BroadcastFirstF32",
+		"accel.Thread.Elect", "accel.Thread.Any", "accel.Thread.All",
+
 		// Bounded and exact scalar math.
 		"accel/kmath.Abs", "accel/kmath.Cos", "accel/kmath.Exp", "accel/kmath.Log",
 		"accel/kmath.Max", "accel/kmath.Min", "accel/kmath.RSqrt",

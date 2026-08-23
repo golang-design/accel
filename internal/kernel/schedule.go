@@ -34,6 +34,15 @@ func DispatchCooperative(k *Kernel, count ID3, args Args) error {
 
 // Options is how a dispatch is run.
 type Options struct {
+	// SubgroupSize is the emulated lane count. Zero means the workgroup's own
+	// invocation count, which is the degenerate case of one subgroup.
+	//
+	// It is an option rather than a constant so a kernel can be swept across
+	// the sizes real hardware has, which is spec 009's criterion: a subgroup
+	// reduction that agrees at 32 and disagrees at 4 has a boundary bug, and a
+	// boundary bug at v0 becomes a wrong answer on hardware nobody here owns.
+	SubgroupSize uint32
+
 	// Diagnostics turns the instrumentation on. It is the CPU backend's
 	// developer mode: the checks are what make this backend an oracle rather
 	// than an executor, so they are on by default and off only when a caller
@@ -95,7 +104,7 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 				if k.NewShared != nil {
 					args.Shared = k.NewShared()
 				}
-				fill(threads, group, size, count)
+				fill(threads, group, size, count, opts.SubgroupSize)
 				tracker.Reset(group)
 				for i := range frames {
 					frames[i].Shared = tracker
@@ -114,6 +123,141 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 		}
 	}
 	return nil
+}
+
+// combineSubgroups performs one epoch's subgroup rendezvous.
+//
+// # Why per subgroup and not per workgroup
+//
+// A subgroup is the unit these operations are defined over, and a workgroup
+// holds several. Combining across the whole workgroup would give the right
+// answer only when the subgroup size equals the workgroup size, which is
+// exactly the configuration a sweep across sizes 1, 4, 32 and 64 is written to
+// distinguish.
+//
+// # Why the reduction order is fixed
+//
+// Lane order, ascending. f32 addition is not associative, so a reduction's
+// result depends on the order, and an oracle whose answer moved between runs
+// would be an oracle no test could be written against. Real hardware may use a
+// different order and produce a different last bit; that is what
+// specs/008-numerics.md section 7's budget is for, and it is why a *same
+// backend* determinism test is meaningful while a cross-backend exact one is
+// not.
+func combineSubgroups(threads []Thread, frames []Frame) {
+	// Group the suspended lanes by subgroup. Ascending lane order within each,
+	// which the invocation order already gives: fill visits x fastest and
+	// SubgroupInvocationID is LocalIndex modulo the size.
+	type group struct {
+		op    SubgroupOp
+		lanes []int
+	}
+	groups := map[uint32]*group{}
+	var order []uint32
+
+	for i := range frames {
+		if frames[i].Done || frames[i].Sub == SubNone {
+			continue
+		}
+		id := threads[i].SubgroupID()
+		g := groups[id]
+		if g == nil {
+			g = &group{op: frames[i].Sub}
+			groups[id] = g
+			order = append(order, id)
+		}
+		g.lanes = append(g.lanes, i)
+	}
+
+	// In discovery order, which is invocation order, so a report or a
+	// floating-point sum is the same every run.
+	for _, id := range order {
+		combineOne(threads, frames, groups[id].op, groups[id].lanes)
+	}
+}
+
+// combineOne applies one operation across one subgroup's suspended lanes.
+func combineOne(threads []Thread, frames []Frame, op SubgroupOp, lanes []int) {
+	switch op {
+	case SubAddF32:
+		var acc float32
+		for n, i := range lanes {
+			if n == 0 {
+				// The first lane's value rather than zero plus it: a reduction
+				// over an active set of one returns that lane's value, and for
+				// non-associative f32 those differ in the last bit. See
+				// specs/002-compute-model.md section 5.2, rule 5.
+				acc = frames[i].SubF32
+				continue
+			}
+			acc += frames[i].SubF32
+		}
+		broadcastF32(frames, lanes, acc)
+
+	case SubMinF32:
+		acc := frames[lanes[0]].SubF32
+		for _, i := range lanes[1:] {
+			if v := frames[i].SubF32; v < acc {
+				acc = v
+			}
+		}
+		broadcastF32(frames, lanes, acc)
+
+	case SubMaxF32:
+		acc := frames[lanes[0]].SubF32
+		for _, i := range lanes[1:] {
+			if v := frames[i].SubF32; v > acc {
+				acc = v
+			}
+		}
+		broadcastF32(frames, lanes, acc)
+
+	case SubBroadcastFirstF32:
+		broadcastF32(frames, lanes, frames[lanes[0]].SubF32)
+
+	case SubElect:
+		// True for exactly one lane, and accel pins *which*: the lowest
+		// numbered. Hardware guarantees only "exactly one", so leaving it
+		// unpinned would make a correct kernel's output depend on the device.
+		for n, i := range lanes {
+			frames[i].SubBool = n == 0
+		}
+
+	case SubAny:
+		any := false
+		for _, i := range lanes {
+			any = any || frames[i].SubBool
+		}
+		for _, i := range lanes {
+			frames[i].SubBool = any
+		}
+
+	case SubAll:
+		all := true
+		for _, i := range lanes {
+			all = all && frames[i].SubBool
+		}
+		for _, i := range lanes {
+			frames[i].SubBool = all
+		}
+
+	case SubBallot:
+		var m Mask
+		for _, i := range lanes {
+			if frames[i].SubBool {
+				m.set(threads[i].SubgroupInvocationID())
+			}
+		}
+		for _, i := range lanes {
+			frames[i].SubMask = m
+		}
+	}
+}
+
+func broadcastF32(frames []Frame, lanes []int, v float32) {
+	for _, i := range lanes {
+		frames[i].SubF32 = v
+	}
 }
 
 // checkArrival reports invocations that did not all reach the same barrier.
@@ -207,18 +351,24 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 // x-fastest is guaranteed by specs/002-compute-model.md section 1.4 rather than
 // incidental, because a kernel indexing shared memory by LocalIndex depends on
 // which invocation gets which slot.
-func fill(threads []Thread, group, size, count ID3) {
+func fill(threads []Thread, group, size, count ID3, subgroup uint32) {
+	if subgroup == 0 {
+		// One subgroup spanning the workgroup, which is the degenerate case
+		// rather than a special one: every operation still combines, over every
+		// lane.
+		subgroup = linear(size)
+	}
 	i := 0
 	for lz := range size.Z {
 		for ly := range size.Y {
 			for lx := range size.X {
-				threads[i] = NewThread(
+				threads[i] = NewThreadWithSubgroup(
 					ID3{
 						X: group.X*size.X + lx,
 						Y: group.Y*size.Y + ly,
 						Z: group.Z*size.Z + lz,
 					},
-					ID3{X: lx, Y: ly, Z: lz}, group, size, count,
+					ID3{X: lx, Y: ly, Z: lz}, group, size, count, subgroup,
 				)
 				i++
 			}
@@ -253,6 +403,7 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 			}
 			tracker.Begin(threads[i].LocalID())
 			frames[i].Barrier = BarrierID{Index: -1}
+			frames[i].Sub = SubNone
 			if k.Cooperative(threads[i], args, &frames[i]) {
 				active++
 				continue
@@ -262,6 +413,10 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 		if active == 0 {
 			return nil
 		}
+		// A subgroup rendezvous is combined before the arrival check, because
+		// lanes suspended at one are at the same suspension point by
+		// construction -- the check below is about barriers.
+		combineSubgroups(threads, frames)
 		if err := checkArrival(k, threads, frames, tracker); err != nil {
 			return err
 		}

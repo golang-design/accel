@@ -39,6 +39,14 @@ type (
 	// is nil in strict mode, where every call on it is a no-op.
 	KernelSharedTracker = kernel.SharedTracker
 
+	// KernelSubgroupOp identifies which subgroup rendezvous a lane is suspended
+	// at. A subgroup operation needs every lane's value at the point of the
+	// call, so it suspends exactly as a barrier does.
+	KernelSubgroupOp = kernel.SubgroupOp
+
+	// KernelMask is a subgroup ballot, one bit per lane.
+	KernelMask = kernel.Mask
+
 	// KernelBarrierID identifies one suspension point, with the source position
 	// a report needs to name the line rather than only the index.
 	KernelBarrierID = kernel.BarrierID
@@ -123,6 +131,19 @@ func CompareExchangeI32(b []int32, i uint32, cmp, v int32) int32 {
 // is wrong even where the same test is right for integers. See
 // [CapAtomicFloatAddStorage].
 func AddF32(b []float32, i uint32, v float32) float32 { return kernel.AddF32(b, i, v) }
+
+// The subgroup rendezvous a generated lowering names.
+const (
+	KernelSubNone              = kernel.SubNone
+	KernelSubAddF32            = kernel.SubAddF32
+	KernelSubMinF32            = kernel.SubMinF32
+	KernelSubMaxF32            = kernel.SubMaxF32
+	KernelSubBroadcastFirstF32 = kernel.SubBroadcastFirstF32
+	KernelSubElect             = kernel.SubElect
+	KernelSubAny               = kernel.SubAny
+	KernelSubAll               = kernel.SubAll
+	KernelSubBallot            = kernel.SubBallot
+)
 
 // KernelABIVersion is the contract between a generated kernel and this runtime.
 // A generated file records it, and a mismatch refuses to run rather than

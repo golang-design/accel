@@ -263,6 +263,50 @@ var table = map[key]*Intrinsic{
 		Class: ClassExact, Cap: CapAtomicFloatAddStorage,
 	},
 
+	// Subgroup operations. The id accessors combine nothing and are
+	// subgroup-uniform or not by their own definition; the rest are rendezvous.
+	{kernelPkg, "Thread", "SubgroupSize"}: {
+		Authored: "accel.Thread.SubgroupSize", Op: ir.OpSubgroupSize,
+		Uniformity: PerWorkgroup, Result: ir.U32, Cap: CapSubgroupBasic,
+	},
+	{kernelPkg, "Thread", "SubgroupID"}: {
+		Authored: "accel.Thread.SubgroupID", Op: ir.OpSubgroupID,
+		Uniformity: PerInvocation, Result: ir.U32, Cap: CapSubgroupBasic,
+	},
+	{kernelPkg, "Thread", "SubgroupInvocationID"}: {
+		Authored: "accel.Thread.SubgroupInvocationID", Op: ir.OpSubgroupInvocationID,
+		Uniformity: PerInvocation, Result: ir.U32, Cap: CapSubgroupBasic,
+	},
+
+	{kernelPkg, "Thread", "SubgroupAddF32"}: {
+		Authored: "accel.Thread.SubgroupAddF32", Op: ir.OpSubgroupAddF32, Params: 1,
+		Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMinF32"}: {
+		Authored: "accel.Thread.SubgroupMinF32", Op: ir.OpSubgroupMinF32, Params: 1,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMaxF32"}: {
+		Authored: "accel.Thread.SubgroupMaxF32", Op: ir.OpSubgroupMaxF32, Params: 1,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "BroadcastFirstF32"}: {
+		Authored: "accel.Thread.BroadcastFirstF32", Op: ir.OpBroadcastFirstF32, Params: 1,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupBallot,
+	},
+	{kernelPkg, "Thread", "Elect"}: {
+		Authored: "accel.Thread.Elect", Op: ir.OpElect,
+		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupBasic,
+	},
+	{kernelPkg, "Thread", "Any"}: {
+		Authored: "accel.Thread.Any", Op: ir.OpSubgroupAny, Params: 1,
+		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
+	},
+	{kernelPkg, "Thread", "All"}: {
+		Authored: "accel.Thread.All", Op: ir.OpSubgroupAll, Params: 1,
+		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
+	},
+
 	// Recognized and not available. Being in the table is what makes the
 	// rejection say "barriers arrive at M4" at the right line, rather than
 	// leaving a kernel author with an unknown-call error about a method that

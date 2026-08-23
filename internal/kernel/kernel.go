@@ -54,12 +54,25 @@ type Thread struct {
 	global, local, group ID3
 	groupSize            ID3 // workgroup extents, for the linear forms
 	groupCount           ID3 // grid extents, for the linear forms
+
+	// subgroupSize is the emulated lane count, which the CPU backend reports
+	// and a caller may set: specs/006-backends.md section 5 makes it an option
+	// so that a kernel can be swept across the sizes real hardware has.
+	subgroupSize uint32
 }
 
 // NewThread builds one invocation's [Thread]. It is for the backend and the
 // harness that drive generated kernels, never for a kernel body.
 func NewThread(global, local, group, groupSize, groupCount ID3) Thread {
 	return Thread{global: global, local: local, group: group, groupSize: groupSize, groupCount: groupCount}
+}
+
+// NewThreadWithSubgroup is [NewThread] with the emulated lane count, for the
+// backend and the sweeps that vary it.
+func NewThreadWithSubgroup(global, local, group, groupSize, groupCount ID3, subgroup uint32) Thread {
+	t := NewThread(global, local, group, groupSize, groupCount)
+	t.subgroupSize = subgroup
+	return t
 }
 
 // GlobalID is this invocation's position in the grid.
@@ -328,6 +341,21 @@ type Frame struct {
 	// the scheduler without going through the generator. A generated lowering
 	// keeps its own counter inside State.
 	Pass int
+
+	// Sub is the subgroup rendezvous this invocation is suspended at, or
+	// SubNone for an ordinary barrier.
+	//
+	// A subgroup operation needs every lane's contribution at the point of the
+	// call, and the scheduler advances one invocation at a time -- so it is a
+	// suspension like a barrier, with the contribution travelling in the fields
+	// below and the result arriving in them on resume.
+	Sub SubgroupOp
+
+	// SubF32 carries a float contribution in and the result out. SubBool and
+	// SubMask do the same for the predicate and ballot operations.
+	SubF32  float32
+	SubBool bool
+	SubMask Mask
 
 	// Barrier is which suspension point this invocation stopped at, set by the
 	// generated lowering before it returns true. Every active invocation must

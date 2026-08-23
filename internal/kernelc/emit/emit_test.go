@@ -479,3 +479,73 @@ func TestWholeNumberConstantsStayReadable(t *testing.T) {
 		t.Errorf("a whole number should stay a literal:\n%s", out)
 	}
 }
+
+// A subgroup rendezvous inside a larger expression is refused by position.
+//
+// The state machine would have to suspend part-way through evaluating the
+// expression and resume at a point Go has no way to name. Lowering it as an
+// ordinary call instead would combine nothing and give each lane its own value
+// back — a plausible number rather than an error, which is why this refuses.
+func TestANestedSubgroupRendezvousIsRefused(t *testing.T) {
+	f32 := &ir.Type{Kind: ir.F32}
+	sub := ir.NewIntrinsic(0, f32, ir.OpSubgroupAddF32, nil,
+		[]ir.Value{ir.NewConst(0, f32, constant.MakeFloat64(1))})
+
+	cases := []struct {
+		name string
+		stmt ir.Stmt
+	}{
+		{"in an arithmetic expression", ir.NewDeclare(0,
+			ir.NewLocal(0, f32, 0, "v", nil),
+			ir.NewBinary(0, f32, token.ADD, sub, ir.NewConst(0, f32, constant.MakeFloat64(1))))},
+		{"in a conversion", ir.NewDeclare(0,
+			ir.NewLocal(0, f32, 0, "v", nil), ir.NewConvert(0, f32, sub))},
+		{"as a condition's operand", ir.NewIf(0,
+			ir.NewBinary(0, &ir.Type{Kind: ir.Bool}, token.GTR, sub,
+				ir.NewConst(0, f32, constant.MakeFloat64(0))),
+			ir.NewBlock(0), nil)},
+		{"discarded", ir.NewExprStmt(0, sub)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			k := &ir.Func{
+				Name: "Nested", Kernel: true, Cooperative: true,
+				Body: ir.NewBlock(0, c.stmt),
+			}
+			_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+			if err == nil {
+				t.Fatal("a nested subgroup rendezvous should be refused")
+			}
+			for _, want := range []string{"Nested", "assigned directly to a", "SubgroupAddF32"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the message should say %q, got:\n%v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// And the shape a kernel actually writes is accepted, or the refusals above
+// would be refusing everything.
+func TestADirectlyAssignedRendezvousIsAccepted(t *testing.T) {
+	f32 := &ir.Type{Kind: ir.F32}
+	local := ir.NewLocal(0, f32, 0, "v", nil)
+	k := &ir.Func{
+		Name: "Direct", Kernel: true, Cooperative: true,
+		Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
+		Params: []*ir.Param{ir.NewParam(0, &ir.Type{Kind: ir.ID3Kind}, 0, "t", nil)},
+		Body: ir.NewBlock(0, ir.NewDeclare(0, local,
+			ir.NewIntrinsic(0, f32, ir.OpSubgroupAddF32, nil,
+				[]ir.Value{ir.NewConst(0, f32, constant.MakeFloat64(1))}))),
+	}
+	out, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+	if err != nil {
+		t.Fatalf("`v := t.SubgroupAddF32(x)` is the shape a kernel writes: %v", err)
+	}
+	src := string(out)
+	for _, want := range []string{"frame.Sub = accel.KernelSubAddF32", "frame.SubF32"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the lowering should contain %q:\n%s", want, src)
+		}
+	}
+}
