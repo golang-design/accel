@@ -439,52 +439,64 @@ func TestAllocationIsConstantTime(t *testing.T) {
 	// batch therefore runs against a wall-clock floor: a coarse timer makes it
 	// do more repetitions rather than spin.
 	//
-	// **Interference.** The two measurements are taken at different moments,
-	// and anything else running on the machine inflates one of them — which
-	// showed up as this test failing at a ratio of 3.6 while passing five times
-	// in a row when run alone. The minimum of several batches is the standard
-	// answer: noise only ever adds time, so the smallest sample is the one
-	// least perturbed, and taking it makes the comparison about the allocator
-	// rather than about what else the machine was doing.
+	// **Interference, and why the obvious defence was not enough.** The two
+	// measurements are of different sizes and so are taken at different
+	// moments, and anything else on the machine inflates whichever one it
+	// overlaps. Taking the minimum of several batches was the first answer,
+	// on the reasoning that noise only ever adds time — and it failed again at
+	// a ratio of 3.7 during a full `go test ./...`, because sustained load
+	// perturbs every batch of the phase it covers rather than one of them.
 	//
-	// A mean would not do this. It moves with the interference, which is
+	// The minimum treated the symptom. The cause is in the sentence above: the
+	// two phases run at *different moments*, so they are not measuring the same
+	// machine. Interleaving them removes that — each round times both sizes
+	// back to back, so a load spike lands on both and cancels in the ratio,
+	// which is the only number this test reads. The minimum is kept per size,
+	// since it is still the least perturbed sample of each.
+	//
+	// A mean would not do either job. It moves with the interference, which is
 	// precisely the variable that must not reach the ratio.
-	perAlloc := func(n int) (time.Duration, int) {
-		const (
-			floor   = 20 * time.Millisecond
-			batches = 5
-		)
-		best := time.Duration(0)
-		total := 0
-		for range batches {
-			start := time.Now()
-			reps := 0
-			for time.Since(start) < floor {
-				a, err := alloc.NewTLSF(n*granularity*2, granularity)
-				if err != nil {
+	//
+	// Confirmed the way every check in this repository is confirmed: by
+	// reinstating the fault. A deliberate scan over the live population,
+	// temporarily added to TLSF.Alloc, makes this report a ratio of 7.2 and
+	// fail. A test relaxed until it stops failing has to be shown it can still
+	// fail.
+	batch := func(n int) time.Duration {
+		const floor = 10 * time.Millisecond
+		start := time.Now()
+		reps := 0
+		for time.Since(start) < floor {
+			a, err := alloc.NewTLSF(n*granularity*2, granularity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range n {
+				if _, err := a.Alloc(granularity, 4); err != nil {
 					t.Fatal(err)
 				}
-				for range n {
-					if _, err := a.Alloc(granularity, 4); err != nil {
-						t.Fatal(err)
-					}
-				}
-				reps++
 			}
-			each := time.Since(start) / time.Duration(n*reps)
-			if best == 0 || each < best {
-				best = each
-			}
-			total += reps
+			reps++
 		}
-		return best, total
+		return time.Since(start) / time.Duration(n*reps)
 	}
 
-	const factor = 10
-	small, smallReps := perAlloc(1000)
-	large, largeReps := perAlloc(1000 * factor)
-	t.Logf("%v per allocation at 1,000 live (%d runs), %v at %d live (%d runs)",
-		small, smallReps, large, 1000*factor, largeReps)
+	const (
+		factor = 10
+		rounds = 7
+	)
+	var small, large time.Duration
+	for range rounds {
+		s, l := batch(1000), batch(1000*factor)
+		if small == 0 || s < small {
+			small = s
+		}
+		if large == 0 || l < large {
+			large = l
+		}
+	}
+	t.Logf("%v per allocation at 1,000 live, %v at %d live, over %d interleaved rounds",
+		small, large, 1000*factor, rounds)
 
 	// The guard the first version of this test did not have. A zero baseline is
 	// a clock too coarse to measure with, not an infinitely fast allocator, and
