@@ -154,6 +154,25 @@ func (PrefillDimsCodec) Encode(dst []byte, value PrefillDims) error {
 	return w.Err()
 }
 
+// SampleDimsCodec is the generated std140 codec for SampleDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type SampleDimsCodec struct{}
+
+// SampleDimsBlockSize is the encoded size of a SampleDims block, in bytes.
+const SampleDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (SampleDimsCodec) EncodedSize() int { return SampleDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (SampleDimsCodec) Encode(dst []byte, value SampleDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Vocab)
+	w.F32(4, value.Draw)
+	return w.Err()
+}
+
 // ParamsCodec is the generated std140 codec for Params.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -3515,6 +3534,286 @@ kernel void ReduceSum(
 	},
 }
 
+// sampleArgmaxFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type sampleArgmaxFrame struct {
+	pc      int
+	lane0   uint32
+	v1      float32
+	idx2    uint32
+	i3      uint32
+	x4      float32
+	stride5 uint32
+	a6      float32
+	b7      float32
+}
+
+// sampleArgmaxCoop runs one invocation of SampleArgmax to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func sampleArgmaxCoop(t accel.Thread, d SampleDims, logits []float32, out []uint32, best *[128]float32, at *[128]uint32, f *sampleArgmaxFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lane0 = t.LocalID().X
+			f.v1 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx2 = uint32(0)
+			{
+				f.i3 = f.lane0
+				for ; f.i3 < d.Vocab; f.i3 = (f.i3 + uint32(128)) {
+					f.x4 = logits[f.i3]
+					if f.x4 > f.v1 {
+						f.v1 = f.x4
+						f.idx2 = f.i3
+					}
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.v1
+			tr.Write(1, int(f.lane0))
+			at[f.lane0] = f.idx2
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "sample.go:55:2"}
+			return true
+		case 2:
+			f.stride5 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lane0 < f.stride5 {
+				f.a6 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b7 = best[tr.ReadAt(0, int((f.lane0+f.stride5)))]
+				if f.b7 > f.a6 {
+					tr.Write(0, int(f.lane0))
+					best[f.lane0] = f.b7
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride5)))]
+				} else if (f.b7 == f.a6) && (at[tr.ReadAt(1, int((f.lane0+f.stride5)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride5)))]
+				}
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: "sample.go:71:3"}
+			return true
+		case 5:
+			f.stride5 = (f.stride5 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride5 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			if f.lane0 == uint32(0) {
+				out[int32(0)] = at[tr.ReadAt(1, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// SampleArgmaxKernel is the compiled form of SampleArgmax.
+var SampleArgmaxKernel = accel.Kernel{
+	Name:          "SampleArgmax",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "logits", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelU32, Access: accel.KernelWrite},
+	},
+	Digest:    "885d1de0835570b6ff2c953f110418ea",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct SampleDims {
+    uint Vocab;
+    float Draw;
+    char _tail[8];
+};
+
+kernel void SampleArgmax(
+    const device float *logits [[buffer(0)]],
+    device uint *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant SampleDims &d [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float best[128];
+    threadgroup uint at[128];
+    uint lane = _lid.x;
+    float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    uint idx = uint(0);
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        float x = logits[i];
+        if ((x > v)) {
+            v = x;
+            idx = i;
+        }
+    }
+    best[lane] = v;
+    at[lane] = idx;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            float a = best[lane];
+            float b = best[(lane + stride)];
+            if ((b > a)) {
+                best[lane] = b;
+                at[lane] = at[(lane + stride)];
+            } else
+            if (((b == a) && (at[(lane + stride)] < at[lane]))) {
+                at[lane] = at[(lane + stride)];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if ((lane == uint(0))) {
+        out[int(0)] = at[int(0)];
+    }
+}
+`,
+	Suspensions: 2,
+	SharedSizes: []int{128, 128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		var s1 [128]uint32
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "SampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, SampleDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*sampleArgmaxFrame)
+		if f == nil {
+			f = &sampleArgmaxFrame{}
+			slot.State = f
+		}
+		return sampleArgmaxCoop(t, accel.KernelUniformValue[SampleDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]uint32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// sampleCategoricalFlat is the generated flat lowering of SampleCategorical.
+//
+// It is what the CPU backend runs. The authored SampleCategorical is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, out []uint32) {
+	if t.GlobalID().X != uint32(0) {
+		return
+	}
+	var draw float32 = d.Draw
+	if draw < float32(0) {
+		draw = float32(0)
+	}
+	if draw > math.Float32frombits(0x3F7FFFFF /* 0.99999994 */) {
+		draw = math.Float32frombits(0x3F7FFFFF /* 0.99999994 */)
+	}
+	var acc float32 = float32(0)
+	var chosen uint32 = (d.Vocab - uint32(1))
+	var found bool = false
+	{
+		var i uint32 = uint32(0)
+		for ; i < d.Vocab; i = (i + uint32(1)) {
+			acc = float32(acc + probs[i])
+			if !found && (acc > draw) {
+				chosen = i
+				found = true
+			}
+		}
+	}
+	out[int32(0)] = chosen
+}
+
+// SampleCategoricalKernel is the compiled form of SampleCategorical.
+var SampleCategoricalKernel = accel.Kernel{
+	Name:          "SampleCategorical",
+	WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "probs", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelU32, Access: accel.KernelWrite},
+	},
+	Digest:    "431b1094ed3bf2e09d87a5262e7250d3",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct SampleDims {
+    uint Vocab;
+    float Draw;
+    char _tail[8];
+};
+
+kernel void SampleCategorical(
+    const device float *probs [[buffer(0)]],
+    device uint *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant SampleDims &d [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    if ((_gid.x != uint(0))) {
+        return;
+    }
+    float draw = d.Draw;
+    if ((draw < float(0))) {
+        draw = float(0);
+    }
+    if ((draw > as_type<float>(0x3F7FFFFFu) /* 0.99999994 */)) {
+        draw = as_type<float>(0x3F7FFFFFu) /* 0.99999994 */;
+    }
+    float acc = float(0);
+    uint chosen = (d.Vocab - uint(1));
+    bool found = false;
+    for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
+        acc = (acc + probs[i]);
+        if ((!found && (acc > draw))) {
+            chosen = i;
+            found = true;
+        }
+    }
+    out[int(0)] = chosen;
+}
+`,
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "SampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, SampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		sampleCategoricalFlat(t, accel.KernelUniformValue[SampleDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1))
+	},
+}
+
 // scaleFlat is the generated flat lowering of Scale.
 //
 // It is what the CPU backend runs. The authored Scale is never registered as
@@ -3863,6 +4162,8 @@ var Kernels = []*accel.Kernel{
 	&CountAboveKernel,
 	&NormalizeKernel,
 	&ReduceSumKernel,
+	&SampleArgmaxKernel,
+	&SampleCategoricalKernel,
 	&ScaleKernel,
 	&TransformKernel,
 	&SubgroupReduceKernel,

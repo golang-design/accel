@@ -254,6 +254,41 @@ func diffCases() []diffCase {
 			groups:   accel.WorkgroupCount{X: 12},
 		},
 		{
+			// Argmax over a vocabulary with a deliberate plateau at the top.
+			// A tie rule that differed between the backends would move the
+			// answer, which is the one thing this kernel must not do -- and a
+			// distribution of distinct values would compare equal whatever
+			// either backend did with ties.
+			kernel: &testkernels.SampleArgmaxKernel, counts: []int{512, 1},
+			uniforms: []any{testkernels.SampleDims{Vocab: 512}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				// Three equal maxima, spread so the pairs that meet them form
+				// at different depths of the reduction tree.
+				if i == 41 || i == 200 || i == 380 {
+					return 9
+				}
+				return float32(i%17) - 8
+			},
+		},
+		{
+			kernel: &testkernels.SampleCategoricalKernel, counts: []int{256, 1},
+			uniforms: []any{testkernels.SampleDims{Vocab: 256, Draw: 0.5}},
+			groups:   accel.WorkgroupCount{X: 1},
+			// A distribution with equal masses, so the boundary the draw lands
+			// on is one an in-order walk and a parallel scan would place
+			// differently.
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				return 1.0 / 256
+			},
+		},
+		{
 			// The quantized GEMM. Exact between backends: both widen each
 			// product to f32 and sum in the same order, so quantization changes
 			// what is computed and not whether the two agree about it.
