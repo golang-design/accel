@@ -147,10 +147,11 @@ func TestWriteMaskSelectsChannels(t *testing.T) {
 	const n = 4
 	clear := [4]float32{0.1, 0.2, 0.3, 0.4}
 	tgt := raster.NewColorTarget(n, n, clear)
-	tgt.Mask = raster.WriteR | raster.WriteB
 	fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
+	ps := pass(n, n)
+	ps.Mask = []raster.WriteMask{raster.WriteR | raster.WriteB}
 
-	raster.Draw(pass(n, n), fb, quadAt(0), constant([4]float32{1, 1, 1, 1}))
+	raster.Draw(ps, fb, quadAt(0), constant([4]float32{1, 1, 1, 1}))
 	want := [4]float32{1, clear[1], 1, clear[3]}
 	if got := tgt.At(1, 1); got != want {
 		t.Errorf("masked write produced %v, want %v", got, want)
@@ -162,17 +163,18 @@ func TestBlendFollowsTheEquation(t *testing.T) {
 	const n = 4
 	dst := [4]float32{0.2, 0.4, 0.6, 1}
 	tgt := raster.NewColorTarget(n, n, dst)
-	tgt.Blend = raster.Blend{
+	fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
+	ps := pass(n, n)
+	ps.Blend = []raster.Blend{{
 		Enabled:  true,
 		SrcColor: raster.FactorSrcAlpha, DstColor: raster.FactorOneMinusSrcAlpha,
 		ColorOp:  raster.BlendAdd,
 		SrcAlpha: raster.FactorOne, DstAlpha: raster.FactorZero,
 		AlphaOp: raster.BlendAdd,
-	}
-	fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
+	}}
 
 	src := [4]float32{1, 0, 0, 0.25}
-	raster.Draw(pass(n, n), fb, quadAt(0), constant(src))
+	raster.Draw(ps, fb, quadAt(0), constant(src))
 
 	var want [4]float32
 	for c := range 3 {
@@ -187,9 +189,8 @@ func TestBlendFollowsTheEquation(t *testing.T) {
 	// reordered: blending the same two fragments the other way round gives a
 	// different answer.
 	tgt2 := raster.NewColorTarget(n, n, src)
-	tgt2.Blend = tgt.Blend
 	fb2 := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt2}}
-	raster.Draw(pass(n, n), fb2, quadAt(0), constant(dst))
+	raster.Draw(ps, fb2, quadAt(0), constant(dst))
 	if got := tgt2.At(1, 1); got == want {
 		t.Error("blending is order independent here, so this fixture does not show " +
 			"why recorded draw order is preserved")
@@ -507,13 +508,14 @@ func TestBlendFactorsAndOperations(t *testing.T) {
 		for _, df := range factors {
 			for _, op := range ops {
 				tgt := raster.NewColorTarget(n, n, dst)
-				tgt.Blend = raster.Blend{
+				fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
+				ps := pass(n, n)
+				ps.Blend = []raster.Blend{{
 					Enabled:  true,
 					SrcColor: sf, DstColor: df, ColorOp: op,
 					SrcAlpha: sf, DstAlpha: df, AlphaOp: op,
-				}
-				fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
-				raster.Draw(pass(n, n), fb, quadAt(0), constant(src))
+				}}
+				raster.Draw(ps, fb, quadAt(0), constant(src))
 
 				var want [4]float32
 				for c := range 4 {
@@ -566,5 +568,56 @@ func TestFewerStageOutputsThanAttachments(t *testing.T) {
 	}
 	if got := fb.Color[1].At(0, 0); got != clear {
 		t.Errorf("attachment 1 is %v, want the untouched %v", got, clear)
+	}
+}
+
+// Blend and mask are per attachment, so two attachments in one draw take
+// different ones.
+//
+// This is the configuration that decides where the state lives: a pass holds one
+// set of attachments and many draws, so blend belongs to the pipeline the draw
+// carries rather than to the attachment it writes. specs/033-render-api.md fixes
+// it at pipeline creation for that reason, and every backend agrees.
+func TestBlendAndMaskArePerAttachment(t *testing.T) {
+	const n = 2
+	dst := [4]float32{0.5, 0.5, 0.5, 1}
+	a := raster.NewColorTarget(n, n, dst)
+	b := raster.NewColorTarget(n, n, dst)
+	fb := &raster.Framebuffer{Color: []*raster.ColorTarget{a, b}}
+
+	ps := pass(n, n)
+	ps.Blend = []raster.Blend{
+		{}, // attachment 0 does not blend
+		{Enabled: true,
+			SrcColor: raster.FactorOne, DstColor: raster.FactorOne, ColorOp: raster.BlendAdd,
+			SrcAlpha: raster.FactorOne, DstAlpha: raster.FactorOne, AlphaOp: raster.BlendAdd},
+	}
+	ps.Mask = []raster.WriteMask{raster.WriteR} // and only attachment 0 is masked
+
+	src := [4]float32{0.25, 0.25, 0.25, 0}
+	raster.Draw(ps, fb, quadAt(0), constant(src, src))
+
+	wantA := [4]float32{src[0], dst[1], dst[2], dst[3]}
+	if got := a.At(0, 0); got != wantA {
+		t.Errorf("attachment 0 is %v, want %v: unblended and red-masked", got, wantA)
+	}
+	wantB := [4]float32{src[0] + dst[0], src[1] + dst[1], src[2] + dst[2], src[3] + dst[3]}
+	if got := b.At(0, 0); got != wantB {
+		t.Errorf("attachment 1 is %v, want %v: additively blended and unmasked", got, wantB)
+	}
+}
+
+// An attachment past the end of either slice takes the default, which is no
+// blending and every channel written -- not a target nothing reaches.
+func TestAbsentBlendAndMaskEntriesDefault(t *testing.T) {
+	const n = 2
+	tgt := raster.NewColorTarget(n, n, [4]float32{})
+	fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
+	ps := pass(n, n) // no Blend, no Mask
+
+	red := [4]float32{1, 0, 0, 1}
+	raster.Draw(ps, fb, quadAt(0), constant(red))
+	if got := tgt.At(0, 0); got != red {
+		t.Errorf("with no blend or mask configured the target holds %v, want %v", got, red)
 	}
 }

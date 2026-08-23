@@ -233,20 +233,28 @@ func (m WriteMask) has(c int) bool { return m&(1<<uint(c)) != 0 }
 // ColorTarget is one colour attachment: four float32 components per pixel, in
 // row-major order with row 0 the top row.
 //
+// It is storage and nothing else. Blend state and the write mask live on
+// [PassState] rather than here, because specs/033-render-api.md fixes both at
+// *pipeline* creation and every backend agrees: Vulkan puts them in an array on
+// the pipeline, Metal on the render pipeline's colour attachment descriptor,
+// D3D12 in the blend description's render-target array. Putting them on the
+// attachment would mean rewriting the attachment object before every draw, since
+// a pass holds one set of attachments and many draws with different pipelines --
+// per-submission state on a per-graph object, which is what 003's immutability
+// model exists to prevent.
+//
 // Top-origin here and nowhere else is what makes specs/005-graphics.md's
 // three-way origin guarantee one correction rather than three: the y flip
 // already happened in the viewport transform, so this buffer's layout is the
 // same one a host readback sees.
 type ColorTarget struct {
-	W, H  int
-	Pix   []float32
-	Blend Blend
-	Mask  WriteMask
+	W, H int
+	Pix  []float32
 }
 
 // NewColorTarget allocates a target cleared to the given colour.
 func NewColorTarget(w, h int, clear [4]float32) *ColorTarget {
-	t := &ColorTarget{W: w, H: h, Pix: make([]float32, w*h*4), Mask: WriteAll}
+	t := &ColorTarget{W: w, H: h, Pix: make([]float32, w*h*4)}
 	t.Clear(clear)
 	return t
 }
@@ -310,10 +318,34 @@ type Shaded struct {
 }
 
 // PassState is the fixed-function state one draw runs under.
+//
+// Everything a pipeline compiles in, plus the two dynamic values. Blend and
+// Mask are indexed by attachment slot; a slot past the end of either takes the
+// default, which is no blending and every channel written.
 type PassState struct {
 	State
 	Depth   DepthState
 	Stencil StencilState
+	Blend   []Blend
+	Mask    []WriteMask
+}
+
+// blendAt is the blend state for one attachment slot.
+func (ps PassState) blendAt(i int) Blend {
+	if i < len(ps.Blend) {
+		return ps.Blend[i]
+	}
+	return Blend{}
+}
+
+// maskAt is the write mask for one attachment slot. An absent entry writes every
+// channel, so a caller who configures nothing gets the unmasked behaviour rather
+// than a target nothing reaches.
+func (ps PassState) maskAt(i int) WriteMask {
+	if i < len(ps.Mask) {
+		return ps.Mask[i]
+	}
+	return WriteAll
 }
 
 // Draw rasterizes one triangle through the full per-fragment chain.
@@ -387,11 +419,12 @@ func Draw(ps PassState, fb *Framebuffer, tri [3]Vertex, shade func(Fragment) Sha
 			at := (f.Y*t.W + f.X) * 4
 			dst := [4]float32{t.Pix[at], t.Pix[at+1], t.Pix[at+2], t.Pix[at+3]}
 			res := src
-			if t.Blend.Enabled {
-				res = blend(t.Blend, src, dst)
+			if b := ps.blendAt(i); b.Enabled {
+				res = blend(b, src, dst)
 			}
+			mask := ps.maskAt(i)
 			for c := range 4 {
-				if t.Mask.has(c) {
+				if mask.has(c) {
 					t.Pix[at+c] = res[c]
 				}
 			}
