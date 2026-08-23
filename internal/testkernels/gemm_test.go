@@ -208,24 +208,13 @@ func TestBothGEMMBarriersAreLoadBearing(t *testing.T) {
 // lowering is what runs, so nothing else calls this function, and a kernel
 // nobody executes means whatever the IR made of it.
 //
-// # Why K is bounded here
-//
-// The rendezvous is emulated the way the scheduler implements it: every
-// invocation runs to the barrier, then every invocation runs past it. For this
-// kernel that means two whole passes, which is exact only while the K loop runs
-// **once** — the tile loads are idempotent, so a second pass reloads the same
-// values and then accumulates over a settled tile. With two K steps the second
-// round's tiles are not settled when the second pass reaches them, and the
-// emulation stops being one.
-//
-// That is not a gap in the test, it is the limit spec 018 section 3 states:
-// a kernel whose pre-barrier half is not idempotent across rounds has no
-// whole-function emulation, which is why the general criterion is
-// flat-versus-cooperative agreement rather than authored-versus-generated. The
-// tails on M and N are still exercised, which is where this kernel's arithmetic
-// is easiest to get wrong.
+// The invocations rendezvous for real, one goroutine each behind a cyclic
+// barrier. An earlier version ran every invocation through the whole function
+// twice per K step, which is exact only while the loop runs once -- so it needed
+// K bounded under a tile and could not exercise a multi-step K at all. See
+// [kernel.RunAuthored].
 func TestAuthoredTiledGEMM(t *testing.T) {
-	const m, n, k = 5, 7, 13 // tails on all three axes, and one K step
+	const m, n, k = 9, 18, 40 // tails on all three axes, and three K steps
 
 	a := make([]accel.Float16, m*k)
 	b := make([]accel.Float16, k*n)
@@ -249,16 +238,10 @@ func TestAuthoredTiledGEMM(t *testing.T) {
 		for gx := range groups.X {
 			var tileA [128]accel.Float16
 			var tileB [256]accel.Float16
-			for range 2 {
-				for ly := range size.Y {
-					for lx := range size.X {
-						th := kernel.NewThread(
-							kernel.ID3{X: gx*size.X + lx, Y: gy*size.Y + ly},
-							kernel.ID3{X: lx, Y: ly}, kernel.ID3{X: gx, Y: gy}, size, groups)
-						testkernels.MatMulTiled(th, dims, a, b, authored, &tileA, &tileB)
-					}
-				}
-			}
+			kernel.RunAuthored(size, kernel.ID3{X: gx, Y: gy}, groups, 128,
+				func(th kernel.Thread) {
+					testkernels.MatMulTiled(th, dims, a, b, authored, &tileA, &tileB)
+				})
 		}
 	}
 

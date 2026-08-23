@@ -59,6 +59,14 @@ type Thread struct {
 	// and a caller may set: specs/006-backends.md section 5 makes it an option
 	// so that a kernel can be swept across the sizes real hardware has.
 	subgroupSize uint32
+
+	// rendezvous is what [Thread.Barrier] calls, or nil.
+	//
+	// Nil in the generated lowering, where a barrier is a suspension the
+	// scheduler handles and this method is never reached. Non-nil only when the
+	// *authored* function is run directly as a reference, which needs a real
+	// rendezvous: see [RunAuthored].
+	rendezvous func()
 }
 
 // NewThread builds one invocation's [Thread]. It is for the backend and the
@@ -120,11 +128,16 @@ func (t Thread) GroupIndex() uint32 {
 // one kind whose authored form nothing can execute, and an unexecutable
 // reference is not a reference.
 //
-// Calling it does not synchronise anything, and a caller who runs an authored
-// cooperative kernel invocation by invocation gets a different program. That is
-// why specs/018-cooperative-lowering.md emulates the rendezvous explicitly
-// wherever it runs an authored cooperative kernel.
-func (t Thread) Barrier() {}
+// Calling it on a thread with no rendezvous does nothing, which is the case in
+// generated code. [RunAuthored] supplies one, which is what makes the authored
+// function runnable as a reference — spec 004's fifth testing level compares the
+// generated lowering against it, and an unexecutable reference is not a
+// reference.
+func (t Thread) Barrier() {
+	if t.rendezvous != nil {
+		t.rendezvous()
+	}
+}
 
 // linear is an extent's invocation count.
 func linear(e ID3) uint32 { return max(e.X, 1) * max(e.Y, 1) * max(e.Z, 1) }

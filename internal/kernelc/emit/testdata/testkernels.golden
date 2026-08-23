@@ -8,6 +8,28 @@ import (
 	"math"
 )
 
+// AttnDimsCodec is the generated std140 codec for AttnDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type AttnDimsCodec struct{}
+
+// AttnDimsBlockSize is the encoded size of a AttnDims block, in bytes.
+const AttnDimsBlockSize = 32
+
+// EncodedSize reports the std140 block size.
+func (AttnDimsCodec) EncodedSize() int { return AttnDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (AttnDimsCodec) Encode(dst []byte, value AttnDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.QHeads)
+	w.U32(4, value.KVHeads)
+	w.U32(8, value.HeadDim)
+	w.U32(12, value.KVLen)
+	w.F32(16, value.Scale)
+	return w.Err()
+}
+
 // GEMMDimsCodec is the generated std140 codec for GEMMDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -228,6 +250,199 @@ var CountWorkgroupsKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		countWorkgroupsFlat(t, accel.KernelSlice[uint32](a, 0))
+	},
+}
+
+// attentionDecodeFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type attentionDecodeFrame struct {
+	pc       int
+	h0       uint32
+	lane1    uint32
+	group2   uint32
+	kvHead3  uint32
+	s4       float32
+	acc5     float32
+	i6       uint32
+	qi7      float32
+	ki8      float32
+	stride9  uint32
+	m10      float32
+	e11      float32
+	stride12 uint32
+	total13  float32
+	acc14    float32
+	j15      uint32
+}
+
+// attentionDecodeCoop runs one invocation of AttentionDecode to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32, out []float32, scores *[128]float32, red *[128]float32, f *attentionDecodeFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.h0 = t.GroupID().X
+			f.lane1 = t.LocalID().X
+			f.group2 = (d.QHeads / d.KVHeads)
+			f.kvHead3 = (f.h0 / f.group2)
+			f.s4 = float32(0)
+			if f.lane1 < d.KVLen {
+				f.acc5 = float32(0)
+				{
+					f.i6 = uint32(0)
+					for ; f.i6 < d.HeadDim; f.i6 = (f.i6 + uint32(1)) {
+						f.qi7 = q[((f.h0 * d.HeadDim) + f.i6)]
+						f.ki8 = k[((((f.lane1 * d.KVHeads) * d.HeadDim) + (f.kvHead3 * d.HeadDim)) + f.i6)]
+						f.acc5 = float32(f.acc5 + float32(f.qi7*f.ki8))
+					}
+				}
+				f.s4 = float32(f.acc5 * d.Scale)
+			}
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.s4
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.s4
+			if f.lane1 >= d.KVLen {
+				tr.Write(1, int(f.lane1))
+				red[f.lane1] = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			}
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.stride9 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lane1 < f.stride9 {
+				tr.Write(1, int(f.lane1))
+				red[f.lane1] = kmath.Max(red[tr.ReadAt(1, int(f.lane1))], red[tr.ReadAt(1, int((f.lane1+f.stride9)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: ""}
+			return true
+		case 5:
+			f.stride9 = (f.stride9 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride9 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.m10 = red[tr.ReadAt(1, int(int32(0)))]
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = accel.KernelBarrierID{Index: 8, Pos: ""}
+			return true
+		case 9:
+			f.e11 = float32(0)
+			if f.lane1 < d.KVLen {
+				f.e11 = kmath.Exp(float32(scores[tr.ReadAt(0, int(f.lane1))] - f.m10))
+			}
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.e11
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.e11
+			f.pc = 10
+			continue
+		case 10:
+			f.pc = 11
+			frame.Barrier = accel.KernelBarrierID{Index: 10, Pos: ""}
+			return true
+		case 11:
+			f.stride12 = uint32(64)
+			f.pc = 15
+			continue
+		case 12:
+			if f.lane1 < f.stride12 {
+				tr.Write(1, int(f.lane1))
+				red[f.lane1] = float32(red[tr.ReadAt(1, int(f.lane1))] + red[tr.ReadAt(1, int((f.lane1+f.stride12)))])
+			}
+			f.pc = 13
+			continue
+		case 13:
+			f.pc = 14
+			frame.Barrier = accel.KernelBarrierID{Index: 13, Pos: ""}
+			return true
+		case 14:
+			f.stride12 = (f.stride12 / uint32(2))
+			f.pc = 15
+			continue
+		case 15:
+			if f.stride12 > uint32(0) {
+				f.pc = 12
+				continue
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.total13 = red[tr.ReadAt(1, int(int32(0)))]
+			if f.lane1 < d.HeadDim {
+				f.acc14 = float32(0)
+				{
+					f.j15 = uint32(0)
+					for ; f.j15 < d.KVLen; f.j15 = (f.j15 + uint32(1)) {
+						f.acc14 = float32(f.acc14 + float32(scores[tr.ReadAt(0, int(f.j15))]*v[((((f.j15*d.KVHeads)*d.HeadDim)+(f.kvHead3*d.HeadDim))+f.lane1)]))
+					}
+				}
+				out[((f.h0 * d.HeadDim) + f.lane1)] = float32(f.acc14 / f.total13)
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// AttentionDecodeKernel is the compiled form of AttentionDecode.
+var AttentionDecodeKernel = accel.Kernel{
+	Name:          "AttentionDecode",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "q", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "k", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "v", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "17c3c7d2b180f4ed260f0323f8dad89a",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 5,
+	SharedSizes: []int{128, 128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		var s1 [128]float32
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "AttnDims", Size: 32},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*attentionDecodeFrame)
+		if f == nil {
+			f = &attentionDecodeFrame{}
+			slot.State = f
+		}
+		return attentionDecodeCoop(t, accel.KernelUniformValue[AttnDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelSlice[float32](a, 3), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]float32](a, 1), f, slot, slot.Shared)
 	},
 }
 

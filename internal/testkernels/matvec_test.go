@@ -174,15 +174,12 @@ func TestTheBiasIsBroadcastAlongRows(t *testing.T) {
 
 // The authored halves, spec 004's fifth testing level.
 //
-// The rendezvous is emulated by running every invocation once per suspension
-// point, which is exact while the pre-barrier work is idempotent: both kernels
-// re-load the same values on each pass, so re-running them changes nothing.
-// That is the condition spec 018 section 3 states, and it is why MatVec is
-// driven with a K that fits one fold and LinearTiled with a K that fits one
-// tile.
+// The invocations rendezvous for real, one goroutine each behind a cyclic
+// barrier, so neither kernel's shape has to be bent to suit the test. See
+// [kernel.RunAuthored] for why the obvious alternative is unsound.
 func TestAuthoredMatVecAndLinear(t *testing.T) {
 	t.Run("MatVec", func(t *testing.T) {
-		const n, k = 3, 100 // K under 128, so the strided fold runs once per lane
+		const n, k = 3, 300 // K past the workgroup, so the strided fold runs several times
 		a := make([]accel.Float16, k)
 		b := make([]accel.Float16, k*n)
 		for i := range a {
@@ -198,13 +195,10 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 		for col := range uint32(n) {
 			var sh [128]float32
 			accel.KernelPoison(sh[:])
-			for range 9 { // the load barrier plus seven tree rounds, plus a settle
-				for l := range uint32(testkernels.RowWidth) {
-					th := kernel.NewThread(kernel.ID3{X: col*testkernels.RowWidth + l},
-						kernel.ID3{X: l}, kernel.ID3{X: col}, size, kernel.ID3{X: n})
+			kernel.RunAuthored(size, kernel.ID3{X: col}, kernel.ID3{X: n},
+				testkernels.RowWidth, func(th kernel.Thread) {
 					testkernels.MatVec(th, dims, a, b, authored, &sh)
-				}
-			}
+				})
 		}
 
 		generated := make([]float32, n)
@@ -220,7 +214,7 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 	})
 
 	t.Run("LinearTiled", func(t *testing.T) {
-		const m, n, k = 5, 7, 13 // one K step, so two passes emulate it exactly
+		const m, n, k = 5, 7, 40 // three K steps, which a whole-function emulation could not do
 		a := make([]accel.Float16, m*k)
 		b := make([]accel.Float16, k*n)
 		bias := make([]float32, n)
@@ -240,15 +234,9 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 		authored := make([]float32, m*n)
 		var tileA [128]accel.Float16
 		var tileB [256]accel.Float16
-		for range 2 {
-			for ly := range size.Y {
-				for lx := range size.X {
-					th := kernel.NewThread(kernel.ID3{X: lx, Y: ly},
-						kernel.ID3{X: lx, Y: ly}, kernel.ID3{}, size, groups)
-					testkernels.LinearTiled(th, dims, a, b, bias, authored, &tileA, &tileB)
-				}
-			}
-		}
+		kernel.RunAuthored(size, kernel.ID3{}, groups, 128, func(th kernel.Thread) {
+			testkernels.LinearTiled(th, dims, a, b, bias, authored, &tileA, &tileB)
+		})
 
 		generated := make([]float32, m*n)
 		if err := kernel.DispatchCooperative(&testkernels.LinearTiledKernel,

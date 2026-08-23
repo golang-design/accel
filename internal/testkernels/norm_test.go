@@ -186,25 +186,20 @@ func TestRMSNormHandlesAZeroRow(t *testing.T) {
 
 // The authored halves, which is spec 004's fifth testing level.
 //
-// Both kernels' barriers sit inside the reduction, so the rendezvous is
-// emulated by running every invocation once per suspension point. The
-// pre-barrier work is idempotent — a strided fold writing the same partial each
-// pass — so re-running it changes nothing, which is what makes the emulation
-// exact here and is the condition spec 018 section 3 names.
+// The invocations rendezvous for real, one goroutine each behind a cyclic
+// barrier. Running every invocation through the whole function once per barrier
+// is unsound for these kernels -- a tree overwrites the array it reduces, so a
+// second pass reduces its own output -- and an earlier version of this test did
+// exactly that and passed by luck. See [kernel.RunAuthored].
 func TestAuthoredRowKernels(t *testing.T) {
 	const width = 100 // not a multiple of the workgroup, so the tail is folded
 	size := kernel.ID3{X: testkernels.RowWidth, Y: 1, Z: 1}
 
-	drive := func(passes int, run func(th kernel.Thread, sh *[128]float32)) {
+	drive := func(run func(th kernel.Thread, sh *[128]float32)) {
 		var sh [128]float32
 		accel.KernelPoison(sh[:])
-		for range passes {
-			for l := range uint32(testkernels.RowWidth) {
-				th := kernel.NewThread(kernel.ID3{X: l}, kernel.ID3{X: l},
-					kernel.ID3{}, size, kernel.ID3{X: 1})
-				run(th, &sh)
-			}
-		}
+		kernel.RunAuthored(size, kernel.ID3{}, kernel.ID3{X: 1}, testkernels.RowWidth,
+			func(th kernel.Thread) { run(th, &sh) })
 	}
 
 	t.Run("RMSNorm", func(t *testing.T) {
@@ -216,8 +211,7 @@ func TestAuthoredRowKernels(t *testing.T) {
 			w[i] = 1
 		}
 		authored := make([]float32, width)
-		// Eight passes: one per barrier in the tree plus the loads.
-		drive(9, func(th kernel.Thread, sh *[128]float32) {
+		drive(func(th kernel.Thread, sh *[128]float32) {
 			testkernels.RMSNorm(th, d, x, w, authored, sh)
 		})
 
@@ -238,8 +232,7 @@ func TestAuthoredRowKernels(t *testing.T) {
 			x[i] = float32(i%13) - 6
 		}
 		authored := make([]float32, width)
-		// Two trees, so twice as many passes.
-		drive(18, func(th kernel.Thread, sh *[128]float32) {
+		drive(func(th kernel.Thread, sh *[128]float32) {
 			testkernels.Softmax(th, d, x, authored, sh)
 		})
 

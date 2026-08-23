@@ -141,16 +141,9 @@ func TestACooperativeKernelRefusesTheFlatPath(t *testing.T) {
 // TestAuthoredExchange runs the authored kernel against an independent
 // reference, which is the authored half of spec 004's fifth testing level.
 //
-// A cooperative kernel cannot be run one invocation at a time, so the barrier
-// is emulated the way the scheduler implements it: every invocation runs to the
-// barrier, then every invocation runs past it. Here that is two passes over the
-// whole function, which works because Exchange's pre-barrier half is idempotent
-// — it writes the same value both times.
-//
-// That reasoning is specific to this kernel, and it is why spec 018 makes
-// flat-versus-cooperative agreement the general criterion instead: a kernel
-// whose pre-barrier half is not idempotent has no such emulation, and the
-// differential needs none.
+// A cooperative kernel cannot be run one invocation at a time, so its
+// invocations rendezvous for real: one goroutine each behind a cyclic barrier.
+// See [kernel.RunAuthored].
 func TestAuthoredExchange(t *testing.T) {
 	const n = 128
 	in := make([]float32, n)
