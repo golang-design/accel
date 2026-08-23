@@ -2,117 +2,88 @@
 // All rights reserved. Use of this source code is governed by
 // a BSD-style license that can be found in the LICENSE file.
 
-// Package accel is a backend-selectable, cgo-free foundation for running compute
-// and graphics work on a GPU.
+// Package accel runs compute work on a GPU from Go, with no cgo.
 //
-// This is the device layer. Its vocabulary is buffers, textures, workgroups, and
-// barriers; it knows nothing about tensors or meshes. The tensor layer is built
-// on top of it and lives in a subpackage.
+// You write a kernel in a subset of Go. It is compiled ahead of time by
+// cmd/accel-kernel under go generate, and runs on whichever backend the machine
+// has: Metal, or a pure-Go CPU device that produces the same results and needs
+// no GPU at all.
 //
-// # Status
+//	go get golang.design/x/accel
 //
-// Under construction, and the API will change.
+// This is the device layer. Its vocabulary is buffers, textures, workgroups and
+// barriers; it knows nothing about tensors or meshes. For inference, use
+// golang.design/x/accel/tensor, which is built on this package and deals in
+// shapes and operators instead.
 //
-// Implemented on the CPU backend: enumeration, device open and selection,
-// capabilities and limits, pools and suballocation, buffers and views,
-// lifetimes, and the immediate transfer path ([Queue.WriteBuffer],
-// [Queue.ReadBuffer], [Queue.Flush]).
+// # Getting started
 //
-// Kernels are compiled ahead of time by cmd/accel-kernel, run under go
-// generate. A generated file carries one [Kernel] record per kernel and the
-// lowering it names; nothing here compiles a kernel at runtime, because type
-// checking needs the go tool and a deployed binary does not have it.
+// Kernels live in a package of their own, because the generator type-checks the
+// package it compiles and cannot run on a package that already refers to the
+// symbol it is about to define. Given a generated kernels.ScaleKernel:
 //
-// Uniform blocks are encoded by a generated std140 codec, so a caller supplies
-// a [UniformBuffer] and never writes a padding offset.
+//	dev, err := accel.OpenCPU(accel.CPUOptions{})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer dev.Close()
 //
-// Graphs of transfers and flat compute dispatches can be recorded, validated,
-// built once, bound, submitted, waited on, and replayed with a rebound input:
-// [Device.NewRecorder], [Recorder.CopyToBuffer], [Recorder.CopyBuffer],
-// [Recorder.Dispatch], [Recorder.Transient], [Recorder.Slot],
-// [Recorder.Build], [Graph.Bind], [Queue.Submit] and [Fence.Wait].
+//	pipe, err := dev.NewComputePipeline(accel.ComputePipelineDescriptor{
+//		Kernel: &kernels.ScaleKernel,
+//	})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer pipe.Close()
 //
-// Dependency edges are inferred from each node's declared accesses, compared as
-// byte ranges rather than whole resources, and barriers come from those: nodes
-// with no hazard between them are not separated. [Graph.Edges],
-// [Graph.Hazards], and [Graph.Barriers] report the plan, because a caller
-// asking why a graph does not overlap needs the plan rather than a timing.
+//	err = dev.Queue().Run(func(r *accel.Recorder) {
+//		r.Dispatch(pipe, bindings, accel.WorkgroupCount{X: 4})
+//	})
 //
-// Transients the builder owns are aliased: two share bytes when every node
-// touching one is ordered before every node touching the other, which is
-// reachability rather than record-order position. [Graph.Memory] reports what
-// that bought and [Graph.TransientPlacement] reports the layout.
-// [Recorder.BuildNaive] builds the same graph without any of it, for bisecting
-// a suspected planning bug.
+// The README has the whole program, buffers included.
 //
-// Cooperative kernels run: a kernel declaring workgroup-shared memory, calling
-// [Thread.Barrier], or reducing across a subgroup is lowered to a resumable
-// form and driven by a workgroup scheduler. The CPU backend reports what such a
-// kernel does wrong rather than leaving it to a GPU to discover: a read of
-// shared memory nothing wrote, invocations reaching different barriers, and two
-// invocations touching one location with nothing ordering them are each
-// reported with the invocation and the source position, on the first offending
-// run.
+// To select a GPU instead, use [OpenBest]. It does not choose the CPU backend
+// unless [Policy].AllowCPU is set, so a caller who asked for a GPU and has none
+// gets an error rather than a silent substitution.
 //
-// Atomics, emulated subgroups, and capability inference are built. What a
-// kernel requires is read from its body, never declared, and a device that does
-// not meet it refuses at [Device.NewComputePipeline] rather than at dispatch.
+// # What runs today
 //
-// Indirect dispatch works, with the device-supplied workgroup count clamped
-// against a build-time maximum in every mode — correctness does not depend on a
-// debug flag. [Recorder.CollectRunStats] makes the graph report what the count
-// turned out to be, through [Fence.Stats], at the cost of a readback.
+// Two backends: Metal on darwin, and a pure-Go CPU backend everywhere.
+// [Enumerate] reports what this machine has. [BackendVulkan], [BackendD3D12]
+// and [BackendOpenGL] exist in the [Backend] enumeration and are not built.
 //
-// Textures work: formats, pools, allocation, readback, and copies in both
-// directions through a graph. Texture data is tightly packed at this API's
-// boundary — row r begins at r*width*bpp — so a caller sizes a readback as
-// width*height*bpp and is always right, whatever pitch the device stores.
+// On both backends: buffers, textures, memory pools, uploads and readbacks,
+// compute dispatch both direct and indirect, command graphs, cooperative
+// kernels with workgroup-shared memory and barriers, atomics, and subgroup
+// reductions. The two agree exactly where the kernel's arithmetic is exact, and
+// within a stated ceiling where it reaches a bounded primitive such as exp.
 //
-// Metal runs on darwin. [Enumerate] reports a Metal adapter beside the CPU one,
-// and a graph of uploads, dispatches and readbacks runs on it: every kernel is
-// lowered to Metal Shading Language by the same compiler that produces the Go
-// lowering, compiled by the device at runtime, and the two backends agree —
-// exactly where the kernel's arithmetic is exact, and within the numeric
-// contract's own ceiling where it reaches a bounded primitive such as exp.
-// A kernel the MSL target cannot lower is refused by name rather than run on
-// the CPU instead, so a device the caller selected is never quietly bypassed.
+// Uniform blocks are encoded by a generated std140 codec, so you supply a
+// [UniformBuffer] and never write a padding offset. Texture data is tightly
+// packed at this API's boundary — row r begins at r*width*bpp — so a readback
+// sized width*height*bpp is right whatever pitch the device stores.
 //
-// Graphs run on it as they do on the CPU: multi-node graphs are re-encoded per
-// submission, an indirect dispatch's device-written workgroup count is clamped
-// on the device rather than read back, and device loss is reported and is
-// terminal once reported.
+// A kernel the Metal target cannot lower is refused by name at
+// [Device.NewComputePipeline] rather than run on the CPU instead, so a device
+// you selected is never quietly bypassed.
 //
-// The tensor layer is in golang.design/x/accel/tensor: a graph of tensors
-// compiles once into a plan and submits many times with different inputs, with
-// views, broadcasting, normalization, matrix multiplication, a KV cache and
-// attention. It lowers entirely through this package, so a backend never learns
-// what a tensor is.
+// # What does not
 //
-// Above the tensor layer, golang.design/x/accel/quant turns weights into the
-// int8-plus-scale form a quantized kernel reads, with an error bound a test can
-// compute rather than a tolerance somebody tuned. Sampling primitives take
-// their random draw as an input rather than generating one, so a token is
-// reproducible and both backends agree on it. A KV cache can be paged, so
-// sequences of different lengths share one pool and several of them step in one
-// dispatch.
+// The API is under construction and will change.
 //
-// Several graphs can plan their transients into one [TransientPool], which is
-// sized to the largest of them rather than to their sum:
-// [Device.NewTransientPool] and [Recorder.UseTransientPool]. The price is that
-// they cannot execute at the same time, and the second one is refused through
-// its fence rather than queued.
-//
-// Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
-// nothing to sample with until a render pass exists. Subgroup shuffles and
-// scans are specified and unbuilt. specs/009-sequencing.md is the order the
-// rest arrives in.
+// [Sampler] is unbuilt, because there is no render pass to sample in yet. Its
+// methods **panic** with [ErrNotImplemented] rather than return it, so do not
+// write errors.Is against them. Subgroup shuffles and scans are unbuilt.
+// Graphics is designed and being written: [Vertex], [Fragment] and [Clip] are
+// here, and there is no render pipeline, render pass or surface to use them
+// with.
 //
 // # The model
 //
 // Work is recorded into a [Graph], which is immutable once built and can be
-// submitted many times with its inputs rebound between submissions. This is
-// deliberately not a one-shot command encoder; see specs/000-decisions.md
-// decision 1 for why, and specs/003-command-graph.md for the details.
+// submitted many times with its inputs rebound in between ([Graph.Rebind]).
+// Validation, memory planning and barrier placement happen once, at
+// [Recorder.Build], not on every submission.
 //
 //	rec := dev.NewRecorder()
 //	rec.Dispatch(pipeline, bindings, WorkgroupCount{X: n})
@@ -121,9 +92,24 @@
 //	f := dev.Queue().Submit(g)
 //	f.Wait()
 //
+// You do not write barriers. Each node declares what it reads and writes, and
+// the builder compares those as byte ranges, ordering only the pairs that
+// really conflict. [Graph.Edges], [Graph.Hazards] and [Graph.Barriers] report
+// what it decided, so a graph that does not overlap can be explained rather
+// than timed.
+//
+// Buffers the builder owns share memory when their uses cannot overlap.
+// [Graph.Memory] reports what that saved and [Recorder.BuildNaive] rebuilds the
+// same graph with aliasing off, to isolate a suspected planning bug. Several
+// graphs can share one [TransientPool], sized to the largest rather than the
+// sum, at the price that they cannot execute at the same time.
+//
 // Memory comes from pools rather than one allocation per resource, because a
-// model has thousands of tensors and drivers cap the number of allocations. See
-// specs/001-device-resources.md.
+// model has thousands of tensors and drivers cap the number of allocations. A
+// pool is exactly one device allocation and never grows.
+//
+// The reasoning behind these choices is in specs/: 003 for the graph, 001 for
+// memory, 000 for the decisions the rest follow from.
 package accel
 
 import (
@@ -134,8 +120,13 @@ import (
 	"golang.design/x/accel/internal/driver"
 )
 
-// ErrNotImplemented is reported by every operation while this package is at the
-// design stage.
+// ErrNotImplemented marks a declaration that exists so its shape is fixed but
+// whose implementation has not arrived.
+//
+// It is **panicked**, not returned: the only user is [Sampler], which cannot do
+// anything useful until a render pass exists, and a method that returned an
+// error would let a caller write a plausible handler for a path that can never
+// succeed. A panic says the call was a mistake rather than a runtime failure.
 var ErrNotImplemented = errors.New("accel: not implemented (design stage)")
 
 // ErrUnsupported reports that a device cannot perform an operation because it
