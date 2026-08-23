@@ -426,16 +426,16 @@ Per [033](033-render-api.md) §6, nothing arrives at submission.
 | [006](006-backends.md) prose after that table | it says MSAA is excluded because the pattern is not standardized; §2 replaces that with the mandated pattern and the verified per-backend form |
 | [005](005-graphics.md) child table and open questions | both say this child spec does not exist |
 | `internal/cpu/profile.go` | `Multisampling: true`, and the comment that currently says it is `no` |
-| `internal/cpu/cpu_test.go` | the assertion that multisampling is `cap` on every target and absent on the CPU |
+| `internal/cpu/cpu_test.go` | **gains** an assertion that the CPU profile reports no multisampling. Its only assertion today iterates `baselines`, whose keys are Metal, Vulkan, D3D12 and OpenGL, so the CPU profile is never checked — verified, not assumed |
 | [035](035-cpu-rasterizer.md) scope | "no multisampling" becomes counts 1, 2, 4 |
 | [033](033-render-api.md) §2.1 | the fixed column's "Sample count, fixed to 1" |
 | [034](034-surface-present.md) §2 | the present slot's recorded usage gains resolve destination |
 | `limits.go` `FormatInfo` | the per-format supported-count set |
 | `texturealloc.go` | `validateTexture`, `textureBytes`, `readTexture` |
 
-Flipping 006's row without `profile.go` and `cpu_test.go` leaves a failing
-assertion that reads like an unrelated regression, which is why they are one
-change and not three.
+Flipping 006's row without `profile.go` and `cpu_test.go` leaves that row and
+the CPU profile silently disagreeing, which is why they are one change and not
+three.
 
 ## 13. Costs
 

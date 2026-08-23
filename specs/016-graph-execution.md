@@ -26,7 +26,8 @@ ordered, and puts a compiled kernel in it.
 - **The flat dispatch node**: a compiled pipeline from
   [012](012-kernel-pipeline.md) recorded into a graph, with its bindings, its
   uniforms, and its workgroup count, plus CPU lowering for it.
-- **Validation rows V8–V11, V17, V22**, which are the dispatch rows plus the
+- **Validation rows V8–V10, V17, V22** — V11 is stated and unreachable, see
+  below — which are the dispatch rows plus the
   acyclicity assertion.
 - **Run-time counters**, [003](003-command-graph.md) §"Run-time counters".
 
@@ -153,7 +154,7 @@ rather than a second test of the kernel.
 - Inference and barrier planning are asserted deterministic by building one
   graph twenty times and comparing plans, which is the shape that caught the
   front end's map-order bug.
-- V8–V11 and V17 have focused negative tests; V22 is asserted by a test that
+- V8, V9, V10 and V17 have focused negative tests; V22 is asserted by a test that
   reaches the internal assertion through a deliberately corrupted edge set.
 - A fuzz target builds random dispatch graphs and asserts the inferred edge set
   is acyclic and that record order is a topological order of it — the property
@@ -242,3 +243,31 @@ cut between the two children was in the right place.
   [017](017-graph-aliasing.md).
 - **No indirect dispatch.** V9 exists for it and is written; the payload is not.
 - **No cooperative dispatch**: M4.
+
+## Correction: V11 is stated and cannot fire — 2026-08-24
+
+Appended rather than edited in, per [009](009-sequencing.md)'s rule.
+
+§1 and §5 counted V11 (a kernel's shared-memory request against the device
+budget) among the rows with focused negative tests. It has none, and cannot: the
+test that names V11 exercises `MaxWorkgroupSize` and `MaxWorkgroupInvocations`,
+which is V10.
+
+`requirementsOf` never sets `Requirements.SharedBytes`, so `Device.Missing`
+always compares 0 against the budget. That is not an oversight to patch in a
+line: **the kernel record does not carry the number.** `Kernel.SharedSizes` is
+each shared array's element *count*, in signature order, with no element size
+beside it — the scheduler needs counts to size its shadow bits, and nothing
+needed bytes.
+
+So computing the request means adding a field the generator emits, which changes
+the shape of `accel.Kernel` — the type
+[036](036-documentation.md) §4 records as an open freeze question, with twelve
+exported mutable fields and no constructor. Adding a thirteenth before that is
+settled is the wrong order.
+
+**V11 stands as stated and unenforced**, and this note is what stops a reader
+inferring from §5 that it is covered. It becomes reachable with whichever change
+gives the record a byte count; the spec that makes cooperative kernels
+recordable in a graph is the natural owner, since no graph kernel declares shared
+memory today either.
