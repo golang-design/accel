@@ -210,6 +210,13 @@ read the wrong elements rather than repeating them. Inferring the shape
 correctly and refusing to lower it is the honest half-step: the alternative is
 either a wrong answer or a shape rule that contradicts the spec.
 
+**Retired in [025](025-tensor-operators.md)**, for the broadcast that is a
+contiguous run repeated a whole number of times — a gain across rows, a bias
+across a batch — which is the shape that appears in a transformer. An interior
+axis expanding repeats with a stride rather than as a run and is still refused,
+with the shape it can build named. Every materialization is reported in
+`Plan.Selections`.
+
 ### What this child found
 
 **One mistake has to stay one diagnostic, and the second one arrived from an

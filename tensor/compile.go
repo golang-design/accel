@@ -165,24 +165,6 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 
 	count := n.out.shape.Elements()
 
-	// Every operand must already be the output shape. Broadcasting is inferred
-	// and not yet materialized: the corpus kernels index their operands
-	// together, so an operand of a different extent would read the wrong
-	// elements rather than repeat them. specs/025-tensor-operators.md adds the
-	// materializing copy, and refusing by name is what keeps this honest until
-	// it does.
-	for _, in := range n.inputs {
-		if !in.shape.Equal(n.out.shape) {
-			return fmt.Errorf("accel/tensor: %s: an operand of shape %v against a result of "+
-				"%v needs a broadcast copy, which specs/025-tensor-operators.md adds",
-				n.op, in.shape, n.out.shape)
-		}
-		if !in.contiguousLayout() {
-			return fmt.Errorf("accel/tensor: %s: a non-contiguous operand needs a "+
-				"materializing copy, which specs/025-tensor-operators.md adds", n.op)
-		}
-	}
-
 	pipe, err := p.rt.pipeline(n.kernel, fmt.Sprintf("%s.%s", p.label, n.op))
 	if err != nil {
 		return fmt.Errorf("accel/tensor: %s: %w", n.op, err)
@@ -203,6 +185,16 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		bind, err := p.operand(in, views)
 		if err != nil {
 			return fmt.Errorf("accel/tensor: %s operand %d: %w", n.op, j, err)
+		}
+		// An operand that is not already the result's shape and layout is
+		// packed into a transient first. Reported in Selections rather than
+		// done quietly: a copy nobody can see is a cost nobody can explain.
+		if !in.shape.Equal(n.out.shape) || !in.contiguousLayout() {
+			bind, err = p.materialize(r, n.op, in, n.out.shape, bind,
+				fmt.Sprintf("%s.%s.%d.broadcast", p.label, n.op, i))
+			if err != nil {
+				return fmt.Errorf("accel/tensor: %s operand %d: %w", n.op, j, err)
+			}
 		}
 		bind.Index = j
 		binds = append(binds, bind)

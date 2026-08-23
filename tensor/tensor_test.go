@@ -457,19 +457,22 @@ func TestPortsAreDiscoverable(t *testing.T) {
 func TestLoweringRefusals(t *testing.T) {
 	rt := newRuntime(t)
 
-	t.Run("an operand that needs broadcasting", func(t *testing.T) {
+	t.Run("a broadcast that is not a repeated run", func(t *testing.T) {
+		// A size-one axis in the *middle* of the result: expanding it repeats
+		// with a stride rather than as a run, so copies alone cannot build it
+		// and the refusal says which shape it can build.
 		b := rt.NewBuilder("bc")
 		x := tensor.Input(b, tensor.ValueDesc{
-			Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 8},
+			Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 2, 8},
 		})
 		y := tensor.Input(b, tensor.ValueDesc{
-			Name: "y", DType: accel.F32, Shape: tensor.Shape{1, 8},
+			Name: "y", DType: accel.F32, Shape: tensor.Shape{4, 1, 8},
 		})
 		tensor.Output(b, "z", tensor.Add(b, x, y))
 		if _, err := b.Compile(rt, tensor.CompileOptions{}); err == nil {
-			t.Fatal("a broadcast operand lowered, and the kernel indexes operands together")
-		} else if !strings.Contains(err.Error(), "broadcast copy") {
-			t.Errorf("the refusal should name what is missing: %v", err)
+			t.Fatal("a broadcast that is not a repeated run lowered")
+		} else if !strings.Contains(err.Error(), "contiguous run repeated") {
+			t.Errorf("the refusal should say which broadcasts it can build: %v", err)
 		}
 	})
 
@@ -725,5 +728,181 @@ func TestScalarValidation(t *testing.T) {
 	}
 	if got := tensor.ScalarKind(9).String(); !strings.Contains(got, "ScalarKind(9)") {
 		t.Errorf("an unknown kind should say so, got %q", got)
+	}
+}
+
+// A broadcast operand is materialized and the result is what NumPy's rule says.
+//
+// The materialization is reported rather than done quietly: a copy nobody can
+// see is a performance cliff nobody can explain, which is the same argument
+// that makes kernel choice a report rather than an implementation detail.
+func TestBroadcastingMaterializesAndReportsItself(t *testing.T) {
+	const rows, width = 4, 8
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("bias")
+
+	x := tensor.Input(b, tensor.ValueDesc{
+		Name: "x", DType: accel.F32, Shape: tensor.Shape{rows, width},
+	})
+	// A gain vector across rows, which is the shape a normalization or a bias
+	// actually has.
+	g := tensor.Weight(b, tensor.ValueDesc{
+		Name: "g", DType: accel.F32, Shape: tensor.Shape{width},
+	})
+	tensor.Output(b, "y", tensor.Mul(b, x, g))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	var copied *tensor.KernelSelection
+	for i, s := range plan.Selections() {
+		if s.Kernel == "copy" {
+			copied = &plan.Selections()[i]
+		}
+	}
+	if copied == nil {
+		t.Fatal("a broadcast operand was materialized and nothing reported it")
+	}
+	if !strings.Contains(copied.Reason, "4 copies") {
+		t.Errorf("the report should say how many copies: %q", copied.Reason)
+	}
+
+	xs := make([]float32, rows*width)
+	gs := make([]float32, width)
+	for i := range xs {
+		xs[i] = float32(i) + 1
+	}
+	for i := range gs {
+		gs[i] = float32(i%3) - 1
+	}
+	out := f32Buffer(t, d, "y", make([]float32, rows*width))
+	f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x", xs), "g": f32Buffer(t, d, "g", gs), "y": out,
+	}})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, rows*width)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	for r := range rows {
+		for c := range width {
+			i := r*width + c
+			if want := xs[i] * gs[c]; got[i] != want {
+				t.Fatalf("element (%d,%d) is %v, want %v: the gain did not repeat across rows",
+					r, c, got[i], want)
+			}
+		}
+	}
+}
+
+// Views are bookkeeping: they change what a tensor describes and move nothing.
+func TestViews(t *testing.T) {
+	rt := newRuntime(t)
+	b := rt.NewBuilder("v")
+	x := tensor.Input(b, tensor.ValueDesc{
+		Name: "x", DType: accel.F32, Shape: tensor.Shape{2, 3, 4},
+	})
+
+	cases := []struct {
+		name  string
+		build func() *tensor.Tensor
+		shape tensor.Shape
+		want  string
+	}{
+		{"reshape", func() *tensor.Tensor { return tensor.Reshape(b, x, tensor.Shape{6, 4}) },
+			tensor.Shape{6, 4}, ""},
+		{"permute", func() *tensor.Tensor { return tensor.Permute(b, x, 2, 0, 1) },
+			tensor.Shape{4, 2, 3}, ""},
+		{"transpose", func() *tensor.Tensor { return tensor.Transpose(b, x, 0, 2) },
+			tensor.Shape{4, 3, 2}, ""},
+		{"transpose by negative axis", func() *tensor.Tensor { return tensor.Transpose(b, x, -1, 0) },
+			tensor.Shape{4, 3, 2}, ""},
+		{"slice", func() *tensor.Tensor { return tensor.Slice(b, x, 1, 1, 3) },
+			tensor.Shape{2, 2, 4}, ""},
+		{"broadcast", func() *tensor.Tensor {
+			y := tensor.Input(b, tensor.ValueDesc{Name: "b1", DType: accel.F32, Shape: tensor.Shape{1, 4}})
+			return tensor.Broadcast(b, y, tensor.Shape{3, 4})
+		}, tensor.Shape{3, 4}, ""},
+
+		{"a reshape that changes the element count", func() *tensor.Tensor {
+			return tensor.Reshape(b, x, tensor.Shape{5, 5})
+		}, nil, "never adds or drops values"},
+		{"a reshape of a strided view", func() *tensor.Tensor {
+			return tensor.Reshape(b, tensor.Transpose(b, x, 0, 1), tensor.Shape{24})
+		}, nil, "names different elements"},
+		{"a permutation with a repeated axis", func() *tensor.Tensor {
+			return tensor.Permute(b, x, 0, 0, 1)
+		}, nil, "appears twice"},
+		{"a permutation of the wrong length", func() *tensor.Tensor {
+			return tensor.Permute(b, x, 0, 1)
+		}, nil, "for a rank-3 tensor"},
+		{"a permutation naming an axis that does not exist", func() *tensor.Tensor {
+			return tensor.Permute(b, x, 0, 1, 5)
+		}, nil, "outside a rank-3 tensor"},
+		{"a transpose outside the rank", func() *tensor.Tensor {
+			return tensor.Transpose(b, x, 0, 7)
+		}, nil, "outside a rank-3 tensor"},
+		{"a slice outside its axis", func() *tensor.Tensor {
+			return tensor.Slice(b, x, 1, 0, 9)
+		}, nil, "not a range within axis"},
+		{"a slice on an axis that does not exist", func() *tensor.Tensor {
+			return tensor.Slice(b, x, 9, 0, 1)
+		}, nil, "outside a rank-3 tensor"},
+		{"a broadcast that drops rank", func() *tensor.Tensor {
+			return tensor.Broadcast(b, x, tensor.Shape{4})
+		}, nil, "never drops one"},
+		{"a broadcast of an axis that is not one", func() *tensor.Tensor {
+			return tensor.Broadcast(b, x, tensor.Shape{2, 5, 4})
+		}, nil, "only a size-one axis expands"},
+		{"a reshape to a non-positive dimension", func() *tensor.Tensor {
+			return tensor.Reshape(b, x, tensor.Shape{0, 24})
+		}, nil, "positive concrete integer"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := b.Err()
+			out := tc.build()
+			after := b.Err()
+			if tc.want == "" {
+				if !out.Shape().Equal(tc.shape) {
+					t.Errorf("%s produced %v, want %v", tc.name, out.Shape(), tc.shape)
+				}
+				if (before == nil) != (after == nil) {
+					t.Errorf("%s recorded an error: %v", tc.name, after)
+				}
+				return
+			}
+			if after == nil || (before != nil && after.Error() == before.Error()) {
+				t.Fatalf("%s was accepted", tc.name)
+			}
+			if !strings.Contains(after.Error(), tc.want) {
+				t.Errorf("the refusal should say %q, got %v", tc.want, after)
+			}
+		})
+	}
+
+	// A poisoned operand flows through every view without a second diagnostic.
+	bad := tensor.Reshape(b, x, tensor.Shape{5, 5})
+	for _, f := range []func() *tensor.Tensor{
+		func() *tensor.Tensor { return tensor.Reshape(b, bad, tensor.Shape{1}) },
+		func() *tensor.Tensor { return tensor.Permute(b, bad, 0) },
+		func() *tensor.Tensor { return tensor.Transpose(b, bad, 0, 1) },
+		func() *tensor.Tensor { return tensor.Slice(b, bad, 0, 0, 1) },
+		func() *tensor.Tensor { return tensor.Broadcast(b, bad, tensor.Shape{2}) },
+	} {
+		before := b.Err().Error()
+		if got := f(); !strings.Contains(got.String(), "invalid") {
+			t.Errorf("a view of a poisoned tensor is not poisoned: %v", got)
+		}
+		if b.Err().Error() != before {
+			t.Error("a view of a poisoned tensor recorded a second diagnostic")
+		}
 	}
 }
