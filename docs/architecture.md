@@ -41,7 +41,7 @@ everything else.
           |      |      |      |      |
         CPU   Metal  Vulkan  D3D12   GL
         ^^^^^^^^^^^  \____________________/
-        built at v0     designed, not yet built
+           built        designed, not yet built
 ```
 
 Two of those five synchronous backends are what v0 builds. The others are
@@ -217,7 +217,7 @@ If you contribute a backend, that file is the contract.
 | M3, graph planning and flat submission | done, split into [015](../specs/015-graph-recording.md), [016](../specs/016-graph-execution.md), and [017](../specs/017-graph-aliasing.md) |
 | M4, cooperative execution on the CPU | done, split into [018](../specs/018-cooperative-lowering.md), [019](../specs/019-cooperative-diagnostics.md), and [020](../specs/020-cooperative-atomics.md); subgroup shuffles and scans deferred |
 | M5, the portable tiled GEMM | done: 000's second v0 proof obligation |
-| M6, Metal | in progress, split into [021](../specs/021-metal-bringup.md), [022](../specs/022-msl-target.md), and [023](../specs/023-metal-graph.md); 021 and 022 are built |
+| M6, Metal | done, split into [021](../specs/021-metal-bringup.md), [022](../specs/022-msl-target.md), and [023](../specs/023-metal-graph.md); the encoder-barrier measurement and indirect command buffers stay behind [006](../specs/006-backends.md) §4.3's measurement |
 | M7, tensor decode and prefill | specified, not started |
 
 M1 built the bottom of the device layer: enumeration and device open, the

@@ -1,6 +1,6 @@
 ---
 title: "Metal graph execution, lifetime, and device loss"
-status: in progress
+status: implemented
 layer: device
 depends_on:
   - 001-device-resources.md

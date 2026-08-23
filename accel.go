@@ -77,8 +77,10 @@
 // A kernel the MSL target cannot lower is refused by name rather than run on
 // the CPU instead, so a device the caller selected is never quietly bypassed.
 //
-// What Metal does not do yet: multi-node graphs re-encode but indirect dispatch
-// does not, and device loss is not yet reported.
+// Graphs run on it as they do on the CPU: multi-node graphs are re-encoded per
+// submission, an indirect dispatch's device-written workgroup count is clamped
+// on the device rather than read back, and device loss is reported and is
+// terminal once reported.
 //
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and

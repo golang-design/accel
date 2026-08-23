@@ -616,7 +616,7 @@ remainder is tracked forward.
 **What still stands between 003 and `implemented`:** the render-pass payloads and
 their validation rows, which belong to [005](005-graphics.md) and are post-v0.
 
-### M6. Metal
+### M6. Metal — complete 2026-08-23
 
 **Correction, 2026-08-23.** This section previously opened *"this milestone
 needs hardware, and cannot be completed without it"*, and carried a table
@@ -717,6 +717,65 @@ is a milestone criterion.
 The numeric probes run before the GEMM. If Metal misses a normative ceiling, the
 lowering or supported domain changes; tests are not widened. Completion-handler
 lifetime is exercised under repeated early closes and asynchronous completion.
+
+#### M6 outcome — complete 2026-08-23
+
+**All six done criteria are met**, and the milestone is complete in the sense
+this file means: what it promised is built and proved, not that Metal has no
+work left. The two outstanding items — whether a memory barrier inside one
+encoder would serve where an encoder boundary is used, and
+`MTLIndirectCommandBuffer` — are ones [006](006-backends.md) §4.3 already keeps
+behind a measurement rather than a schedule.
+
+**The milestone's premise was wrong and that is the most useful thing it
+produced.** This section opened by asserting that M6 needed hardware nobody
+here had, and reasoned for several paragraphs about how to work around it. A
+four-line spike disproved it. The generalization is that an environment
+constraint is a claim like any other, and testing one usually costs less than
+the first paragraph written on top of it.
+
+**What the differential is worth.** All 29 corpus kernels run on both backends
+from one generated record: 22 agree bit for bit and 7 within a ceiling derived
+from [008](008-numerics.md) §6 for the bounded primitive each reaches. The CPU
+runs a resumable state machine with a program counter and Metal runs the
+authored structure with a real barrier, so a disagreement is the transform's and
+nothing else's. Every check here was confirmed by reinstating its fault rather
+than by watching it pass — an edited MSL body, a clamp that does not clamp, a
+shifted std140 offset, `exp` swapped for `exp2`.
+
+**Four divergences, each measured rather than remembered**, and all four in
+[`conventions.md`](../docs/conventions.md):
+
+1. `-contents` is non-nil for private storage on Apple silicon, contradicting
+   what Metal documents. Trusting the object over the requested mode would have
+   made every buffer mappable here and not on an Intel Mac.
+2. `MTLMathMode.safe` does not disable contraction. It governs reassociation and
+   denormals, so §5's requirement is met by a pragma in every emitted kernel.
+3. Apple GPUs flush a subnormal *result* to zero while preserving a stored one,
+   which narrows Metal's exact domain and widens no bound.
+4. A SIMD width belongs to a compiled pipeline, not a device.
+
+**Three bugs whose shape generalizes past Metal.** A class resolved in a `var`
+initializer runs before its image is mapped, which made Metal abort the process
+on an assertion rather than return the error this code reads carefully — a
+selector may be registered before anything loads, because registering one
+creates it, and a class may not. A symbol resolver that installed as it resolved
+let a test's fakes overwrite the real function pointers. And **dead code was
+found twice, both times by the coverage gate, both times a check that
+`Plan.Validate` already made unreachable** — which is an argument for the gate
+being about more than a number.
+
+**Two existing tests caught real problems**, which is the argument for the CPU
+milestones having built them first: one rejected a zero-valued subgroup limit
+and forced the width to be measured, and one failed on a premise Metal falsified
+and was rewritten to check its rule rather than its premise.
+
+**Carried forward.** `Ballot` (a `simd_vote` rather than an integer), f32
+atomics (a Metal *version* capability), and array members of uniform blocks (a
+std140 stride that would need the index expression rewritten) are each refused
+by name with a reason rather than emitted approximately. An outstanding fence is
+not signalled at the moment of device loss, only when waited on, which would
+need the completion handler [021](021-metal-bringup.md) §2 deliberately avoids.
 
 ### M7. Tensor decode plus minimal prefill
 

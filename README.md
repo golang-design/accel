@@ -172,15 +172,14 @@ bindings are the better choice.
 | Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
 | Portable tiled GEMM | **Built** on the CPU backend |
 | Kernel corpus: the unquantized v0 kernels | **Built** on the CPU backend; the selection registry is not |
-| Metal backend | **Built** on an Apple M2, except graph-level work: all 29 corpus kernels compile on the device and agree with the CPU backend, 22 of them bit for bit. Multi-node graphs, indirect dispatch and device loss are [023](specs/023-metal-graph.md) |
+| Metal backend | **Built** on an Apple M2: all 29 corpus kernels compile on the device and agree with the CPU backend, 22 of them bit for bit. Graphs, indirect dispatch and device loss included |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 through M5](specs/009-sequencing.md), and the Metal row from
-[M6's first child](specs/021-metal-bringup.md).
+rows came from [M1 through M6](specs/009-sequencing.md).
 
 A graph infers its own dependency edges from what each node declares it touches,
 comparing byte ranges rather than whole resources, so two nodes writing disjoint
