@@ -61,18 +61,39 @@ worse document than the one it replaced. Change the framing from "our bet" to
 One aspect each, short, in dependency order. Each teaches **one** concept and
 ends with the reader having run something.
 
-| # | Tutorial | The one concept | Use case it is framed around |
+**Written 2026-08-24: eight pages, in `docs/tutorial/`.** The deck below was
+ten; it shipped as eight, and the two that are absent are absent for a reason
+worth recording.
+
+| # | Tutorial | The one concept | Use case |
 | --- | --- | --- | --- |
-| 1 | Hello, GPU | open a device, dispatch a kernel, read the result | scale an array |
-| 2 | Writing a kernel | the Go subset and `go generate` | elementwise image adjust |
-| 3 | Memory | pools, buffers, views, lifetimes | holding weights that outlive a frame |
-| 4 | Graphs | record once, replay many | a simulation step run every tick |
-| 5 | Cooperation | shared memory and barriers | a reduction, and a tiled GEMM |
-| 6 | Uniforms and scalars | passing values that are not buffers | a runtime coefficient |
-| 7 | Tensors | shapes, operators, one plan | a small MLP |
-| 8 | A decode step | KV cache, attention, sampling | one token from a transformer |
-| 9 | Quantized weights | int8 with a per-block scale | fitting a model in memory |
-| 10 | Backends and portability | the CPU oracle, selecting a device | testing without a GPU |
+| 1 | Hello, GPU | open a device, dispatch, read back | scaling an array |
+| 2 | Writing a kernel | the Go subset and `go generate` | brightening an image |
+| 3 | Memory | pools, buffers, views, ordered closing | weights that outlive a frame |
+| 4 | Graphs | record once, replay many | a simulation step |
+| 5 | Cooperation | shared memory and barriers | a reduction |
+| 6 | Values that are not buffers | uniforms, and `SetUniform` | a runtime coefficient |
+| 7 | Tensors | shapes and operators | a feed-forward block |
+| 8 | Backends | selection, capabilities, testing without a GPU | shipping to machines you do not own |
+
+**A decode step and quantized weights are not written.** §5.6 gates them on
+`Contiguous`, the `PlanCache` ownership documentation, `quant`'s naming, and
+f16 host uploads. A tutorial for either would spend more space on workarounds
+than on the concept, which is the opposite of one aspect at a time. The
+package documentation is the current word on both.
+
+**Every page's code is verified, not by `Example` functions.** §3.1 asked for
+those, and §4.1's finding is why they do not fit: a kernel-bearing example needs
+a generated kernel in its own package, and the only such package in this
+repository is `internal/testkernels`, which a reader cannot import. Teaching
+from it would show an import that does not work.
+
+So the check is the one the README already uses, and it is stronger than
+compilation: every kernel is **extracted from the prose and run through the real
+generator**, every host program is extracted and executed from a clean module,
+every Go block is parsed, and every `accel.`/`tensor.`/`quant.` symbol named
+anywhere in the pages is checked against `go doc`. Twenty-four blocks, zero
+unknown symbols.
 
 Graphics tutorials are **not** in this deck. [033](033-render-api.md) and
 [034](034-surface-present.md) specify a public API that does not exist in code,

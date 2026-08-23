@@ -3,7 +3,7 @@
 What accel can do today, and why it is shaped the way it is.
 
 If you only want to get something running, the [README](../README.md) is shorter
-and has the code. If you want the formal decision record — what was tried, what
+and has the code, and the [tutorials](tutorial/) take it one idea at a time. If you want the formal decision record — what was tried, what
 was rejected, and why — that is [`specs/`](../specs/).
 
 Start with [what you can run today](#what-you-can-run-today) if that is your

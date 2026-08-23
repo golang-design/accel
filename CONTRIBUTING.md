@@ -10,6 +10,10 @@ as much as a patch — and patches are welcome.
 
 ## What is most useful right now
 
+**Working through the [tutorials](docs/tutorial/) and telling us where they
+lose you.** They are new, and the place a newcomer gets stuck is the thing
+nobody who wrote them can see.
+
 **Tell us where the design is wrong.** Especially if you have shipped GPU code,
 or run models in production, and something here looks naive. Open an issue.
 [`docs/architecture.md`](docs/architecture.md) is the readable overview;

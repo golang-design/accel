@@ -128,6 +128,10 @@ func main() {
 To run the same thing on a GPU, swap `OpenCPU` for
 `accel.OpenBest(accel.Policy{})`. Nothing else changes.
 
+The [tutorials](docs/tutorial/) take this apart one idea at a time: what the
+kernel subset allows, where memory comes from, how to record work once and
+replay it, and how to run the same code on a device you do not own.
+
 On a machine with no GPU that returns an error rather than falling back:
 `OpenBest` never selects the CPU backend unless you set `Policy.AllowCPU`. A
 device you asked for is never silently substituted.
@@ -217,6 +221,7 @@ runs anywhere.
 
 | | |
 | --- | --- |
+| [**Tutorials**](docs/tutorial/) | Eight short pages, one idea each. Start here |
 | [Architecture](docs/architecture.md) | How it fits together, and the decisions behind it |
 | [Backend conventions](docs/conventions.md) | Where GPU backends actually disagree. Useful even if you never use accel |
 | [Specs](specs/) | Internal design documents, full reasoning, open questions |
