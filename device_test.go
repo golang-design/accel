@@ -517,23 +517,25 @@ func TestDTypeSizeAndName(t *testing.T) {
 	}
 }
 
-// TestErrNotImplementedStillCovers records what is still unbuilt, so the
-// boundary is visible rather than discovered by a caller.
+// ErrNotImplemented has no reachable user, which is the state to notice.
 //
-// It named NewTexture until textures landed. What is left is the sampler, which
-// has nothing to sample with until a render pass exists: spec 005 is a drafted
-// post-v0 parent whose four child designs are not yet written, and a sampler
-// that could be created and not used would be an API surface with no meaning
-// behind it.
-func TestErrNotImplementedStillCovers(t *testing.T) {
-	defer func() {
-		r := recover()
-		if err, ok := r.(error); !ok || !errors.Is(err, accel.ErrNotImplemented) {
-			t.Errorf("Sampler.Close panicked with %v, want ErrNotImplemented", r)
-		}
-	}()
-	var s accel.Sampler
-	_ = s.Close()
+// It existed for Sampler, and specs/036-documentation.md's freeze record
+// withdrew that whole family: exported with no producer, no consumer, and a
+// Close that panicked, so a caller who found it could build a descriptor, never
+// obtain one, and crash if they somehow did. Naming a type in a public API is a
+// promise to keep it.
+//
+// The constant stays, because specs/032-stage-abi.md and
+// specs/033-render-api.md will give it users again. This test asserts the
+// boundary is empty rather than that it is gone, so re-exporting something
+// unbuilt is a deliberate act rather than a drift.
+func TestErrNotImplementedHasNoReachableUser(t *testing.T) {
+	if accel.ErrNotImplemented == nil {
+		t.Fatal("ErrNotImplemented was removed; if that is deliberate, this test goes with it")
+	}
+	if !errors.Is(accel.ErrNotImplemented, accel.ErrNotImplemented) {
+		t.Error("ErrNotImplemented does not match itself")
+	}
 }
 
 // And what *was* on that list is now built, which is the other half: a boundary

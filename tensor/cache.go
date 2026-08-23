@@ -41,11 +41,11 @@ type PlanCache struct {
 	rt *Runtime
 
 	mu     sync.Mutex
-	plans  map[Key]*Plan
+	plans  map[key]*Plan
 	closed bool
 }
 
-// Key identifies a compiled plan.
+// key identifies a compiled plan.
 //
 // A digest over the six things specs/007-tensor-layer.md requires: the DAG's
 // structure, every port and scalar, the selected kernels' own digests, the
@@ -53,18 +53,18 @@ type PlanCache struct {
 // subject is the one that matters -- "shape alone is never a sufficient key" --
 // because two different models over the same shapes are different plans and
 // returning one for the other is a confident wrong answer.
-type Key [32]byte
+type key [32]byte
 
-func (k Key) String() string { return fmt.Sprintf("%x", k[:8]) }
+func (k key) String() string { return fmt.Sprintf("%x", k[:8]) }
 
 // NewPlanCache returns a cache over one runtime.
 func NewPlanCache(rt *Runtime) *PlanCache {
-	return &PlanCache{rt: rt, plans: map[Key]*Plan{}}
+	return &PlanCache{rt: rt, plans: map[key]*Plan{}}
 }
 
 // key combines a recorded graph's identity with everything outside it that
 // changes what compiling produces.
-func (c *PlanCache) key(id Identity, opts CompileOptions) Key {
+func (c *PlanCache) key(id Identity, opts CompileOptions) key {
 	h := sha256.New()
 	writeString(h, "accel/tensor plan key v1")
 	_, _ = h.Write(id[:])
@@ -80,7 +80,7 @@ func (c *PlanCache) key(id Identity, opts CompileOptions) Key {
 	// are the same plan, and including it would double the cache for nothing.
 	writeString(h, "opts v1")
 
-	var k Key
+	var k key
 	copy(k[:], h.Sum(nil))
 	return k
 }

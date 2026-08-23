@@ -162,34 +162,41 @@ func (t *Texture) free() {
 	p.mu.Unlock()
 }
 
-// FilterMode is how a sampler interpolates between texels.
-type FilterMode int
+// The sampler family is withdrawn from the public API until there is a render
+// pass to sample in.
+//
+// It was exported with no producer, no consumer, and a Close that panicked, so
+// a caller who found it could construct a descriptor, never obtain a *sampler,
+// and crash if they somehow did. Naming a type in a public API is a promise to
+// keep it; this one promised something specs/005-graphics.md has not designed
+// the shape of yet.
+//
+// specs/033-render-api.md and specs/032-stage-abi.md decide what it becomes.
+// 032 admits an integer texel fetch and continues to refuse filtered sampling,
+// on the evidence specs/004-kernel-authoring.md records, so the eventual public
+// shape may not be a sampler at all.
+type filterMode int
 
 const (
-	FilterNearest FilterMode = iota
-	FilterLinear
+	filterNearest filterMode = iota
+	filterLinear
 )
 
-// AddressMode is how a sampler handles coordinates outside [0, 1].
-type AddressMode int
+type addressMode int
 
 const (
-	AddressClampToEdge AddressMode = iota
-	AddressRepeat
-	AddressMirrorRepeat
+	addressClampToEdge addressMode = iota
+	addressRepeat
+	addressMirrorRepeat
 )
 
-// SamplerDescriptor describes a sampler to create.
-type SamplerDescriptor struct {
-	Min, Mag, Mip FilterMode
-	AddressU      AddressMode
-	AddressV      AddressMode
-	AddressW      AddressMode
+type samplerDescriptor struct {
+	Min, Mag, Mip filterMode
+	AddressU      addressMode
+	AddressV      addressMode
+	AddressW      addressMode
 	Label         string
 }
 
-// Sampler describes how a texture is read in a kernel.
-type Sampler struct{ _ noCopy }
-
-// Close releases the sampler.
-func (s *Sampler) Close() error { panic(ErrNotImplemented) }
+// sampler describes how a texture is read in a kernel.
+type sampler struct{ _ noCopy }

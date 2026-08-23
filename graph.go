@@ -270,7 +270,6 @@ const (
 	NodeCopyTextureToBuffer
 	NodeCopyBufferToTexture
 	NodeHostWrite
-	NodeBarrier // builder-synthesized; not returned by Graph.Nodes
 )
 
 // Graph is validated, planned work that can be submitted many times.

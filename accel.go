@@ -71,12 +71,12 @@
 //
 // The API is under construction and will change.
 //
-// [Sampler] is unbuilt, because there is no render pass to sample in yet. Its
-// methods **panic** with [ErrNotImplemented] rather than return it, so do not
-// write errors.Is against them. Subgroup shuffles and scans are unbuilt.
-// Graphics is designed and being written: [Vertex], [Fragment] and [Clip] are
-// here, and there is no render pipeline, render pass or surface to use them
-// with.
+// Subgroup shuffles and scans are unbuilt.
+//
+// Graphics is designed and being written, and none of it is in this API yet.
+// The stage receivers and the sampler family were exported ahead of the code
+// that gives them meaning and have been withdrawn until a stage can run; see
+// specs/036-documentation.md's freeze record.
 //
 // # The model
 //
@@ -123,10 +123,12 @@ import (
 // ErrNotImplemented marks a declaration that exists so its shape is fixed but
 // whose implementation has not arrived.
 //
-// It is **panicked**, not returned: the only user is [Sampler], which cannot do
-// anything useful until a render pass exists, and a method that returned an
-// error would let a caller write a plausible handler for a path that can never
-// succeed. A panic says the call was a mistake rather than a runtime failure.
+// It has no user today: its only one was the sampler family, withdrawn with the
+// rest of the unbuilt graphics surface. It stays because
+// specs/032-stage-abi.md and specs/033-render-api.md will give it users again,
+// and because the rule it carries is worth keeping — a declaration that exists
+// only for its shape **panics** rather than returning, so a caller cannot write
+// a plausible handler for a path that can never succeed.
 var ErrNotImplemented = errors.New("accel: not implemented (design stage)")
 
 // ErrUnsupported reports that a device cannot perform an operation because it
@@ -214,9 +216,8 @@ type AdapterRejection struct {
 
 // SelectionReport makes automatic selection reproducible in logs.
 type SelectionReport struct {
-	Selected           AdapterID
-	EnvironmentBackend string
-	Rejected           []AdapterRejection
+	Selected AdapterID
+	Rejected []AdapterRejection
 }
 
 // Policy is what OpenBest is allowed to select.

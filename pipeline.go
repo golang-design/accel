@@ -251,7 +251,7 @@ func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, 
 
 func (r *Recorder) bindingAccess(p *ComputePipeline, b Binding, slot kernel.Binding) (access, bool) {
 	mode := publicAccess(slot.Access)
-	if b.Texture != nil || b.Sampler != nil {
+	if b.Texture != nil {
 		r.fail("Dispatch %q: binding %q is a buffer and textures arrive with "+
 			"specs/001-device-resources.md section 4", p.label, slot.Name)
 		return access{}, false

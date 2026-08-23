@@ -91,14 +91,6 @@ type ID3 = kernel.ID3
 // than two that have to be converted. See specs/012-kernel-pipeline.md.
 type Thread = kernel.Thread
 
-// WorkgroupSize is the shape of one workgroup, fixed when a pipeline is created
-// because backends need it at compile time.
-//
-// All three extents matter: a kernel addressing a 2D tile needs a 2D workgroup,
-// and flattening it into X alone forces index math that the compiler cannot then
-// prove uniform.
-type WorkgroupSize struct{ X, Y, Z int }
-
 // SubgroupOpSet reports which subgroup operations a device provides. Vulkan
 // exposes these independently, so presence of one does not imply the others.
 //
@@ -262,17 +254,6 @@ func (c Capability) String() string {
 // positive. Indirect dispatches keep zero as the specified skip mechanism.
 type WorkgroupCount struct{ X, Y, Z int }
 
-// SharedMemory declares workgroup-shared storage for a kernel. The size is fixed
-// at pipeline creation because every backend needs it statically.
-//
-// Shared memory is uninitialised at workgroup start. The CPU backend fills it
-// with a poison pattern rather than zeroes, so a kernel that reads before writing
-// fails loudly on the oracle instead of working by accident on one backend.
-type SharedMemory struct {
-	DType DType
-	Count int
-}
-
 // ComputePipelineDescriptor describes a compute pipeline to create.
 type ComputePipelineDescriptor struct {
 	// Kernel is the compiled kernel. See the kernel authoring package for how one
@@ -397,11 +378,10 @@ type Binding struct {
 
 	Buffer  BufferView
 	Texture *Texture
-	Sampler *Sampler
 
 	// Slot supplies the resource before submission instead of at record time. Its
-	// zero value is not a slot, so a Binding that set none of the four is rejected
-	// rather than silently referring to the first one.
+	// zero value is not a slot, so a Binding that set none of the three is
+	// rejected rather than silently referring to the first one.
 	Slot Slot
 
 	// Uniform is a by-value parameter, and Index then names the kernel's

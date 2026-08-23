@@ -24,7 +24,7 @@ func (g *Graph) checkBinding(b Binding) (driver.SlotBinding, error) {
 		return driver.SlotBinding{}, fmt.Errorf("accel: Bind: slot %d is not one of this graph's %d",
 			int(b.Slot), len(g.slots))
 	}
-	if b.Texture != nil || b.Sampler != nil {
+	if b.Texture != nil {
 		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: textures and samplers arrive "+
 			"with specs/001-device-resources.md section 4", d.Name)
 	}
