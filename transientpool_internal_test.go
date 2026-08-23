@@ -137,3 +137,80 @@ func TestSharedPoolRefusesABuildWhileInFlight(t *testing.T) {
 	// The refusal leaves the pool usable rather than half-grown.
 	poolGraph(t, d, pool, 128)
 }
+
+// A pool's graph count has to match the graphs that actually reserved from it,
+// and the two ways it can drift are opposite and both fatal.
+//
+// Too high and the pool never closes again: nothing can clear the count, so a
+// Build that failed after reserving kills the pool for the rest of the program.
+// Too low and the pool closes while a live graph still holds offsets into the
+// memory it frees, which is a use-after-free whose symptom is another graph's
+// results.
+func TestSharedPoolCountsTheGraphsThatReserved(t *testing.T) {
+	d, err := OpenCPU(CPUOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	pool, err := d.NewTransientPool("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// A graph with no transients reserves nothing, so closing it must not
+	// decrement a count it never incremented.
+	empty := d.NewRecorder()
+	empty.UseTransientPool(pool)
+	g, err := empty.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if pool.Graphs() != 0 {
+		t.Errorf("a graph with no transients counts %d against the pool", pool.Graphs())
+	}
+	// It must not claim the pool when it runs either, or closing the pool would
+	// break a graph that needs nothing from it.
+	if err := pool.begin(); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	err = d.Queue().Submit(g).Wait()
+	pool.end()
+	if err != nil {
+		t.Errorf("a graph with no transients claimed the pool it takes nothing from: %v", err)
+	}
+	if err := g.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if n := pool.Graphs(); n != 0 {
+		t.Fatalf("closing a graph that reserved nothing left the count at %d", n)
+	}
+
+	// A build that fails after reserving must give the reservation back. That
+	// failure is driven directly rather than provoked, because every Build
+	// error reachable from outside happens either before placement or not at
+	// Build at all -- V19's closed-resource check runs at Submit. The call is
+	// the one Build makes on its own error path, which is the thing under test.
+	g2 := poolGraph(t, d, pool, 64)
+	if pool.Graphs() != 1 {
+		t.Fatalf("a graph with transients counts %d against the pool", pool.Graphs())
+	}
+	g2.releaseTransients()
+	if n := pool.Graphs(); n != 0 {
+		t.Fatalf("a failed build left %d graph(s) counted against the pool, which then "+
+			"never closes", n)
+	}
+	// And the graph's own Close runs the same call again, so it has to be
+	// harmless the second time or the count drifts the other way.
+	if err := g2.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if n := pool.Graphs(); n != 0 {
+		t.Fatalf("releasing twice left the count at %d", n)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatalf("the pool is unusable after a failed build: %v", err)
+	}
+
+}

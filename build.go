@@ -163,6 +163,12 @@ func (g *Graph) placeTransients() error {
 			"reports a %s pool budget", humanBytes(total), g.dev.info.Name, humanBytes(budget))
 	}
 	if total == 0 {
+		// A graph with no transients takes nothing from a shared pool, so it
+		// does not hold one either: it must not claim the pool when it runs,
+		// and it must not release a count it never took. Dropping the pool here
+		// is what makes "g.pool is non-nil" and "this graph holds the pool" the
+		// same fact, which is what releaseTransients keys on.
+		g.shared = nil
 		return nil
 	}
 
@@ -341,18 +347,41 @@ func (d *Device) countGraphs(delta int) {
 	d.mu.Unlock()
 }
 
+// releaseTransients gives up whatever this graph holds of its transient memory.
+//
+// It is the single place that does so, which is what keeps the accounting
+// right: Build calls it when a later step fails, and Close calls it, and those
+// are the only two ways a graph stops holding memory. A second release path --
+// Close doing this itself for a shared pool -- left a Build that failed after
+// reserving still counted against the pool, which then refused to close for the
+// rest of the program.
+//
+// g.pool is the marker for "this graph took something", and it is nil for a
+// graph with no transients at all. Releasing on the strength of g.shared
+// instead would decrement a pool such a graph never incremented, and the count
+// would then let the pool close while a live graph held offsets into it.
 func (g *Graph) releaseTransients() {
-	// A shared pool belongs to the caller and outlives this graph. Freeing it
-	// here would pull the memory out from under every other graph planned into
-	// it, and the symptom would be one graph's results appearing in another's
-	// buffers rather than a crash.
-	if g.shared != nil {
-		g.pool = nil
+	pool := g.pool
+	if pool == nil {
 		return
 	}
-	if g.pool != nil {
-		g.pool.Free()
-		g.dev.countImplicit(-1)
-		g.pool = nil
+	g.pool = nil
+
+	// Under the lock, because Graph.run reads g.shared inside the critical
+	// section that marks the graph in flight.
+	g.mu.Lock()
+	shared := g.shared
+	g.shared = nil
+	g.mu.Unlock()
+
+	if shared != nil {
+		// A shared pool belongs to the caller and outlives this graph. Freeing
+		// it here would pull the memory out from under every other graph
+		// planned into it, and the symptom would be one graph's results
+		// appearing in another's buffers rather than a crash.
+		shared.release()
+		return
 	}
+	pool.Free()
+	g.dev.countImplicit(-1)
 }

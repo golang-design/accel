@@ -515,15 +515,6 @@ func (g *Graph) Close() error {
 		}
 	}
 	g.releaseTransients()
-	// Under the lock, because run reads the same field inside the critical
-	// section that marks the graph in flight.
-	g.mu.Lock()
-	shared := g.shared
-	g.shared = nil
-	g.mu.Unlock()
-	if shared != nil {
-		shared.release()
-	}
 	g.dev.countGraphs(-1)
 	return nil
 }
