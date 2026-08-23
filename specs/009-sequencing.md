@@ -848,6 +848,19 @@ Build:
 No automatic plan cache, quantization, sampling, production prefill buckets, or
 multi-sequence scheduler is in M7.
 
+#### M7 is split, and the cut is vertical
+
+| Child | Scope |
+| --- | --- |
+| [024](024-tensor-bringup.md) | `Runtime`, `Builder`, `Tensor`, `Plan`, ports, shape/dtype/stride inference with poisoned-tensor error collection, lowering to a recorder, bindings and submission, selection reports, and the elementwise operators |
+| [025](025-tensor-operators.md) | The rest of 007's v0 operators: views and indexing, `Rows`, `RMSNorm`, `MatMul` and `Linear`, `RoPE`, and `Softmax` |
+| [026](026-tensor-decode.md) | `Persistent` state and the KV cache, `Attention`, the decode and minimal prefill plans, and the parity oracle between them |
+
+Vertical again, for the reason [012](012-kernel-pipeline.md) and
+[021](021-metal-bringup.md) give: the first child exists to make the next ones
+checkable. Until one tensor DAG compiles and runs, every piece of shape
+inference is checked by reading it.
+
 Done:
 
 - every 007 v0 operator contract has unit and plan-level coverage;

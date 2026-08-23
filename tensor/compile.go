@@ -1,0 +1,229 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+package tensor
+
+import (
+	"errors"
+	"fmt"
+
+	"golang.design/x/accel"
+)
+
+// CompileOptions carries what a plan needs beyond the graph.
+type CompileOptions struct {
+	Label string
+}
+
+// KernelSelection reports which kernel an operator became, and why.
+//
+// Reported rather than merely decided, because specs/007-tensor-layer.md makes
+// fused attention a *selection* rather than a capability: a caller who cannot
+// see which they got cannot explain a performance cliff or a numeric
+// difference, and would have to guess from timings.
+type KernelSelection struct {
+	Op       string
+	Kernel   string
+	Reason   string
+	Rejected []string
+}
+
+// Plan is a compiled tensor graph, ready to submit.
+//
+// It owns one device graph and the transient memory the planner chose; the
+// caller owns every buffer they named. Immutable, and with the graph's
+// one-submission-in-flight restriction.
+type Plan struct {
+	rt         *Runtime
+	graph      *accel.Graph
+	label      string
+	ports      []PortDesc
+	slots      map[string]accel.Slot
+	selections []KernelSelection
+
+	closed bool
+}
+
+// Bindings is everything a submission needs from the caller.
+type Bindings struct {
+	Buffers map[string]accel.BufferView
+}
+
+// Compile turns the recorded graph into a plan.
+//
+// Every collected error is returned together rather than the first one, because
+// a model with three mistakes should take one compile to find all three. Each
+// names the operator, the operand, and the line that recorded it.
+func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
+	if rt == nil {
+		return nil, errors.New("accel/tensor: Compile needs a runtime")
+	}
+	if b.rt != nil && b.rt != rt {
+		return nil, errors.New("accel/tensor: this builder belongs to another runtime")
+	}
+	// Reported only when nothing else went wrong. Output ignores a poisoned
+	// value, so a graph whose only mistake is upstream has no outputs *because*
+	// of that mistake -- and saying so as well would be the second diagnostic
+	// the poisoned-tensor rule exists to prevent, arriving from a different
+	// direction.
+	if err := b.Err(); err != nil {
+		return nil, err
+	}
+	if len(b.outputs) == 0 {
+		return nil, errors.New("accel/tensor: Compile: the graph declares no output, so " +
+			"nothing it computes would be readable")
+	}
+
+	label := opts.Label
+	if label == "" {
+		label = b.label
+	}
+	p := &Plan{rt: rt, label: label, ports: b.ports, slots: map[string]accel.Slot{}}
+
+	r := rt.dev.NewRecorder()
+
+	// Every external port is a slot, so one plan serves many submissions with
+	// different buffers. specs/003-command-graph.md's slots are exactly this
+	// and there is no reason to invent a second mechanism.
+	for _, d := range b.ports {
+		access := accel.AccessRead
+		switch d.Kind {
+		case PortOutput:
+			access = accel.AccessWrite
+		case PortState:
+			access = accel.AccessReadWrite
+		}
+		p.slots[d.Name] = r.Slot(accel.SlotDescriptor{
+			Name: d.Name, Kind: accel.BindingStorageBuffer,
+			DType: d.DType, Access: access, MinCount: d.Shape.Elements(),
+		})
+	}
+
+	// Intermediates are transients, so the graph's aliasing and barrier
+	// planning apply unchanged. A tensor layer allocating its own would
+	// reimplement specs/017-graph-aliasing.md, worse.
+	views := make([]accel.BufferView, len(b.nodes))
+	outputOf := map[*Tensor]string{}
+	for _, o := range b.outputs {
+		outputOf[o.t] = o.name
+	}
+
+	var errs []error
+	for i := range b.nodes {
+		n := &b.nodes[i]
+		if err := p.lowerNode(r, n, views, outputOf, i); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+
+	// An output that names an external port rather than a computed value would
+	// be a copy between two caller buffers. Refused rather than emitted,
+	// because a caller who wanted that wrote a graph that computes nothing and
+	// almost certainly meant something else -- and the copy they can write
+	// themselves is one line.
+	for _, o := range b.outputs {
+		if o.t.node < 0 {
+			return nil, fmt.Errorf("accel/tensor: output %q is an input or weight rather "+
+				"than a computed value; a plan that only copies is a copy, not a plan",
+				o.name)
+		}
+	}
+
+	g, err := r.Build()
+	if err != nil {
+		return nil, fmt.Errorf("accel/tensor: compiling %q: %w", label, err)
+	}
+	p.graph = g
+	rt.plans++
+	return p, nil
+}
+
+// lowerNode turns one operator into a dispatch.
+func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
+	outputOf map[*Tensor]string, i int) error {
+
+	count := n.out.shape.Elements()
+
+	// Every operand must already be the output shape. Broadcasting is inferred
+	// and not yet materialized: the corpus kernels index their operands
+	// together, so an operand of a different extent would read the wrong
+	// elements rather than repeat them. specs/025-tensor-operators.md adds the
+	// materializing copy, and refusing by name is what keeps this honest until
+	// it does.
+	for _, in := range n.inputs {
+		if !in.shape.Equal(n.out.shape) {
+			return fmt.Errorf("accel/tensor: %s: an operand of shape %v against a result of "+
+				"%v needs a broadcast copy, which specs/025-tensor-operators.md adds",
+				n.op, in.shape, n.out.shape)
+		}
+		if !in.contiguousLayout() {
+			return fmt.Errorf("accel/tensor: %s: a non-contiguous operand needs a "+
+				"materializing copy, which specs/025-tensor-operators.md adds", n.op)
+		}
+	}
+
+	pipe, err := p.rt.pipeline(n.kernel, fmt.Sprintf("%s.%s", p.label, n.op))
+	if err != nil {
+		return fmt.Errorf("accel/tensor: %s: %w", n.op, err)
+	}
+	p.selections = append(p.selections, KernelSelection{
+		Op: n.op, Kernel: n.kernel.Name, Reason: n.reason, Rejected: n.rejected,
+	})
+
+	binds := make([]accel.Binding, 0, len(n.inputs)+2)
+	for j, in := range n.inputs {
+		bind, err := p.operand(in, views)
+		if err != nil {
+			return fmt.Errorf("accel/tensor: %s operand %d: %w", n.op, j, err)
+		}
+		bind.Index = j
+		binds = append(binds, bind)
+	}
+
+	// The result is a transient unless the caller asked for it by name, in
+	// which case it is written straight into their buffer and no copy exists.
+	outIndex := len(n.inputs)
+	if name, wanted := outputOf[n.out]; wanted {
+		binds = append(binds, accel.Binding{Index: outIndex, Slot: p.slots[name]})
+	} else {
+		v := r.Transient(accel.BufferDescriptor{
+			DType: n.out.dtype, Count: count,
+			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+			Label: fmt.Sprintf("%s.%s.%d", p.label, n.op, i),
+		})
+		views[i] = v
+		binds = append(binds, accel.Binding{Index: outIndex, Buffer: v})
+	}
+
+	wg := int(n.kernel.WorkgroupSize.X)
+	r.Dispatch(pipe, binds, accel.WorkgroupCount{X: (count + wg - 1) / wg})
+	return nil
+}
+
+// operand resolves one operand to a binding.
+//
+// An external port becomes a slot, so the same plan serves many submissions; a
+// computed value becomes the transient its producer wrote.
+func (p *Plan) operand(t *Tensor, views []accel.BufferView) (accel.Binding, error) {
+	if t.node < 0 {
+		slot, ok := p.slots[t.port]
+		if !ok {
+			return accel.Binding{}, fmt.Errorf("the port %q has no slot", t.port)
+		}
+		return accel.Binding{Slot: slot}, nil
+	}
+	v := views[t.node]
+	if v.Buffer == nil {
+		// The producing node wrote straight into an output slot, so there is no
+		// transient to read. Declaring a value as an output *and* consuming it
+		// is legal in principle and needs the slot on both sides, which
+		// specs/025-tensor-operators.md can add when something needs it.
+		return accel.Binding{}, fmt.Errorf("it reads a value written directly into an " +
+			"output; a value that is both an output and an operand is not lowered yet")
+	}
+	return accel.Binding{Buffer: v}, nil
+}

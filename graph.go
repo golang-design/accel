@@ -564,6 +564,26 @@ func (q *Queue) Submit(g *Graph) *Fence {
 	})
 }
 
+// FailedFence returns a fence that has already failed with err.
+//
+// It exists for layers above this one. A tensor plan validates its bindings
+// before submitting, and specs/007-tensor-layer.md requires that failure to
+// arrive the same way every other submission failure does -- through the fence
+// -- so that a caller checks one thing rather than a second return value they
+// will forget. Without this, every layer above would either invent its own
+// two-value convention or reach into this package.
+//
+// A nil err is a programming mistake rather than a success, and says so.
+func FailedFence(err error) *Fence {
+	if err == nil {
+		err = errors.New("accel: FailedFence with no error")
+	}
+	f := newFence()
+	f.state.err = err
+	f.signal()
+	return f
+}
+
 // reject reports a submission that cannot be attempted at all, as a fence that
 // has already failed. Returning an error instead would make Submit the one
 // entry point a caller has to check twice.
