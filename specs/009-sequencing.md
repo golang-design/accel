@@ -1096,7 +1096,11 @@ Independently scoped later work includes:
   graph has for itself widens to the set sharing a pool.
 
 Vulkan is the first backend priority because it gives the CPU oracle a second
-vendor/API opinion and pays the cost of the real SPIR-V IR.
+vendor/API opinion and pays the cost of the real SPIR-V IR. It is verifiable in
+CI on Mesa lavapipe today — [006](006-backends.md) §7 costs that at one apt
+install, and the predecessor already runs a cgo-free Vulkan compute backend that
+way — so what makes it unscheduled is [000](000-decisions.md)'s two-backend v0,
+not the environment. See [the correction](#correction-vulkan-was-never-blocked-2026-08-23).
 
 #### M8 status — 2026-08-23
 
@@ -1112,7 +1116,7 @@ Written out rather than left to a reader to infer from the strikethroughs above.
 | paged KV and multi-sequence | **[030](030-paged-kv.md)**, mechanism complete; the *scheduler* is policy over it |
 | additional transient sets | **[031](031-shared-transients.md)** |
 | textures/formats and graphics | textures, formats and row pitch shipped at M1; **the graphics gate is cleared**, implementation in progress |
-| Vulkan and the SPIR-V emitter | **blocked here**, measured |
+| Vulkan and the SPIR-V emitter | **not blocked** — unscheduled by choice; see [the correction](#correction-vulkan-was-never-blocked-2026-08-23) |
 
 **Graphics was gated by [000](000-decisions.md), not by effort, and the gate is
 now cleared.** That file promised no graphics public API "until its stage ABI,
@@ -1167,6 +1171,9 @@ makes SPIR-V a *binary* target with no source level, so without a device, a
 validator, or a driver compiler an emitter would be code nobody ran — the
 failure mode [M6's outcome](#m6-outcome--complete-2026-08-23) names.
 
+> **Corrected 2026-08-23, see [the correction below](#correction-vulkan-was-never-blocked-2026-08-23).**
+> Every measurement above is accurate and the conclusion drawn from it is not.
+
 **What the completed items have in common** is worth recording, because it
 is the same shape four times: each turned out to rest on a decision that the
 obvious implementation gets wrong, and each was confirmed by reinstating that
@@ -1195,7 +1202,58 @@ elsewhere, because [004](004-kernel-authoring.md) makes SPIR-V a *binary* target
 with no source level: without a device, a validator, or a driver compiler, an
 emitter would be code nobody ran, which is the failure mode M6's outcome names.
 
+> **Corrected 2026-08-23, see [the correction below](#correction-vulkan-was-never-blocked-2026-08-23).**
+
 So M8 started with quantization, which this environment can prove end to end.
+
+#### Correction: Vulkan was never blocked — 2026-08-23
+
+**The paragraphs above are wrong, and they are left standing because this file's
+maintenance rule says a correction is appended and never edited in.** A tidied
+history is one nobody can trust, and the shape of this mistake is worth more than
+the paragraphs it replaces.
+
+Every measurement in them is accurate. The conclusion drawn from them is not.
+What was measured is the **development Mac**; what was claimed is a fact about
+the project. Those are different, and the second does not follow from the first.
+
+Three things establish it:
+
+1. **[006](006-backends.md) §7 already said so.** Its CI tier table lists
+   *"Vulkan on lavapipe (apt `mesa-vulkan-drivers`)"* in tier 2, blocking, at a
+   cost of *"one apt install, or nothing"*. This file contradicted a normative
+   spec in its own repository.
+2. **The predecessor has already done it.** [polyred](https://github.com/polyred/polyred)
+   carries a cgo-free Vulkan compute backend — `gpu/backend_vk.go`, reached
+   through `purego`, consuming SPIR-V — and a `vk-probe` workflow that runs it
+   headless on `ubuntu-latest` against Mesa lavapipe. Green as of 2026-08-21.
+   [000](000-decisions.md) names polyred as the source of this project's
+   lessons; not looking there was the omission.
+3. **accel's own CI already runs `ubuntu-latest`.** Tier 1 has linux jobs today.
+   The delta is an apt line and a probe, not an environment.
+
+**What was actually true**, and all that is:
+
+| Claim | Status |
+| --- | --- |
+| No Vulkan loader, ICD, or SPIR-V tools on the development Mac | true, and irrelevant to whether the work can be done |
+| An emitter would be "code nobody ran" | false — lavapipe runs it, `spirv-val` and `glslangValidator` check it, both one apt install away |
+| Vulkan is blocked | **false** |
+| Vulkan is unscheduled | true, and a choice: [000](000-decisions.md) puts it post-v0 |
+
+**The generalizable part**, which is why this is recorded rather than deleted.
+This is the same error as [M6's](#m6-outcome--complete-2026-08-23), and it was
+made *while citing M6 as the thing to avoid*. Checking harder was not the fix,
+because the check was already correct — it answered a question about the wrong
+machine. Two rules follow:
+
+- **A measurement's scope is part of the measurement.** "No loader on this Mac"
+  and "no loader available to this project" are different propositions, and
+  writing the first while meaning the second is how "measured" becomes a word
+  that adds false confidence rather than evidence.
+- **Before recording an environmental blocker, check the specs and the
+  predecessor.** Both already had the answer here. A blocker that contradicts
+  a normative spec in the same repository is a bug in the blocker.
 
 #### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
 
