@@ -1,15 +1,14 @@
 # How accel is put together
 
-A tour of the design, written for someone who wants to understand or contribute
-to it. If you are looking for the formal decision record instead, that lives in
-[`specs/`](../specs/).
+What accel can do today, and why it is shaped the way it is.
 
-The compute half is built, on the CPU backend and on Metal: memory, command
-graphs, cooperative kernels, the tensor layer, and the inference pieces above
-it. The graphics half is designed and unbuilt, and so are the remaining
-backends. Everything below describes what was built and why, so that when you
-read the code it makes sense, and [what is built](#what-is-built-so-far) says
-which parts you can run today, milestone by milestone.
+If you only want to get something running, the [README](../README.md) is shorter
+and has the code. If you want the formal decision record — what was tried, what
+was rejected, and why — that is [`specs/`](../specs/).
+
+Start with [what you can run today](#what-you-can-run-today) if that is your
+question; [what will bite you](#what-will-bite-you) is the three things about
+memory that look like bugs the first time you meet them.
 
 ## The problem
 
@@ -43,12 +42,11 @@ everything else.
            built        designed, not yet built
 ```
 
-Two of those five synchronous backends are what v0 builds. The others are
-designed in [`../specs/006-backends.md`](../specs/006-backends.md) so that adding
-one stays a device-layer job, and none is on the path to a first release. This is
-also why the CPU backend below matters more than it looks: at v0 it is not one
-oracle among several, it is the only thing standing between a kernel and a
-portability bug that no available device can produce.
+Two of these five backends work today: the CPU backend and Metal. The other
+three are designed in [`006`](../specs/006-backends.md), which keeps adding one a
+device-layer job rather than a project, and none is scheduled for a first
+release. Until a second GPU backend exists, the CPU backend is the only thing
+that can catch a portability bug on hardware you do not have.
 
 WebGPU is a sixth, later backend shape. Browser promises cannot be waited on by
 the synchronous surface without deadlocking the event loop, so it is deferred
@@ -108,7 +106,7 @@ pre-plan memory. It arrived at the same shape from the same pressure.
 
 ### Does this hurt graphics?
 
-No, and that surprised us too. A render pass is already recorded into a command
+No. A render pass is already recorded into a command
 buffer on every backend, so nothing is lost. Vulkan has secondary command
 buffers, D3D12 has bundles, Metal has indirect command buffers: the hardware
 APIs already want you to record and replay.
@@ -142,10 +140,9 @@ ecosystem. No cuBLAS, no cuDNN, no GGML. Every kernel has to be written here, in
 Go, and compiled to each backend's shading language. That is a lot of work and it
 will not beat vendor libraries on raw throughput for a long time, possibly ever.
 
-This is the project's central bet. If cross-compilation and build simplicity are
-worth more to you than peak throughput, it is a good bet. If they are not,
-existing bindings are genuinely the better choice, and we would rather you knew
-that early.
+So the trade is explicit. If cross-compilation and build simplicity are worth
+more to you than peak throughput, accel is a reasonable choice. If they are not,
+existing cgo bindings will be faster today and are the better tool.
 
 ## Kernels are written in Go
 
@@ -208,9 +205,7 @@ If you contribute a backend, that file is the contract.
 
 ## Three things the graph does that are worth knowing
 
-These moved here from the README, where they were answering a question a user
-had not asked. They are the parts of the design a contributor most often needs
-explained, and the reasoning for each is in the spec it names.
+The reasoning for each is in the spec it names.
 
 **Edges come from declared access, not from record order.** A graph infers its
 own dependency edges from what each node says it touches, comparing byte ranges
@@ -247,67 +242,50 @@ and a different one elsewhere. See
 [018](../specs/018-cooperative-lowering.md) and
 [019](../specs/019-cooperative-diagnostics.md).
 
-## What is built so far
+## What you can run today
 
-| Milestone | State |
-| --- | --- |
-| M0, the cgo-free build gate | done |
-| M1, memory on the CPU backend | done |
-| M2, the minimum kernel compiler and flat CPU execution | done |
-| M3, graph planning and flat submission | done, split into [015](../specs/015-graph-recording.md), [016](../specs/016-graph-execution.md), and [017](../specs/017-graph-aliasing.md) |
-| M4, cooperative execution on the CPU | done, split into [018](../specs/018-cooperative-lowering.md), [019](../specs/019-cooperative-diagnostics.md), and [020](../specs/020-cooperative-atomics.md); subgroup shuffles and scans deferred |
-| M5, the portable tiled GEMM | done: 000's second v0 proof obligation |
-| M6, Metal | done, split into [021](../specs/021-metal-bringup.md), [022](../specs/022-msl-target.md), and [023](../specs/023-metal-graph.md); the encoder-barrier measurement and indirect command buffers stay behind [006](../specs/006-backends.md) §4.3's measurement |
-| M7, tensor decode and prefill | done, split into [024](../specs/024-tensor-bringup.md), [025](../specs/025-tensor-operators.md), and [026](../specs/026-tensor-decode.md); this completes 000's v0 proof |
-| M8, independently scoped work | five of seven: [027](../specs/027-quantization.md) quantization, [028](../specs/028-sampling.md) sampling, [029](../specs/029-plan-cache.md) prefill buckets and the plan cache, [030](../specs/030-paged-kv.md) paged KV and batching, [031](../specs/031-shared-transients.md) shared transients. Graphics is gated by 000; Vulkan is blocked on this machine |
+Compute works end to end on two backends, the CPU backend and Metal: pooled
+memory, buffers and typed views; kernels written in a subset of Go; recorded
+command graphs with inferred barriers and transient aliasing; cooperative
+kernels with shared memory and barriers; a portable tiled GEMM; and the tensor
+layer above it, with quantized weights, sampling, a paged KV cache, and prefill
+and decode attention. Subgroup shuffles and scans are specified and not built.
 
-M1 built the bottom of the device layer: enumeration and device open, the
-capability and limit profiles, pooled memory with a two-level segregated fit
-allocator, buffers and typed views, explicit lifetimes, and host-to-device
-transfers, all on the CPU backend and all reachable through the public API.
+Graphics is not callable yet. The design is finished, the vertex and fragment
+stage types are already in the public API, and the CPU reference rasterizer is
+being written — but there is no render pipeline, no render pass and no surface.
+If you need rasterization today, this is not it. Neither are the Vulkan, D3D12,
+OpenGL and WebGPU backends.
 
-Three things about it are worth knowing before reading the code.
+The row-by-row breakdown is the [status table in the
+README](../README.md#what-works-today). The order the work was done in, and the
+deviations taken, are in
+[`../specs/009-sequencing.md`](../specs/009-sequencing.md).
+
+## What will bite you
+
+Three properties of the memory model that are not bugs and will look like bugs
+the first time you hit them.
 
 **A pool is exactly one device allocation, and it never grows.** No backend can
-resize one in place, and growing by reallocating and copying would invalidate
-every address already handed out, since a device address is baked into
-descriptor sets and recorded commands by the time anything runs. So the choice
-was never between fixed and growable; it was between fixed and lying. The one
-thing that does grow is the implicit pool behind `Device.NewBuffer`, which grows
-the only way a device allocation can: by adding another one.
+resize one in place, and growing by reallocating would invalidate every address
+already handed out — a device address is baked into descriptor sets and recorded
+commands by the time anything runs. So size a pool for your peak. The one thing
+that does grow is the implicit pool behind `Device.NewBuffer`, which grows the
+only way a device allocation can: by adding another one.
 
-**Nothing compacts, and fragmentation is permanent for a pool's life.** That is
-what a non-compacting allocator is rather than a bug to be fixed, so
-`PoolStats` reports `LargestFree` beside `Free` to let a caller see the failure
-coming instead of hearing about it afterwards. The mitigation is separating
-pools by lifetime class, which is why a pool takes a policy and a label instead
-of accel trying to guess.
+**Nothing compacts, so fragmentation is permanent for a pool's life.** That is
+what a non-compacting allocator is, rather than something to be fixed later.
+`PoolStats` reports `LargestFree` beside `Free` so you can see an allocation
+failure coming instead of hearing about it afterwards. The mitigation is
+separating pools by lifetime class, which is why a pool takes a policy and a
+label rather than accel trying to guess.
 
 **Closing is ordered, not recursive.** A pool with live buffers refuses to
-close, and so does a device with live pools; both report and free nothing, and
-the children keep working. Closing a child out from under a caller who still
-holds it turns their bug into a silent success and makes the next use undefined
-instead of reported.
-
-M2's first child built the compiler pipeline end to end for one kernel, and two
-things about it decide how the rest of the compiler reads.
-
-**The authored function is not what runs.** The CPU backend executes a generated
-lowering built from the same typed IR every GPU artifact comes from, with an
-explicit rounding point at each arithmetic operation. That is what makes the CPU
-backend an oracle rather than a second implementation: two implementations of
-the same maths disagree in ways nobody can attribute, and one IR lowered twice
-disagrees only where the hardware does. The cost is a bug class where a mistake
-in IR construction is wrong identically everywhere, so the authored function is
-still run, by a test that compares the two.
-
-**Nothing resolves by name.** Intrinsics are matched on the identity `go/types`
-resolved, including the receiver's type. The predecessor keyed its builtin table
-by bare name, so a user function called `Dot` lowered to the GPU builtin: nothing
-errors, and the kernel computes something else.
-
-The milestone list, what done means for each, and the deviations taken so far
-are in [`../specs/009-sequencing.md`](../specs/009-sequencing.md).
+close, and so does a device with live pools. Both report and free nothing, and
+the children keep working. Close children first. Closing a child out from under
+a caller who still holds it would turn their bug into a silent success and make
+the next use undefined instead of reported.
 
 ## Where to go next
 
