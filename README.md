@@ -172,7 +172,7 @@ bindings are the better choice.
 | Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
 | Portable tiled GEMM | **Built** on the CPU backend |
 | Kernel corpus: the unquantized v0 kernels | **Built** on the CPU backend; the selection registry is not |
-| Metal backend | **Bring-up built** on an Apple M2: device, buffers, straight-line kernels, and a bit-for-bit differential against the CPU backend. Threadgroup memory, barriers, atomics and subgroups are not lowered yet |
+| Metal backend | **Built** on an Apple M2, except graph-level work: all 29 corpus kernels compile on the device and agree with the CPU backend, 22 of them bit for bit. Multi-node graphs, indirect dispatch and device loss are [023](specs/023-metal-graph.md) |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |

@@ -1,6 +1,6 @@
 ---
 title: "The rest of the MSL target, and the Metal numeric profile"
-status: in progress
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -182,7 +182,7 @@ it would otherwise pass every ceiling there is.
   one index, and reconciling that rewrites the index expression rather than the
   declaration. No corpus kernel needs it.
 
-## 6. Done
+## 6. Done — all met 2026-08-23
 
 - the Metal numeric profile is recorded, from probes, before anything derives
   from it;
@@ -191,7 +191,10 @@ it would otherwise pass every ceiling there is.
 - CPU and Metal agree on every corpus kernel within [008](008-numerics.md)'s
   budget for that kernel, and bit for bit where the budget is exactness;
 - the portable tiled GEMM matches the higher-precision reference on Metal at
-  dimensions that are not multiples of any tile dimension; and
+  dimensions that are not multiples of any tile dimension — asserted directly
+  rather than inferred from the differential, because the differential says
+  Metal agrees with the CPU and this says Metal is *right*, against a straight
+  triple loop that shares none of the kernel's structure; and
 - a uniform-carrying dispatch runs, which is deviation 1 retired.
 
 ## Testing

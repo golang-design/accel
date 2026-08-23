@@ -554,3 +554,128 @@ func openMetalDevice(t *testing.T) *accel.Device {
 	t.Skipf("no Metal adapter on this machine; diagnostics: %v", e.Diagnostics)
 	return nil
 }
+
+// The portable tiled GEMM matches an independently written higher-precision
+// reference on Metal, at dimensions that are not multiples of any tile
+// dimension.
+//
+// specs/022-msl-target.md names this separately from the corpus differential,
+// and the separation is the point. The differential says Metal agrees with the
+// CPU; this says Metal is *right*, against a reference written as a straight
+// triple loop with no tiling and no shared memory. A reference sharing the
+// kernel's structure would share its bugs, and two backends agreeing on a wrong
+// answer is exactly what one IR makes possible.
+//
+// The budget is per output element -- that element's own K terms and its own sum
+// of magnitudes -- which is what specs/008-numerics.md section 7 requires rather
+// than one budget for the whole matrix.
+func TestTheTiledGEMMMatchesItsReferenceOnMetal(t *testing.T) {
+	d := openMetalDevice(t)
+
+	for _, c := range []struct{ m, n, k int }{
+		{8, 16, 16}, // exactly one tile
+		{3, 5, 7},   // all three tails, none aligned
+		{9, 19, 23}, // all three, each larger than one tile
+		{1, 1, 40},  // a single output over several K steps
+	} {
+		t.Run(fmt.Sprintf("%dx%dx%d", c.m, c.n, c.k), func(t *testing.T) {
+			a := make([]accel.Float16, c.m*c.k)
+			b := make([]accel.Float16, c.k*c.n)
+			for i := range a {
+				a[i] = accel.ToFloat16(float32(math.Sin(float64(i))) * 2)
+			}
+			for i := range b {
+				b[i] = accel.ToFloat16(float32(math.Cos(float64(i))) * 3)
+			}
+
+			out := runGEMM(t, d, c.m, c.n, c.k, a, b)
+			for i := range out {
+				row, col := i/c.n, i%c.n
+				terms := make([]float32, c.k)
+				for kk := range c.k {
+					terms[kk] = a[row*c.k+kk].F32() * b[kk*c.n+col].F32()
+				}
+				if r := numeq.Sum(out[i], terms, c.k-1); !r.OK() {
+					t.Fatalf("element (%d,%d) of %dx%dx%d: %v", row, col, c.m, c.n, c.k, r)
+				}
+			}
+		})
+	}
+}
+
+func runGEMM(t *testing.T, d *accel.Device, m, n, k int, a, b []accel.Float16) []float32 {
+	t.Helper()
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst | accel.UsageUniform
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.MatMulTiledKernel, Label: "gemm",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	f16 := func(label string, v []accel.Float16) accel.BufferView {
+		buf, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F16, Count: len(v), Usage: storage, Label: label,
+		})
+		if err != nil {
+			t.Fatalf("buffer %s: %v", label, err)
+		}
+		t.Cleanup(func() { _ = buf.Close() })
+		view, err := buf.View(0, len(v))
+		if err != nil {
+			t.Fatalf("view %s: %v", label, err)
+		}
+		return view
+	}
+
+	av, bv := f16("a", a), f16("b", b)
+	outBuf, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: m * n, Usage: storage, Label: "out",
+	})
+	if err != nil {
+		t.Fatalf("buffer out: %v", err)
+	}
+	defer outBuf.Close()
+	outView, err := outBuf.View(0, m*n)
+	if err != nil {
+		t.Fatalf("view out: %v", err)
+	}
+
+	bits := func(v []accel.Float16) []uint16 {
+		raw := make([]uint16, len(v))
+		for i := range v {
+			raw[i] = v[i].Bits()
+		}
+		return raw
+	}
+
+	r := d.NewRecorder()
+	r.CopyToBuffer(av, bits(a))
+	r.CopyToBuffer(bv, bits(b))
+	r.CopyToBuffer(outView, make([]float32, m*n))
+	r.Dispatch(p, []accel.Binding{
+		{Index: 0, Uniform: testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}},
+		{Index: 0, Buffer: av},
+		{Index: 1, Buffer: bv},
+		{Index: 2, Buffer: outView},
+	}, accel.WorkgroupCount{
+		X: (n + testkernels.TileN - 1) / testkernels.TileN,
+		Y: (m + testkernels.TileM - 1) / testkernels.TileM,
+	})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	out := make([]float32, m*n)
+	if err := d.Queue().ReadBuffer(outBuf, 0, out); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	return out
+}

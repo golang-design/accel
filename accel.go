@@ -68,13 +68,17 @@
 // boundary — row r begins at r*width*bpp — so a caller sizes a readback as
 // width*height*bpp and is always right, whatever pitch the device stores.
 //
-// Metal has begun. On darwin, [Enumerate] reports a Metal adapter beside the
-// CPU one, and a graph of uploads, straight-line dispatches and readbacks runs
-// on it: kernels are lowered to Metal Shading Language by the same compiler
-// that produces the Go lowering, compiled by the device at runtime, and the two
-// backends agree bit for bit. Kernels using workgroup-shared memory, barriers,
-// atomics or subgroups are not lowered to MSL yet and are refused by name
-// rather than run on the CPU instead.
+// Metal runs on darwin. [Enumerate] reports a Metal adapter beside the CPU one,
+// and a graph of uploads, dispatches and readbacks runs on it: every kernel is
+// lowered to Metal Shading Language by the same compiler that produces the Go
+// lowering, compiled by the device at runtime, and the two backends agree —
+// exactly where the kernel's arithmetic is exact, and within the numeric
+// contract's own ceiling where it reaches a bounded primitive such as exp.
+// A kernel the MSL target cannot lower is refused by name rather than run on
+// the CPU instead, so a device the caller selected is never quietly bypassed.
+//
+// What Metal does not do yet: multi-node graphs re-encode but indirect dispatch
+// does not, and device loss is not yet reported.
 //
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and
