@@ -6,11 +6,7 @@
 
 package mtl_test
 
-import (
-	"testing"
-
-	"golang.design/x/accel/internal/mtl"
-)
+import "testing"
 
 // A Metal device opens and answers for itself.
 //
@@ -18,13 +14,7 @@ import (
 // specs/006-backends.md section 7: a job that promises a backend and finds none
 // is a failure. A skip here would let the whole Metal backend rot green.
 func TestDeviceOpens(t *testing.T) {
-	devs, err := mtl.Devices()
-	if err != nil {
-		t.Fatalf("enumerate: %v", err)
-	}
-	if len(devs) == 0 {
-		t.Fatal("no Metal device on a darwin build: this suite promises one")
-	}
+	devs := requireDevice(t)
 	for _, d := range devs {
 		defer d.Close()
 		if d.Name() == "" {

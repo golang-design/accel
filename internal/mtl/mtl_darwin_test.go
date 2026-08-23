@@ -7,6 +7,7 @@
 package mtl_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"unsafe"
@@ -17,18 +18,39 @@ import (
 
 func open(t *testing.T) *mtl.Device {
 	t.Helper()
-	devs, err := mtl.Devices()
-	if err != nil {
-		t.Fatalf("enumerate: %v", err)
-	}
-	if len(devs) == 0 {
-		t.Fatal("no Metal device on a darwin build: this suite promises one")
-	}
+	devs := requireDevice(t)
 	for _, d := range devs[1:] {
 		d.Close()
 	}
 	t.Cleanup(devs[0].Close)
 	return devs[0]
+}
+
+// requireDevice returns the Metal devices, or ends the test.
+//
+// Whether "no device" is a failure or a skip depends on what the *job* promised,
+// which is specs/006-backends.md section 7 and the rule .github/workflows/ci.yml
+// states in its own header: "a job that promises a backend and finds no device
+// is a failure, not a skip, so it cannot share a matrix with the jobs that
+// promise only the CPU."
+//
+// Tier 1 runs plain `go test ./...` on three platforms and promises only the CPU
+// backend, so a hosted macOS runner without a usable GPU must not turn it red.
+// Tier 2 promises Metal, and sets ACCEL_REQUIRE_METAL so that the same tests
+// fail instead. A developer on a Mac gets the failure too, because a device is
+// there and a skip would hide a backend that stopped enumerating.
+func requireDevice(t *testing.T) []*mtl.Device {
+	t.Helper()
+	devs, err := mtl.Devices()
+	if err == nil && len(devs) > 0 {
+		return devs
+	}
+	if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+		t.Fatalf("this job promises Metal and found no device (err=%v)", err)
+	}
+	t.Skipf("no Metal device on this machine (err=%v); set ACCEL_REQUIRE_METAL to "+
+		"make that a failure", err)
+	return nil
 }
 
 func f32s(b []byte) []float32 {

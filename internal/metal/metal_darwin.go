@@ -8,6 +8,7 @@ package metal
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -16,11 +17,18 @@ import (
 	"golang.design/x/accel/internal/mtl"
 )
 
+// ErrNoDevice reports that Metal loaded and enumerated nothing.
+//
+// It is a distinct error rather than an empty list, because an empty list is
+// indistinguishable from a build with no Metal at all -- and
+// specs/006-backends.md section 6.4 requires a caller to be able to tell "this
+// machine has no Metal device" from "this binary was not built with Metal".
+// The layer above turns it into a probe diagnostic, which is not an open error.
+var ErrNoDevice = errors.New("accel: Metal is present and reports no device")
+
 // Adapters reports every Metal device on this machine.
 //
-// A machine with no device returns no adapters and no error, which is the case
-// specs/006-backends.md section 6.4 distinguishes from "Metal was not built":
-// the caller gets a probe diagnostic, not a failure.
+// A machine with no device returns [ErrNoDevice], not an empty list.
 func Adapters() ([]driver.Adapter, error) {
 	devs, err := mtl.Devices()
 	if err != nil {
@@ -38,6 +46,9 @@ func Adapters() ([]driver.Adapter, error) {
 			return nil, err
 		}
 		out = append(out, &adapter{dev: d, info: info})
+	}
+	if len(out) == 0 {
+		return nil, ErrNoDevice
 	}
 	return out, nil
 }

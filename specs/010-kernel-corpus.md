@@ -203,6 +203,31 @@ selectors at init/test time. A plan records selected IDs plus rejected candidate
 and reasons. Selection failure names the semantic op, shape/layout, and every
 unmet requirement.
 
+### The first half of it exists — 2026-08-23
+
+The generator emits `Kernels`, a slice of every kernel record in the package, in
+source order:
+
+```go
+// Kernels is every kernel this package generated, in source order.
+var Kernels = []*accel.Kernel{&AddKernel, /* ... */}
+```
+
+**It is the enumeration the registry above needs, and none of the selection.**
+There is no KernelID, no selector, no priority, and no duplicate rejection; what
+it provides is the property that a pass over the corpus cannot miss a kernel
+somebody added. It landed for [021](021-metal-bringup.md)'s device-compile test,
+which had to compile every kernel carrying MSL and would otherwise have kept a
+hand-written list beside the corpus — and a hand-written list goes stale the
+moment the corpus grows, silently, because the new kernel looks exactly like one
+that passed.
+
+Generated rather than reflected, because a package's variables cannot be
+enumerated at run time in Go, and generation already knows the answer.
+
+The rest of this section is unbuilt: it arrives with M7, which is the first
+consumer that has to *choose* a kernel rather than name one.
+
 ## 5. Numeric recipes
 
 | Kernel family | 008 recipe |

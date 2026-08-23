@@ -1,0 +1,54 @@
+name: ci-metal
+
+# Tier 2 from specs/011-conformance-harness.md section 11: the jobs that promise
+# a backend. It is a separate workflow rather than a row in ci.yml's matrix for
+# the reason that file states in its own header, and which is
+# specs/006-backends.md section 7: a job that promises a backend and finds no
+# device is a failure, not a skip, and a job promising only the CPU must not go
+# red for the same reason.
+#
+# ACCEL_REQUIRE_METAL is what carries that promise into the tests. Without it
+# the darwin device tests skip when there is no device, which is correct for
+# Tier 1 and would be a way to rot green here.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: '0'
+  ACCEL_REQUIRE_METAL: '1'
+
+jobs:
+  metal:
+    name: metal
+    # Apple silicon, because specs/006-backends.md section 2.2's claims about
+    # unified memory and a 32-wide SIMD are about that hardware, and a probe run
+    # on an Intel Mac would record a different profile under the same name.
+    runs-on: macos-15
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # The device is enumerated before anything else, so that "no GPU on this
+    # runner" is one clear line rather than a wall of test failures that each
+    # say the same thing.
+    - name: Enumerate
+      run: go test ./internal/mtl/ -run TestDeviceOpens -v
+
+    - name: Test
+      run: go test ./...
+
+    - name: Test under the race detector
+      env:
+        CGO_ENABLED: '1'
+      run: go test -race ./...

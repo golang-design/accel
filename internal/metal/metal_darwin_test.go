@@ -8,6 +8,7 @@ package metal_test
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"unsafe"
@@ -25,19 +26,33 @@ import (
 // is a failure, because a skip lets the backend rot green.
 func open(t *testing.T) driver.Device {
 	t.Helper()
-	all, err := metal.Adapters()
-	if err != nil {
-		t.Fatalf("adapters: %v", err)
-	}
-	if len(all) == 0 {
-		t.Fatal("no Metal adapter on a darwin build: this suite promises one")
-	}
-	d, err := all[0].Open(nil)
+	d, err := adapters(t)[0].Open(nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
+}
+
+// adapters returns the Metal adapters, or ends the test.
+//
+// Whether "no device" is a failure or a skip depends on what the *job* promised,
+// which is specs/006-backends.md section 7 and the rule .github/workflows/ci.yml
+// states in its own header: a job that promises a backend and finds no device is
+// a failure, and one that promises only the CPU must not go red for the same
+// reason. Tier 2 sets ACCEL_REQUIRE_METAL; Tier 1 does not.
+func adapters(t *testing.T) []driver.Adapter {
+	t.Helper()
+	all, err := metal.Adapters()
+	if err == nil && len(all) > 0 {
+		return all
+	}
+	if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+		t.Fatalf("this job promises Metal and found no adapter (err=%v)", err)
+	}
+	t.Skipf("no Metal adapter on this machine (err=%v); set ACCEL_REQUIRE_METAL to "+
+		"make that a failure", err)
+	return nil
 }
 
 func f32(b []byte) []float32 {
@@ -52,10 +67,7 @@ func f32(b []byte) []float32 {
 // token derived from enumeration order would satisfy every other test here and
 // break the moment a machine had two GPUs.
 func TestAdapterIdentity(t *testing.T) {
-	first, err := metal.Adapters()
-	if err != nil {
-		t.Fatalf("adapters: %v", err)
-	}
+	first := adapters(t)
 	second, err := metal.Adapters()
 	if err != nil {
 		t.Fatalf("adapters: %v", err)
@@ -173,10 +185,7 @@ func TestBlockTransfers(t *testing.T) {
 
 // A closed device refuses to allocate, and closing twice is not an error.
 func TestClosedDeviceRefusesWork(t *testing.T) {
-	all, err := metal.Adapters()
-	if err != nil || len(all) == 0 {
-		t.Fatalf("adapters: %v", err)
-	}
+	all := adapters(t)
 	d, err := all[0].Open(nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)

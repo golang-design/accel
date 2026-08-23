@@ -88,6 +88,8 @@ numbered in.
 | [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | Implemented | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
 | [020-cooperative-atomics.md](020-cooperative-atomics.md) | In progress | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
 | [021-metal-bringup.md](021-metal-bringup.md) | In progress | M6 child: the Objective-C shim and its ownership rule, enumeration, storage modes, a straight-line MSL emitter, and one kernel on the GPU |
+| [022-msl-target.md](022-msl-target.md) | Drafted | M6 child: the Metal numeric profile, then threadgroup memory, barriers, atomics, subgroups, helpers and intrinsics in MSL |
+| [023-metal-graph.md](023-metal-graph.md) | Drafted | M6 child: multi-node re-encoding, indirect dispatch, completion-handler lifetime, device loss, and the M6 E2E |
 
 ## Layer 2: the tensor
 

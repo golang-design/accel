@@ -7,6 +7,7 @@
 package testkernels_test
 
 import (
+	"os"
 	"testing"
 
 	"golang.design/x/accel"
@@ -29,11 +30,14 @@ import (
 // kernel that passes.
 func TestEveryEmittedKernelCompilesOnTheDevice(t *testing.T) {
 	devs, err := mtl.Devices()
-	if err != nil {
-		t.Fatalf("enumerate: %v", err)
-	}
-	if len(devs) == 0 {
-		t.Fatal("no Metal device on a darwin build: this suite promises one")
+	if err != nil || len(devs) == 0 {
+		// A failure or a skip depending on what the job promised: see
+		// specs/006-backends.md section 7 and the header of
+		// .github/workflows/ci.yml. Tier 2 sets ACCEL_REQUIRE_METAL.
+		if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+			t.Fatalf("this job promises Metal and found no device (err=%v)", err)
+		}
+		t.Skipf("no Metal device on this machine (err=%v)", err)
 	}
 	d := devs[0]
 	defer func() {

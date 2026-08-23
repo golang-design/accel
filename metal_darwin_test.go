@@ -8,6 +8,7 @@ package accel_test
 
 import (
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -35,7 +36,16 @@ func openMetal(t *testing.T) *accel.Device {
 		t.Cleanup(func() { _ = d.Close() })
 		return d
 	}
-	t.Fatalf("no Metal adapter enumerated on darwin; diagnostics: %v", e.Diagnostics)
+	// A failure or a skip depending on what the job promised: see
+	// specs/006-backends.md section 7 and the header of
+	// .github/workflows/ci.yml. Tier 1 runs on three platforms and promises
+	// only the CPU backend, so a hosted macOS runner with no usable GPU must
+	// not turn it red; Tier 2 promises Metal and sets ACCEL_REQUIRE_METAL.
+	if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+		t.Fatalf("this job promises Metal and enumerated no adapter; diagnostics: %v",
+			e.Diagnostics)
+	}
+	t.Skipf("no Metal adapter on this machine; diagnostics: %v", e.Diagnostics)
 	return nil
 }
 

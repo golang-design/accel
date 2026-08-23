@@ -5,9 +5,12 @@ name: ci
 # per-package coverage gate, formatting, vet, and the cgo-free check. Every one
 # of these runs on every commit, because each of them rots silently.
 #
-# Tier 2 arrives with Metal at M6 and is a separate workflow: a job that
-# promises a backend and finds no device is a failure, not a skip, so it cannot
-# share a matrix with the jobs that promise only the CPU.
+# Tier 2 arrived with Metal at M6 and is ci-metal.yml: a job that promises a
+# backend and finds no device is a failure, not a skip, so it cannot share a
+# matrix with the jobs that promise only the CPU. The darwin device tests are
+# built here too and skip when there is no device, because this job promises
+# only the CPU; ci-metal.yml sets ACCEL_REQUIRE_METAL to turn that skip into the
+# failure it should be where Metal *is* promised.
 
 on:
   push:
