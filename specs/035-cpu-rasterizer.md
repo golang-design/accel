@@ -1,6 +1,6 @@
 ---
 title: "The CPU reference rasterizer and its conformance corpus"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 005-graphics.md
@@ -256,6 +256,35 @@ Deliberate, because the pieces have very different risk:
 Steps 1 to 3 need no GPU and no surface. Step 6 is where
 [`conventions.md`](../docs/conventions.md)'s graphics half gets its first
 verification, which is the entire reason 005 exists.
+
+### 8.1 What is built — 2026-08-23
+
+Step 1's fixed-function core, in `internal/raster`: the fill rule,
+perspective-correct varying interpolation, linear window-depth interpolation,
+near/far clipping, the viewport transform with its y flip, winding and culling,
+and the scissor. It takes clip positions and a flat float vector of varyings and
+calls back per covered sample, so it is testable without the compiler — which is
+what let the arithmetic land before the stage ABI does.
+
+Two of its own tests were **too weak on the first pass**, and both were found by
+reinstating the bug rather than by review:
+
+| The test as first written | What survived it |
+| --- | --- |
+| winding and culling, asserted only through cull modes | dropping the vertex swap that normalises a back-facing triangle's winding. Culling is decided *before* the walk, so every culling assertion still passed while a surviving back-facing triangle covered nothing. Fixed by asserting that under `CullNone` it covers exactly what its front-facing counterpart covers. |
+| clipped vertices, asserted as "reads above zero" | a clip that copied an endpoint's varyings into the new vertex. Samples are pixel centres strictly inside the triangle, so nothing ever reads the endpoint's exact value. Fixed by computing the clip parameter and checking the minimum against it. |
+
+Both are the same shape as this repository's recurring finding, one level down:
+a criterion checked against a test that nearly tests it. The generalizable part
+is that **an assertion about a bound must use the bound the arithmetic
+predicts**, not a weaker one that happens to hold.
+
+One implementation choice worth recording because it is not obvious. Edge
+functions are evaluated in `float64` even though everything around them is f32.
+The fill rule's decision is about a sample landing *exactly* on an edge, which is
+what the rule exists to arbitrate; an f32 edge function makes that a coin toss
+between two triangles that round differently, and the double-shading or gap it
+produces is exactly what §2 says makes a coverage comparison meaningless.
 
 ## 9. Done
 
