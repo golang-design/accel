@@ -176,6 +176,32 @@ type Device interface {
 	Close() error
 }
 
+// Unwrap resolves a Block that is a handle to another Block.
+//
+// A Block is an interface, and the layer above may hand a backend one that
+// forwards rather than one the backend allocated: accel's shared transient pool
+// does exactly that, so growing it swaps the allocation underneath without
+// invalidating the operands, transients and executables that captured a handle
+// at build time.
+//
+// Every backend that type-asserts a Block to its own concrete type must call
+// this first. Forgetting to is not subtle -- the assertion fails and the error
+// names the wrapper -- which is why this is a free function rather than a
+// method a backend could forget was there.
+func Unwrap(b Block) Block {
+	for {
+		u, ok := b.(interface{ Unwrap() Block })
+		if !ok {
+			return b
+		}
+		next := u.Unwrap()
+		if next == nil || next == b {
+			return b
+		}
+		b = next
+	}
+}
+
 // Block is one device allocation backing one pool.
 type Block interface {
 	// Bytes returns the host mapping, or nil when this memory is not

@@ -338,6 +338,9 @@ func reinterpret[T any](b []byte) (any, error) {
 // pool is device-local. A backend executing a copy between its own allocations
 // is not mapping them, so it uses the concrete type it created.
 func backing(b driver.Block) ([]byte, error) {
+	// A Block may be a handle to another Block -- accel's shared transient pool
+	// hands one out so it can grow without invalidating what captured it.
+	b = driver.Unwrap(b)
 	blk, ok := b.(*block)
 	if !ok {
 		return nil, fmt.Errorf("a %T was not allocated by the CPU backend", b)

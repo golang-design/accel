@@ -167,7 +167,7 @@ func (e *executable) Rebind(binds []driver.SlotBinding) error {
 		if b.Block == nil {
 			return fmt.Errorf("accel: rebind of slot %d names no block", b.Slot)
 		}
-		if _, ok := b.Block.(*block); !ok {
+		if _, ok := driver.Unwrap(b.Block).(*block); !ok {
 			return fmt.Errorf("accel: rebind of slot %d names a %T, which is not Metal memory",
 				b.Slot, b.Block)
 		}
@@ -202,7 +202,9 @@ type resolved struct {
 func (e *executable) operand(o driver.Operand) (resolved, error) {
 	switch o.Kind() {
 	case driver.OperandBlock:
-		b, ok := o.Block().(*block)
+		// Unwrapped first: a Block may be a handle to another, which is how
+		// accel's shared transient pool grows without invalidating operands.
+		b, ok := driver.Unwrap(o.Block()).(*block)
 		if !ok {
 			return resolved{}, fmt.Errorf("%s names a %T, which is not Metal memory", o, o.Block())
 		}
@@ -215,7 +217,7 @@ func (e *executable) operand(o driver.Operand) (resolved, error) {
 		if o.Offset() > bind.Size || o.Size() > bind.Size-o.Offset() {
 			return resolved{}, fmt.Errorf("%s is outside the %d bytes bound to it", o, bind.Size)
 		}
-		b := bind.Block.(*block)
+		b := driver.Unwrap(bind.Block).(*block)
 		return resolved{buf: b.buf, off: bind.Offset + o.Offset(), size: o.Size()}, nil
 	}
 	return resolved{}, fmt.Errorf("%s", o)
