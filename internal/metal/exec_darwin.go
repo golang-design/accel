@@ -265,14 +265,15 @@ func (e *executable) encode(p *pass) error {
 			if err != nil {
 				return fmt.Errorf("accel: node %d destination: %w", n.ID, err)
 			}
-			if len(n.Data) > dst.size {
-				return fmt.Errorf("accel: node %d writes %d bytes into a %d-byte range",
-					n.ID, len(n.Data), dst.size)
-			}
 			copy(buf.Bytes(), n.Data)
 			p.blit().Copy(dst.buf, dst.off, buf, 0, len(n.Data))
 
 		case driver.OpCopy:
+			// The sizes are not compared here. Plan.Validate already rejects a
+			// copy between unequal ranges and a host write larger than its
+			// destination, and Compile runs it before anything else, so a check
+			// repeated here would be unreachable -- a second statement of a rule
+			// that can then drift from the first.
 			dst, err := e.operand(n.Dst)
 			if err != nil {
 				return fmt.Errorf("accel: node %d destination: %w", n.ID, err)
@@ -280,9 +281,6 @@ func (e *executable) encode(p *pass) error {
 			src, err := e.operand(n.Src)
 			if err != nil {
 				return fmt.Errorf("accel: node %d source: %w", n.ID, err)
-			}
-			if dst.size != src.size {
-				return fmt.Errorf("accel: node %d copies %d bytes into %d", n.ID, src.size, dst.size)
 			}
 			p.blit().Copy(dst.buf, dst.off, src.buf, src.off, src.size)
 

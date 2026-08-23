@@ -63,54 +63,86 @@ var (
 // "no Metal device" from "Metal was not built".
 func load() error {
 	loadOnce.Do(func() {
-		metal, err := purego.Dlopen(metalPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-		if err != nil {
-			loadErr = fmt.Errorf("accel/mtl: Metal.framework: %w", err)
+		var s symbols
+		if s, loadErr = resolve(purego.Dlopen, purego.Dlsym); loadErr != nil {
 			return
 		}
-		libobjc, err := purego.Dlopen(libobjcPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
-		if err != nil {
-			loadErr = fmt.Errorf("accel/mtl: libobjc: %w", err)
-			return
-		}
-		if _, err := purego.Dlopen(foundationPath, purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
-			loadErr = fmt.Errorf("accel/mtl: Foundation.framework: %w", err)
-			return
-		}
-
-		sym, err := purego.Dlsym(metal, "MTLCreateSystemDefaultDevice")
-		if err != nil {
-			loadErr = fmt.Errorf("accel/mtl: MTLCreateSystemDefaultDevice: %w", err)
-			return
-		}
-		purego.RegisterFunc(&createSystemDefaultDevice, sym)
-
-		// Absent on iOS-derived platforms. Its absence is not an error: the
-		// default device is then the only device.
-		if sym, err := purego.Dlsym(metal, "MTLCopyAllDevices"); err == nil {
-			purego.RegisterFunc(&copyAllDevices, sym)
-		}
-
-		push, err := purego.Dlsym(libobjc, "objc_autoreleasePoolPush")
-		if err != nil {
-			loadErr = fmt.Errorf("accel/mtl: objc_autoreleasePoolPush: %w", err)
-			return
-		}
-		pop, err := purego.Dlsym(libobjc, "objc_autoreleasePoolPop")
-		if err != nil {
-			loadErr = fmt.Errorf("accel/mtl: objc_autoreleasePoolPop: %w", err)
-			return
-		}
-		purego.RegisterFunc(&autoreleasePoolPush, push)
-		purego.RegisterFunc(&autoreleasePoolPop, pop)
-
-		classNSString = objc.GetClass("NSString")
-		if classNSString == 0 {
-			loadErr = errors.New("accel/mtl: Foundation is loaded but NSString is not registered")
-			return
-		}
+		bind(s)
 	})
 	return loadErr
+}
+
+// symbols is what resolve found, before anything is bound to it.
+//
+// Separating the lookup from the binding is what makes the lookup testable. An
+// earlier version wrote the package's function pointers as it went, so a test
+// passing fake lookups overwrote the real MTLCreateSystemDefaultDevice with the
+// fake's return value and the next real call jumped to address 1. Finding
+// symbols and installing them are different jobs and now say so.
+type symbols struct {
+	createDevice   uintptr
+	copyAllDevices uintptr // zero when absent, which is not an error
+	poolPush       uintptr
+	poolPop        uintptr
+}
+
+// resolve looks up every symbol this package needs, through injected lookups.
+//
+// Injected because every branch in here is an error branch, and every one is on
+// the path taken when this package runs somewhere it does not belong: a machine
+// with no Metal, a stripped framework, an SDK that renamed something. Those are
+// the messages a user actually reads, and a message nobody has seen printed is
+// a message nobody has checked.
+func resolve(dlopen func(string, int) (uintptr, error), dlsym func(uintptr, string) (uintptr, error)) (symbols, error) {
+	var out symbols
+	metal, err := dlopen(metalPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		return out, fmt.Errorf("accel/mtl: Metal.framework: %w", err)
+	}
+	libobjc, err := dlopen(libobjcPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		return out, fmt.Errorf("accel/mtl: libobjc: %w", err)
+	}
+	if _, err := dlopen(foundationPath, purego.RTLD_NOW|purego.RTLD_GLOBAL); err != nil {
+		return out, fmt.Errorf("accel/mtl: Foundation.framework: %w", err)
+	}
+
+	if out.createDevice, err = dlsym(metal, "MTLCreateSystemDefaultDevice"); err != nil {
+		return out, fmt.Errorf("accel/mtl: MTLCreateSystemDefaultDevice: %w", err)
+	}
+	// Absent on iOS-derived platforms. Its absence is not an error: the default
+	// device is then the only device.
+	out.copyAllDevices, _ = dlsym(metal, "MTLCopyAllDevices")
+
+	if out.poolPush, err = dlsym(libobjc, "objc_autoreleasePoolPush"); err != nil {
+		return out, fmt.Errorf("accel/mtl: objc_autoreleasePoolPush: %w", err)
+	}
+	if out.poolPop, err = dlsym(libobjc, "objc_autoreleasePoolPop"); err != nil {
+		return out, fmt.Errorf("accel/mtl: objc_autoreleasePoolPop: %w", err)
+	}
+	return out, nil
+}
+
+// bind installs resolved symbols and the classes that need a loaded image.
+//
+// NSString is looked up here rather than in a var initializer, and the
+// distinction is not stylistic. A selector can be registered before anything is
+// loaded, because registering one creates it; a class cannot, because
+// objc_getClass returns nil for a class whose image is not mapped. Resolved too
+// early it is nil, +stringWithUTF8String: to nil returns nil, and Metal aborts
+// the process on an assertion inside -newLibraryWithSource: rather than
+// returning the error this package is careful to read.
+func bind(s symbols) {
+	purego.RegisterFunc(&createSystemDefaultDevice, s.createDevice)
+	if s.copyAllDevices != 0 {
+		purego.RegisterFunc(&copyAllDevices, s.copyAllDevices)
+	}
+	purego.RegisterFunc(&autoreleasePoolPush, s.poolPush)
+	purego.RegisterFunc(&autoreleasePoolPop, s.poolPop)
+	classNSString = objc.GetClass("NSString")
+	if classNSString == 0 {
+		loadErr = errors.New("accel/mtl: Foundation is loaded but NSString is not registered")
+	}
 }
 
 // Selectors, registered once. Registering a selector is a hash lookup in the

@@ -310,3 +310,104 @@ kernel void contract(const device float *in [[buffer(0)]],
 			got, fused)
 	}
 }
+
+// An allocation the device cannot make is an error, not a nil buffer.
+//
+// Both directions are checked because they fail differently. A zero or negative
+// size is refused here without asking Metal, since -newBufferWithLength: with
+// zero raises rather than returning nil; a size above the device's own limit is
+// refused by the device, and the point is that the nil it returns becomes an
+// error rather than a buffer nobody notices is unusable.
+func TestBadAllocationsAreErrors(t *testing.T) {
+	d := open(t)
+	for _, n := range []int{0, -1} {
+		if _, err := d.NewBuffer(n, mtl.StorageShared); err == nil {
+			t.Errorf("a buffer of %d bytes was allocated", n)
+		}
+	}
+	if _, err := d.NewBuffer(d.MaxBufferBytes*2, mtl.StorageShared); err == nil {
+		t.Error("an allocation above the device's own maximum buffer length succeeded")
+	}
+}
+
+// The SIMD width is reported by compiling something, and every pipeline this
+// device makes agrees with it.
+//
+// MTLDevice has no query for the width, so the only source is a compiled
+// pipeline's threadExecutionWidth. This checks the cached device-level answer
+// against a freshly compiled pipeline, which is what would diverge if the cache
+// were filled from something other than the device.
+func TestSubgroupWidthMatchesAPipeline(t *testing.T) {
+	d := open(t)
+	width := d.SubgroupSize()
+	if width <= 0 {
+		t.Fatalf("SubgroupSize is %d, which is not a width", width)
+	}
+	p, err := d.Compile(`
+#include <metal_stdlib>
+using namespace metal;
+kernel void w(device float *out [[buffer(0)]], uint gid [[thread_position_in_grid]]) {
+  out[gid] = 1.0f;
+}`, "w")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer p.Close()
+	if p.Name() != "w" {
+		t.Errorf("pipeline name is %q, want %q", p.Name(), "w")
+	}
+	if p.ThreadExecutionWidth != width {
+		t.Errorf("this pipeline executes %d wide and the device reports %d",
+			p.ThreadExecutionWidth, width)
+	}
+	// Twice, to exercise the cached path rather than only the first call.
+	if again := d.SubgroupSize(); again != width {
+		t.Errorf("SubgroupSize returned %d then %d", width, again)
+	}
+}
+
+// Binding no bytes is a no-op rather than a crash.
+//
+// SetBytes with an empty slice would otherwise take the address of element
+// zero of an empty slice, which is what a kernel with no bindings would
+// produce.
+func TestSetBytesTolerlatesEmptyData(t *testing.T) {
+	d := open(t)
+	p, err := d.Compile(`
+#include <metal_stdlib>
+using namespace metal;
+kernel void nop(device float *out [[buffer(0)]], uint gid [[thread_position_in_grid]]) {
+  out[gid] = 7.0f;
+}`, "nop")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer p.Close()
+	buf, err := d.NewBuffer(4, mtl.StorageShared)
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer buf.Close()
+
+	q := d.NewQueue()
+	defer q.Close()
+	cb := q.Begin()
+	defer cb.Close()
+	e := cb.Compute()
+	e.SetPipeline(p)
+	e.SetBuffer(buf, 0, 0)
+	e.SetBytes(nil, 1)
+	e.Dispatch(mtl.Size{Width: 1, Height: 1, Depth: 1}, mtl.Size{Width: 1, Height: 1, Depth: 1})
+	e.End()
+	cb.Commit()
+	cb.Wait()
+	if err := cb.Err(); err != nil {
+		t.Fatalf("submission: %v", err)
+	}
+	if got := f32s(buf.Bytes())[0]; got != 7 {
+		t.Errorf("the dispatch produced %v, want 7", got)
+	}
+	if !cb.Done() {
+		t.Error("a command buffer that has been waited on must report done")
+	}
+}

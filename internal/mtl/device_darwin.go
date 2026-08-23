@@ -60,15 +60,24 @@ func Devices() ([]*Device, error) {
 	if err := load(); err != nil {
 		return nil, err
 	}
+	return devicesFrom(copyAllDevices, createSystemDefaultDevice), nil
+}
+
+// devicesFrom enumerates against injected constructors.
+//
+// Injected so the fallback path is reachable. MTLCopyAllDevices is absent on
+// iOS-derived platforms and can return an empty array on a Mac whose GPU is not
+// yet ready, and both of those lead here rather than to an error -- so both
+// deserve a test, and neither can be produced by asking this machine nicely.
+func devicesFrom(copyAll func() uintptr, createDefault func() uintptr) []*Device {
 	var out []*Device
-	var err error
 	withPool(func() {
 		// MTLCopyAllDevices returns the array +1 and the devices inside it
 		// unowned, so each device is retained separately and the array is
 		// released. This is the ownership rule doing real work: the naming
 		// convention says Copy* is +1, and says nothing about the contents.
-		if copyAllDevices != nil {
-			if arr := objc.ID(copyAllDevices()); arr != 0 {
+		if copyAll != nil {
+			if arr := objc.ID(copyAll()); arr != 0 {
 				defer release(arr)
 				n := int(arr.Send(selCount))
 				for i := range n {
@@ -77,15 +86,15 @@ func Devices() ([]*Device, error) {
 				}
 			}
 		}
-		if len(out) == 0 {
-			if d := objc.ID(createSystemDefaultDevice()); d != 0 {
+		if len(out) == 0 && createDefault != nil {
+			if d := objc.ID(createDefault()); d != 0 {
 				// Already +1: a name beginning with Create is the C spelling of
 				// the same convention, so it is not retained again.
 				out = append(out, newDevice(d))
 			}
 		}
 	})
-	return out, err
+	return out
 }
 
 // newDevice reads the ceilings that never change. The device is already
