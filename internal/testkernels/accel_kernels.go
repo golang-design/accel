@@ -2992,6 +2992,171 @@ kernel void AttentionPrefill(
 	},
 }
 
+// quantMatMulFlat is the generated flat lowering of QuantMatMul.
+//
+// It is what the CPU backend runs. The authored QuantMatMul is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func quantMatMulFlat(t accel.Thread, d GEMMDims, a []accel.Float16, bq []int8, bs []accel.Float16, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < (d.M * d.N) {
+		var row uint32 = (i / d.N)
+		var col uint32 = (i % d.N)
+		var acc float32 = float32(0)
+		{
+			var k uint32 = uint32(0)
+			for ; k < d.K; k = (k + uint32(1)) {
+				var w uint32 = ((k * d.N) + col)
+				var q float32 = float32(bq[w])
+				var s float32 = bs[(w / uint32(32))].F32()
+				acc = float32(acc + float32(a[((row*d.K)+k)].F32()*float32(q*s)))
+			}
+		}
+		out[i] = acc
+	}
+}
+
+// QuantMatMulKernel is the compiled form of QuantMatMul.
+var QuantMatMulKernel = accel.Kernel{
+	Name:          "QuantMatMul",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "bq", DType: accel.KernelI8, Access: accel.KernelRead},
+		{Name: "bs", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "e03d6c021ee80dabd195fdc040b12cdd",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void QuantMatMul(
+    const device half *a [[buffer(0)]],
+    const device char *bq [[buffer(1)]],
+    const device half *bs [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant GEMMDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < (d.M * d.N))) {
+        uint row = (i / d.N);
+        uint col = (i % d.N);
+        float acc = float(0);
+        for (uint k = uint(0); (k < d.K); k = (k + uint(1))) {
+            uint w = ((k * d.N) + col);
+            float q = float(bq[w]);
+            float s = float(bs[(w / uint(32))]);
+            acc = (acc + (float(a[((row * d.K) + k)]) * (q * s)));
+        }
+        out[i] = acc;
+    }
+}
+`,
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		quantMatMulFlat(t, accel.KernelUniformValue[GEMMDims](a, 0), accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[int8](a, 1), accel.KernelSlice[accel.Float16](a, 2), accel.KernelSlice[float32](a, 3))
+	},
+}
+
+// quantRowsFlat is the generated flat lowering of QuantRows.
+//
+// It is what the CPU backend runs. The authored QuantRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func quantRowsFlat(t accel.Thread, p RowParams, tq []int8, ts []accel.Float16, ids []uint32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < (p.Rows * p.Width) {
+		var r uint32 = (i / p.Width)
+		var c uint32 = (i % p.Width)
+		var id uint32 = ids[r]
+		if id < p.Capacity {
+			var w uint32 = ((id * p.Width) + c)
+			out[i] = float32(float32(tq[w]) * ts[(w/uint32(32))].F32())
+		} else {
+			out[i] = float32(0)
+		}
+	}
+}
+
+// QuantRowsKernel is the compiled form of QuantRows.
+var QuantRowsKernel = accel.Kernel{
+	Name:          "QuantRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "tq", DType: accel.KernelI8, Access: accel.KernelRead},
+		{Name: "ts", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "ids", DType: accel.KernelU32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "b56b6d7d3c0be1e7431e646afedc450c",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowParams {
+    uint Rows;
+    uint Width;
+    uint Capacity;
+    char _tail[4];
+};
+
+kernel void QuantRows(
+    const device char *tq [[buffer(0)]],
+    const device half *ts [[buffer(1)]],
+    const device uint *ids [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant RowParams &p [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < (p.Rows * p.Width))) {
+        uint r = (i / p.Width);
+        uint c = (i % p.Width);
+        uint id = ids[r];
+        if ((id < p.Capacity)) {
+            uint w = ((id * p.Width) + c);
+            out[i] = (float(tq[w]) * float(ts[(w / uint(32))]));
+        } else {
+            out[i] = float(0);
+        }
+    }
+}
+`,
+	Uniforms: []accel.KernelUniform{
+		{Name: "p", Type: "RowParams", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, RowParamsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		quantRowsFlat(t, accel.KernelUniformValue[RowParams](a, 0), accel.KernelSlice[int8](a, 0), accel.KernelSlice[accel.Float16](a, 1), accel.KernelSlice[uint32](a, 2), accel.KernelSlice[float32](a, 3))
+	},
+}
+
 // segmentSumFlat is the generated flat lowering of SegmentSum.
 //
 // It is what the CPU backend runs. The authored SegmentSum is never registered as
@@ -3692,6 +3857,8 @@ var Kernels = []*accel.Kernel{
 	&RMSNormKernel,
 	&SoftmaxKernel,
 	&AttentionPrefillKernel,
+	&QuantMatMulKernel,
+	&QuantRowsKernel,
 	&SegmentSumKernel,
 	&CountAboveKernel,
 	&NormalizeKernel,

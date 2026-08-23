@@ -254,6 +254,45 @@ func diffCases() []diffCase {
 			groups:   accel.WorkgroupCount{X: 12},
 		},
 		{
+			// The quantized GEMM. Exact between backends: both widen each
+			// product to f32 and sum in the same order, so quantization changes
+			// what is computed and not whether the two agree about it.
+			kernel:   &testkernels.QuantMatMulKernel,
+			counts:   []int{4 * 32, 32 * 8, 32 * 8 / 32, 4 * 8},
+			uniforms: []any{testkernels.GEMMDims{M: 4, N: 8, K: 32}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				// Binding 1 is the i8 quant plane and 2 the f16 scales. The
+				// seed feeds writeSeed, which converts per dtype, so the quants
+				// need values an int8 holds and the scales need to be non-zero
+				// or every product is zero and the comparison proves nothing.
+				switch b {
+				case 1:
+					return float32(i%201) - 100
+				case 2:
+					return 0.25 + float32(i%3)/8
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
+			kernel:   &testkernels.QuantRowsKernel,
+			counts:   []int{8 * 32, 8 * 32 / 32, 4, 4 * 32},
+			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 32, Capacity: 8}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 0:
+					return float32(i%201) - 100
+				case 1:
+					return 0.5 + float32(i%2)/4
+				case 2:
+					return float32(i % 8) // ids inside the table
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			// f16 to f32 is exact -- every f16 value is an f32 value -- so this
 			// must agree bit for bit and would be the first thing to fail if a
 			// backend's widening were not a widening.
@@ -485,6 +524,10 @@ func dtypeOf(d accel.KernelDType) accel.DType {
 		return accel.U32
 	case accel.KernelI32:
 		return accel.I32
+	case accel.KernelI8:
+		return accel.I8
+	case accel.KernelU8:
+		return accel.U8
 	}
 	return accel.F32
 }
@@ -506,6 +549,18 @@ func writeSeed(t *testing.T, r *accel.Recorder, v accel.BufferView, dt accel.DTy
 		vals := make([]uint32, n)
 		for i := range vals {
 			vals[i] = uint32(math.Abs(float64(at(i))))
+		}
+		r.CopyToBuffer(v, vals)
+	case accel.I8:
+		vals := make([]int8, n)
+		for i := range vals {
+			vals[i] = int8(at(i))
+		}
+		r.CopyToBuffer(v, vals)
+	case accel.U8:
+		vals := make([]uint8, n)
+		for i := range vals {
+			vals[i] = uint8(math.Abs(float64(at(i))))
 		}
 		r.CopyToBuffer(v, vals)
 	case accel.I32:
@@ -550,6 +605,22 @@ func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt accel.KernelDT
 		}
 	case accel.KernelI32:
 		raw := make([]int32, n)
+		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		for i, v := range raw {
+			out[i] = float32(v)
+		}
+	case accel.KernelI8:
+		raw := make([]int8, n)
+		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		for i, v := range raw {
+			out[i] = float32(v)
+		}
+	case accel.KernelU8:
+		raw := make([]uint8, n)
 		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
 			t.Fatalf("readback: %v", err)
 		}
