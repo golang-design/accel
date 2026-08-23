@@ -112,6 +112,37 @@ The output is a written record of what is frozen and what is provisional, so
 "the API will change" in the README can become a specific sentence rather than a
 blanket disclaimer.
 
+### 4.1 First finding, from writing one example
+
+Writing the README's quick start found one before the review started, which is
+the argument for the review in miniature.
+
+**A kernel package cannot be generated for the first time if anything in it
+already refers to the generated symbol.** `accel-kernel` type-checks the package
+it compiles, so a single-package program with the kernel and its caller together
+fails:
+
+```
+accel-kernel: accel: ./... did not type-check:
+main.go:17:79: undefined: ScaleKernel
+```
+
+The symbol does not exist yet, and it cannot exist until the generator runs. The
+workaround is to put kernels in their own package, which is good practice
+anyway, and the README now says so. But the error tells a first-time user what
+failed and not what to do about it, and "the generator cannot run on the code it
+is generating for" is a step a user must discover.
+
+Two candidate fixes, neither yet chosen:
+
+| Fix | Cost |
+| --- | --- |
+| The generator tolerates undefined symbols whose names match kernels it is about to define | it would have to type-check twice, or reason about names before resolution |
+| The error names the cause and the fix | cheap, and does not remove the constraint |
+
+This is exactly the class §4 predicts: not a bug, and not visible from inside the
+implementation, because everyone who already has generated output never hits it.
+
 **Scope of the freeze.** The compute half only: device, memory, kernels, graphs,
 cooperation, and the tensor layer. Those shipped across M1 through M8 and
 [000](000-decisions.md)'s two-layer split is locked, so graphics arrives as a
