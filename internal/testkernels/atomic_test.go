@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"testing"
 
 	"golang.design/x/accel"
@@ -25,7 +26,7 @@ func TestAtomicsReturnThePreviousValue(t *testing.T) {
 	prev := make([]uint32, 10)
 
 	if err := direct.Run(&testkernels.AtomicOpsKernel, accel.ID3{X: 1},
-		accel.KernelArgs{Slices: []any{state, prev}}); err != nil {
+		kernelabi.Args{Slices: []any{state, prev}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -88,7 +89,7 @@ func TestHistogramCountsEveryElement(t *testing.T) {
 	counts := make([]uint32, 4)
 
 	if err := direct.Run(&testkernels.HistogramKernel, direct.Cover(&testkernels.HistogramKernel, n),
-		accel.KernelArgs{Slices: []any{in, counts}}); err != nil {
+		kernelabi.Args{Slices: []any{in, counts}}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -111,7 +112,7 @@ func TestHistogramCountsEveryElement(t *testing.T) {
 // builder infers dependency edges from. A binding that looked untouched would
 // be a missing barrier, and therefore a race.
 func TestAnAtomicMarksItsBindingReadWrite(t *testing.T) {
-	var counts *accel.KernelBinding
+	var counts *kernelabi.Binding
 	for i := range testkernels.HistogramKernel.Bindings {
 		if b := &testkernels.HistogramKernel.Bindings[i]; b.Name == "counts" {
 			counts = b
@@ -120,7 +121,7 @@ func TestAnAtomicMarksItsBindingReadWrite(t *testing.T) {
 	if counts == nil {
 		t.Fatal("Histogram has no counts binding")
 	}
-	if counts.Access != accel.KernelRead|accel.KernelWrite {
+	if counts.Access != kernelabi.Read|kernelabi.Write {
 		t.Errorf("the atomic's binding is %v, want read-write: an atomic is a "+
 			"read-modify-write and the graph builder infers barriers from that",
 			counts.Access)
@@ -169,7 +170,7 @@ func TestAuthoredAtomicKernels(t *testing.T) {
 		// And the generated lowering agrees.
 		generated := make([]uint32, 4)
 		if err := direct.Run(&testkernels.HistogramKernel, accel.ID3{X: groups},
-			accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+			kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		for i := range counts {
@@ -191,7 +192,7 @@ func TestAuthoredAtomicKernels(t *testing.T) {
 		genState := append([]uint32(nil), start...)
 		genPrev := make([]uint32, 10)
 		if err := direct.Run(&testkernels.AtomicOpsKernel, accel.ID3{X: 1},
-			accel.KernelArgs{Slices: []any{genState, genPrev}}); err != nil {
+			kernelabi.Args{Slices: []any{genState, genPrev}}); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 

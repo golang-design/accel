@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -19,7 +20,7 @@ import (
 func runRow(t *testing.T, k *accel.Kernel, d testkernels.RowDims, slices []any) {
 	t.Helper()
 	err := kernel.DispatchCooperative(k, accel.ID3{X: d.Rows},
-		accel.KernelArgs{Slices: slices, Uniforms: []any{d}})
+		kernelabi.Args{Slices: slices, Uniforms: []any{d}})
 	if err != nil {
 		t.Fatalf("dispatch %s: %v", k.Name, err)
 	}
@@ -197,7 +198,7 @@ func TestAuthoredRowKernels(t *testing.T) {
 
 	drive := func(run func(th kernel.Thread, sh *[128]float32)) {
 		var sh [128]float32
-		accel.KernelPoison(sh[:])
+		kernelabi.Poison(sh[:])
 		kernel.RunAuthored(size, kernel.ID3{}, kernel.ID3{X: 1}, testkernels.RowWidth,
 			func(th kernel.Thread) { run(th, &sh) })
 	}

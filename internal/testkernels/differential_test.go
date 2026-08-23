@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -35,41 +36,41 @@ func TestFlatAndCooperativeLoweringsAgree(t *testing.T) {
 	cases := []struct {
 		name   string
 		kernel *accel.Kernel
-		args   func() (accel.KernelArgs, []float32)
+		args   func() (kernelabi.Args, []float32)
 	}{{
 		name:   "Scale",
 		kernel: &testkernels.ScaleKernel,
-		args: func() (accel.KernelArgs, []float32) {
+		args: func() (kernelabi.Args, []float32) {
 			in, out := ramp(n), make([]float32, n)
-			return accel.KernelArgs{Slices: []any{in, out}}, out
+			return kernelabi.Args{Slices: []any{in, out}}, out
 		},
 	}, {
 		name:   "Add",
 		kernel: &testkernels.AddKernel,
-		args: func() (accel.KernelArgs, []float32) {
+		args: func() (kernelabi.Args, []float32) {
 			a, b, out := ramp(n), ramp(n), make([]float32, n)
 			for i := range b {
 				b[i] = -b[i] * 0.5
 			}
-			return accel.KernelArgs{Slices: []any{a, b, out}}, out
+			return kernelabi.Args{Slices: []any{a, b, out}}, out
 		},
 	}, {
 		name:   "SegmentSum",
 		kernel: &testkernels.SegmentSumKernel,
-		args: func() (accel.KernelArgs, []float32) {
+		args: func() (kernelabi.Args, []float32) {
 			in, out := ramp(n), make([]float32, n)
-			return accel.KernelArgs{Slices: []any{in, out}}, out
+			return kernelabi.Args{Slices: []any{in, out}}, out
 		},
 	}, {
 		name:   "Normalize",
 		kernel: &testkernels.NormalizeKernel,
-		args: func() (accel.KernelArgs, []float32) {
+		args: func() (kernelabi.Args, []float32) {
 			in := make([]accel.Float16, n)
 			for i := range in {
 				in[i] = accel.ToFloat16(float32(i)*0.25 - 3)
 			}
 			out, scratch := make([]float32, n), make([]float32, n)
-			return accel.KernelArgs{Slices: []any{in, out, scratch}}, out
+			return kernelabi.Args{Slices: []any{in, out, scratch}}, out
 		},
 	}}
 
@@ -111,11 +112,11 @@ func TestFlatAndCooperativeLoweringsAgree(t *testing.T) {
 // the same thing. What this exercises is the scheduler's own machinery -- the
 // per-invocation frames, the epoch loop, the id computation -- against the path
 // that does not use any of it.
-func runAsCooperative(k *accel.Kernel, count accel.ID3, args accel.KernelArgs) error {
+func runAsCooperative(k *accel.Kernel, count accel.ID3, args kernelabi.Args) error {
 	wrapped := *k
 	wrapped.Flat = nil
 	wrapped.Suspensions = 0
-	wrapped.Cooperative = func(t accel.Thread, a accel.KernelArgs, f *accel.KernelFrame) bool {
+	wrapped.Cooperative = func(t accel.Thread, a kernelabi.Args, f *kernelabi.Frame) bool {
 		k.Flat(t, a)
 		return false
 	}
@@ -145,17 +146,17 @@ func TestTheSchedulerComputesTheSameIDs(t *testing.T) {
 	var flat, coop []ids
 	record := func(dst *[]ids) *accel.Kernel {
 		return &accel.Kernel{
-			Name: "Ids", WorkgroupSize: size, Generator: accel.KernelABIVersion,
-			Bindings: []accel.KernelBinding{
-				{Name: "out", DType: accel.KernelU32, Access: accel.KernelWrite},
+			Name: "Ids", WorkgroupSize: size, Generator: kernelabi.Version,
+			Bindings: []kernelabi.Binding{
+				{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 			},
-			Flat: func(th accel.Thread, a accel.KernelArgs) {
+			Flat: func(th accel.Thread, a kernelabi.Args) {
 				*dst = append(*dst, ids{th.GlobalID(), th.LocalID(), th.GroupID()})
 			},
 		}
 	}
 	out := make([]uint32, 1)
-	args := accel.KernelArgs{Slices: []any{out}}
+	args := kernelabi.Args{Slices: []any{out}}
 
 	if err := direct.Run(record(&flat), count, args); err != nil {
 		t.Fatalf("flat: %v", err)
@@ -185,13 +186,13 @@ func TestTheSchedulerVisitsInvocationsXFastest(t *testing.T) {
 	size := accel.ID3{X: 4, Y: 2, Z: 1}
 	var seen []accel.ID3
 	k := &accel.Kernel{
-		Name: "Order", WorkgroupSize: size, Generator: accel.KernelABIVersion,
-		Bindings: []accel.KernelBinding{
-			{Name: "out", DType: accel.KernelU32, Access: accel.KernelWrite},
+		Name: "Order", WorkgroupSize: size, Generator: kernelabi.Version,
+		Bindings: []kernelabi.Binding{
+			{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 		},
-		Flat: func(th accel.Thread, a accel.KernelArgs) { seen = append(seen, th.LocalID()) },
+		Flat: func(th accel.Thread, a kernelabi.Args) { seen = append(seen, th.LocalID()) },
 	}
-	if err := runAsCooperative(k, accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{make([]uint32, 1)}}); err != nil {
+	if err := runAsCooperative(k, accel.ID3{X: 1}, kernelabi.Args{Slices: []any{make([]uint32, 1)}}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 

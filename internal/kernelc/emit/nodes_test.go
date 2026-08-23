@@ -147,13 +147,13 @@ func TestEmitsEveryBindingType(t *testing.T) {
 		goType    string
 		dtypeName string
 	}{
-		{ir.F32, "[]float32", "accel.KernelF32"},
-		{ir.I32, "[]int32", "accel.KernelI32"},
-		{ir.U32, "[]uint32", "accel.KernelU32"},
-		{ir.I8, "[]int8", "accel.KernelI8"},
-		{ir.U8, "[]uint8", "accel.KernelU8"},
-		{ir.F16, "[]accel.Float16", "accel.KernelF16"},
-		{ir.BF16, "[]accel.BFloat16", "accel.KernelBF16"},
+		{ir.F32, "[]float32", "kernelabi.F32"},
+		{ir.I32, "[]int32", "kernelabi.I32"},
+		{ir.U32, "[]uint32", "kernelabi.U32"},
+		{ir.I8, "[]int8", "kernelabi.I8"},
+		{ir.U8, "[]uint8", "kernelabi.U8"},
+		{ir.F16, "[]accel.Float16", "kernelabi.F16"},
+		{ir.BF16, "[]accel.BFloat16", "kernelabi.BF16"},
 	} {
 		t.Run(tc.kind.String(), func(t *testing.T) {
 			elem := &ir.Type{Kind: tc.kind}
@@ -174,7 +174,7 @@ func TestEmitsEveryBindingType(t *testing.T) {
 			if !strings.Contains(string(got), tc.dtypeName) {
 				t.Errorf("no %s in:\n%s", tc.dtypeName, got)
 			}
-			if !strings.Contains(string(got), "accel.KernelRead | accel.KernelWrite") {
+			if !strings.Contains(string(got), "kernelabi.Read | kernelabi.Write") {
 				t.Errorf("a read-write binding is not spelled as both:\n%s", got)
 			}
 			// The narrow floats bind to their own storage types rather than to a
@@ -182,7 +182,7 @@ func TestEmitsEveryBindingType(t *testing.T) {
 			// so adding two narrow values would compile and add their bit
 			// patterns, with no diagnostic anywhere.
 			if tc.kind == ir.F16 || tc.kind == ir.BF16 {
-				if !strings.Contains(string(got), "accel.KernelSlice["+tc.goType[2:]+"]") {
+				if !strings.Contains(string(got), "kernelabi.Slice["+tc.goType[2:]+"]") {
 					t.Errorf("a narrow float does not bind to %s:\n%s", tc.goType, got)
 				}
 			}

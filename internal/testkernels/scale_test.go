@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -130,7 +131,7 @@ func TestGeneratedMatchesAuthored(t *testing.T) {
 			generated := make([]float32, n)
 			if err := direct.Run(&testkernels.ScaleKernel,
 				direct.Cover(&testkernels.ScaleKernel, n),
-				accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+				kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 				t.Fatalf("direct.Run: %v", err)
 			}
 
@@ -155,8 +156,8 @@ func TestGeneratedRecordDescribesTheSource(t *testing.T) {
 	if k.WorkgroupSize != (accel.ID3{X: 64, Y: 1, Z: 1}) {
 		t.Errorf("WorkgroupSize = %+v, want 64,1,1", k.WorkgroupSize)
 	}
-	if k.Generator != accel.KernelABIVersion {
-		t.Errorf("Generator = %d, want %d", k.Generator, accel.KernelABIVersion)
+	if k.Generator != kernelabi.Version {
+		t.Errorf("Generator = %d, want %d", k.Generator, kernelabi.Version)
 	}
 	if k.Digest == "" {
 		t.Error("the record carries no digest, so nothing can check it is fresh")
@@ -166,10 +167,10 @@ func TestGeneratedRecordDescribesTheSource(t *testing.T) {
 	}
 	// The accesses are inferred from the body. in is read, out is written, and
 	// len(out) is not an element read.
-	if got := k.Bindings[0]; got.Name != "in" || got.Access != accel.KernelRead {
+	if got := k.Bindings[0]; got.Name != "in" || got.Access != kernelabi.Read {
 		t.Errorf("binding 0 = %+v, want in/read", got)
 	}
-	if got := k.Bindings[1]; got.Name != "out" || got.Access != accel.KernelWrite {
+	if got := k.Bindings[1]; got.Name != "out" || got.Access != kernelabi.Write {
 		t.Errorf("binding 1 = %+v, want out/write", got)
 	}
 }
@@ -180,10 +181,10 @@ func TestBindRejectsTheWrongBuffers(t *testing.T) {
 	k := &testkernels.ScaleKernel
 	for _, tc := range []struct {
 		name string
-		args accel.KernelArgs
+		args kernelabi.Args
 	}{
-		{"too few", accel.KernelArgs{Slices: []any{make([]float32, 4)}}},
-		{"wrong dtype", accel.KernelArgs{Slices: []any{make([]float32, 4), make([]int32, 4)}}},
+		{"too few", kernelabi.Args{Slices: []any{make([]float32, 4)}}},
+		{"wrong dtype", kernelabi.Args{Slices: []any{make([]float32, 4), make([]int32, 4)}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := direct.Run(k, direct.Cover(k, 4), tc.args); err == nil {

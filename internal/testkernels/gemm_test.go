@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"strings"
 	"testing"
@@ -73,7 +74,7 @@ func TestTiledGEMMMatchesItsReference(t *testing.T) {
 				Z: 1,
 			}
 			err := kernel.DispatchCooperative(&testkernels.MatMulTiledKernel, groups,
-				accel.KernelArgs{
+				kernelabi.Args{
 					Slices:   []any{a, b, out},
 					Uniforms: []any{dims},
 				})
@@ -124,17 +125,17 @@ func TestBothGEMMBarriersAreLoadBearing(t *testing.T) {
 	build := func(firstBarrier, secondBarrier bool) *accel.Kernel {
 		return &accel.Kernel{
 			Name: "Tile", WorkgroupSize: accel.ID3{X: lanes, Y: 1, Z: 1},
-			Generator: accel.KernelABIVersion, Suspensions: 4,
+			Generator: kernelabi.Version, Suspensions: 4,
 			SharedSizes: []int{lanes},
-			Bindings: []accel.KernelBinding{
-				{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+			Bindings: []kernelabi.Binding{
+				{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 			},
 			NewShared: func() []any {
 				var sh [lanes]float32
-				accel.KernelPoison(sh[:])
+				kernelabi.Poison(sh[:])
 				return []any{&sh}
 			},
-			Cooperative: func(th accel.Thread, a accel.KernelArgs, f *accel.KernelFrame) bool {
+			Cooperative: func(th accel.Thread, a kernelabi.Args, f *kernelabi.Frame) bool {
 				sh := kernel.SharedSlice[[lanes]float32](a, 0)
 				out := a.Slices[0].([]float32)
 				lane := th.LocalID().X
@@ -146,7 +147,7 @@ func TestBothGEMMBarriersAreLoadBearing(t *testing.T) {
 					sh[lane] = float32(lane)
 					f.Pass = 1
 					if firstBarrier {
-						f.Barrier = accel.KernelBarrierID{Index: 0, Pos: "tile.go:1:1"}
+						f.Barrier = kernelabi.BarrierID{Index: 0, Pos: "tile.go:1:1"}
 						return true
 					}
 					fallthrough
@@ -154,7 +155,7 @@ func TestBothGEMMBarriersAreLoadBearing(t *testing.T) {
 					out[lane] = sh[f.Shared.ReadAt(0, int(next))]
 					f.Pass = 2
 					if secondBarrier {
-						f.Barrier = accel.KernelBarrierID{Index: 1, Pos: "tile.go:2:2"}
+						f.Barrier = kernelabi.BarrierID{Index: 1, Pos: "tile.go:2:2"}
 						return true
 					}
 					fallthrough
@@ -162,7 +163,7 @@ func TestBothGEMMBarriersAreLoadBearing(t *testing.T) {
 					f.Shared.Write(0, int(lane))
 					sh[lane] = float32(lane) * 2
 					f.Pass = 3
-					f.Barrier = accel.KernelBarrierID{Index: 2, Pos: "tile.go:3:3"}
+					f.Barrier = kernelabi.BarrierID{Index: 2, Pos: "tile.go:3:3"}
 					return true
 				default:
 					out[lane] += sh[f.Shared.ReadAt(0, int(next))]
@@ -174,7 +175,7 @@ func TestBothGEMMBarriersAreLoadBearing(t *testing.T) {
 
 	run := func(k *accel.Kernel) error {
 		return kernel.DispatchCooperative(k, accel.ID3{X: 1},
-			accel.KernelArgs{Slices: []any{make([]float32, lanes)}})
+			kernelabi.Args{Slices: []any{make([]float32, lanes)}})
 	}
 
 	if err := run(build(true, true)); err != nil {
@@ -248,7 +249,7 @@ func TestAuthoredTiledGEMM(t *testing.T) {
 	generated := make([]float32, m*n)
 	err := kernel.DispatchCooperative(&testkernels.MatMulTiledKernel,
 		accel.ID3{X: groups.X, Y: groups.Y, Z: 1},
-		accel.KernelArgs{Slices: []any{a, b, generated}, Uniforms: []any{dims}})
+		kernelabi.Args{Slices: []any{a, b, generated}, Uniforms: []any{dims}})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}

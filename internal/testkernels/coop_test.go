@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestExchangeRunsCooperatively(t *testing.T) {
 	for i := range in {
 		in[i] = float32(i)
 	}
-	args := accel.KernelArgs{Slices: []any{in, out}}
+	args := kernelabi.Args{Slices: []any{in, out}}
 	if err := kernel.DispatchCooperative(k, accel.ID3{X: n / 64}, args); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestSharedStorageIsPerWorkgroup(t *testing.T) {
 	for i := range in {
 		in[i] = float32(i)
 	}
-	args := accel.KernelArgs{Slices: []any{in, out}}
+	args := kernelabi.Args{Slices: []any{in, out}}
 	if err := kernel.DispatchCooperative(&testkernels.ExchangeKernel,
 		accel.ID3{X: n / 64}, args); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -91,7 +92,7 @@ func TestLocalsSurviveTheSuspension(t *testing.T) {
 	for i := range in {
 		in[i] = 42
 	}
-	args := accel.KernelArgs{Slices: []any{in, out}}
+	args := kernelabi.Args{Slices: []any{in, out}}
 	if err := kernel.DispatchCooperative(&testkernels.ExchangeKernel,
 		accel.ID3{X: 1}, args); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -108,7 +109,7 @@ func TestLocalsSurviveTheSuspension(t *testing.T) {
 // before writing produces a number nobody mistakes for an answer.
 func TestSharedStorageIsPoisoned(t *testing.T) {
 	var sh [8]float32
-	accel.KernelPoison(sh[:])
+	kernelabi.Poison(sh[:])
 	for i, v := range sh {
 		if v == 0 {
 			t.Fatalf("element %d is zero: zero is a value a kernel legitimately "+
@@ -120,7 +121,7 @@ func TestSharedStorageIsPoisoned(t *testing.T) {
 	}
 
 	var u [8]uint32
-	accel.KernelPoison(u[:])
+	kernelabi.Poison(u[:])
 	for i, v := range u {
 		if v == 0 {
 			t.Fatalf("integer element %d is zero", i)
@@ -132,7 +133,7 @@ func TestSharedStorageIsPoisoned(t *testing.T) {
 // invocations in sequence, which would be a different program.
 func TestACooperativeKernelRefusesTheFlatPath(t *testing.T) {
 	err := kernel.Dispatch(&testkernels.ExchangeKernel, accel.ID3{X: 1},
-		accel.KernelArgs{Slices: []any{make([]float32, 64), make([]float32, 64)}})
+		kernelabi.Args{Slices: []any{make([]float32, 64), make([]float32, 64)}})
 	if err == nil {
 		t.Fatal("a cooperative kernel should refuse the flat path")
 	}
@@ -159,7 +160,7 @@ func TestAuthoredExchange(t *testing.T) {
 
 	for g := range groups {
 		var sh [group]float32
-		accel.KernelPoison(sh[:])
+		kernelabi.Poison(sh[:])
 		// Two passes: the first is every invocation up to the barrier, the
 		// second is every invocation past it.
 		for range 2 {
@@ -243,7 +244,7 @@ func TestGeneratedAddAgreesWithTheAuthoredOne(t *testing.T) {
 
 	generated := make([]float32, n)
 	if err := direct.Run(&testkernels.AddKernel, accel.ID3{X: groups},
-		accel.KernelArgs{Slices: []any{a, b, generated}}); err != nil {
+		kernelabi.Args{Slices: []any{a, b, generated}}); err != nil {
 		t.Fatalf("direct.Run: %v", err)
 	}
 
@@ -277,7 +278,7 @@ func TestTheLoopedAndUnrolledReductionsAgree(t *testing.T) {
 		t.Helper()
 		out := make([]float32, groups)
 		err := kernel.DispatchCooperative(k, accel.ID3{X: groups},
-			accel.KernelArgs{Slices: []any{in, out}})
+			kernelabi.Args{Slices: []any{in, out}})
 		if err != nil {
 			t.Fatalf("%s: %v", k.Name, err)
 		}
@@ -358,7 +359,7 @@ func TestAuthoredReductionsMatchTheirLowerings(t *testing.T) {
 	count := kernel.ID3{X: groups, Y: 1, Z: 1}
 	for g := range uint32(groups) {
 		var sh [group]float32
-		accel.KernelPoison(sh[:])
+		kernelabi.Poison(sh[:])
 		for range 7 {
 			for l := range uint32(group) {
 				th := kernel.NewThread(kernel.ID3{X: g*group + l},
@@ -377,7 +378,7 @@ func TestAuthoredReductionsMatchTheirLowerings(t *testing.T) {
 	// And the generated lowering agrees with it.
 	generated := make([]float32, groups)
 	if err := kernel.DispatchCooperative(&testkernels.ReduceUnrolledKernel,
-		accel.ID3{X: groups}, accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+		accel.ID3{X: groups}, kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	for g := range groups {

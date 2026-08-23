@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"strings"
 	"testing"
@@ -63,7 +64,7 @@ func TestReduceSumMatchesItsReference(t *testing.T) {
 			out := make([]float32, 1)
 
 			err := kernel.DispatchCooperative(&testkernels.ReduceSumKernel,
-				accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{in, out}})
+				accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, out}})
 			if err != nil {
 				t.Fatalf("dispatch: %v", err)
 			}

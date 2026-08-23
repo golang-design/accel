@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestMatVecAgreesWithTheTiledGEMM(t *testing.T) {
 			viaMatVec := make([]float32, c.n)
 			err := kernel.DispatchCooperative(&testkernels.MatVecKernel,
 				accel.ID3{X: uint32(c.n)},
-				accel.KernelArgs{Slices: []any{a, b, viaMatVec}, Uniforms: []any{dims}})
+				kernelabi.Args{Slices: []any{a, b, viaMatVec}, Uniforms: []any{dims}})
 			if err != nil {
 				t.Fatalf("matvec: %v", err)
 			}
@@ -51,7 +52,7 @@ func TestMatVecAgreesWithTheTiledGEMM(t *testing.T) {
 					X: uint32((c.n + testkernels.TileN - 1) / testkernels.TileN),
 					Y: 1, Z: 1,
 				},
-				accel.KernelArgs{Slices: []any{a, b, viaGEMM}, Uniforms: []any{dims}})
+				kernelabi.Args{Slices: []any{a, b, viaGEMM}, Uniforms: []any{dims}})
 			if err != nil {
 				t.Fatalf("gemm: %v", err)
 			}
@@ -118,12 +119,12 @@ func TestLinearIsTheGEMMPlusItsBias(t *testing.T) {
 
 			plain := make([]float32, c.m*c.n)
 			if err := kernel.DispatchCooperative(&testkernels.MatMulTiledKernel, groups,
-				accel.KernelArgs{Slices: []any{a, b, plain}, Uniforms: []any{dims}}); err != nil {
+				kernelabi.Args{Slices: []any{a, b, plain}, Uniforms: []any{dims}}); err != nil {
 				t.Fatalf("gemm: %v", err)
 			}
 			withBias := make([]float32, c.m*c.n)
 			if err := kernel.DispatchCooperative(&testkernels.LinearTiledKernel, groups,
-				accel.KernelArgs{Slices: []any{a, b, bias, withBias},
+				kernelabi.Args{Slices: []any{a, b, bias, withBias},
 					Uniforms: []any{dims}}); err != nil {
 				t.Fatalf("linear: %v", err)
 			}
@@ -158,7 +159,7 @@ func TestTheBiasIsBroadcastAlongRows(t *testing.T) {
 	dims := testkernels.GEMMDims{M: m, N: n, K: k}
 	err := kernel.DispatchCooperative(&testkernels.LinearTiledKernel,
 		accel.ID3{X: 1, Y: 1, Z: 1},
-		accel.KernelArgs{Slices: []any{a, b, bias, out}, Uniforms: []any{dims}})
+		kernelabi.Args{Slices: []any{a, b, bias, out}, Uniforms: []any{dims}})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -194,7 +195,7 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 		size := kernel.ID3{X: testkernels.RowWidth, Y: 1, Z: 1}
 		for col := range uint32(n) {
 			var sh [128]float32
-			accel.KernelPoison(sh[:])
+			kernelabi.Poison(sh[:])
 			kernel.RunAuthored(size, kernel.ID3{X: col}, kernel.ID3{X: n},
 				testkernels.RowWidth, func(th kernel.Thread) {
 					testkernels.MatVec(th, dims, a, b, authored, &sh)
@@ -203,7 +204,7 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 
 		generated := make([]float32, n)
 		if err := kernel.DispatchCooperative(&testkernels.MatVecKernel, accel.ID3{X: n},
-			accel.KernelArgs{Slices: []any{a, b, generated}, Uniforms: []any{dims}}); err != nil {
+			kernelabi.Args{Slices: []any{a, b, generated}, Uniforms: []any{dims}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		for i := range authored {
@@ -241,7 +242,7 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 		generated := make([]float32, m*n)
 		if err := kernel.DispatchCooperative(&testkernels.LinearTiledKernel,
 			accel.ID3{X: 1, Y: 1, Z: 1},
-			accel.KernelArgs{Slices: []any{a, b, bias, generated},
+			kernelabi.Args{Slices: []any{a, b, bias, generated},
 				Uniforms: []any{dims}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}

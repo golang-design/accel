@@ -5,6 +5,7 @@
 package direct_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"strings"
 	"testing"
 
@@ -16,12 +17,12 @@ import (
 func recorder(size accel.ID3) (*accel.Kernel, *[]accel.ID3, *[]accel.ID3) {
 	var globals, locals []accel.ID3
 	k := &accel.Kernel{
-		Name: "Record", WorkgroupSize: size, Generator: accel.KernelABIVersion,
-		Bindings: []accel.KernelBinding{{Name: "out", DType: accel.KernelU32, Access: accel.KernelWrite}},
-		Flat: func(t accel.Thread, a accel.KernelArgs) {
+		Name: "Record", WorkgroupSize: size, Generator: kernelabi.Version,
+		Bindings: []kernelabi.Binding{{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write}},
+		Flat: func(t accel.Thread, a kernelabi.Args) {
 			globals = append(globals, t.GlobalID())
 			locals = append(locals, t.LocalID())
-			out := accel.KernelSlice[uint32](a, 0)
+			out := kernelabi.Slice[uint32](a, 0)
 			if i := t.GlobalIndex(); int(i) < len(out) {
 				out[i] = i + 1
 			}
@@ -38,7 +39,7 @@ func TestRunCoversEveryInvocation(t *testing.T) {
 	count := accel.ID3{X: 3, Y: 1, Z: 1}
 
 	out := make([]uint32, 12)
-	if err := direct.Run(k, count, accel.KernelArgs{Slices: []any{out}}); err != nil {
+	if err := direct.Run(k, count, kernelabi.Args{Slices: []any{out}}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -73,7 +74,7 @@ func TestRunCoversEveryInvocation(t *testing.T) {
 // them in sequence is a different program rather than a slower one.
 func TestRunRefusesACooperativeKernel(t *testing.T) {
 	k := &accel.Kernel{Name: "Reduce", WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1}}
-	err := direct.Run(k, accel.ID3{X: 1}, accel.KernelArgs{})
+	err := direct.Run(k, accel.ID3{X: 1}, kernelabi.Args{})
 	if err == nil {
 		t.Fatal("a kernel with no flat entry point ran")
 	}
@@ -91,26 +92,26 @@ func TestRunRejections(t *testing.T) {
 		return k
 	}
 
-	if err := direct.Run(nil, accel.ID3{X: 1}, accel.KernelArgs{}); err == nil {
+	if err := direct.Run(nil, accel.ID3{X: 1}, kernelabi.Args{}); err == nil {
 		t.Error("a nil kernel ran")
 	}
 
 	zero := ok()
 	zero.WorkgroupSize = accel.ID3{X: 4, Y: 0, Z: 1}
-	if err := direct.Run(zero, accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{[]uint32{}}}); err == nil {
+	if err := direct.Run(zero, accel.ID3{X: 1}, kernelabi.Args{Slices: []any{[]uint32{}}}); err == nil {
 		t.Error("a workgroup with a zero axis ran")
 	} else if !strings.Contains(err.Error(), "dispatches nothing") {
 		t.Errorf("error %q does not say why", err)
 	}
 
 	mismatched := ok()
-	if err := direct.Run(mismatched, accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{[]float32{}}}); err == nil {
+	if err := direct.Run(mismatched, accel.ID3{X: 1}, kernelabi.Args{Slices: []any{[]float32{}}}); err == nil {
 		t.Error("a mismatched argument set ran")
 	}
 
 	stale := ok()
-	stale.Generator = accel.KernelABIVersion - 1
-	if err := direct.Run(stale, accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{[]uint32{}}}); err == nil {
+	stale.Generator = kernelabi.Version - 1
+	if err := direct.Run(stale, accel.ID3{X: 1}, kernelabi.Args{Slices: []any{[]uint32{}}}); err == nil {
 		t.Error("a kernel generated against an older ABI ran")
 	}
 }
@@ -120,7 +121,7 @@ func TestRunRejections(t *testing.T) {
 func TestRunTreatsAZeroGridAsOne(t *testing.T) {
 	k, globals, _ := recorder(accel.ID3{X: 2, Y: 1, Z: 1})
 	out := make([]uint32, 2)
-	if err := direct.Run(k, accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{out}}); err != nil {
+	if err := direct.Run(k, accel.ID3{X: 1}, kernelabi.Args{Slices: []any{out}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(*globals) != 2 {
@@ -170,7 +171,7 @@ func TestRunIsDeterministic(t *testing.T) {
 	first, second := make([]uint32, 16), make([]uint32, 16)
 	for _, out := range [][]uint32{first, second} {
 		k, _, _ := recorder(accel.ID3{X: 4, Y: 1, Z: 1})
-		if err := direct.Run(k, direct.Cover(k, len(out)), accel.KernelArgs{Slices: []any{out}}); err != nil {
+		if err := direct.Run(k, direct.Cover(k, len(out)), kernelabi.Args{Slices: []any{out}}); err != nil {
 			t.Fatal(err)
 		}
 	}

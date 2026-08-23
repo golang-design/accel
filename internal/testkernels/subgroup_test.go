@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestSubgroupSweepAgreesWithTheFallback(t *testing.T) {
 					viaSubgroup := make([]float32, subgroups)
 					err := kernel.DispatchCooperativeWith(&testkernels.SubgroupReduceKernel,
 						accel.ID3{X: uint32((n + group - 1) / group)},
-						accel.KernelArgs{Slices: []any{in, viaSubgroup}},
+						kernelabi.Args{Slices: []any{in, viaSubgroup}},
 						kernel.Options{SubgroupSize: width, Diagnostics: true})
 					if err != nil {
 						t.Fatalf("subgroup path: %v", err)
@@ -54,7 +55,7 @@ func TestSubgroupSweepAgreesWithTheFallback(t *testing.T) {
 					viaFallback := make([]float32, subgroups)
 					err = kernel.Dispatch(&testkernels.SubgroupReduceFallbackKernel,
 						accel.ID3{X: uint32((n + group - 1) / group)},
-						accel.KernelArgs{Slices: []any{in, viaFallback, []uint32{width}}})
+						kernelabi.Args{Slices: []any{in, viaFallback, []uint32{width}}})
 					if err != nil {
 						t.Fatalf("fallback: %v", err)
 					}
@@ -82,7 +83,7 @@ func TestASubgroupOfOneIsTheIdentity(t *testing.T) {
 	out := make([]float32, n)
 
 	err := kernel.DispatchCooperativeWith(&testkernels.SubgroupReduceKernel,
-		accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{in, out}},
+		accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, out}},
 		kernel.Options{SubgroupSize: 1, Diagnostics: true})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -115,7 +116,7 @@ func TestElectPicksTheLowestLane(t *testing.T) {
 			}
 
 			err := kernel.DispatchCooperativeWith(&testkernels.SubgroupReduceKernel,
-				accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{in, out}},
+				accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, out}},
 				kernel.Options{SubgroupSize: width, Diagnostics: true})
 			if err != nil {
 				t.Fatalf("dispatch: %v", err)
@@ -182,7 +183,7 @@ func TestAuthoredSubgroupKernels(t *testing.T) {
 	// And the generated subgroup path agrees with it.
 	generated := make([]float32, group/width)
 	err := kernel.DispatchCooperativeWith(&testkernels.SubgroupReduceKernel,
-		accel.ID3{X: 1}, accel.KernelArgs{Slices: []any{in, generated}},
+		accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, generated}},
 		kernel.Options{SubgroupSize: width, Diagnostics: true})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)

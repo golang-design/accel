@@ -107,7 +107,9 @@ func Generate(p Package) ([]byte, error) {
 	// The imports the body actually used. An unused import does not compile and
 	// a missing one does not either, so neither can be guessed: each is
 	// recorded while emitting.
-	imports := []string{"golang.design/x/accel"}
+	// Both are always used when there is a kernel to emit: every entry point's
+	// closure takes an accel.Thread, and every record is a kernelabi.Kernel.
+	imports := []string{"golang.design/x/accel", "golang.design/x/accel/kernelabi"}
 	if e.needsKMath {
 		imports = append(imports, "golang.design/x/accel/kmath")
 	}
@@ -223,23 +225,23 @@ func (e *emitter) kernel(k *ir.Func) {
 	e.printf("}\n\n")
 
 	e.printf("// %s is the compiled form of %s.\n", k.Name+"Kernel", k.Name)
-	e.printf("var %s = accel.Kernel{\n", k.Name+"Kernel")
+	e.printf("var %s = kernelabi.Kernel{\n", k.Name+"Kernel")
 	e.printf("\tName: %q,\n", k.Name)
 	e.printf("\tWorkgroupSize: accel.ID3{X: %d, Y: %d, Z: %d},\n",
 		k.Workgroup[0], k.Workgroup[1], k.Workgroup[2])
-	e.printf("\tBindings: []accel.KernelBinding{\n")
+	e.printf("\tBindings: []kernelabi.Binding{\n")
 	for _, b := range k.Bindings {
 		e.printf("\t\t{Name: %q, DType: %s, Access: %s},\n", b.Name, e.dtype(b.Type), access(b))
 	}
 	e.printf("\t},\n")
 	e.printf("\tDigest: %q,\n", k.Digest)
-	e.printf("\tGenerator: accel.KernelABIVersion,\n")
+	e.printf("\tGenerator: kernelabi.Version,\n")
 	if k.Caps != 0 {
 		e.printf("\tCaps: %d,\n", k.Caps)
 	}
 	e.mslArtifact(k)
 	e.uniformRecords(k)
-	e.printf("\tFlat: func(t accel.Thread, a accel.KernelArgs) {\n")
+	e.printf("\tFlat: func(t accel.Thread, a kernelabi.Args) {\n")
 	e.printf("\t\t%s(t", lower)
 	// Parameters are passed in signature order, which interleaves uniforms and
 	// bindings however the author wrote them. The argument set is indexed the
@@ -251,11 +253,11 @@ func (e *emitter) kernel(k *ir.Func) {
 			continue
 		}
 		if u := uniformAt(k, p.Index); u != nil {
-			e.printf(", accel.KernelUniformValue[%s](a, %d)", u.TypeName, uniformSlot)
+			e.printf(", kernelabi.UniformValue[%s](a, %d)", u.TypeName, uniformSlot)
 			uniformSlot++
 			continue
 		}
-		e.printf(", accel.KernelSlice[%s](a, %d)", e.goType(p.Type().Elem), slot)
+		e.printf(", kernelabi.Slice[%s](a, %d)", e.goType(p.Type().Elem), slot)
 		slot++
 	}
 	e.printf(")\n")
@@ -274,11 +276,11 @@ func (e *emitter) uniformRecords(k *ir.Func) {
 	if len(k.Uniforms) == 0 {
 		return
 	}
-	e.printf("\tUniforms: []accel.KernelUniform{\n")
+	e.printf("\tUniforms: []kernelabi.Uniform{\n")
 	for _, u := range k.Uniforms {
 		e.printf("\t\t{Name: %q, Type: %q, Size: %d, Encode: func(dst []byte, v any) error {\n",
 			u.Name, u.TypeName, u.Size)
-		e.printf("\t\t\treturn accel.EncodeKernelUniform(dst, v, %sCodec{}.Encode)\n", u.TypeName)
+		e.printf("\t\t\treturn kernelabi.EncodeUniform(dst, v, %sCodec{}.Encode)\n", u.TypeName)
 		e.printf("\t\t}},\n")
 	}
 	e.printf("\t},\n")
@@ -298,7 +300,7 @@ func (e *emitter) registry(kernels []*ir.Func) {
 	e.printf("//\n")
 	e.printf("// Generated rather than written, so that a pass over the whole corpus cannot\n")
 	e.printf("// silently miss a kernel somebody added.\n")
-	e.printf("var Kernels = []*accel.Kernel{\n")
+	e.printf("var Kernels = []*kernelabi.Kernel{\n")
 	for _, k := range kernels {
 		e.printf("\t&%sKernel,\n", k.Name)
 	}
@@ -448,11 +450,11 @@ func lowerName(name string) string {
 func access(b *ir.Binding) string {
 	switch {
 	case b.Read && b.Write:
-		return "accel.KernelRead | accel.KernelWrite"
+		return "kernelabi.Read | kernelabi.Write"
 	case b.Write:
-		return "accel.KernelWrite"
+		return "kernelabi.Write"
 	default:
-		return "accel.KernelRead"
+		return "kernelabi.Read"
 	}
 }
 
@@ -997,24 +999,24 @@ func (e *emitter) goType(t *ir.Type) string {
 func (e *emitter) dtype(t *ir.Type) string {
 	if t == nil || t.Elem == nil {
 		e.fail("a binding with no element type")
-		return "accel.KernelF32"
+		return "kernelabi.F32"
 	}
 	switch t.Elem.Kind {
 	case ir.F32:
-		return "accel.KernelF32"
+		return "kernelabi.F32"
 	case ir.I32:
-		return "accel.KernelI32"
+		return "kernelabi.I32"
 	case ir.U32:
-		return "accel.KernelU32"
+		return "kernelabi.U32"
 	case ir.I8:
-		return "accel.KernelI8"
+		return "kernelabi.I8"
 	case ir.U8:
-		return "accel.KernelU8"
+		return "kernelabi.U8"
 	case ir.F16:
-		return "accel.KernelF16"
+		return "kernelabi.F16"
 	case ir.BF16:
-		return "accel.KernelBF16"
+		return "kernelabi.BF16"
 	}
 	e.fail("no dtype for binding element %v", t.Elem)
-	return "accel.KernelF32"
+	return "kernelabi.F32"
 }

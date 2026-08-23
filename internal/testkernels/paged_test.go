@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestPagedDecodeMatchesContiguous(t *testing.T) {
 	contiguous := make([]float32, qHeads*headDim)
 	err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 		accel.ID3{X: qHeads},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{q, logicalK, logicalV, contiguous},
 			Uniforms: []any{testkernels.AttnDims{
 				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
@@ -85,7 +86,7 @@ func TestPagedDecodeMatchesContiguous(t *testing.T) {
 			paged := make([]float32, qHeads*headDim)
 			err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 				accel.ID3{X: qHeads},
-				accel.KernelArgs{
+				kernelabi.Args{
 					Slices: []any{q, physK, physV, tc.pages, paged},
 					Uniforms: []any{testkernels.PagedDims{
 						QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
@@ -156,7 +157,7 @@ func TestTwoSequencesShareAPoolWithoutSeeingEachOther(t *testing.T) {
 		out := make([]float32, qHeads*headDim)
 		err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 			accel.ID3{X: qHeads},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{q, physK, physV, s.pages, out},
 				Uniforms: []any{testkernels.PagedDims{
 					QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,

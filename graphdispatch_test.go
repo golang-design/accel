@@ -5,6 +5,7 @@
 package accel_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"strings"
 	"testing"
@@ -381,7 +382,7 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 	}
 
 	stale := testkernels.AddKernel
-	stale.Generator = accel.KernelABIVersion + 1
+	stale.Generator = kernelabi.Version + 1
 	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &stale}); err == nil ||
 		!strings.Contains(err.Error(), "re-run go generate") {
 		t.Errorf("a kernel from another ABI should be rejected, got %v", err)

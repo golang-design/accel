@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -59,7 +60,7 @@ func TestBatchedDecodeMatchesOneAtATime(t *testing.T) {
 	batched := make([]float32, batch*qHeads*headDim)
 	err := kernel.DispatchCooperative(&testkernels.AttentionDecodeBatchedKernel,
 		accel.ID3{X: batch * qHeads},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{q, physK, physV, pages, lengths, batched},
 			Uniforms: []any{testkernels.BatchedDims{
 				Batch: batch, QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
@@ -75,7 +76,7 @@ func TestBatchedDecodeMatchesOneAtATime(t *testing.T) {
 		alone := make([]float32, qHeads*headDim)
 		err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 			accel.ID3{X: qHeads},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{
 					q[s*qHeads*headDim : (s+1)*qHeads*headDim],
 					physK, physV,
@@ -122,7 +123,7 @@ func TestBatchOfOne(t *testing.T) {
 	one := make([]float32, qHeads*headDim)
 	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeBatchedKernel,
 		accel.ID3{X: qHeads},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{q, physK, physV, pages, []uint32{5}, one},
 			Uniforms: []any{testkernels.BatchedDims{
 				Batch: 1, QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
@@ -135,7 +136,7 @@ func TestBatchOfOne(t *testing.T) {
 	unbatched := make([]float32, qHeads*headDim)
 	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 		accel.ID3{X: qHeads},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{q, physK, physV, pages, unbatched},
 			Uniforms: []any{testkernels.PagedDims{
 				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,

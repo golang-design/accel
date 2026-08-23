@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"sort"
 	"testing"
@@ -18,7 +19,7 @@ func topK(t *testing.T, w []float32, k int) []float32 {
 	t.Helper()
 	out := make([]float32, len(w))
 	err := kernel.DispatchCooperative(&testkernels.TopKMaskKernel, accel.ID3{X: 1},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{w, out},
 			Uniforms: []any{testkernels.TopDims{
 				Vocab: uint32(len(w)), K: uint32(k),
@@ -34,7 +35,7 @@ func topP(t *testing.T, w []float32, p float32) []float32 {
 	t.Helper()
 	out := make([]float32, len(w))
 	err := kernel.DispatchCooperative(&testkernels.TopPMaskKernel, accel.ID3{X: 1},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{w, out},
 			Uniforms: []any{testkernels.TopDims{
 				Vocab: uint32(len(w)), P: p,

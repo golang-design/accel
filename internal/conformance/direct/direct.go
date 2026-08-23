@@ -27,6 +27,7 @@ package direct
 import (
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/kernel"
+	"golang.design/x/accel/kernelabi"
 )
 
 // Run executes a kernel over a grid of workgroups.
@@ -40,7 +41,7 @@ import (
 // the binding layout, so a mismatch is something generation already proved, and
 // checking it inside the loop would report it once per invocation instead of
 // once with the binding's name.
-func Run(k *accel.Kernel, count accel.ID3, args accel.KernelArgs) error {
+func Run(k *accel.Kernel, count accel.ID3, args kernelabi.Args) error {
 	return kernel.Dispatch(k, count, args)
 }
 

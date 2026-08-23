@@ -7,6 +7,7 @@ package testkernels_test
 import (
 	"encoding/binary"
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -105,7 +106,7 @@ func TestTransformMatchesAuthored(t *testing.T) {
 			generated := make([]float32, n)
 			if err := direct.Run(&testkernels.TransformKernel,
 				direct.Cover(&testkernels.TransformKernel, n),
-				accel.KernelArgs{
+				kernelabi.Args{
 					Slices:   []any{in, generated},
 					Uniforms: []any{p},
 				}); err != nil {
@@ -135,7 +136,7 @@ func TestUniformBoundIsRespected(t *testing.T) {
 	}
 	if err := direct.Run(&testkernels.TransformKernel,
 		direct.Cover(&testkernels.TransformKernel, n),
-		accel.KernelArgs{Slices: []any{in, out}, Uniforms: []any{p}}); err != nil {
+		kernelabi.Args{Slices: []any{in, out}, Uniforms: []any{p}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,7 +166,7 @@ func TestKernelDeclaresItsUniform(t *testing.T) {
 	}
 
 	// A missing uniform is refused before anything runs.
-	if err := k.Bind(accel.KernelArgs{Slices: []any{[]float32{}, []float32{}}}); err == nil {
+	if err := k.Bind(kernelabi.Args{Slices: []any{[]float32{}, []float32{}}}); err == nil {
 		t.Error("an argument set with no uniform was accepted")
 	}
 }

@@ -471,7 +471,7 @@ func (e *emitter) coopLowering(k *ir.Func, segs []segment) {
 		}
 		e.printf("%s %s", p.Name, e.paramType(p.Type()))
 	}
-	e.printf(", f *%s, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {\n", frame)
+	e.printf(", f *%s, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {\n", frame)
 
 	// A loop over a switch, so a state that jumps backwards is a `continue`
 	// rather than a recursive call: the machine's own control flow stays flat
@@ -548,7 +548,7 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 
 	if seg.suspend {
 		e.printf("%sf.pc = %d\n", pad, seg.next)
-		e.printf("%sframe.Barrier = accel.KernelBarrierID{Index: %d, Pos: %q}\n",
+		e.printf("%sframe.Barrier = kernelabi.BarrierID{Index: %d, Pos: %q}\n",
 			pad, index, seg.pos)
 		e.printf("%sreturn true\n", pad)
 		return
@@ -579,21 +579,21 @@ func subCarrier(op ir.Opcode) carrier {
 func subOpName(op ir.Opcode) string {
 	switch op {
 	case ir.OpSubgroupAddF32:
-		return "accel.KernelSubAddF32"
+		return "kernelabi.SubAddF32"
 	case ir.OpSubgroupMinF32:
-		return "accel.KernelSubMinF32"
+		return "kernelabi.SubMinF32"
 	case ir.OpSubgroupMaxF32:
-		return "accel.KernelSubMaxF32"
+		return "kernelabi.SubMaxF32"
 	case ir.OpBroadcastFirstF32:
-		return "accel.KernelSubBroadcastFirstF32"
+		return "kernelabi.SubBroadcastFirstF32"
 	case ir.OpElect:
-		return "accel.KernelSubElect"
+		return "kernelabi.SubElect"
 	case ir.OpSubgroupAny:
-		return "accel.KernelSubAny"
+		return "kernelabi.SubAny"
 	case ir.OpSubgroupAll:
-		return "accel.KernelSubAll"
+		return "kernelabi.SubAll"
 	}
-	return "accel.KernelSubNone"
+	return "kernelabi.SubNone"
 }
 
 // jump enters another state, or finishes.
@@ -689,17 +689,17 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	e.coopLowering(k, segs)
 
 	e.printf("// %s is the compiled form of %s.\n", k.Name+"Kernel", k.Name)
-	e.printf("var %s = accel.Kernel{\n", k.Name+"Kernel")
+	e.printf("var %s = kernelabi.Kernel{\n", k.Name+"Kernel")
 	e.printf("\tName: %q,\n", k.Name)
 	e.printf("\tWorkgroupSize: accel.ID3{X: %d, Y: %d, Z: %d},\n",
 		k.Workgroup[0], k.Workgroup[1], k.Workgroup[2])
-	e.printf("\tBindings: []accel.KernelBinding{\n")
+	e.printf("\tBindings: []kernelabi.Binding{\n")
 	for _, b := range k.Bindings {
 		e.printf("\t\t{Name: %q, DType: %s, Access: %s},\n", b.Name, e.dtype(b.Type), access(b))
 	}
 	e.printf("\t},\n")
 	e.printf("\tDigest: %q,\n", k.Digest)
-	e.printf("\tGenerator: accel.KernelABIVersion,\n")
+	e.printf("\tGenerator: kernelabi.Version,\n")
 	// The Metal artifact is the *authored* structure, not this resumable
 	// lowering: specs/022-msl-target.md section 2 says why. A target with real
 	// barriers has no use for a program counter.
@@ -720,7 +720,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 		e.printf("\tNewShared: func() []any {\n")
 		for i, sh := range k.Shared {
 			e.printf("\t\tvar s%d %s\n", i, e.goType(sh.Type))
-			e.printf("\t\taccel.KernelPoison(s%d[:])\n", i)
+			e.printf("\t\tkernelabi.Poison(s%d[:])\n", i)
 		}
 		e.printf("\t\treturn []any{")
 		for i := range k.Shared {
@@ -738,7 +738,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	// resumes it afterwards. The scheduler owns the frames, so it passes an
 	// opaque slot rather than the kernel keeping state of its own: two
 	// workgroups run concurrently and a package-level frame would alias them.
-	e.printf("\tCooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {\n")
+	e.printf("\tCooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {\n")
 	e.printf("\t\tf, _ := slot.State.(*%s)\n", frameName(k.Name))
 	e.printf("\t\tif f == nil {\n")
 	e.printf("\t\t\tf = &%s{}\n", frameName(k.Name))
@@ -754,15 +754,15 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 		}
 		switch {
 		case p.Type() != nil && p.Type().Kind == ir.Slice:
-			e.printf(", accel.KernelSlice[%s](a, %d)", e.goType(p.Type().Elem), slot)
+			e.printf(", kernelabi.Slice[%s](a, %d)", e.goType(p.Type().Elem), slot)
 			slot++
 		case p.Type() != nil && p.Type().Kind == ir.Array:
 			// A pointer, so every invocation of the workgroup addresses one
 			// copy. By value each would get its own, which compiles.
-			e.printf(", accel.KernelShared[%s](a, %d)", e.goType(p.Type()), sharedSlot)
+			e.printf(", kernelabi.Shared[%s](a, %d)", e.goType(p.Type()), sharedSlot)
 			sharedSlot++
 		default:
-			e.printf(", accel.KernelUniformValue[%s](a, %d)", e.goType(p.Type()), uniformSlot)
+			e.printf(", kernelabi.UniformValue[%s](a, %d)", e.goType(p.Type()), uniformSlot)
 			uniformSlot++
 		}
 	}

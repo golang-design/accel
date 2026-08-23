@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -69,7 +70,7 @@ func TestQuantMatMulMeetsItsBudget(t *testing.T) {
 			wg := int(testkernels.QuantMatMulKernel.WorkgroupSize.X)
 			err := kernel.Dispatch(&testkernels.QuantMatMulKernel,
 				accel.ID3{X: uint32((c.m*c.n + wg - 1) / wg)},
-				accel.KernelArgs{
+				kernelabi.Args{
 					Slices: []any{af16, bq, bs, out}, Uniforms: []any{dims},
 				})
 			if err != nil {
@@ -142,7 +143,7 @@ func TestQuantRowsGathers(t *testing.T) {
 	wg := int(testkernels.QuantRowsKernel.WorkgroupSize.X)
 	err := kernel.Dispatch(&testkernels.QuantRowsKernel,
 		accel.ID3{X: uint32((rows*width + wg - 1) / wg)},
-		accel.KernelArgs{Slices: []any{tq, ts, ids, out}, Uniforms: []any{p}})
+		kernelabi.Args{Slices: []any{tq, ts, ids, out}, Uniforms: []any{p}})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}

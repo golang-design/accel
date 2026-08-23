@@ -6,6 +6,7 @@ package accel
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
@@ -291,14 +292,16 @@ func (p *ComputePipeline) Close() error {
 
 // Kernel is a kernel compiled to whatever form the target device consumes.
 //
-// Kernels are authored in a subset of Go and lowered from one typed IR to
-// generated, instrumented CPU code and native GPU shaders. The authored function
-// is type-checking input, not the CPU executable. See specs/004-kernel-authoring.md.
+// An alias for [kernelabi.Kernel], which is where generated code names it and
+// where its fields are documented. A caller does not construct one and does not
+// read its fields: `go generate` emits one package-level variable per kernel,
+// and the address is the whole of the interface —
+// `ComputePipelineDescriptor{Kernel: &kernels.ScaleKernel}`.
 //
-// A caller does not construct one. The generator emits it, filled in from
-// everything it inferred: the workgroup extent, the bindings and their access
-// modes, the source digest, and the entry point.
-type Kernel = kernel.Kernel
+// The alias stays so that spelling remains available at the point of use, while
+// the thirty-odd names a *generated file* needs live in kernelabi rather than
+// in this package's index. See specs/036-documentation.md's freeze record.
+type Kernel = kernelabi.Kernel
 
 // Access is how a binding is used by a kernel. The graph builder infers
 // dependency edges and barriers from declared access, so this must be accurate:

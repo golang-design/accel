@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -17,7 +18,7 @@ func argmax(t *testing.T, logits []float32) uint32 {
 	t.Helper()
 	out := make([]uint32, 1)
 	err := kernel.DispatchCooperative(&testkernels.SampleArgmaxKernel, accel.ID3{X: 1},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices:   []any{logits, out},
 			Uniforms: []any{testkernels.SampleDims{Vocab: uint32(len(logits))}},
 		})
@@ -31,7 +32,7 @@ func categorical(t *testing.T, probs []float32, draw float32) uint32 {
 	t.Helper()
 	out := make([]uint32, 1)
 	err := kernel.Dispatch(&testkernels.SampleCategoricalKernel, accel.ID3{X: 1},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices:   []any{probs, out},
 			Uniforms: []any{testkernels.SampleDims{Vocab: uint32(len(probs)), Draw: draw}},
 		})
@@ -155,7 +156,7 @@ func TestSamplingFollowsTheDistribution(t *testing.T) {
 	// Softmax through the corpus kernel, so this tests the pair rather than a
 	// host-side distribution the kernel never sees.
 	err := kernel.DispatchCooperative(&testkernels.SoftmaxKernel, accel.ID3{X: rows},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices:   []any{logits, probs},
 			Uniforms: []any{testkernels.RowDims{Rows: rows, Width: vocab}},
 		})

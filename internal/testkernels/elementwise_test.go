@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -33,21 +34,21 @@ func TestTheElementwiseFamily(t *testing.T) {
 	}{{
 		name: "add",
 		run: func(out []float32) {
-			runFlat(t, &testkernels.ElemAddKernel, n, accel.KernelArgs{
+			runFlat(t, &testkernels.ElemAddKernel, n, kernelabi.Args{
 				Slices: []any{a, b, out}})
 		},
 		want: func(i int) float64 { return float64(a[i]) + float64(b[i]) },
 	}, {
 		name: "mul",
 		run: func(out []float32) {
-			runFlat(t, &testkernels.ElemMulKernel, n, accel.KernelArgs{
+			runFlat(t, &testkernels.ElemMulKernel, n, kernelabi.Args{
 				Slices: []any{a, b, out}})
 		},
 		want: func(i int) float64 { return float64(a[i]) * float64(b[i]) },
 	}, {
 		name: "scale",
 		run: func(out []float32) {
-			runFlat(t, &testkernels.ElemScaleKernel, n, accel.KernelArgs{
+			runFlat(t, &testkernels.ElemScaleKernel, n, kernelabi.Args{
 				Slices:   []any{a, out},
 				Uniforms: []any{testkernels.ScaleParams{Factor: 0.25}},
 			})
@@ -56,7 +57,7 @@ func TestTheElementwiseFamily(t *testing.T) {
 	}, {
 		name: "silu",
 		run: func(out []float32) {
-			runFlat(t, &testkernels.SiLUKernel, n, accel.KernelArgs{Slices: []any{a, out}})
+			runFlat(t, &testkernels.SiLUKernel, n, kernelabi.Args{Slices: []any{a, out}})
 		},
 		want: func(i int) float64 {
 			x := float64(a[i])
@@ -65,7 +66,7 @@ func TestTheElementwiseFamily(t *testing.T) {
 	}, {
 		name: "swiglu",
 		run: func(out []float32) {
-			runFlat(t, &testkernels.SwiGLUKernel, n, accel.KernelArgs{
+			runFlat(t, &testkernels.SwiGLUKernel, n, kernelabi.Args{
 				Slices: []any{a, b, out}})
 		},
 		want: func(i int) float64 {
@@ -88,7 +89,7 @@ func TestTheElementwiseFamily(t *testing.T) {
 	}
 }
 
-func runFlat(t *testing.T, k *accel.Kernel, n int, args accel.KernelArgs) {
+func runFlat(t *testing.T, k *accel.Kernel, n int, args kernelabi.Args) {
 	t.Helper()
 	if err := direct.Run(k, direct.Cover(k, n), args); err != nil {
 		t.Fatalf("run %s: %v", k.Name, err)
@@ -104,7 +105,7 @@ func runFlat(t *testing.T, k *accel.Kernel, n int, args accel.KernelArgs) {
 func TestSiLUIsFiniteAtBothExtremes(t *testing.T) {
 	in := []float32{-1e30, -200, -100, -88, 0, 88, 100, 200, 1e30}
 	out := make([]float32, len(in))
-	runFlat(t, &testkernels.SiLUKernel, len(in), accel.KernelArgs{Slices: []any{in, out}})
+	runFlat(t, &testkernels.SiLUKernel, len(in), kernelabi.Args{Slices: []any{in, out}})
 
 	for i, x := range in {
 		got := float64(out[i])
@@ -136,7 +137,7 @@ func TestGatherRowsChecksItsIDs(t *testing.T) {
 	ids := []uint32{2, 0, capacity, 4} // the third is out of range
 	out := make([]float32, rows*width)
 
-	runFlat(t, &testkernels.GatherRowsKernel, rows*width, accel.KernelArgs{
+	runFlat(t, &testkernels.GatherRowsKernel, rows*width, kernelabi.Args{
 		Slices: []any{table, ids, out}, Uniforms: []any{p}})
 
 	for r := range rows {
@@ -175,7 +176,7 @@ func TestScatterRowsDropsAnOutOfRangeWrite(t *testing.T) {
 	}
 	ids := []uint32{1, capacity + 7, 3}
 
-	runFlat(t, &testkernels.ScatterRowsKernel, rows*width, accel.KernelArgs{
+	runFlat(t, &testkernels.ScatterRowsKernel, rows*width, kernelabi.Args{
 		Slices: []any{rowsIn, ids, state}, Uniforms: []any{p}})
 
 	for r := range rows {
@@ -214,7 +215,7 @@ func TestRoPERotatesPairsAndLeavesTheTail(t *testing.T) {
 	}
 	before := append([]float32(nil), inout...)
 
-	runFlat(t, &testkernels.RoPEKernel, rows*rotary/2, accel.KernelArgs{
+	runFlat(t, &testkernels.RoPEKernel, rows*rotary/2, kernelabi.Args{
 		Slices: []any{inout}, Uniforms: []any{p}})
 
 	for r := range rows {
@@ -255,7 +256,7 @@ func TestRoPEHonoursTheOffset(t *testing.T) {
 			Rows: 1, Width: width, RotaryDim: rotary, Base: 10000, Offset: offset,
 		}
 		inout := []float32{1, 0, 1, 0}
-		runFlat(t, &testkernels.RoPEKernel, rotary/2, accel.KernelArgs{
+		runFlat(t, &testkernels.RoPEKernel, rotary/2, kernelabi.Args{
 			Slices: []any{inout}, Uniforms: []any{p}})
 		return inout
 	}
@@ -283,7 +284,7 @@ func TestAuthoredElementwiseFamily(t *testing.T) {
 		b[i] = float32(i%7) - 3
 	}
 
-	run := func(k *accel.Kernel, args accel.KernelArgs, authored func(th kernel.Thread)) []float32 {
+	run := func(k *accel.Kernel, args kernelabi.Args, authored func(th kernel.Thread)) []float32 {
 		t.Helper()
 		const group = 64
 		size := kernel.ID3{X: group, Y: 1, Z: 1}
@@ -305,13 +306,13 @@ func TestAuthoredElementwiseFamily(t *testing.T) {
 
 	t.Run("add", func(t *testing.T) {
 		au := make([]float32, n)
-		gen := run(&testkernels.ElemAddKernel, accel.KernelArgs{Slices: []any{a, b, au}},
+		gen := run(&testkernels.ElemAddKernel, kernelabi.Args{Slices: []any{a, b, au}},
 			func(th kernel.Thread) { testkernels.ElemAdd(th, a, b, au) })
 		compareExact(t, au, gen)
 	})
 	t.Run("mul", func(t *testing.T) {
 		au := make([]float32, n)
-		gen := run(&testkernels.ElemMulKernel, accel.KernelArgs{Slices: []any{a, b, au}},
+		gen := run(&testkernels.ElemMulKernel, kernelabi.Args{Slices: []any{a, b, au}},
 			func(th kernel.Thread) { testkernels.ElemMul(th, a, b, au) })
 		compareExact(t, au, gen)
 	})
@@ -319,19 +320,19 @@ func TestAuthoredElementwiseFamily(t *testing.T) {
 		p := testkernels.ScaleParams{Factor: 0.5}
 		au := make([]float32, n)
 		gen := run(&testkernels.ElemScaleKernel,
-			accel.KernelArgs{Slices: []any{a, au}, Uniforms: []any{p}},
+			kernelabi.Args{Slices: []any{a, au}, Uniforms: []any{p}},
 			func(th kernel.Thread) { testkernels.ElemScale(th, p, a, au) })
 		compareExact(t, au, gen)
 	})
 	t.Run("silu", func(t *testing.T) {
 		au := make([]float32, n)
-		gen := run(&testkernels.SiLUKernel, accel.KernelArgs{Slices: []any{a, au}},
+		gen := run(&testkernels.SiLUKernel, kernelabi.Args{Slices: []any{a, au}},
 			func(th kernel.Thread) { testkernels.SiLU(th, a, au) })
 		compareExact(t, au, gen)
 	})
 	t.Run("swiglu", func(t *testing.T) {
 		au := make([]float32, n)
-		gen := run(&testkernels.SwiGLUKernel, accel.KernelArgs{Slices: []any{a, b, au}},
+		gen := run(&testkernels.SwiGLUKernel, kernelabi.Args{Slices: []any{a, b, au}},
 			func(th kernel.Thread) { testkernels.SwiGLU(th, a, b, au) })
 		compareExact(t, au, gen)
 	})
@@ -374,7 +375,7 @@ func TestAuthoredRowAndRotationKernels(t *testing.T) {
 		})
 		gen := make([]float32, p.Rows*p.Width)
 		runFlat(t, &testkernels.GatherRowsKernel, int(p.Rows*p.Width),
-			accel.KernelArgs{Slices: []any{table, ids, gen}, Uniforms: []any{p}})
+			kernelabi.Args{Slices: []any{table, ids, gen}, Uniforms: []any{p}})
 		compareExact(t, au, gen)
 	})
 
@@ -388,7 +389,7 @@ func TestAuthoredRowAndRotationKernels(t *testing.T) {
 		})
 		gen := make([]float32, p.Capacity*p.Width)
 		runFlat(t, &testkernels.ScatterRowsKernel, int(p.Rows*p.Width),
-			accel.KernelArgs{Slices: []any{rows, ids, gen}, Uniforms: []any{p}})
+			kernelabi.Args{Slices: []any{rows, ids, gen}, Uniforms: []any{p}})
 		compareExact(t, au, gen)
 	})
 
@@ -404,7 +405,7 @@ func TestAuthoredRowAndRotationKernels(t *testing.T) {
 		})
 		gen := append([]float32(nil), start...)
 		runFlat(t, &testkernels.RoPEKernel, int(p.Rows*p.RotaryDim/2),
-			accel.KernelArgs{Slices: []any{gen}, Uniforms: []any{p}})
+			kernelabi.Args{Slices: []any{gen}, Uniforms: []any{p}})
 		compareExact(t, au, gen)
 	})
 }

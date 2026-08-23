@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -62,7 +63,7 @@ func TestAttentionPrefillMatchesItsReference(t *testing.T) {
 				}
 				err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
 					accel.ID3{X: uint32(c.qSeq * c.qHeads)},
-					accel.KernelArgs{
+					kernelabi.Args{
 						Slices: []any{q, k, v, out}, Uniforms: []any{dims},
 					})
 				if err != nil {
@@ -195,7 +196,7 @@ func TestPrefillEqualsIncrementalDecode(t *testing.T) {
 	prefill := make([]float32, len(q))
 	err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
 		accel.ID3{X: n * qHeads},
-		accel.KernelArgs{
+		kernelabi.Args{
 			Slices: []any{q, k, v, prefill},
 			Uniforms: []any{testkernels.PrefillDims{
 				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
@@ -212,7 +213,7 @@ func TestPrefillEqualsIncrementalDecode(t *testing.T) {
 		step1 := make([]float32, qHeads*headDim)
 		err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 			accel.ID3{X: qHeads},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{
 					q[step*qHeads*headDim : (step+1)*qHeads*headDim],
 					k[:(step+1)*kvHeads*headDim],
@@ -264,7 +265,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 		generated := make([]accel.Float16, n)
 		if err := kernel.Dispatch(&testkernels.CastF32ToF16Kernel, accel.ID3{X: 2},
-			accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+			kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		for i := range generated {
@@ -287,7 +288,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 		generated := make([]float32, n)
 		if err := kernel.Dispatch(&testkernels.CastF16ToF32Kernel, accel.ID3{X: 2},
-			accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+			kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		for i := range generated {
@@ -321,7 +322,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 		generated := make([]float32, m*n)
 		if err := kernel.Dispatch(&testkernels.QuantMatMulKernel, accel.ID3{X: 1},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{a, bq, bs, generated}, Uniforms: []any{dims},
 			}); err != nil {
 			t.Fatalf("dispatch: %v", err)
@@ -352,7 +353,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 		generated := make([]float32, rows*width)
 		if err := kernel.Dispatch(&testkernels.QuantRowsKernel, accel.ID3{X: 1},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{tq, ts, ids, generated}, Uniforms: []any{p},
 			}); err != nil {
 			t.Fatalf("dispatch: %v", err)
@@ -372,7 +373,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		testkernels.SampleCategorical(flatThread(0, 1), d, probs, authored)
 		generated := make([]uint32, 1)
 		if err := kernel.Dispatch(&testkernels.SampleCategoricalKernel, accel.ID3{X: 1},
-			accel.KernelArgs{Slices: []any{probs, generated}, Uniforms: []any{d}}); err != nil {
+			kernelabi.Args{Slices: []any{probs, generated}, Uniforms: []any{d}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		if authored[0] != generated[0] {
@@ -403,7 +404,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		generated := make([]uint32, 1)
 		if err := kernel.DispatchCooperative(&testkernels.SampleArgmaxKernel,
 			accel.ID3{X: 1},
-			accel.KernelArgs{Slices: []any{logits, generated}, Uniforms: []any{d}}); err != nil {
+			kernelabi.Args{Slices: []any{logits, generated}, Uniforms: []any{d}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		if authored[0] != generated[0] {
@@ -427,7 +428,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 			})
 		generated := make([]float32, len(w))
 		if err := kernel.DispatchCooperative(&testkernels.TopKMaskKernel, accel.ID3{X: 1},
-			accel.KernelArgs{Slices: []any{w, generated}, Uniforms: []any{d}}); err != nil {
+			kernelabi.Args{Slices: []any{w, generated}, Uniforms: []any{d}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		for i := range generated {
@@ -460,7 +461,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 			})
 		generated := make([]float32, len(w))
 		if err := kernel.DispatchCooperative(&testkernels.TopPMaskKernel, accel.ID3{X: 1},
-			accel.KernelArgs{Slices: []any{w, generated}, Uniforms: []any{d}}); err != nil {
+			kernelabi.Args{Slices: []any{w, generated}, Uniforms: []any{d}}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		for i := range generated {
@@ -502,7 +503,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		generated := make([]float32, batch*qHeads*headDim)
 		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeBatchedKernel,
 			accel.ID3{X: batch * qHeads},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices:   []any{q, pk, pv, pages, lengths, generated},
 				Uniforms: []any{d},
 			}); err != nil {
@@ -546,7 +547,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		generated := make([]float32, qHeads*headDim)
 		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 			accel.ID3{X: qHeads},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{q, pk, pv, pages, generated}, Uniforms: []any{d},
 			}); err != nil {
 			t.Fatalf("dispatch: %v", err)
@@ -589,7 +590,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		generated := make([]float32, len(q))
 		if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
 			accel.ID3{X: groups.X},
-			accel.KernelArgs{
+			kernelabi.Args{
 				Slices: []any{q, k, v, generated}, Uniforms: []any{dims},
 			}); err != nil {
 			t.Fatalf("dispatch: %v", err)

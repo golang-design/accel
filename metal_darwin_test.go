@@ -8,6 +8,7 @@ package accel_test
 
 import (
 	"errors"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"os"
 	"runtime"
@@ -219,12 +220,12 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 		Name:          "Unlowered",
 		WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1},
 		Digest:        "test:unlowered",
-		Generator:     accel.KernelABIVersion,
-		Bindings: []accel.KernelBinding{
-			{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+		Generator:     kernelabi.Version,
+		Bindings: []kernelabi.Binding{
+			{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 		},
-		Flat: func(t accel.Thread, a accel.KernelArgs) {
-			accel.KernelSlice[float32](a, 0)[0] = 1
+		Flat: func(t accel.Thread, a kernelabi.Args) {
+			kernelabi.Slice[float32](a, 0)[0] = 1
 		},
 	}
 

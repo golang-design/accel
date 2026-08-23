@@ -7,6 +7,7 @@ package accel
 import (
 	"errors"
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"strings"
 
 	"golang.design/x/accel/internal/driver"
@@ -40,10 +41,10 @@ func (d *Device) newComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 	// The generated record is the source of truth for everything static about a
 	// kernel, so this is a check on it rather than on a second declaration the
 	// descriptor might have carried. See specs/006-backends.md R6.
-	if k.Generator != KernelABIVersion {
+	if k.Generator != kernelabi.Version {
 		return nil, fmt.Errorf("accel: NewComputePipeline %q: kernel %q was generated against "+
 			"ABI %d and this runtime is ABI %d; re-run go generate",
-			label, k.Name, k.Generator, KernelABIVersion)
+			label, k.Name, k.Generator, kernelabi.Version)
 	}
 	// A kernel has exactly one entry point: flat if its body reaches no
 	// barrier, shared memory, or subgroup operation, and cooperative otherwise.

@@ -8,6 +8,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"os"
 	"testing"
@@ -629,17 +630,17 @@ func runCase(t *testing.T, d *accel.Device, c diffCase) [][]float32 {
 	return out
 }
 
-func dtypeOf(d accel.KernelDType) accel.DType {
+func dtypeOf(d kernelabi.DType) accel.DType {
 	switch d {
-	case accel.KernelF16:
+	case kernelabi.F16:
 		return accel.F16
-	case accel.KernelU32:
+	case kernelabi.U32:
 		return accel.U32
-	case accel.KernelI32:
+	case kernelabi.I32:
 		return accel.I32
-	case accel.KernelI8:
+	case kernelabi.I8:
 		return accel.I8
-	case accel.KernelU8:
+	case kernelabi.U8:
 		return accel.U8
 	}
 	return accel.F32
@@ -696,11 +697,11 @@ func writeSeed(t *testing.T, r *accel.Recorder, v accel.BufferView, dt accel.DTy
 // Integers are widened rather than compared as integers so one comparison
 // covers every dtype. The widening is exact for u32 and i32 values this corpus
 // produces, and a count that exceeded 2^24 would be a different bug.
-func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt accel.KernelDType, n int) []float32 {
+func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt kernelabi.DType, n int) []float32 {
 	t.Helper()
 	out := make([]float32, n)
 	switch dt {
-	case accel.KernelF16:
+	case kernelabi.F16:
 		raw := make([]uint16, n)
 		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
 			t.Fatalf("readback: %v", err)
@@ -708,7 +709,7 @@ func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt accel.KernelDT
 		for i, v := range raw {
 			out[i] = accel.Float16FromBits(v).F32()
 		}
-	case accel.KernelU32:
+	case kernelabi.U32:
 		raw := make([]uint32, n)
 		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
 			t.Fatalf("readback: %v", err)
@@ -716,7 +717,7 @@ func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt accel.KernelDT
 		for i, v := range raw {
 			out[i] = float32(v)
 		}
-	case accel.KernelI32:
+	case kernelabi.I32:
 		raw := make([]int32, n)
 		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
 			t.Fatalf("readback: %v", err)
@@ -724,7 +725,7 @@ func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt accel.KernelDT
 		for i, v := range raw {
 			out[i] = float32(v)
 		}
-	case accel.KernelI8:
+	case kernelabi.I8:
 		raw := make([]int8, n)
 		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
 			t.Fatalf("readback: %v", err)
@@ -732,7 +733,7 @@ func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt accel.KernelDT
 		for i, v := range raw {
 			out[i] = float32(v)
 		}
-	case accel.KernelU8:
+	case kernelabi.U8:
 		raw := make([]uint8, n)
 		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
 			t.Fatalf("readback: %v", err)

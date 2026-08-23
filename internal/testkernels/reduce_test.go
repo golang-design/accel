@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/kernelabi"
 	"math"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestSegmentSumMatchesAuthored(t *testing.T) {
 			generated := make([]float32, n)
 			if err := direct.Run(&testkernels.SegmentSumKernel,
 				direct.Cover(&testkernels.SegmentSumKernel, n),
-				accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+				kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 				t.Fatalf("direct.Run: %v", err)
 			}
 
@@ -79,7 +80,7 @@ func TestSegmentSumAgainstAReference(t *testing.T) {
 	out := make([]float32, n)
 	if err := direct.Run(&testkernels.SegmentSumKernel,
 		direct.Cover(&testkernels.SegmentSumKernel, n),
-		accel.KernelArgs{Slices: []any{in, out}}); err != nil {
+		kernelabi.Args{Slices: []any{in, out}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +117,7 @@ func TestCountAboveMatchesAuthored(t *testing.T) {
 			generated := make([]int32, n)
 			if err := direct.Run(&testkernels.CountAboveKernel,
 				direct.Cover(&testkernels.CountAboveKernel, n),
-				accel.KernelArgs{Slices: []any{in, generated}}); err != nil {
+				kernelabi.Args{Slices: []any{in, generated}}); err != nil {
 				t.Fatalf("direct.Run: %v", err)
 			}
 
@@ -145,11 +146,11 @@ func TestHelperAccessIsInferredThroughACall(t *testing.T) {
 	if len(k.Bindings) != 2 {
 		t.Fatalf("%d bindings", len(k.Bindings))
 	}
-	if got := k.Bindings[0]; got.Name != "in" || got.Access != accel.KernelRead {
+	if got := k.Bindings[0]; got.Name != "in" || got.Access != kernelabi.Read {
 		t.Errorf("binding 0 is %+v; in is read only inside a helper, and the access still "+
 			"has to reach the record", got)
 	}
-	if got := k.Bindings[1]; got.Name != "out" || got.Access != accel.KernelWrite {
+	if got := k.Bindings[1]; got.Name != "out" || got.Access != kernelabi.Write {
 		t.Errorf("binding 1 is %+v", got)
 	}
 }
@@ -181,7 +182,7 @@ func TestNormalizeMatchesAuthored(t *testing.T) {
 			generatedScratch := make([]float32, n)
 			if err := direct.Run(&testkernels.NormalizeKernel,
 				direct.Cover(&testkernels.NormalizeKernel, n),
-				accel.KernelArgs{Slices: []any{in, generated, generatedScratch}}); err != nil {
+				kernelabi.Args{Slices: []any{in, generated, generatedScratch}}); err != nil {
 				t.Fatalf("direct.Run: %v", err)
 			}
 
@@ -214,7 +215,7 @@ func TestNormalizeWidensItsInput(t *testing.T) {
 	scratch := make([]float32, n)
 	if err := direct.Run(&testkernels.NormalizeKernel,
 		direct.Cover(&testkernels.NormalizeKernel, n),
-		accel.KernelArgs{Slices: []any{in, out, scratch}}); err != nil {
+		kernelabi.Args{Slices: []any{in, out, scratch}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,10 +236,10 @@ func TestNormalizeWidensItsInput(t *testing.T) {
 // a buffer of the wrong element width.
 func TestNarrowBindingIsDeclaredAsSuch(t *testing.T) {
 	k := &testkernels.NormalizeKernel
-	if got := k.Bindings[0]; got.DType != accel.KernelF16 {
+	if got := k.Bindings[0]; got.DType != kernelabi.F16 {
 		t.Errorf("binding 0 is %v, want f16", got.DType)
 	}
-	if err := k.Bind(accel.KernelArgs{Slices: []any{
+	if err := k.Bind(kernelabi.Args{Slices: []any{
 		make([]uint16, 4), make([]float32, 4), make([]float32, 4),
 	}}); err == nil {
 		t.Error("a []uint16 was accepted for an f16 binding: a narrow value is a distinct type " +
