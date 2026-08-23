@@ -77,6 +77,13 @@ func coopSegments(k *ir.Func) ([][]ir.Stmt, error) {
 			cur = []ir.Stmt{}
 			continue
 		}
+		if loop, ok := s.(*ir.For); ok && blockHasBarrier(loop.Body) {
+			return nil, fmt.Errorf("a barrier inside a loop needs the state machine to " +
+				"resume in the middle of that loop, carrying its induction variable across " +
+				"the epoch; that is a numbering problem this split does not solve, and it " +
+				"is what a tree reduction is made of, so it arrives with " +
+				"specs/020-cooperative-atomics.md. Hoist the barrier out of the loop for now")
+		}
 		cur = append(cur, s)
 	}
 	segs = append(segs, cur)
@@ -85,12 +92,10 @@ func coopSegments(k *ir.Func) ([][]ir.Stmt, error) {
 
 // checkBarrierPlacement refuses a barrier this transform cannot yet split at.
 //
-// A barrier inside a loop is legal by specs/002-compute-model.md and is what a
-// tree reduction is made of, so this is a scheduling gap rather than a rule: it
-// needs the state machine to carry a loop's induction variable across an epoch,
-// which is a numbering problem this split does not solve. It is refused by
-// position rather than mis-lowered, because a barrier lowered as a no-op is a
-// different program that compiles.
+// A barrier inside a conditional or a loop is legal by
+// specs/002-compute-model.md, so this is a scheduling gap rather than a rule,
+// and the message says which. It is refused by position rather than mis-lowered
+// because a barrier lowered as a no-op is a different program that compiles.
 func checkBarrierPlacement(b *ir.Block, top bool) error {
 	if b == nil {
 		return nil
@@ -127,6 +132,36 @@ func checkNested(s ir.Stmt) error {
 		return checkBarrierPlacement(n.Body, false)
 	}
 	return nil
+}
+
+// blockHasBarrier reports whether a block reaches a barrier at any depth.
+func blockHasBarrier(b *ir.Block) bool {
+	if b == nil {
+		return false
+	}
+	for _, s := range b.List {
+		if isBarrier(s) {
+			return true
+		}
+		switch n := s.(type) {
+		case *ir.Block:
+			if blockHasBarrier(n) {
+				return true
+			}
+		case *ir.If:
+			if blockHasBarrier(n.Then) {
+				return true
+			}
+			if inner, ok := n.Else.(*ir.Block); ok && blockHasBarrier(inner) {
+				return true
+			}
+		case *ir.For:
+			if blockHasBarrier(n.Body) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isBarrier(s ir.Stmt) bool {

@@ -1,6 +1,6 @@
 ---
 title: "The resumable cooperative lowering and the workgroup scheduler"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -99,7 +99,75 @@ child's definition of done rather than a note against it**.
 - A benchmark reports the cooperative lowering's cost against the flat one on a
   kernel eligible for both, since §3 claims the gap is why both exist.
 
-## 5. What it does not build
+## 5. Outcome — the transform is built, with one gap
+
+§2 is built and §4's cases pass, except the state split's reach: **a barrier
+inside a loop is refused by position rather than lowered**, because the state
+machine would have to resume in the middle of that loop carrying its induction
+variable across the epoch. That is a numbering problem this split does not
+solve, it is what a tree reduction is made of, and it is therefore
+[020](020-cooperative-atomics.md)'s to close alongside `reduce_sum`. Recorded
+here as a gap rather than left implicit, because a reader of §2 would otherwise
+believe every legal barrier lowers.
+
+**The flat-versus-cooperative differential runs** over every corpus kernel
+eligible for both, comparing bit for bit. It is what §3 argued for and it
+exercises the scheduler's own machinery — the per-invocation frames, the epoch
+loop, the id computation — against the path that uses none of it.
+
+### 5.1 Two things Go's own rules made visible
+
+Both would otherwise have compiled and computed something else, which is the
+failure mode this project spends its budget avoiding.
+
+- **Shared memory is a pointer to its array.** Passing the array by value gives
+  every invocation its own copy, which is the opposite of what shared means and
+  is not a type error.
+- **A frame-resident local is assigned, not redeclared.** Emitting `var` inside
+  the lowering shadows the frame field, so the value is lost at the next
+  suspension point.
+
+### 5.2 The bring-up kernel had to be rewritten to be worth anything
+
+The first version had one invocation publish a value and the rest read it, and
+it **passed with the rendezvous removed entirely** — because the publisher is
+invocation zero and happens to run first in sequence. A test that cannot tell a
+barrier from a no-op is not testing the barrier.
+
+The corpus kernel now has each invocation read its *neighbour's* slot, so
+sequential execution reads poison and the wrong lowering produces NaNs rather
+than the right answer slowly. The same mistake appeared in the id comparison:
+recording only the global id let a scheduler that swapped the local id's axes
+pass, and a kernel addressing a shared tile reads exactly the id that was wrong.
+
+Both were caught by reinstating the bug and watching the test not fail, which is
+worth doing on every differential: **a test that passes proves less than one
+seen to fail for the stated reason.**
+
+### 5.3 Shared storage is poisoned, and that is not the whole answer
+
+Zero is a value a kernel legitimately expects, so a read-before-write would
+return something plausible and survive every test. A quiet NaN propagates
+through arithmetic instead. But a poison *value* is still a value a kernel could
+compute, which is why [019](019-cooperative-diagnostics.md) makes the read
+itself detected rather than merely loud.
+
+### 5.4 What it added beyond §2
+
+- **`kernel.Frame` and `Kernel.Cooperative`**, the scheduler's per-invocation
+  slot and the resumable entry point. A cooperative kernel has no `Flat` at all.
+- **`Kernel.NewShared`**, generated, because only the generated code knows each
+  shared array's element type and extent; the runtime would need reflection.
+- **`Kernel.Suspensions`**, which bounds the epoch loop. Exceeding it means the
+  generated program counter is not advancing — a defect in the transform rather
+  than in the kernel, so it reports rather than looping forever.
+- **`ir.SharedMem`** and `Func.Shared`, since a kernel's shared storage is part
+  of its signature and a backend needs it at pipeline creation.
+- **`Thread.Barrier` does nothing rather than panicking.** The authored function
+  has to be runnable, because spec 004's fifth level compares the generated
+  lowering against it, and an unexecutable reference is not a reference.
+
+## 6. What it does not build
 
 - **No atomics and no subgroups.** [020](020-cooperative-atomics.md). A kernel
   using either is rejected by name, as it is today.
@@ -111,7 +179,7 @@ child's definition of done rather than a note against it**.
 - **No non-uniform-arrival detection.** The static analysis rejects what it can
   prove; [019](019-cooperative-diagnostics.md) catches the rest at runtime.
 
-## 6. Open question
+## 7. Open question
 
 - **Whether the flat lowering survives past v0.** §3 makes the case for keeping
   it, and the differential oracle is most of that case. Once the transform has

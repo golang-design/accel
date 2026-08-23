@@ -84,7 +84,7 @@ numbered in.
 | [015-graph-recording.md](015-graph-recording.md) | Implemented | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
 | [016-graph-execution.md](016-graph-execution.md) | Implemented | M3 child: edge inference, sub-range hazards, barrier planning, and the flat dispatch node |
 | [017-graph-aliasing.md](017-graph-aliasing.md) | Implemented | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
-| [018-cooperative-lowering.md](018-cooperative-lowering.md) | Drafted | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
+| [018-cooperative-lowering.md](018-cooperative-lowering.md) | In progress | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
 | [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | Drafted | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
 | [020-cooperative-atomics.md](020-cooperative-atomics.md) | Drafted | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
 

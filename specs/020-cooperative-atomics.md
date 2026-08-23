@@ -29,6 +29,11 @@ kernel requires, and the first kernel from [010](010-kernel-corpus.md).
 - **The CPU developer, strict, and mimic modes** wired to that inference, so a
   kernel requiring something the mimicked profile lacks fails at pipeline
   creation rather than at dispatch.
+- **Barriers inside loops.** [018](018-cooperative-lowering.md) refuses one,
+  because the state machine has to resume mid-loop carrying the induction
+  variable across the epoch. `reduce_sum` is exactly that shape — a halving
+  stride with a barrier each round — so the two land together rather than the
+  reduction waiting on a transform nobody scheduled.
 - **`reduce_sum`** from [010](010-kernel-corpus.md), which is the first kernel
   that needs all of the above at once.
 - **The arm64 and amd64 numeric probes** of [008](008-numerics.md), establishing
