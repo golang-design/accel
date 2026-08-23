@@ -575,3 +575,155 @@ func TestFormatting(t *testing.T) {
 		t.Errorf("a nil tensor should format rather than panic, got %q", got)
 	}
 }
+
+// A named scalar changes between submissions of one plan, which is the whole
+// reason it is named rather than a Go value baked in at build.
+//
+// Two submissions with different factors, and the second result checked: a
+// mechanism that wrote the value somewhere the plan does not read would pass
+// any test that submitted once.
+func TestAScalarVariesBetweenSubmissions(t *testing.T) {
+	const n = 32
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("scale")
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "factor", Kind: tensor.ScalarF32})
+	x := tensor.Input(b, value("x", n))
+	tensor.Output(b, "y", tensor.Scale(b, x, "factor"))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+	if len(plan.Scalars()) != 1 || plan.Scalars()[0].Name != "factor" {
+		t.Fatalf("the plan reports scalars %+v", plan.Scalars())
+	}
+
+	xs := make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(i) + 1
+	}
+	xv := f32Buffer(t, d, "x", xs)
+	out := f32Buffer(t, d, "y", make([]float32, n))
+
+	for _, factor := range []float32{2, -0.5, 100} {
+		f := plan.Submit(d.Queue(), tensor.Bindings{
+			Buffers: map[string]accel.BufferView{"x": xv, "y": out},
+			Scalars: map[string]tensor.ScalarValue{"factor": tensor.F32(factor)},
+		})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit at %v: %v", factor, err)
+		}
+		got := make([]float32, n)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		for i := range got {
+			if want := xs[i] * factor; got[i] != want {
+				t.Fatalf("at factor %v element %d is %v, want %v", factor, i, got[i], want)
+			}
+		}
+	}
+}
+
+// The scalar refusals, which are the half that keeps a misspelling from
+// becoming a value nobody binds.
+func TestScalarValidation(t *testing.T) {
+	rt := newRuntime(t)
+	d := rt.Device()
+
+	t.Run("an undeclared name", func(t *testing.T) {
+		b := rt.NewBuilder("u")
+		tensor.Output(b, "y", tensor.Scale(b, tensor.Input(b, value("x", 8)), "nope"))
+		if err := b.Err(); err == nil {
+			t.Fatal("an undeclared scalar was accepted")
+		} else if !strings.Contains(err.Error(), "not a declared scalar") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("the wrong kind at declaration", func(t *testing.T) {
+		b := rt.NewBuilder("k")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "n", Kind: tensor.ScalarU32})
+		tensor.Output(b, "y", tensor.Scale(b, tensor.Input(b, value("x", 8)), "n"))
+		if err := b.Err(); err == nil {
+			t.Fatal("a u32 scalar was accepted where f32 is needed")
+		} else if !strings.Contains(err.Error(), "needs f32") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("a duplicate declaration", func(t *testing.T) {
+		b := rt.NewBuilder("d")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "f", Kind: tensor.ScalarF32})
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "f", Kind: tensor.ScalarF32})
+		if err := b.Err(); err == nil || !strings.Contains(err.Error(), "declared twice") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("no name", func(t *testing.T) {
+		b := rt.NewBuilder("n")
+		tensor.Scalar(b, tensor.ScalarDesc{Kind: tensor.ScalarF32})
+		if err := b.Err(); err == nil || !strings.Contains(err.Error(), "needs a name") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("an unknown kind", func(t *testing.T) {
+		b := rt.NewBuilder("bk")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "f", Kind: tensor.ScalarKind(9)})
+		if err := b.Err(); err == nil || !strings.Contains(err.Error(), "f32 or u32") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	// And at submission: the wrong kind is the case worth catching, because the
+	// bytes pack either way and the kernel reads a float as an integer.
+	b := rt.NewBuilder("s")
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "factor", Kind: tensor.ScalarF32})
+	tensor.Output(b, "y", tensor.Scale(b, tensor.Input(b, value("x", 8)), "factor"))
+	plan, err := b.Compile(rt, tensor.CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	bufs := map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x", make([]float32, 8)),
+		"y": f32Buffer(t, d, "y", make([]float32, 8)),
+	}
+	for _, tc := range []struct {
+		name    string
+		scalars map[string]tensor.ScalarValue
+		want    string
+	}{
+		{"unbound", nil, `the scalar "factor" is not bound`},
+		{"the wrong kind", map[string]tensor.ScalarValue{"factor": tensor.U32(3)},
+			"the bound value is u32"},
+		{"a scalar nobody declared", map[string]tensor.ScalarValue{
+			"factor": tensor.F32(1), "extra": tensor.F32(1),
+		}, `the scalar "extra" is bound`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := plan.Submit(d.Queue(), tensor.Bindings{Buffers: bufs, Scalars: tc.scalars}).Wait()
+			if err == nil {
+				t.Fatalf("%s was accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the error should say %q, got %v", tc.want, err)
+			}
+		})
+	}
+
+	if got := tensor.F32(1.5).String(); got != "1.5" {
+		t.Errorf("ScalarValue.String = %q", got)
+	}
+	if got := tensor.U32(7).String(); got != "7" {
+		t.Errorf("ScalarValue.String = %q", got)
+	}
+	if got := tensor.ScalarKind(9).String(); !strings.Contains(got, "ScalarKind(9)") {
+		t.Errorf("an unknown kind should say so, got %q", got)
+	}
+}

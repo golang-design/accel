@@ -131,6 +131,9 @@ type Builder struct {
 	ports  []PortDesc
 	byName map[string]int // port name to index in ports
 
+	scalars   []ScalarDesc
+	scalarPos map[string]int
+
 	outputs []output
 	errs    []error
 }
@@ -150,6 +153,16 @@ type node struct {
 	// kernel is the corpus kernel this lowers to, chosen when the node is
 	// recorded so that Selections can report it before anything runs.
 	kernel *accel.Kernel
+
+	// uniform builds this operator's by-value parameter from the scalars a
+	// submission supplies, or is nil when the operator takes none. A function
+	// rather than a value, because the value is not known until submission and
+	// the *shape* of it is known only here.
+	uniform func(map[string]ScalarValue) any
+
+	// reads names the scalars uniform consults, so binding validation can say
+	// which operator wanted a value nobody bound.
+	reads []string
 
 	// reason and rejected explain the selection, for Plan.Selections.
 	reason   string

@@ -189,6 +189,18 @@ nothing and they find out at run time.
 the surface together. `RoPE` and `Softmax` need it too, so it is not one
 operator's problem.
 
+**Retired the same day.** `accel.Graph.SetUniform` replaces one recorded
+dispatch's by-value parameter between submissions, refused while a submission is
+in flight for the reason `Bind` is. The type must be the one the kernel
+declares, checked as a *type* rather than a size: a struct of the same shape and
+a different name encodes identically today and diverges the first time either
+gains a field. `Scale` and the scalar surface are built on it.
+
+The line stays where [007](007-tensor-layer.md) drew it. A value that changes
+nothing structural varies per submission; one that changes a shape, a layout, or
+which kernel is selected needs another plan, because the barriers and the
+transient layout were computed from it.
+
 ### Deviation 2: broadcasting is inferred and not materialized
 
 Inference implements NumPy's rule, and lowering refuses an operand whose extent

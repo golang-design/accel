@@ -705,3 +705,105 @@ func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
 		}
 	}
 }
+
+// A by-value parameter can be replaced between submissions, and the next
+// submission computes with the new one.
+//
+// This is what lets a plan carry a value that varies every step -- a softmax
+// scale, a RoPE base, a sequence length -- without rebuilding the graph. The
+// line specs/007-tensor-layer.md draws is structural: a value that changes the
+// *shape* of the work still needs another plan, because the barriers and the
+// transient layout were computed from it.
+//
+// The test submits twice with different factors and checks the second result,
+// because a SetUniform that wrote somewhere the plan does not read would pass
+// any test that submitted once.
+func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
+	const n = 64
+	d := openDevice(t)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.ElemScaleKernel, Label: "scale",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	in := newBuffer(t, d, "in", n, storage)
+	out := newBuffer(t, d, "out", n, storage)
+	vals := make([]float32, n)
+	for i := range vals {
+		vals[i] = float32(i) + 1
+	}
+	if err := d.Queue().WriteBuffer(in, 0, vals); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	r := d.NewRecorder()
+	node := r.Dispatch(p, []accel.Binding{
+		{Index: 0, Uniform: testkernels.ScaleParams{Factor: 2}},
+		{Index: 0, Buffer: whole(t, in)},
+		{Index: 1, Buffer: whole(t, out)},
+	}, accel.WorkgroupCount{X: 1})
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	submit := func(want float32) {
+		t.Helper()
+		if err := d.Queue().Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		got := readback(t, d, out)
+		for i := range got {
+			if got[i] != vals[i]*want {
+				t.Fatalf("element %d is %v, want %v at a factor of %v",
+					i, got[i], vals[i]*want, want)
+			}
+		}
+	}
+	submit(2)
+	if err := g.SetUniform(node, 0, testkernels.ScaleParams{Factor: 5}); err != nil {
+		t.Fatalf("SetUniform: %v", err)
+	}
+	submit(5)
+
+	// The refusals. Each is a way to write a value the plan would not read, or
+	// would read as something else.
+	for _, tc := range []struct {
+		name string
+		call func() error
+		want string
+	}{{
+		name: "a node that is not a dispatch",
+		call: func() error { return g.SetUniform(node+1, 0, testkernels.ScaleParams{}) },
+		want: "node 1 of 1",
+	}, {
+		name: "a parameter index the kernel does not have",
+		call: func() error { return g.SetUniform(node, 3, testkernels.ScaleParams{}) },
+		want: "takes 1 by-value parameters",
+	}, {
+		name: "a different type of the same shape",
+		call: func() error {
+			type lookalike struct{ Factor float32 }
+			return g.SetUniform(node, 0, lookalike{Factor: 5})
+		},
+		// The one that matters: this encodes identically today and diverges the
+		// first time either type gains a field, so the check is on the type.
+		want: "would encode identically",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil {
+				t.Fatalf("%s was accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the error should say %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

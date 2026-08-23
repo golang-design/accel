@@ -11,13 +11,14 @@ import (
 
 // The elementwise family.
 //
-// # Why these four first
+// # Why these five first
 //
 // specs/024-tensor-bringup.md picks them as the smallest set that exercises
-// every part of the slice: two operands and broadcasting (Add, Mul), a unary
-// with a bounded primitive (SiLU), and a fused two-operand form whose semantic
-// definition is a composition (SwiGLU). A larger set would prove nothing more
-// about the machinery and a smaller one would leave a piece of it unexercised.
+// every part of the slice: two operands and broadcasting (Add, Mul), a named
+// runtime scalar (Scale), a unary with a bounded primitive (SiLU), and a fused
+// two-operand form whose semantic definition is a composition (SwiGLU). A larger
+// set would prove nothing more about the machinery and a smaller one would leave
+// a piece of it unexercised.
 //
 // # Where the kernels come from
 //
@@ -64,19 +65,37 @@ func Mul(b *Builder, x, y *Tensor) *Tensor {
 	return binary(b, "Mul", &testkernels.ElemMulKernel, x, y, 1)
 }
 
-// Scale, and the whole named-scalar surface, is not built here. See
-// specs/024-tensor-bringup.md's deviation 1.
+// Scale multiplies x by a named runtime f32 scalar.
 //
-// A by-value uniform travels with a recorded dispatch and the device layer has
-// no way to rewrite one between submissions, so a factor that changed every
-// step would need a new plan -- exactly what specs/007-tensor-layer.md says a
-// runtime scalar must not need. Closing that is a device-layer change with its
-// own scope rather than something to improvise here.
-//
-// Scalar, ScalarDesc and ScalarValue are absent rather than present and
-// unusable, because an API a caller can call and cannot use is worse than one
-// that is not there: the compiler says nothing, and they find out at runtime.
-// specs/025-tensor-operators.md adds the mechanism and the surface together.
+// A named scalar rather than a Go float32, because the value changes every step
+// and a compiled plan must not have to be rebuilt for it. An attribute that
+// changed a shape, a layout, or which kernel is selected would be different:
+// that needs another plan, and specs/007-tensor-layer.md draws the line there.
+func Scale(b *Builder, x *Tensor, scalarName string) *Tensor {
+	if poisoned(x) {
+		return b.poison()
+	}
+	if !elementwiseDType(x.dtype) {
+		return b.fail(1, "Scale", "%v is not an elementwise dtype", x.dtype)
+	}
+	kind, ok := b.scalarKind(scalarName)
+	if !ok {
+		return b.fail(1, "Scale", "%q is not a declared scalar; declare it with Scalar so a "+
+			"misspelling is an error rather than a value nobody binds", scalarName)
+	}
+	if kind != ScalarF32 {
+		return b.fail(1, "Scale", "%q is declared %v and Scale needs f32", scalarName, kind)
+	}
+	return b.record(node{
+		op: "Scale", inputs: []*Tensor{x}, kernel: &testkernels.ElemScaleKernel,
+		reads: []string{scalarName},
+		uniform: func(vals map[string]ScalarValue) any {
+			return testkernels.ScaleParams{Factor: vals[scalarName].F32}
+		},
+		reason: "the contiguous elementwise variant, with the factor in a uniform block " +
+			"rewritten before each submission",
+	}, x.dtype, x.shape)
+}
 
 // SiLU returns x * sigmoid(x), elementwise.
 //

@@ -6,6 +6,8 @@ package accel
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 
 	"golang.design/x/accel/internal/driver"
@@ -710,4 +712,61 @@ type IndirectStats struct {
 	Actual  [3]uint32 // device-supplied count before clamping
 	Max     [3]uint32
 	Clamped bool // Actual exceeded Max on at least one axis
+}
+
+// SetUniform replaces one by-value parameter of a recorded dispatch.
+//
+// # Why a graph can be told this after it is built
+//
+// A kernel's by-value parameters are compiled into the plan when the graph is
+// built, which makes them fast and makes them fixed. Most of them should be:
+// specs/007-tensor-layer.md draws the line at whether the value changes the
+// *shape* of the work, and one that does needs another plan because the
+// barriers and the transient layout were computed from it.
+//
+// A value that changes nothing structural is different. A softmax scale, a RoPE
+// base, a current sequence length: these vary every step and rebuilding a graph
+// for each would defeat the point of building one. So they are set here, between
+// submissions, exactly as a slot is rebound.
+//
+// It is refused while a submission is in flight, for the reason [Graph.Bind] is:
+// a value changing under a running graph would give the first half of it one
+// number and the second half another, and no caller could tell which they got.
+//
+// The type must be the one the kernel declares. A struct of the same shape and a
+// different name would encode identically and read correctly, which is why the
+// check is on the type rather than on the size: the pair that encodes the same
+// today diverges the first time either gains a field.
+func (g *Graph) SetUniform(n NodeID, index int, v any) error {
+	if err := g.state.checkOpen("SetUniform"); err != nil {
+		return err
+	}
+	if n < 0 || int(n) >= len(g.nodes) {
+		return fmt.Errorf("accel: SetUniform: node %d of %d", n, len(g.nodes))
+	}
+	node := &g.nodes[n]
+	if node.pipeline == nil {
+		return fmt.Errorf("accel: SetUniform: node %d is a %v, and only a dispatch has "+
+			"by-value parameters", n, node.kind)
+	}
+	if index < 0 || index >= len(node.uniforms) {
+		return fmt.Errorf("accel: SetUniform: node %d takes %d by-value parameters and %d "+
+			"was named", n, len(node.uniforms), index)
+	}
+	if have, want := reflect.TypeOf(v), reflect.TypeOf(node.uniforms[index]); have != want {
+		return fmt.Errorf("accel: SetUniform: node %d parameter %d is %v and %v was given; "+
+			"a different type of the same shape would encode identically and diverge the "+
+			"first time either gained a field", n, index, want, have)
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inFlight {
+		return &LifetimeError{Op: "SetUniform", Resource: "graph", Reason: reasonInFlight}
+	}
+	// The plan's dispatch shares this slice, so writing here is what the next
+	// submission encodes. That sharing is deliberate and load-bearing; a copy
+	// would make this silently do nothing.
+	node.uniforms[index] = v
+	return nil
 }

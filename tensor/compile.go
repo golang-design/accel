@@ -29,6 +29,12 @@ type KernelSelection struct {
 	Rejected []string
 }
 
+// uniformNode remembers which recorded dispatch a scalar feeds.
+type uniformNode struct {
+	node  accel.NodeID
+	build func(map[string]ScalarValue) any
+}
+
 // Plan is a compiled tensor graph, ready to submit.
 //
 // It owns one device graph and the transient memory the planner chose; the
@@ -42,12 +48,20 @@ type Plan struct {
 	slots      map[string]accel.Slot
 	selections []KernelSelection
 
+	scalars   []ScalarDesc
+	scalarPos map[string]int
+
+	// uniformNodes is every dispatch that reads a scalar, so a submission can
+	// rewrite its by-value parameter before the graph runs.
+	uniformNodes []uniformNode
+
 	closed bool
 }
 
 // Bindings is everything a submission needs from the caller.
 type Bindings struct {
 	Buffers map[string]accel.BufferView
+	Scalars map[string]ScalarValue
 }
 
 // Compile turns the recorded graph into a plan.
@@ -79,7 +93,10 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	if label == "" {
 		label = b.label
 	}
-	p := &Plan{rt: rt, label: label, ports: b.ports, slots: map[string]accel.Slot{}}
+	p := &Plan{
+		rt: rt, label: label, ports: b.ports, slots: map[string]accel.Slot{},
+		scalars: b.scalars, scalarPos: b.scalarPos,
+	}
 
 	r := rt.dev.NewRecorder()
 
@@ -175,6 +192,13 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	})
 
 	binds := make([]accel.Binding, 0, len(n.inputs)+2)
+	if n.uniform != nil {
+		// A placeholder, rewritten before every submission. Recording the zero
+		// and never rewriting it would be a plan that runs and computes with a
+		// factor of nothing, which is why Submit rewrites unconditionally
+		// rather than only when a value changed.
+		binds = append(binds, accel.Binding{Index: 0, Uniform: n.uniform(nil)})
+	}
 	for j, in := range n.inputs {
 		bind, err := p.operand(in, views)
 		if err != nil {
@@ -200,7 +224,10 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	}
 
 	wg := int(n.kernel.WorkgroupSize.X)
-	r.Dispatch(pipe, binds, accel.WorkgroupCount{X: (count + wg - 1) / wg})
+	id := r.Dispatch(pipe, binds, accel.WorkgroupCount{X: (count + wg - 1) / wg})
+	if n.uniform != nil {
+		p.uniformNodes = append(p.uniformNodes, uniformNode{node: id, build: n.uniform})
+	}
 	return nil
 }
 

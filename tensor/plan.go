@@ -23,6 +23,13 @@ func (p *Plan) Ports() []PortDesc {
 	return out
 }
 
+// Scalars reports every named per-step value this plan reads.
+func (p *Plan) Scalars() []ScalarDesc {
+	out := make([]ScalarDesc, len(p.scalars))
+	copy(out, p.scalars)
+	return out
+}
+
 // Selections reports which kernel each operator became, and why.
 func (p *Plan) Selections() []KernelSelection {
 	out := make([]KernelSelection, len(p.selections))
@@ -87,6 +94,27 @@ func (p *Plan) bind(bindings Bindings) error {
 		}
 	}
 
+	// Scalars, the same way. The wrong *kind* is the case worth catching: the
+	// bytes pack either way and the kernel reads a float as an integer or the
+	// reverse, then computes something plausible.
+	for _, s := range p.scalars {
+		v, ok := bindings.Scalars[s.Name]
+		if !ok {
+			errs = append(errs, fmt.Errorf("accel/tensor: the scalar %q is not bound", s.Name))
+			continue
+		}
+		if v.Kind != s.Kind {
+			errs = append(errs, fmt.Errorf("accel/tensor: the scalar %q is declared %v and "+
+				"the bound value is %v", s.Name, s.Kind, v.Kind))
+		}
+	}
+	for name := range bindings.Scalars {
+		if _, ok := p.scalarPos[name]; !ok {
+			errs = append(errs, fmt.Errorf("accel/tensor: the scalar %q is bound and this "+
+				"plan declares no such scalar", name))
+		}
+	}
+
 	if err := errors.Join(sorted(errs)...); err != nil {
 		return err
 	}
@@ -98,7 +126,19 @@ func (p *Plan) bind(bindings Bindings) error {
 			Slot: p.slots[d.Name], Buffer: bindings.Buffers[d.Name],
 		})
 	}
-	return p.graph.Rebind(batch)
+	if err := p.graph.Rebind(batch); err != nil {
+		return err
+	}
+
+	// The by-value parameters last, and unconditionally: a plan that rewrote
+	// only what changed would compute with the placeholder on its first
+	// submission.
+	for _, u := range p.uniformNodes {
+		if err := p.graph.SetUniform(u.node, 0, u.build(bindings.Scalars)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sorted orders diagnostics so a report is stable between runs.
