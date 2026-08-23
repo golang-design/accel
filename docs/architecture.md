@@ -219,6 +219,7 @@ If you contribute a backend, that file is the contract.
 | M5, the portable tiled GEMM | done: 000's second v0 proof obligation |
 | M6, Metal | done, split into [021](../specs/021-metal-bringup.md), [022](../specs/022-msl-target.md), and [023](../specs/023-metal-graph.md); the encoder-barrier measurement and indirect command buffers stay behind [006](../specs/006-backends.md) §4.3's measurement |
 | M7, tensor decode and prefill | done, split into [024](../specs/024-tensor-bringup.md), [025](../specs/025-tensor-operators.md), and [026](../specs/026-tensor-decode.md); this completes 000's v0 proof |
+| M8, independently scoped work | five of seven: [027](../specs/027-quantization.md) quantization, [028](../specs/028-sampling.md) sampling, [029](../specs/029-plan-cache.md) prefill buckets and the plan cache, [030](../specs/030-paged-kv.md) paged KV and batching, [031](../specs/031-shared-transients.md) shared transients. Graphics is gated by 000; Vulkan is blocked on this machine |
 
 M1 built the bottom of the device layer: enumeration and device open, the
 capability and limit profiles, pooled memory with a two-level segregated fit

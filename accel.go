@@ -96,6 +96,12 @@
 // sequences of different lengths share one pool and several of them step in one
 // dispatch.
 //
+// Several graphs can plan their transients into one [TransientPool], which is
+// sized to the largest of them rather than to their sum:
+// [Device.NewTransientPool] and [Recorder.UseTransientPool]. The price is that
+// they cannot execute at the same time, and the second one is refused through
+// its fence rather than queued.
+//
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and
 // scans are specified and unbuilt. specs/009-sequencing.md is the order the

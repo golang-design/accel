@@ -178,12 +178,13 @@ bindings are the better choice.
 | Sampling: argmax, categorical, top-k, top-p | **Built** on both backends; the random draw is an input, so a token is reproducible |
 | Prefill buckets and a plan cache | **Built**; the key is the six things that make reuse safe, not the shape |
 | Paged KV, and batching several sequences in one step | **Built**; sequences of different lengths share one pool |
+| One transient pool, many graphs | **Built**; a bucket set holds the largest plan's transients rather than every plan's |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 through M7](specs/009-sequencing.md), and the last two from
+rows came from [M1 through M7](specs/009-sequencing.md), and the last five from
 [M8](specs/009-sequencing.md#m8-and-later)'s independently scoped work.
 
 A graph infers its own dependency edges from what each node declares it touches,
