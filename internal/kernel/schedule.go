@@ -48,6 +48,20 @@ type Options struct {
 	// than an executor, so they are on by default and off only when a caller
 	// asks for the speed. See specs/006-backends.md section 5.
 	Diagnostics bool
+
+	// ShuffleSeed varies the order invocations are advanced in within an epoch.
+	// Zero keeps signature order, which is the default and what every
+	// reproducible run wants.
+	//
+	// A non-zero seed exists to break the habit a deterministic order teaches. A
+	// kernel whose result depends on which invocation runs first inside an epoch
+	// is wrong on hardware, and with one fixed order it is wrong *consistently*,
+	// which reads as correct. Sweeping the seed turns that into a disagreement
+	// between two runs on one machine.
+	//
+	// It permutes only the order within an epoch. Epoch boundaries are what a
+	// barrier means, so shuffling across them would not model any real device.
+	ShuffleSeed uint64
 }
 
 // DispatchCooperativeWith runs a cooperative kernel with explicit options.
@@ -109,7 +123,7 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 				for i := range frames {
 					frames[i].Shared = tracker
 				}
-				if err := runWorkgroup(k, args, threads, frames, tracker); err != nil {
+				if err := runWorkgroup(k, args, threads, frames, tracker, opts.ShuffleSeed); err != nil {
 					return err
 				}
 				// Reported per workgroup rather than accumulated, because the
@@ -378,7 +392,7 @@ func fill(threads []Thread, group, size, count ID3, subgroup uint32) {
 
 // runWorkgroup advances every invocation epoch by epoch until all have
 // finished.
-func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker) error {
+func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker, shuffleSeed uint64) error {
 	// The bound is a backstop against a generated program counter that does not
 	// advance, and it is deliberately loose.
 	//
@@ -395,9 +409,18 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 	// turn into a report.
 	const maxEpochs = 1 << 20
 	bound := maxEpochs
+	// The advance order within an epoch. Signature order unless a seed asks for
+	// a permutation; see Options.ShuffleSeed.
+	order := make([]int, len(threads))
+	for i := range order {
+		order[i] = i
+	}
 	for epoch := 0; epoch < bound; epoch++ {
+		if shuffleSeed != 0 {
+			shuffleOrder(order, shuffleSeed, uint64(epoch))
+		}
 		active := 0
-		for i := range threads {
+		for _, i := range order {
 			if frames[i].Done {
 				continue
 			}
@@ -427,4 +450,29 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 	return fmt.Errorf("accel: kernel %q did not finish within %d rendezvous epochs, so "+
 		"either its generated program counter is not advancing or a loop in it does not "+
 		"terminate", k.Name, bound)
+}
+
+// shuffleOrder permutes order in place, deterministically in the seed and the
+// epoch.
+//
+// Deterministic in both, so a failing run reproduces from the seed alone: a
+// scheduler that reached for a global random source would report a bug nobody
+// could re-run, which is the opposite of what this backend is for.
+//
+// The generator is a splitmix64 step rather than math/rand, because this package
+// is reached from a kernel's execution path and pulling in a source with its own
+// locking would put a mutex in the epoch loop.
+func shuffleOrder(order []int, seed, epoch uint64) {
+	state := seed ^ (epoch * 0x9E3779B97F4A7C15)
+	next := func() uint64 {
+		state += 0x9E3779B97F4A7C15
+		z := state
+		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+		z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+		return z ^ (z >> 31)
+	}
+	for i := len(order) - 1; i > 0; i-- {
+		j := int(next() % uint64(i+1))
+		order[i], order[j] = order[j], order[i]
+	}
 }

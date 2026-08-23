@@ -169,6 +169,11 @@ type resolvedNode struct {
 	subgroupSize uint32
 	diagnostics  bool
 
+	// shuffleSeed varies the order invocations advance in within an epoch. It
+	// comes from the device's options for the same reason the two above do: a
+	// graph records what to run, not how the backend chooses to run it.
+	shuffleSeed uint64
+
 	// indirect is the count read from the device at submission, already
 	// clamped, or nil for a direct dispatch. indirectStats is where the actual
 	// and the clamp flag are recorded when a caller asked for them.
@@ -278,6 +283,7 @@ func (e *executable) resolveDispatch(r *resolvedNode, n *driver.PlanNode) error 
 	r.args = kernel.Args{Slices: slices, Uniforms: d.Uniforms}
 	r.subgroupSize = e.dev.subgroupSizeU32()
 	r.diagnostics = e.dev.diagnostics
+	r.shuffleSeed = e.dev.shuffleSeed
 	return nil
 }
 
@@ -474,7 +480,7 @@ func dispatch(n *resolvedNode) (err error) {
 	}
 	if k.Cooperative != nil {
 		return kernel.DispatchCooperativeWith(k, count, n.args,
-			kernel.Options{SubgroupSize: n.subgroupSize, Diagnostics: n.diagnostics})
+			kernel.Options{SubgroupSize: n.subgroupSize, Diagnostics: n.diagnostics, ShuffleSeed: n.shuffleSeed})
 	}
 	return kernel.Dispatch(k, count, n.args)
 }

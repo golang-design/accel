@@ -167,3 +167,15 @@ since a kernel and its generated file share a package.
 - **No atomics or subgroups**, so no diagnostics for them.
   [020](020-cooperative-atomics.md) adds both together, because a diagnostic for
   an operation that does not exist has nothing to check.
+
+## Correction: the shuffled-order requirement was unenforceable — 2026-08-24
+
+§5 required each diagnostic asserted "including the shuffled order" and §6
+declared §5's cases pass. Neither could be true: the shuffled order was accepted
+as an option and never reached the scheduler, so every run was the deterministic
+one and the "including" clause selected nothing.
+
+[018](018-cooperative-lowering.md)'s correction records the wiring, which landed
+2026-08-24. §5's requirement now has a mechanism behind it; running the
+diagnostic corpus under a swept seed is the work that discharges it, and it has
+not been done.

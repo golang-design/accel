@@ -231,3 +231,31 @@ this backend is for.
   been stable for a while the oracle's value falls and the maintenance cost of
   two lowerings does not. Worth revisiting at M6, when a second backend gives a
   different oracle.
+
+## Correction: the shuffled order was accepted and ignored — 2026-08-24
+
+Appended rather than edited in.
+
+§2 said the scheduler is "deterministic by default, with the shuffled order
+[006](006-backends.md) §5 already exposes as an option", and
+[019](019-cooperative-diagnostics.md) §5 required every diagnostic asserted
+"including the shuffled order". The option was **not wired**.
+
+`CPUOptions.ShuffleSeed` was accepted, stored on the CPU device and readable
+back through `ShuffleSeed()`, and stopped there: `kernel.Options` carried only
+`SubgroupSize` and `Diagnostics`, so nothing the scheduler saw mentioned a seed.
+Setting it changed nothing.
+
+That is worse than an unbuilt feature, and it is worth naming why. The seed
+exists to break the habit a fixed order teaches: a kernel whose result depends on
+which invocation runs first inside an epoch is wrong on hardware, and under one
+order it is wrong *consistently*, which reads as correct. A caller sweeping seeds
+to shake that out got the same order every time and concluded the kernel was
+fine — the option produced false confidence rather than none.
+
+**Now built.** The order is permuted per epoch, deterministically in the seed and
+the epoch number, so a failing run reproduces from the seed alone. Only within an
+epoch: epoch boundaries are what a barrier means, so shuffling across them would
+model no real device. The permutation uses a splitmix64 step rather than
+`math/rand`, because this is the epoch loop and a source with its own locking
+would put a mutex in it.
