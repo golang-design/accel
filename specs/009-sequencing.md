@@ -469,7 +469,7 @@ they are found deterministically.
 | --- | --- |
 | [018](018-cooperative-lowering.md) | The uniformity analysis, shared memory and `Thread.Barrier` as authored constructs, the state split, the workgroup scheduler, and selection between the flat and cooperative lowerings — **complete 2026-08-23**, including barriers inside loops; a barrier inside a conditional is refused, since a branch has no back edge to resume on |
 | [019](019-cooperative-diagnostics.md) | Shared-memory definition tracking, deterministic barrier-arrival checking, and deterministic conflicting-access reporting — **complete 2026-08-23** |
-| [020](020-cooperative-atomics.md) | Atomics, emulated subgroups and their sweeps, capability inference and the CPU modes, the numeric probes, and `reduce_sum` — **built 2026-08-23**, except subgroup shuffles and scans, and strict mode narrowing the capability set |
+| [020](020-cooperative-atomics.md) | Atomics, emulated subgroups and their sweeps, capability inference and the CPU modes, the numeric probes, and `reduce_sum` — **built 2026-08-23**, except subgroup shuffles and scans. Strict-mode narrowing shipped with it; the entry said otherwise until 2026-08-24 |
 
 The risk table's response to this risk is "split M4 again", so the split is
 taken before implementation rather than after an estimate slips, as it was for

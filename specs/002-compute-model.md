@@ -792,7 +792,7 @@ on which lanes were active. Everything else is a per-device answer.
 
 ### 5.2 The operations
 
-`M` is `accel.Mask`, an opaque value type with methods rather than a `uint64`.
+`M` is `accel.KernelMask`, an opaque value type with methods rather than a `uint64`.
 The dtype set has no 64-bit integer, and Vulkan's ballot is 128 bits wide, so a
 `uint64` would foreclose a real device. Methods: `Count()`, `Bit(lane uint32)`,
 `LowestSet()`, `CountLower(lane uint32)`, `Any()`.
@@ -1403,7 +1403,7 @@ because it is the code nobody runs on their own machine.
   alternative (preserve, and let the tolerance absorb it) hides a real
   portability problem. Leaning toward flushing, and it needs one measurement of
   how many real inference values land in the f16 subnormal range, below 6.1e-5.
-- **Is `accel.Mask` the right shape for a ballot?** 5.2 makes it opaque so a
+- **Is `accel.KernelMask` the right shape for a ballot?** 5.2 makes it opaque so a
   128-lane subgroup is expressible without a 64-bit dtype. The cost is that the
   common bit tricks become method calls, and the method set must be complete
   enough that nobody wants the raw bits. If it is incomplete the fix is more

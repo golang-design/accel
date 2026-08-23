@@ -11,10 +11,11 @@ depends_on:
 # One transient pool, many graphs
 
 [009](009-sequencing.md)'s M8 item "additional transient sets", which
-[003](003-command-graph.md) leaves as two open questions and
-[007](007-tensor-layer.md) puts a number on:
+[003](003-command-graph.md) leaves as two open questions and puts a number on:
 
 > five prefill buckets at 200 MiB is a gigabyte of transients
+>
+> — [003](003-command-graph.md) §"additional transient sets"
 
 [029](029-plan-cache.md) made that number real. A bucket set is several plans
 over one model, each with its own transients, and **only one of them ever runs

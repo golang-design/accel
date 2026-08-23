@@ -184,13 +184,16 @@ is where [002](002-compute-model.md) §5.1 says any of them are.
 boundary that makes the above tractable: the emulation is exactly the barrier
 machinery because every lane arrives.
 
-**The `CPUStrict` and `CPUMimic` modes are not yet wired to capability
-inference.** `Device.Missing` checks the profile a mode reports, so a mimicked
-device already refuses a kernel it cannot run — that path is tested. What is
-missing is strict mode *narrowing* the reported capability set to the
-intersection of its declared targets, which is [006](006-backends.md)'s
-strict-mode contract rather than this child's, and is recorded in
-[009](009-sequencing.md) as an M4 remainder rather than left implicit.
+**The `CPUStrict` and `CPUMimic` modes are wired to capability inference.**
+`Device.Missing` checks the profile a mode reports, so a mimicked device refuses
+a kernel it cannot run. Strict mode narrows the reported capability set to the
+intersection of its declared targets — `internal/cpu/profile.go`'s `resolve`
+computes `caps, lim = intersect(targets)` — which is
+[006](006-backends.md)'s strict-mode contract discharged here.
+
+> This paragraph said the opposite until 2026-08-24. The narrowing had shipped
+> and four documents still called it outstanding, which is the shape of staleness
+> that survives longest: a deferral nobody revisits because nothing fails.
 
 ## 7. What it does not build
 

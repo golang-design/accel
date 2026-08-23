@@ -171,7 +171,7 @@ drains, and the term should not be borrowed without the price.
 [031](031-shared-transients.md) §2: *"Two graphs sharing a pool cannot be in
 flight together"*. The claim covers execution and the refusal arrives through
 the fence rather than queueing. [029](029-plan-cache.md)'s bucket plans and the
-decode plan share one pool, because a pool each restores 007's *"five prefill
+decode plan share one pool, because a pool each restores 003's *"five prefill
 buckets at 200 MiB is a gigabyte of transients"*. So a prefill cannot overlap a
 decode step, and admitting a request costs one drained step.
 

@@ -167,7 +167,7 @@ counts vanish, and 002 §4.3 promises a dispatch-wide counter reaches exactly
 needs no CAS helper. Recorded, not silently enjoyed.
 
 Subgroups map one-to-one onto the capability split in `compute.go:126-135`,
-which was designed for these families and is not collapsed. `accel.Mask` is
+which was designed for these families and is not collapsed. `accel.KernelMask` is
 opaque precisely because Vulkan's ballot is 128 bits wide; SPIR-V is the target
 that would have broken a `uint64`.
 
@@ -175,7 +175,7 @@ that would have broken a `uint64`.
 | --- | --- |
 | `CapSubgroupBasic` | `GroupNonUniform` |
 | `CapSubgroupVote` | `GroupNonUniformVote` |
-| `CapSubgroupBallot` | `GroupNonUniformBallot` (128-bit `uvec4` → `accel.Mask`) |
+| `CapSubgroupBallot` | `GroupNonUniformBallot` (128-bit `uvec4` → `accel.KernelMask`) |
 | `CapSubgroupShuffle` | `GroupNonUniformShuffle`, deferred by [020](020-cooperative-atomics.md) |
 | `CapSubgroupArithmetic` | `GroupNonUniformArithmetic` |
 

@@ -98,6 +98,8 @@ child's definition of done rather than a note against it**.
   is visible and a later escape hatch has something to change.
 - A benchmark reports the cooperative lowering's cost against the flat one on a
   kernel eligible for both, since §3 claims the gap is why both exist.
+  **Not written, and §5's "§4's cases pass" excludes this bullet** — see the
+  note at the end of this spec.
 
 ## 5. Outcome — the transform is built, with one gap
 
@@ -259,3 +261,22 @@ epoch: epoch boundaries are what a barrier means, so shuffling across them would
 model no real device. The permutation uses a splitmix64 step rather than
 `math/rand`, because this is the epoch loop and a source with its own locking
 would put a mutex in it.
+
+## Note: the comparative benchmark is not written — 2026-08-24
+
+§4's last bullet asks for a benchmark of the cooperative lowering against the
+flat one, and §5 declares §4's cases pass. The benchmark does not exist, and it
+is harder to write than the bullet suggests.
+
+It needs *one kernel lowered both ways*, and the generator does not offer that.
+Selection is not a knob: §3's rule derives the lowering from the body, so a
+kernel that reaches a barrier has no flat form and a kernel that does not has no
+reason to have a cooperative one. Producing a fair pair means adding a
+generator option whose only consumer is a benchmark — and an option that exists
+to be measured is a second way to compile a kernel, which is the thing the
+derived rule exists to prevent.
+
+So the claim in §3 that the gap is why both lowerings exist stands on the
+argument, not on a number. Recorded rather than quietly dropped, because a
+reader comparing §4 against `go test -bench` would otherwise find a promised
+measurement missing and not know whether it was forgotten or refused.
