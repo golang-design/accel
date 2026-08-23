@@ -1161,6 +1161,25 @@ emitter would be code nobody ran, which is the failure mode M6's outcome names.
 
 So M8 started with quantization, which this environment can prove end to end.
 
+#### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
+
+Two of the completed items name a follow-on, and both are already placed after
+v0 by the tensor layer's own scope section rather than by this milestone
+running out of time. Recorded so the question is not re-opened from the
+strikethroughs above:
+
+| Follow-on | Where it is placed |
+| --- | --- |
+| sampling **policy** — temperature, repetition penalties, a seeded generator | 007 "Post-v0 scope": *sampling operators and policy* |
+| a **scheduler** deciding which sequences batch together and when to admit one | 007 "Post-v0 scope": *multi-sequence scheduling* |
+
+Both are policy over a mechanism that is built and tested. The primitives they
+would call — `Argmax`, `SampleCategorical`, top-k, top-p, `AttentionDecodeBatched`
+over a paged cache — take their inputs explicitly, including the random draw, so
+a policy layer is a caller of this API and not a change to it. That is the
+property worth having at the boundary, and it is why deferring them costs
+nothing that has to be undone.
+
 ## An unverified commit range
 
 **Everything after `accel: textures, formats, and the row-pitch guarantee` has
