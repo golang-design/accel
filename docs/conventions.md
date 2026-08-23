@@ -146,6 +146,24 @@ packed or as 32-plus-8 padded. `accel` therefore makes it non-host-copyable.
 Reading one back reports an error naming `Depth32Float` as the format to use
 instead, rather than inventing a stride that is wrong somewhere.
 
+### A driver.Block may be a handle, not your allocation
+
+**Rule for every backend, not a divergence.** A `driver.Block` reaching a
+backend is not always one that backend allocated. accel's shared transient pool
+hands graphs a handle so it can grow — swap the allocation underneath — without
+invalidating the operands and executables that captured it at build time.
+
+So a backend that type-asserts a `Block` to its own concrete type must call
+`driver.Unwrap` first, and must do it **at use, never at compile**. Resolving
+while lowering a plan caches the pre-growth allocation, which then survives a
+growth as a stale pointer, and the symptom is one graph reading another's
+memory rather than a failure.
+
+Missing the unwrap is loud, which is deliberate: the assertion fails and the
+error names the wrapper — *"names a `*accel.poolBlock`, which is not Metal
+memory"*. Missing the *timing* is silent, which is why it is written here.
+See [`specs/031-shared-transients.md`](../specs/031-shared-transients.md).
+
 ---
 
 ## Execution and lifetime
