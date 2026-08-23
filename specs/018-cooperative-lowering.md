@@ -1,6 +1,6 @@
 ---
 title: "The resumable cooperative lowering and the workgroup scheduler"
-status: in progress
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -101,20 +101,12 @@ child's definition of done rather than a note against it**.
 
 ## 5. Outcome — the transform is built, with one gap
 
-§2 is built and §4's cases pass, except the state split's reach: **a barrier
-inside a loop is refused by position rather than lowered**, because the state
-machine would have to resume in the middle of that loop carrying its induction
-variable across the epoch.
-
-That remains this child's work rather than moving to
-[020](020-cooperative-atomics.md), even though `reduce_sum` is what needs it.
-[009](009-sequencing.md)'s rule for this milestone is that a compiler pass is
-not estimated as a line item under a kernel, and handing the mid-loop split to
-the child that owns the reduction is that mistake at a smaller scale. 020
-depends on it and says so.
-
-Recorded here rather than left implicit, because a reader of §2 would otherwise
-believe every legal barrier lowers.
+§2 is built and §4's cases pass, including the mid-loop split of §6. **A barrier
+inside a conditional is still refused**, and that is the one gap: a loop has a
+back edge to hang a resumption state on and a branch does not, so the machine
+would have to resume inside a branch whose predicate it no longer knows. A
+barrier must sit in workgroup-uniform control flow anyway, so hoisting it out of
+the conditional is always available and always correct.
 
 **The flat-versus-cooperative differential runs** over every corpus kernel
 eligible for both, comparing bit for bit. It is what §3 argued for and it
@@ -173,7 +165,7 @@ itself detected rather than merely loud.
   has to be runnable, because spec 004's fifth level compares the generated
   lowering against it, and an unexecutable reference is not a reference.
 
-## 6. The mid-loop split, and how it will be checked
+## 6. The mid-loop split, and how it was checked
 
 A barrier inside a uniform loop needs three states rather than two, because the
 loop's back edge becomes a resumption point:
@@ -195,17 +187,30 @@ what is new is the numbering: the state after the barrier must fall through to
 the loop's post statement and back to the check rather than to the next
 top-level segment.
 
-**How it will be checked, and why not with a golden.** The oracle is an
-*unrolled* version against a *looped* one: a fixed-stride reduction written with
-its barriers at the top level, which this child lowers today, against the same
-computation with the barrier inside the loop. Same inputs, same IR node set,
-compared bit for bit — so a disagreement is the new state numbering's and
-nothing else's.
+**How it was checked, and why not with a golden.** The oracle is an *unrolled*
+version against a *looped* one: a fixed-stride reduction written with its
+barriers at the top level, which the earlier split already lowered, against the
+same computation with the barrier inside the loop. Same inputs, same IR node
+set, compared bit for bit — so a disagreement is the new state numbering's and
+nothing else's. Removing the loop's back edge makes it fail immediately, 10
+against 816.
 
-That is stronger than a golden of the generated shape, which would tell us the
-shape changed rather than whether it is right. It is also the pattern that found
-three bugs in [017](017-graph-aliasing.md) and two in this child, so it is the
-first thing to build rather than the last.
+That is stronger than a golden of the generated shape, which says the shape
+changed rather than whether it is right.
+
+**Two things the split forced.** States are built backwards, because a state
+must know its successor's index and the successor is created first; that leaves
+the entry state last, so they are renumbered into source order afterwards. The
+build order is an implementation detail and the numbering is not, since it is
+what a reader of the generated file sees.
+
+And **the scheduler's epoch bound had to be loosened**. A barrier inside a loop
+suspends once per iteration and the trip count is data, so no bound derived from
+the static barrier count admits a correct kernel: a kernel with one barrier in a
+thousand-round loop needs a thousand epochs. The backstop now catches a machine
+that is stuck rather than one that is slow, which is the distinction that
+matters — the alternative is a hang, and turning a hang into a report is what
+this backend is for.
 
 ## 7. What it does not build
 

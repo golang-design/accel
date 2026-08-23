@@ -12,12 +12,11 @@ depends_on:
 The third of [009](009-sequencing.md)'s three M4 children, and the one that
 completes M4's definition of done.
 
-**It depends on [018](018-cooperative-lowering.md)'s mid-loop split.**
-`reduce_sum` is a halving-stride loop with a barrier each round, so it cannot be
-written until the state machine can resume inside a loop. That transform stays
-in 018 rather than moving here, because [009](009-sequencing.md)'s rule for this
-milestone is that a compiler pass is not estimated as a line item under a
-kernel — which is exactly what folding it in here would be, at a smaller scale. It adds the two operation families a
+**[018](018-cooperative-lowering.md)'s mid-loop split is done**, so
+`reduce_sum`'s shape — a halving-stride loop with a barrier each round — lowers.
+It stayed in 018 rather than moving here because [009](009-sequencing.md)'s rule
+for this milestone is that a compiler pass is not estimated as a line item under
+a kernel, which is what folding it in here would have been at a smaller scale. It adds the two operation families a
 cooperative kernel needs beyond a barrier, the analysis that reports what a
 kernel requires, and the first kernel from [010](010-kernel-corpus.md).
 
@@ -47,14 +46,15 @@ Transform, then probes, then reduction:
 
 ```mermaid
 flowchart LR
-    T["<b>018</b> mid-loop split"] --> P["numeric probes"] --> R["reduce_sum"]
+    T["<b>018</b> mid-loop split<br/>done"] --> P["numeric probes"] --> R["reduce_sum"]
     A["atomics"] -.-> R
     S["subgroups"] -.-> R
 ```
 
-Atomics and subgroups are independent of that chain and can land in any order,
-but starting with them means meeting the transform as a blocker after the easy
-work is done — which is when an estimate slips.
+Atomics and subgroups are independent of that chain and can land in any order.
+The transform being done first is what makes that true; had it come last, the
+easy work would have finished before the blocker appeared, which is when an
+estimate slips.
 
 ### Why the probes come before the reduction, not after
 
