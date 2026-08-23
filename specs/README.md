@@ -72,12 +72,12 @@ numbered in.
 | Spec | Status | Covers |
 | --- | --- | --- |
 | [001-device-resources.md](001-device-resources.md) | Implemented | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
-| [002-compute-model.md](002-compute-model.md) | Drafted | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
-| [003-command-graph.md](003-command-graph.md) | Drafted | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
-| [004-kernel-authoring.md](004-kernel-authoring.md) | Drafted | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
+| [002-compute-model.md](002-compute-model.md) | In progress | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
+| [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
+| [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
 | [005-graphics.md](005-graphics.md) | Drafted parent | Post-v0 graphics constraints and the four child specs required before implementation |
-| [006-backends.md](006-backends.md) | Drafted | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
-| [008-numerics.md](008-numerics.md) | Drafted | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
+| [006-backends.md](006-backends.md) | In progress | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
+| [008-numerics.md](008-numerics.md) | In progress | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
 | [013-kernel-subset.md](013-kernel-subset.md) | Implemented | M2 child: control flow, helpers, and the positioned rejection corpus |
 | [014-kernel-uniforms.md](014-kernel-uniforms.md) | Implemented | M2 child: std140 codecs, typed uniform binding, and the device-side layout check |

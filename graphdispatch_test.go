@@ -605,3 +605,103 @@ func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
 		}
 	}
 }
+
+// Persistent state mutated by a kernel is tracked by the graph's hazards, which
+// is the precondition M7's whole risk row rests on.
+//
+// Spec 009 says: "Tensor state mutation escapes graph hazards | M7
+// versioned-state negatives and prefill/decode parity | Fix State lowering;
+// never add an untracked in-place escape hatch." The question that decides
+// whether a tensor State needs new machinery or can route through what exists
+// is answerable now, with two kernels that read and write one buffer.
+//
+// It can: a scatter followed by a gather over the same state produces a
+// read-after-write edge and a barrier, because a dispatch's accesses come from
+// the kernel's binding layout and the compiler inferred them from the body. No
+// escape hatch is needed, and this test is what would notice one being added.
+func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
+	d := openDevice(t)
+	scatter, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.ScatterRowsKernel, Label: "scatter"})
+	if err != nil {
+		t.Fatalf("scatter: %v", err)
+	}
+	defer scatter.Close()
+	gather, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.GatherRowsKernel, Label: "gather"})
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	defer gather.Close()
+
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	const width, capacity, count = 4, 8, 4
+	state := newBuffer(t, d, "state", capacity*width, storage)
+	rows := newBuffer(t, d, "rows", count*width, storage)
+	out := newBuffer(t, d, "out", count*width, storage)
+	idsBuf, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.U32, Count: count, Usage: storage, Label: "ids"})
+	if err != nil {
+		t.Fatalf("ids: %v", err)
+	}
+	defer idsBuf.Close()
+	ids, err := idsBuf.View(0, count)
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	p := testkernels.RowParams{Rows: count, Width: width, Capacity: capacity}
+	r := d.NewRecorder()
+	r.Dispatch(scatter, []accel.Binding{
+		{Index: 0, Uniform: p},
+		{Index: 0, Buffer: whole(t, rows)},
+		{Index: 1, Buffer: ids},
+		{Index: 2, Buffer: whole(t, state)}, // written
+	}, accel.WorkgroupCount{X: 1})
+	r.Dispatch(gather, []accel.Binding{
+		{Index: 0, Uniform: p},
+		{Index: 0, Buffer: whole(t, state)}, // read
+		{Index: 1, Buffer: ids},
+		{Index: 2, Buffer: whole(t, out)},
+	}, accel.WorkgroupCount{X: 1})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	if g.Hazards() != 1 {
+		t.Errorf("got %d hazards, want the read-after-write on the state buffer",
+			g.Hazards())
+	}
+	if e := g.Edges()[0]; len(e) != 1 || e[0] != 1 {
+		t.Errorf("want edge 0 -> 1, got %v: the gather reads what the scatter wrote", e)
+	}
+	if n := g.NodeStats(1); n.BarriersBefore != 1 {
+		t.Errorf("the gather needs a barrier after the scatter, got %d", n.BarriersBefore)
+	}
+
+	// And it runs, producing what was scattered. A hazard the plan records and
+	// the execution ignores would be worse than no hazard at all.
+	vals := make([]float32, count*width)
+	for i := range vals {
+		vals[i] = float32(i) + 1
+	}
+	if err := d.Queue().WriteBuffer(rows, 0, vals); err != nil {
+		t.Fatalf("write rows: %v", err)
+	}
+	if err := d.Queue().WriteBuffer(idsBuf, 0, []uint32{3, 1, 6, 0}); err != nil {
+		t.Fatalf("write ids: %v", err)
+	}
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := readback(t, d, out)
+	for i := range got {
+		if got[i] != vals[i] {
+			t.Fatalf("element %d came back as %v, want the %v that was scattered in",
+				i, got[i], vals[i])
+		}
+	}
+}

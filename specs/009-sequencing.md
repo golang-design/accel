@@ -716,6 +716,27 @@ Independently scoped later work includes:
 Vulkan is the first backend priority because it gives the CPU oracle a second
 vendor/API opinion and pays the cost of the real SPIR-V IR.
 
+## An unverified commit range
+
+**Everything after `accel: textures, formats, and the row-pitch guarantee` has
+passed local gates only.** GitHub Actions stopped running mid-session — every
+job failed to start with a billing message, not a test failure — so those
+commits have not been through the matrix.
+
+That matters more here than it would elsewhere, because CI has caught three
+things in this repository that local runs could not:
+
+- Windows line endings breaking a golden comparison, twice.
+- Windows' coarse clock turning an allocation timing ratio into 2,637,200.
+- An allocation timing test that passed five times locally and failed on all
+  four platforms.
+
+The unverified work includes texture row pitch, which reads
+`MinBufferCopyRowPitchAlignment` from a device profile, and
+`kernel.RunAuthored`, which runs one goroutine per invocation — both exactly the
+shape of thing that behaves differently elsewhere. A session with CI working
+should re-run the matrix over that range before treating any of it as verified.
+
 ## Risks and retirement tests
 
 | Risk | Retired by | Failure response |
@@ -727,7 +748,7 @@ vendor/API opinion and pays the cost of the real SPIR-V IR.
 | Uniformity analysis rejects correct cooperative code | M4 negative/positive corpus | Specify a CPU-checked assertion intrinsic in a later scoped change. |
 | Graph aliasing is unsound | M3 naive-plan fuzz and diamond golden, **both owned by [017](017-graph-aliasing.md)**, the child that introduces the aliasing | Block later milestones until fixed. |
 | Metal objects outlive autorelease ownership incorrectly | M6 close/completion stress E2E | Fix retain-set ownership before backend acceptance. |
-| Tensor state mutation escapes graph hazards | M7 versioned-state negatives and prefill/decode parity | Fix State lowering; never add an untracked in-place escape hatch. |
+| Tensor state mutation escapes graph hazards | M7 versioned-state negatives and prefill/decode parity | Fix State lowering; never add an untracked in-place escape hatch. **Checked ahead of M7 on 2026-08-23**: a graph recording `scatter_rows` then `rows` over one buffer produces a read-after-write edge and a barrier, because a dispatch's accesses come from the kernel's binding layout and the compiler inferred them from the body. 007's `State` routes through what exists; no escape hatch is needed, and the test is what would notice one being added. |
 | CPU oracle has no second opinion | Vulkan after v0 | Keep strict portable mode conservative and state the limitation. |
 
 ## Maintenance rule

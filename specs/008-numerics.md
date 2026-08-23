@@ -1,6 +1,6 @@
 ---
 title: "Numerics: exact domains, derived bounds, and composed error budgets"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -9,6 +9,20 @@ depends_on:
 ---
 
 # Numerics
+
+**What is built — 2026-08-23.** §3's exact-domain conditions are *measured*
+rather than assumed: `internal/conformance/probe` establishes round-to-nearest
+tie-breaking, whether contraction is off, whether subnormals survive, and
+whether infinities and NaNs are produced — and it is shown detecting seven kinds
+of divergent arithmetic, because a detector nobody has seen detect anything is
+one nobody should believe. §7's reduction bounds are derived functions rather
+than tolerances, and every kernel in [010](010-kernel-corpus.md) is compared
+against a higher-precision reference under them.
+
+**What is not.** §6's normative primitive ceilings are stated and unmeasured on
+any GPU, which is what M6's probes are for; §5's contraction control on targets
+other than Go; and §8's composed budgets beyond the reduction and dot-product
+forms. This spec is *in progress*.
 
 This spec defines what a conformance test may assert when a kernel runs on two
 backends. A tolerance is never selected after observing a failure. Exactness is

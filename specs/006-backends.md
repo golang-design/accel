@@ -1,6 +1,6 @@
 ---
 title: "Backends: the contract, the set, and the capability matrix"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -10,6 +10,18 @@ depends_on:
 ---
 
 # Backends
+
+**What is built — 2026-08-23.** The CPU backend in full, which is §5: both
+generated execution strategies, the definition tracking and barrier
+instrumentation, emulated subgroups, atomics, and the developer/strict/mimic
+modes. R1 through R8 and R10 of §1 are implemented for it. The plan crosses the
+seam as a value, which is §4's answer to 003's open question about graph
+lowering.
+
+**What is not.** Every other backend in §2, and R9's convention corrections,
+which have nothing to correct until a backend diverges. §4's per-backend lowering
+strategies are decided and unbuilt. This spec is *in progress* on that basis: the
+contract is settled and one backend meets it.
 
 What a backend has to do, which backends exist, what each one can and cannot do,
 and how [003](003-command-graph.md)'s graph reaches each one.

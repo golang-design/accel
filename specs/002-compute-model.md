@@ -1,12 +1,28 @@
 ---
 title: "Compute model: workgroups, shared memory, barriers, atomics, subgroups"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
 ---
 
 # Compute model
+
+**What is built — 2026-08-23.** §§1–5 are implemented on the CPU backend: the
+execution hierarchy and built-in ids, workgroup-shared memory, barriers with
+§3.1's uniformity requirement enforced by the compiler and §3.4's non-uniform
+arrival detected at run time, the atomic set of §4, and the subgroup operations
+of §5 in uniform control flow.
+
+**What is not.** §5's shuffles and scans, and every operation in divergent
+control flow. Each is defined in terms of *inactive* lanes — reading one is
+undefined, scans skip them rather than treating them as identity — and §5.1 says
+whether lanes reconverge after divergence is implementation-defined, so
+emulating it faithfully means modelling an active set no two backends agree on.
+The operations built are the ones §5.1 says are portable.
+
+This spec is therefore *in progress* rather than implemented, and §5's remaining
+rows are what remains.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 4. This spec exists because
 its subject was the predecessor project's central mistake, and the mistake is

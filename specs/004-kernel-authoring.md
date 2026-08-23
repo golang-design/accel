@@ -1,12 +1,21 @@
 ---
 title: "Kernel authoring: a Go subset lowered to CPU code and shaders"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
 ---
 
 # Kernel authoring
+
+**What is built — 2026-08-23.** The whole v0 subset: the loader and subset
+checker, the closed IR, the intrinsic table, the generated Go lowering with its
+explicit rounding points, the digest and freshness check, both the flat and the
+resumable cooperative lowerings, and the positioned rejection corpus.
+
+**What is not.** The MSL, GLSL, SPIR-V and HLSL emitters, which need the
+backends that consume them. This spec is *in progress* for that reason: the IR
+and the analyses are shared by every target and are done; the targets are not.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 5. A kernel is written
 once, in Go, type-checked once, and lowered from one typed IR to every backend.
