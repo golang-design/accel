@@ -147,6 +147,14 @@ is why the cross-target build is now one of [009](009-sequencing.md)'s gates.
 The adapter token is derived from the device's `registryID`, which is stable
 within a process and distinguishes two GPUs in a machine that has two.
 
+**Enumerating nothing is `metal.ErrNoDevice`, never an empty list.** An empty
+list is indistinguishable from a build with no Metal compiled in, which is the
+one distinction this section exists to preserve. The error is what the layer
+above turns into a `ProbeDiagnostic` at `ProbeEnumerateAdapters`, as against
+`ProbeLoadLibrary` for a framework that would not load: a caller acts on those
+two differently, one being a machine without a GPU and the other a broken
+installation.
+
 **Capabilities and limits are a table, and the table is checked against the
 device rather than trusted.** `driver.Limits` has twenty-one fields and
 `driver.Capabilities` sixteen; a mapping written from documentation is a mapping
@@ -206,10 +214,23 @@ functions, `kmath` intrinsics — belongs to [022](022-msl-target.md).
 
 **Buffer index assignment is the contract.** `Dispatch.Bindings` is positional,
 and `driver.Dispatch` already says why: *"a reordering here silently swaps two
-buffers."* So binding *k* of the kernel layout is `[[buffer(k)]]`, uniforms
-follow at index `len(bindings)`, and the generated lengths follow those. This
-is written down because it is the kind of rule that is obvious while writing the
+buffers."* So binding *k* of the kernel layout is `[[buffer(k)]]`, the generated
+slice lengths follow at `len(bindings)`, and uniforms follow those. This is
+written down because it is the kind of rule that is obvious while writing the
 emitter and invisible six months later.
+
+The emitter exports it rather than leaving the host to recompute it, since two
+copies of an index scheme is exactly one too many:
+
+| Declaration | What it fixes |
+| --- | --- |
+| `emit.MSLLengthsIndex(n)` | where the generated lengths are bound, for a kernel with *n* bindings |
+| `emit.MSLUniformIndex(n, i)` | where uniform *i* is bound |
+| `emit.MSLContractOff` | the pragma every emitted kernel carries; see the outcome below for why it is a pragma and not a compile option |
+
+The lengths slot is reserved whether or not the body calls `len`. A layout that
+depended on the body would be a layout the host has to be told about, and one
+unused argument slot is cheaper than a second source of truth.
 
 ### The length problem
 

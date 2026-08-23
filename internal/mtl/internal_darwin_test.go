@@ -8,9 +8,12 @@ package mtl
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"unsafe"
+
+	"github.com/ebitengine/purego/objc"
 )
 
 // The helpers that translate between Objective-C and Go answer for the null
@@ -190,17 +193,36 @@ func TestDeviceEnumerationFallsBack(t *testing.T) {
 	}
 	zero := func() uintptr { return 0 }
 
-	if got := devicesFrom(nil, createSystemDefaultDevice); len(got) != 1 {
-		t.Errorf("with no MTLCopyAllDevices the default device should be the only one, got %d",
-			len(got))
+	// The two fallback cases below need a real default device to fall back to.
+	// Whether its absence is a failure or a skip is what the *job* promised:
+	// see specs/006-backends.md section 7 and the header of
+	// .github/workflows/ci.yml. Tier 2 sets ACCEL_REQUIRE_METAL; Tier 1 runs the
+	// same tests on a macOS runner and promises only the CPU backend, so it must
+	// not go red for want of a GPU.
+	//
+	// The last two cases need no device and run either way, which is the point
+	// of splitting them out rather than skipping the whole test.
+	if d := objc.ID(createSystemDefaultDevice()); d == 0 {
+		if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+			t.Fatal("this job promises Metal and there is no default device")
+		}
+		t.Log("no Metal device: checking only the cases that need none")
 	} else {
-		got[0].Close()
+		release(d)
+		if got := devicesFrom(nil, createSystemDefaultDevice); len(got) != 1 {
+			t.Errorf("with no MTLCopyAllDevices the default device should be the only "+
+				"one, got %d", len(got))
+		} else {
+			got[0].Close()
+		}
+		if got := devicesFrom(zero, createSystemDefaultDevice); len(got) != 1 {
+			t.Errorf("an empty device array should fall back to the default device, got %d",
+				len(got))
+		} else {
+			got[0].Close()
+		}
 	}
-	if got := devicesFrom(zero, createSystemDefaultDevice); len(got) != 1 {
-		t.Errorf("an empty device array should fall back to the default device, got %d", len(got))
-	} else {
-		got[0].Close()
-	}
+
 	if got := devicesFrom(zero, zero); len(got) != 0 {
 		t.Errorf("a machine with no device should enumerate none, got %d", len(got))
 	}
