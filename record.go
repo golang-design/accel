@@ -55,6 +55,11 @@ type recNode struct {
 	pipeline *ComputePipeline
 	count    kernel.ID3
 	uniforms []any
+
+	// indirect marks a node whose workgroup count the device supplies, in which
+	// case count is the build-time maximum and the last access is the count
+	// buffer rather than a binding.
+	indirect bool
 }
 
 // access is one resource range one node touches, in bytes.
@@ -143,6 +148,10 @@ type recorderState struct {
 	errs []error
 
 	built bool
+
+	// collectStats is whether the graph carries back the counters only the
+	// device knows. Off by default, because they cost a readback.
+	collectStats bool
 }
 
 func (r *Recorder) fail(format string, args ...any) {

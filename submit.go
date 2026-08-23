@@ -311,6 +311,33 @@ func (g *Graph) run() error {
 	return df.Wait()
 }
 
+// readStats collects the counters a completed submission wrote, when the graph
+// asked for them.
+//
+// Through an optional interface, because a backend that cannot produce them
+// should be discovered by assertion rather than by a method that fails when
+// called. See specs/006-backends.md section 1.
+func (g *Graph) readStats() SubmissionStats {
+	if !g.collectStats {
+		return SubmissionStats{}
+	}
+	r, ok := g.exe.(driver.StatsReporter)
+	if !ok {
+		return SubmissionStats{}
+	}
+	raw := r.IndirectStats()
+	out := SubmissionStats{Indirect: make([]IndirectStats, len(raw))}
+	for i, s := range raw {
+		out.Indirect[i] = IndirectStats{
+			Node:    NodeID(s.Node),
+			Actual:  [3]uint32{s.Actual.X, s.Actual.Y, s.Actual.Z},
+			Max:     [3]uint32{s.Max.X, s.Max.Y, s.Max.Z},
+			Clamped: s.Clamped,
+		}
+	}
+	return out
+}
+
 func (g *Graph) checkBoundAtSubmit() error {
 	var errs []error
 	for s := 1; s <= len(g.slots); s++ {

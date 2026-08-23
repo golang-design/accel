@@ -159,7 +159,7 @@ func (q *Queue) Flush() *Fence {
 	}
 	q.mu.Unlock()
 
-	return q.enqueue(func() error { return runWrites(batch) })
+	return q.enqueue(func(*Fence) error { return runWrites(batch) })
 }
 
 // runWrites performs one staged batch.
@@ -206,7 +206,7 @@ func settled(prev chan struct{}) bool {
 // the previous unit's completion channel under the queue lock, so the order
 // units run in is exactly the order Submit and Flush were called in, and a
 // caller that never waits still gets ordering.
-func (q *Queue) enqueue(work func() error) *Fence {
+func (q *Queue) enqueue(work func(*Fence) error) *Fence {
 	f := newFence()
 	done := make(chan struct{})
 
@@ -220,7 +220,10 @@ func (q *Queue) enqueue(work func() error) *Fence {
 		if prev != nil {
 			<-prev
 		}
-		f.state.err = work()
+		// The unit fills in whatever the fence carries *before* it signals.
+		// Anything written afterwards races a caller who waited: Done becoming
+		// true is exactly the promise that the fence is complete.
+		f.state.err = work(f)
 		f.signal()
 	}()
 	return f
@@ -389,6 +392,10 @@ type fenceState struct {
 	once sync.Once
 	done chan struct{}
 	err  error
+
+	// stats are the counters the device wrote during this submission, present
+	// only when the graph asked for them.
+	stats SubmissionStats
 }
 
 func newFence() *Fence {

@@ -43,7 +43,7 @@ func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, count WorkgroupCoun
 // actual count and it is clamped to max: on device in strict mode, and as a
 // documented caller obligation otherwise.
 func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, count BufferView, max WorkgroupCount) NodeID {
-	panic(ErrNotImplemented)
+	return r.indirectImpl(p, b, count, max)
 }
 
 // CopyToBuffer records a host-to-device transfer, copying src at record time.
@@ -237,7 +237,7 @@ type Slot int
 // an indirect node's actual count and whether it was clamped. It is off by
 // default because it adds a readback buffer, a transfer, and a barrier to every
 // submission.
-func (r *Recorder) CollectRunStats(on bool) { panic(ErrNotImplemented) }
+func (r *Recorder) CollectRunStats(on bool) { r.state.collectStats = on }
 
 // NodeID identifies a recorded node, for referring to it in errors.
 type NodeID int
@@ -292,6 +292,10 @@ type Graph struct {
 	memory   GraphMemory
 	barriers int
 	hazards  int
+
+	// collectStats is whether this graph carries back the counters only the
+	// device knows, which cost a readback and are therefore opt-in.
+	collectStats bool
 
 	// succ and pred are the inferred dependency DAG, and reach is its transitive
 	// closure packed as reachWords uint64s per node.
@@ -543,11 +547,20 @@ func (q *Queue) Submit(g *Graph) *Fence {
 	q.stats.Submissions++
 	q.mu.Unlock()
 
-	return q.enqueue(func() error {
+	// The counters travel on the fence rather than on the graph, because a
+	// caller holding a fence is the one who knows which submission produced
+	// them: a graph submitted twice would otherwise report the second's. They
+	// are written before the fence signals, since Done becoming true is exactly
+	// the promise that everything the fence carries is complete.
+	return q.enqueue(func(f *Fence) error {
 		if err := runWrites(batch); err != nil {
 			return err
 		}
-		return g.run()
+		if err := g.run(); err != nil {
+			return err
+		}
+		f.state.stats = g.readStats()
+		return nil
 	})
 }
 
@@ -572,7 +585,44 @@ func (q *Queue) reject(g *Graph) *Fence {
 
 // SubmitAfter submits a graph that begins only once every given fence has
 // signalled.
-func (q *Queue) SubmitAfter(g *Graph, after ...*Fence) *Fence { panic(ErrNotImplemented) }
+func (q *Queue) SubmitAfter(g *Graph, after ...*Fence) *Fence {
+	if fail := q.reject(g); fail != nil {
+		return fail
+	}
+	// The wait happens on the queue's own stream rather than before enqueuing,
+	// so that submission order still follows call order: waiting first would
+	// let a later call to Submit overtake this one, which is the guarantee spec
+	// 003 makes about a single queue.
+	//
+	// Two submissions to *one* queue are already ordered, so this is for
+	// ordering against another queue's work — which at v0 is a shape no device
+	// reports, since every one reports a single queue. It is built because the
+	// API promises it and an unbuilt promise is worse than an absent one.
+	q.mu.Lock()
+	batch := q.pending
+	q.pending = nil
+	q.stats.Submissions++
+	q.mu.Unlock()
+
+	return q.enqueue(func(f *Fence) error {
+		for _, w := range after {
+			if w == nil {
+				continue
+			}
+			if err := w.Wait(); err != nil {
+				return err
+			}
+		}
+		if err := runWrites(batch); err != nil {
+			return err
+		}
+		if err := g.run(); err != nil {
+			return err
+		}
+		f.state.stats = g.readStats()
+		return nil
+	})
+}
 
 // Run records a one-use graph, submits it, and waits.
 //
@@ -614,7 +664,20 @@ type Fence struct {
 // transfer, a barrier, and a Readback allocation. A graph that did not ask still
 // clamps an indirect count against its recorded maximum; what it loses is being
 // told that it did.
-func (f *Fence) Stats() (SubmissionStats, error) { panic(ErrNotImplemented) }
+func (f *Fence) Stats() (SubmissionStats, error) {
+	if !f.Done() {
+		// An error rather than a stale read. The counters are written by the
+		// device during execution, so reading them early does not return an
+		// approximation, it returns whatever the last submission left there.
+		return SubmissionStats{}, errors.New("accel: Fence.Stats: the submission has not " +
+			"completed; the counters are written during execution, so reading them now " +
+			"would report the previous submission's")
+	}
+	if f.state.err != nil {
+		return SubmissionStats{}, f.state.err
+	}
+	return f.state.stats, nil
+}
 
 // SubmissionStats is what one submission's device-written counters reported.
 type SubmissionStats struct {

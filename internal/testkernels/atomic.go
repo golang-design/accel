@@ -53,3 +53,19 @@ func AtomicOps(t accel.Thread, state []uint32, prev []uint32) {
 	prev[8] = accel.CompareExchangeU32(state, 8, 1, 99) // matches, so it stores
 	prev[9] = accel.CompareExchangeU32(state, 9, 1, 99) // does not match
 }
+
+// CountWorkgroups increments a counter once per workgroup, which makes the
+// number of workgroups that actually ran observable.
+//
+// It exists because most kernels hide their dispatch size behind a bounds
+// check: run twice as many workgroups over the same buffer and the extra ones
+// write nothing, so the count cannot be told from the output. Spec 003 requires
+// an indirect count to be clamped in every build mode, and a test of that needs
+// a kernel whose output says how many workgroups there were.
+//
+//accel:kernel workgroup=64
+func CountWorkgroups(t accel.Thread, counts []uint32) {
+	if t.LocalID().X == 0 {
+		accel.AddU32(counts, 0, 1)
+	}
+}

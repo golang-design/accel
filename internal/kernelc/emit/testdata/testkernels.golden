@@ -186,6 +186,31 @@ var AtomicOpsKernel = accel.Kernel{
 	},
 }
 
+// countWorkgroupsFlat is the generated flat lowering of CountWorkgroups.
+//
+// It is what the CPU backend runs. The authored CountWorkgroups is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func countWorkgroupsFlat(t accel.Thread, counts []uint32) {
+	if t.LocalID().X == uint32(0) {
+		accel.AddU32(counts, uint32(0), uint32(1))
+	}
+}
+
+// CountWorkgroupsKernel is the compiled form of CountWorkgroups.
+var CountWorkgroupsKernel = accel.Kernel{
+	Name:          "CountWorkgroups",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "counts", DType: accel.KernelU32, Access: accel.KernelRead | accel.KernelWrite},
+	},
+	Digest:    "35bc8f6fc0a4a37cb11101cfd89794a8",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		countWorkgroupsFlat(t, accel.KernelSlice[uint32](a, 0))
+	},
+}
+
 // exchangeFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that

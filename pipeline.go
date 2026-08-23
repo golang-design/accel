@@ -327,18 +327,114 @@ func publicDType(d kernel.DType) DType {
 	return DType(-1)
 }
 
+// indirectImpl records a dispatch whose workgroup count the device supplies.
+//
+// The count buffer is declared read, and read in the transfer stage rather than
+// the compute one: the indirect fetch happens before the dispatch does, so a
+// node that writes it must be ordered before this one by the fetch rather than
+// by the kernel. Getting that wrong would be a hazard the barrier plan does not
+// see.
+func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, countBuf BufferView,
+	max WorkgroupCount) NodeID {
+
+	if p == nil {
+		r.fail("DispatchIndirect: no pipeline")
+		return r.node(NodeDispatchIndirect, "DispatchIndirect", nil, nil)
+	}
+	if err := p.state.checkOpen("DispatchIndirect"); err != nil {
+		r.state.errs = append(r.state.errs, err)
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+	if p.dev != r.state.dev {
+		r.fail("DispatchIndirect %q: the pipeline belongs to a different device", p.label)
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+	if !r.state.dev.info.Capabilities.IndirectDispatch {
+		r.fail("DispatchIndirect %q: %q does not support indirect dispatch",
+			p.label, r.state.dev.info.Name)
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+
+	// V9: the host-authored maximum follows the same normalization and limit
+	// checks a direct count does. Without a maximum there is nothing to
+	// validate at build and nothing to size transients against, and exceeding
+	// the limit is undefined behaviour on Vulkan rather than a clean error.
+	c, ok := r.normalizeCount("DispatchIndirect "+p.label, max)
+	if !ok {
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+
+	// The count is three uint32s. A view of any other length means the caller
+	// believes the format is something else, which is worth refusing rather
+	// than reading past.
+	if countBuf.DType != U32 || countBuf.Count != 3 {
+		r.fail("DispatchIndirect %q: the count is three uint32 values and this view is "+
+			"%d of %v", p.label, countBuf.Count, countBuf.DType)
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+	if countBuf.Buffer != nil && countBuf.Buffer.transient == nil &&
+		countBuf.Buffer.desc.Usage&UsageIndirect == 0 {
+		r.fail("DispatchIndirect %q: the count buffer needs %v and %q was created with %v",
+			p.label, UsageIndirect, countBuf.Buffer.desc.Label, countBuf.Buffer.desc.Usage)
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+	countAccess, ok := r.declare("DispatchIndirect "+p.label, countBuf, AccessRead)
+	if !ok {
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+
+	accesses, uniforms, ok := r.bindingAccesses(p, bs)
+	if !ok {
+		return r.node(NodeDispatchIndirect, p.label, nil, nil)
+	}
+
+	// The count's access is recorded last, so the binding list stays aligned
+	// with the kernel's layout: dispatchOperands reads the first len(bindings)
+	// positionally.
+	accesses = append(accesses, countAccess)
+
+	id := r.node(NodeDispatchIndirect, p.label, accesses, nil)
+	n := &r.state.nodes[id]
+	n.pipeline = p
+	n.count = c
+	n.uniforms = uniforms
+	n.indirect = true
+	for _, a := range accesses {
+		r.touch(id, a)
+	}
+	return id
+}
+
 // dispatchOperands resolves a dispatch node's bindings for the plan.
 func (g *Graph) dispatchOperands(n *recNode) (*driver.Dispatch, error) {
-	ops := make([]driver.Operand, len(n.accesses))
-	for i, a := range n.accesses {
+	// An indirect node's last access is the count buffer rather than a binding,
+	// so the binding list is the prefix. Positional, because the kernel indexes
+	// its arguments by layout index.
+	bindings := n.accesses
+	var countAccess *access
+	if n.indirect {
+		bindings = n.accesses[:len(n.accesses)-1]
+		countAccess = &n.accesses[len(n.accesses)-1]
+	}
+
+	ops := make([]driver.Operand, len(bindings))
+	for i, a := range bindings {
 		o, err := g.operand(n, a)
 		if err != nil {
 			return nil, err
 		}
 		ops[i] = o
 	}
-	return &driver.Dispatch{
+	d := &driver.Dispatch{
 		Kernel: n.pipeline.kernel, Count: n.count, Bindings: ops,
 		Uniforms: n.uniforms,
-	}, nil
+	}
+	if countAccess != nil {
+		o, err := g.operand(n, *countAccess)
+		if err != nil {
+			return nil, err
+		}
+		d.Indirect = &driver.Indirect{Count: o, Max: n.count}
+	}
+	return d, nil
 }

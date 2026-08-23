@@ -74,10 +74,11 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 	}
 
 	g := &Graph{
-		dev:        r.state.dev,
-		nodes:      r.state.nodes,
-		slots:      r.state.slots,
-		transients: r.state.transients,
+		dev:          r.state.dev,
+		nodes:        r.state.nodes,
+		slots:        r.state.slots,
+		transients:   r.state.transients,
+		collectStats: r.state.collectStats,
 	}
 	g.naive = naive
 	g.inferEdges()
@@ -209,7 +210,10 @@ func (g *Graph) lower() error {
 			g.dev.info.Backend)
 	}
 
-	plan := &driver.Plan{Slots: len(g.slots), Transients: g.pool, Label: "graph"}
+	plan := &driver.Plan{
+		Slots: len(g.slots), Transients: g.pool, Label: "graph",
+		CollectStats: g.collectStats,
+	}
 	for i := range g.nodes {
 		n := &g.nodes[i]
 		node := driver.PlanNode{ID: int(n.id), BarrierBefore: g.barriersBefore[i] != nil}
@@ -233,7 +237,7 @@ func (g *Graph) lower() error {
 				return err
 			}
 			node.Dst, node.Src = dst, src
-		case NodeDispatch:
+		case NodeDispatch, NodeDispatchIndirect:
 			node.Op = driver.OpDispatch
 			d, err := g.dispatchOperands(n)
 			if err != nil {

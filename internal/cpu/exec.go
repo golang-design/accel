@@ -57,6 +57,10 @@ type executable struct {
 	// refused by a flag nobody had got round to clearing. Deriving the answer
 	// from the fence removes the disagreement rather than ordering it, which is
 	// the difference between a fixed race and a narrower one.
+	// stats is the last submission's indirect counters, when the plan asked for
+	// them. One slice reused, because only one submission runs at a time.
+	stats []driver.IndirectStat
+
 	cur *fence
 
 	// scratch is the resolved node list, reused across submissions.
@@ -125,6 +129,7 @@ func (e *executable) Submit() (driver.Fence, error) {
 	// Resolve every operand under the same lock that records the fence, so a
 	// rebind racing a submit either fully precedes it or is rejected. There is
 	// no window in which half the plan sees the new binding.
+	e.stats = e.stats[:0]
 	nodes, err := e.resolve()
 	if err != nil {
 		e.mu.Unlock()
@@ -162,6 +167,14 @@ type resolvedNode struct {
 	// submitted in developer mode is checked and one in strict mode is not.
 	subgroupSize uint32
 	diagnostics  bool
+
+	// indirect is the count read from the device at submission, already
+	// clamped, or nil for a direct dispatch. indirectStats is where the actual
+	// and the clamp flag are recorded when a caller asked for them.
+	indirect      *kernel.ID3
+	indirectSrc   []byte
+	indirectMax   kernel.ID3
+	indirectStats *driver.IndirectStat
 }
 
 func (e *executable) resolve() ([]resolvedNode, error) {
@@ -190,6 +203,18 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 		if n.Op == driver.OpDispatch {
 			if err := e.resolveDispatch(&r, n); err != nil {
 				return nil, err
+			}
+			if ind := n.Dispatch.Indirect; ind != nil {
+				raw, err := e.bytes(ind.Count)
+				if err != nil {
+					return nil, fmt.Errorf("accel: node %d indirect count: %w", n.ID, err)
+				}
+				r.indirectSrc = raw
+				r.indirectMax = ind.Max
+				if e.plan.CollectStats {
+					e.stats = append(e.stats, driver.IndirectStat{Node: n.ID})
+					r.indirectStats = &e.stats[len(e.stats)-1]
+				}
 			}
 		}
 		out[i] = r
@@ -347,6 +372,54 @@ func run(nodes []resolvedNode) error {
 	return nil
 }
 
+// readIndirect reads a device-supplied workgroup count and clamps it.
+//
+// # Why the clamp is unconditional
+//
+// specs/003-command-graph.md is explicit: every build mode clamps on device
+// before the indirect fetch, because correctness cannot depend on a debug flag
+// and no backend may submit an out-of-range count -- which on Vulkan is
+// undefined behaviour rather than a clean error. What a caller gives up by not
+// collecting statistics is being *told* that a clamp happened, not being
+// protected from one.
+//
+// # Why zero is not normalized
+//
+// A host-authored maximum normalizes an omitted Y or Z to one, because a caller
+// writing WorkgroupCount{X: n} means one of each. The three values read from a
+// buffer are the device's, and specs/003-command-graph.md says a zero in any of
+// them skips the dispatch. Normalizing here would turn a deliberate skip into a
+// single workgroup.
+func readIndirect(src []byte, max kernel.ID3) (count kernel.ID3, clamped bool) {
+	raw := kernel.ID3{
+		X: le32(src[0:4]),
+		Y: le32(src[4:8]),
+		Z: le32(src[8:12]),
+	}
+	count = raw
+	for _, c := range []struct {
+		v   *uint32
+		lim uint32
+	}{{&count.X, max.X}, {&count.Y, max.Y}, {&count.Z, max.Z}} {
+		if *c.v > c.lim {
+			*c.v = c.lim
+			clamped = true
+		}
+	}
+	return count, clamped
+}
+
+// le32 reads a little-endian uint32, which is the layout every target writes an
+// indirect count in and which specs/001-device-resources.md section 3.5 makes a
+// requirement on the host rather than a conversion here.
+func le32(b []byte) uint32 {
+	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+}
+
+// skipsDispatch reports a count with a zero axis, which specs/003-command-graph.md
+// defines as a skip rather than as a single workgroup.
+func skipsDispatch(c kernel.ID3) bool { return c.X == 0 || c.Y == 0 || c.Z == 0 }
+
 // dispatch runs one kernel, turning a panic inside it into an error.
 //
 // A kernel that indexes past a binding is a kernel bug, and on a GPU it is an
@@ -371,11 +444,43 @@ func dispatch(n *resolvedNode) (err error) {
 	// cooperative kernel through the flat path would run its invocations one
 	// after another, which is a different program rather than a slower one.
 	k := n.dispatch.Kernel
+	count := n.dispatch.Count
+	if n.indirectSrc != nil {
+		var clamped bool
+		raw := kernel.ID3{
+			X: le32(n.indirectSrc[0:4]),
+			Y: le32(n.indirectSrc[4:8]),
+			Z: le32(n.indirectSrc[8:12]),
+		}
+		count, clamped = readIndirect(n.indirectSrc, n.indirectMax)
+		if n.indirectStats != nil {
+			n.indirectStats.Actual = raw
+			n.indirectStats.Max = n.indirectMax
+			n.indirectStats.Clamped = clamped
+		}
+		if skipsDispatch(count) {
+			return nil
+		}
+	}
 	if k.Cooperative != nil {
-		return kernel.DispatchCooperativeWith(k, n.dispatch.Count, n.args,
+		return kernel.DispatchCooperativeWith(k, count, n.args,
 			kernel.Options{SubgroupSize: n.subgroupSize, Diagnostics: n.diagnostics})
 	}
-	return kernel.Dispatch(k, n.dispatch.Count, n.args)
+	return kernel.Dispatch(k, count, n.args)
+}
+
+// IndirectStats reports the last completed submission's counts.
+//
+// It is a separate interface rather than a method every executable carries,
+// because a backend that cannot produce them should be discovered by assertion
+// rather than by a method that fails when called
+// (specs/006-backends.md section 1).
+func (e *executable) IndirectStats() []driver.IndirectStat {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]driver.IndirectStat, len(e.stats))
+	copy(out, e.stats)
+	return out
 }
 
 func (e *executable) Close() error {

@@ -28,6 +28,10 @@ import (
 // specs/006-backends.md section 4.5 states is enough: category (1), plan-once,
 // is backend-independent and is most of the value.
 type Plan struct {
+	// CollectStats makes the executable record each indirect node's actual
+	// count. Off by default: see [IndirectStat].
+	CollectStats bool
+
 	// Nodes are in execution order. That order is a topological order of the
 	// dependency DAG the layer above inferred, so a backend that executes them
 	// in sequence is always correct and a backend that overlaps consecutive
@@ -61,9 +65,7 @@ const (
 	// small constant replayable.
 	OpHostWrite
 
-	// OpDispatch runs a compiled kernel over a grid of workgroups. Flat only:
-	// a cooperative kernel needs the resumable lowering that arrives at M4, and
-	// a plan carrying one is rejected rather than run in an invented order.
+	// OpDispatch runs a compiled kernel over a grid of workgroups.
 	OpDispatch
 )
 
@@ -104,6 +106,41 @@ type PlanNode struct {
 	ID int
 }
 
+// Indirect is a dispatch whose workgroup count the device supplies.
+//
+// # Why a build-time maximum
+//
+// A device-written count sits awkwardly with an immutable graph: without a
+// bound there is nothing to validate at build and nothing to size transients
+// against, and exceeding a backend's workgroup count limit is undefined
+// behaviour on Vulkan rather than a clean error. So the node records a maximum,
+// the device supplies the actual, and the backend clamps.
+//
+// **Every build mode clamps**, not only a debug one. Correctness cannot depend
+// on a flag, and no backend may submit an out-of-range indirect count. What a
+// debug mode adds is being *told* that a clamp happened, which costs a
+// readback. See specs/003-command-graph.md.
+type Indirect struct {
+	// Count names the three uint32 workgroup counts in a device buffer.
+	Count Operand
+
+	// Max is the build-time upper bound, already normalized: omitted Y and Z
+	// are one, and X is positive.
+	Max kernel.ID3
+}
+
+// IndirectStat is what one indirect node's count turned out to be.
+//
+// Reported only when a caller asked, because reading it back costs a transfer,
+// a barrier and an allocation. The *clamp* happens either way: what a caller
+// gives up by not asking is being told, not being protected.
+type IndirectStat struct {
+	Node    int
+	Actual  kernel.ID3 // what the device supplied, before clamping
+	Max     kernel.ID3
+	Clamped bool
+}
+
 // Dispatch is what one compute node runs.
 //
 // The kernel is a generated record rather than source: specs/006-backends.md R5
@@ -124,6 +161,10 @@ type Dispatch struct {
 
 	// Uniforms are the by-value parameters, in signature order.
 	Uniforms []any
+
+	// Indirect is non-nil when the workgroup count comes from a buffer. Count
+	// on the Dispatch is then the maximum rather than the actual.
+	Indirect *Indirect
 }
 
 // OperandKind distinguishes bytes known at build from bytes supplied later.
@@ -241,6 +282,18 @@ type SlotBinding struct {
 // It is separate from [Plan] because the plan is what the layer above computed
 // and the executable is what a backend made of it, and on Vulkan those are a
 // struct and a command buffer. See specs/006-backends.md section 4.
+// StatsReporter is the optional interface an executable implements when its
+// plan asked for run-time counters.
+//
+// Optional and discovered by assertion, the way specs/006-backends.md section 1
+// requires absence to be discoverable rather than expressed as a method that
+// fails when called.
+type StatsReporter interface {
+	// IndirectStats reports the last completed submission's counts, in node
+	// order.
+	IndirectStats() []IndirectStat
+}
+
 type Executable interface {
 	// Rebind resolves slots. It applies the whole batch or none of it: a
 	// partially applied rebind leaves an executable whose slots disagree about
@@ -357,6 +410,17 @@ func (p *Plan) checkDispatch(node int, n *PlanNode) error {
 		// reads as a typo where "has no \"in\" operand" reads as a name.
 		if err := p.checkOperand(node, fmt.Sprintf("%q", d.Kernel.Bindings[i].Name), o); err != nil {
 			return err
+		}
+	}
+	if ind := d.Indirect; ind != nil {
+		if err := p.checkOperand(node, "indirect count", ind.Count); err != nil {
+			return err
+		}
+		// Three uint32s. A shorter range would read past the buffer, and a
+		// longer one means the caller believes the format is something else.
+		if ind.Count.size != 12 {
+			return fmt.Errorf("accel: plan node %d's indirect count is %d bytes, and a "+
+				"workgroup count is three uint32s", node, ind.Count.size)
 		}
 	}
 	return nil
