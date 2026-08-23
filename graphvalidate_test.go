@@ -454,3 +454,44 @@ func graphWithSlot(t *testing.T, d *accel.Device, desc accel.SlotDescriptor) (*a
 	t.Cleanup(func() { _ = g.Close() })
 	return g, s
 }
+
+// A transient cannot be bound through a slot, which is what makes V24's
+// transient term unreachable rather than missing.
+//
+// specs/015-graph-recording.md §4 expected V24 to gain a term once transients
+// had placements: a slot-supplied resource could then overlap one. It cannot,
+// because BufferView.check refuses a transient at bind time — and that refusal
+// is stricter than an overlap test, since it rejects every transient offered
+// through a slot rather than only the overlapping ones.
+//
+// This test pins the upstream refusal, not the overlap. If someone relaxes
+// BufferView.check, V24 becomes incomplete without V24 being touched, and this
+// is the test that says so. See specs/017-graph-aliasing.md §5.
+func TestATransientCannotReachASlot(t *testing.T) {
+	d := openDevice(t)
+	r := d.NewRecorder()
+	in := r.Slot(accel.SlotDescriptor{
+		Name: "in", Kind: accel.BindingStorageBuffer,
+		DType: accel.F32, Access: accel.AccessRead, MinCount: 4,
+	})
+	mid := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: 4,
+		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst, Label: "mid",
+	})
+	r.CopyFromSlot(mid, in, 0, 4)
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+
+	err = g.Rebind([]accel.Binding{{Slot: in, Buffer: mid}})
+	if err == nil {
+		t.Fatal("a graph transient was bound through a slot; if this is now legal, V24 " +
+			"needs the transient term specs/017-graph-aliasing.md §5 records as unreachable")
+	}
+	if !strings.Contains(err.Error(), "graph transient") {
+		t.Errorf("the refusal should name what the resource is: %v", err)
+	}
+}

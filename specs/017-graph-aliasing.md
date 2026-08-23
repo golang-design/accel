@@ -104,11 +104,26 @@ the first's reads. On the worked graph both handovers ride on a barrier the data
 flow required anyway, so the barrier count does not change — which is an
 assertion, not a hope.
 
-V24's transient term lands here, as [015](015-graph-recording.md) §4 said it
-would: a resource supplied through a slot may now overlap a *transient's*
-placement, and that is rejected on the same rule as any other dynamic overlap.
-Adding the term without changing the row's message is the point — a V24 that had
-been silently missing a term would have been passing for the wrong reason.
+**V24's transient term turned out to be unreachable, and is not added.**
+[015](015-graph-recording.md) §4 expected it: once transients have placements, a
+resource supplied through a slot could overlap one. The case cannot occur,
+because a transient cannot reach a slot at all. `BufferView.check` refuses one at
+bind time — *"it is a graph transient, whose memory the builder owns and may
+reuse between nodes, so only the graph that declared it may touch it"* — and
+that refusal is **stricter** than the overlap test would be: it rejects every
+transient offered through a slot, overlapping or not.
+
+A caller has no other route to those bytes. Transients live in memory the
+builder allocates and no public allocator hands out, so the only handle that
+names them is the one `Recorder.Transient` returns, and that is what the check
+above catches.
+
+So V24 keeps the terms it had, and this is recorded rather than quietly dropped
+for two reasons. A reader comparing 015 §4 against the code would otherwise find
+a promised term missing and reasonably conclude the check was unsound. And the
+vacuity is a property of a *different* check, so relaxing `BufferView.check`
+would make V24 incomplete without touching V24 — which is why §7's corpus pins
+the upstream refusal rather than the overlap it makes impossible.
 
 Row V20 also lands here: the planned pool against the device's reported budget.
 

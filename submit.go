@@ -250,9 +250,11 @@ func (g *Graph) slotWrites(s Slot) bool {
 // concreteSpans is every byte range the graph names through a resource it
 // already holds, with each range's graph-wide access union.
 //
-// Transients are excluded, because at this milestone each has its own bytes and
-// nothing a caller can bind reaches them. specs/017-graph-aliasing.md adds them
-// once placements exist and a slot can therefore land on one.
+// Transients are excluded, and stay excluded now that they have placements.
+// Nothing a caller can bind reaches them: BufferView.check refuses a transient
+// offered through a slot outright, which is stricter than an overlap test, and
+// the builder's memory has no public allocator. specs/017-graph-aliasing.md §5
+// records why the term 015 §4 expected here is unreachable rather than missing.
 func (g *Graph) concreteSpans() []span {
 	var out []span
 	for i := range g.nodes {
