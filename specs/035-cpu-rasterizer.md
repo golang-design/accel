@@ -293,6 +293,24 @@ a criterion checked against a test that nearly tests it. The generalizable part
 is that **an assertion about a bound must use the bound the arithmetic
 predicts**, not a weaker one that happens to hold.
 
+Steps 2 and 3 followed: the per-fragment chain, in this section 5's order, with
+depth, stencil, per-attachment blend, the write mask, and MRT. Two notes.
+
+**The ordering was wrong in this spec before it was right in the code.** §5
+numbered the depth test and write *before* the fragment stage — early-Z
+ordering — while its own prose said the rasterizer never performs early-Z. The
+numbered list is what an implementer reads, and under it §4.2 of
+[032](032-stage-abi.md) is unimplementable: a discarding fragment has already
+written depth by the time it discards. Corrected before the code was written,
+and the corpus gained the entry that separates the two orderings.
+
+**Depth and stencil are one target.** Every backend that offers stencil offers
+it packed with depth, and the stencil operations depend on the depth test's
+outcome — separating them would put the depth-fail case in a type that cannot
+see the depth test. That case is a distinct branch and not folded into the fail
+case, which is the mistake a naive implementation makes and which shadow-volume
+techniques count on.
+
 One implementation choice worth recording because it is not obvious. Edge
 functions are evaluated in `float64` even though everything around them is f32.
 The fill rule's decision is about a sample landing *exactly* on an edge, which is
