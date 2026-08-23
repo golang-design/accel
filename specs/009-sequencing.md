@@ -1065,8 +1065,12 @@ Independently scoped later work includes:
   quantized GEMM and Rows agreeing on both backends, and a tensor-layer operator
   that mixes with the unquantized one in a single plan. Sub-byte formats,
   a quantized KV cache and activation quantization are the follow-ons;
-- production prefill bucketing and, only then, an optional stable-identity plan
-  cache;
+- ~~production prefill bucketing and, only then, an optional stable-identity
+  plan cache~~ — **[029](029-plan-cache.md), complete 2026-08-23**: a bucket set
+  picks the smallest length that fits and refuses a prompt longer than its
+  largest, padding is proved not to change the real rows, and the cache's key is
+  the six components 007 requires — including the selected kernels' digests,
+  which is the one a naive cache omits and whose absence survives longest;
 - textures/formats and graphics;
 - Vulkan plus the SPIR-V emitter, then remaining backends;
 - ~~sampling primitives and policy integration~~ — **[028](028-sampling.md),

@@ -101,6 +101,7 @@ numbered in.
 | [026-tensor-decode.md](026-tensor-decode.md) | Implemented | M7 child: persistent state as versions, the KV cache, attention, and the decode step |
 | [027-quantization.md](027-quantization.md) | Implemented | M8: the symmetric int8 block representation, its derived error bound, and quantized Rows and GEMM |
 | [028-sampling.md](028-sampling.md) | Implemented | M8: argmax and categorical sampling, with the random draw as an input so a token is reproducible |
+| [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 
 ## Process

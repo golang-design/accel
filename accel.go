@@ -119,6 +119,7 @@
 package accel
 
 import (
+	"encoding/hex"
 	"errors"
 	"sync"
 
@@ -155,6 +156,18 @@ const (
 // comparable, stable across repeated enumerations while the adapter is present,
 // and intentionally not serializable.
 type AdapterID struct{ token [16]byte }
+
+// String is the adapter's stable identity, as hex.
+//
+// Exported because a layer above this one needs it and cannot reach the token:
+// specs/007-tensor-layer.md requires a plan cache's key to include "the device
+// identity", and without this the best a caller could do is the device's name,
+// which two identical GPUs in one machine share.
+//
+// Stable within a process and comparable across enumerations, which is what
+// [driver.Adapter] promises of the token underneath. Not stable across machines
+// or driver versions, and not meant to be: it is an identity, not a fingerprint.
+func (id AdapterID) String() string { return hex.EncodeToString(id.token[:]) }
 
 // DeviceInfo describes a device that could be opened, without opening it.
 // Callers choose on reported capabilities and limits rather than by trying and

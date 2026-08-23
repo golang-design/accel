@@ -817,6 +817,15 @@ at the cost of exactness or of the checks in this section.
 
 ## 6. Selection, enumeration, and lifetime
 
+**`AdapterID` carries a `String` method**, added 2026-08-23. The token behind it
+is unexported, and a layer above the device layer needs the identity:
+[007](007-tensor-layer.md) requires a plan cache's key to include the device,
+and the alternative a caller has otherwise is the device's *name*, which two
+identical GPUs in one machine share. It is stable within a process and
+comparable across enumerations, which is what §6.1's token promises; it is not
+stable across machines or driver versions, and is an identity rather than a
+fingerprint.
+
 ### 6.1 Enumeration result
 
 Enumeration returns adapters and diagnostics separately:
