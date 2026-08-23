@@ -64,16 +64,8 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 				return nil, fmt.Errorf("accel: node %d is an indirect dispatch, which the "+
 					"Metal backend does not lower until specs/023-metal-graph.md", n.ID)
 			}
-			if len(n.Dispatch.Uniforms) > 0 {
-				// The kernel record carries no std140 encoder, so a backend
-				// cannot turn a Go value into the bytes the GPU reads. The
-				// generated codec is a named type the caller uses; making it
-				// reachable from the record is specs/022-msl-target.md's, and
-				// specs/021-metal-bringup.md records the gap.
-				return nil, fmt.Errorf("accel: node %d dispatches %s, which takes %d uniform "+
-					"parameters; the Metal backend cannot encode them until the kernel record "+
-					"carries its std140 codec (specs/022-msl-target.md)",
-					n.ID, n.Dispatch.Kernel.Name, len(n.Dispatch.Uniforms))
+			if err := checkUniforms(n.Dispatch); err != nil {
+				return nil, fmt.Errorf("accel: node %d: %w", n.ID, err)
 			}
 			if _, err := d.pipelineFor(n.Dispatch.Kernel); err != nil {
 				return nil, fmt.Errorf("accel: node %d: %w", n.ID, err)
@@ -134,6 +126,11 @@ type executable struct {
 
 	staging []*mtl.Buffer
 	stageAt []stagedWrite
+
+	// uniformBufs is scratch for one dispatch's encoded blocks, reused across
+	// submissions. Guarded by mu with everything else: it is written during
+	// encoding, which happens under the same lock that records the fence.
+	uniformBufs [][]byte
 
 	mu     sync.Mutex
 	bound  []driver.SlotBinding
@@ -332,6 +329,21 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 		lens[i] = uint32(r.size / elemBytes(k.Bindings[i].DType))
 	}
 	enc.SetBytes(u32Bytes(lens), emit.MSLLengthsIndex(len(d.Bindings)))
+
+	// The uniform blocks follow the lengths slot, in signature order, which is
+	// the layout the emitter fixed and exported so there is one copy of it.
+	if len(k.Uniforms) > 0 {
+		if cap(e.uniformBufs) < len(k.Uniforms) {
+			e.uniformBufs = make([][]byte, len(k.Uniforms))
+		}
+		bufs := e.uniformBufs[:len(k.Uniforms)]
+		if err := e.encodeUniforms(n, bufs); err != nil {
+			return err
+		}
+		for i := range bufs {
+			enc.SetBytes(bufs[i], emit.MSLUniformIndex(len(d.Bindings), i))
+		}
+	}
 	enc.Dispatch(
 		mtl.Size{Width: uint64(d.Count.X), Height: uint64(d.Count.Y), Depth: uint64(d.Count.Z)},
 		mtl.Size{
@@ -339,6 +351,50 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 			Height: uint64(k.WorkgroupSize.Y),
 			Depth:  uint64(k.WorkgroupSize.Z),
 		})
+	return nil
+}
+
+// checkUniforms rejects at compile what would otherwise fail per submission.
+//
+// A record generated before the encoder field existed carries a nil Encode, and
+// the answer is to say so by name rather than to bind zeros: a uniform block of
+// zeros is a plausible set of parameters, so the kernel would run and compute
+// something wrong.
+func checkUniforms(d *driver.Dispatch) error {
+	k := d.Kernel
+	if len(d.Uniforms) != len(k.Uniforms) {
+		return fmt.Errorf("%s declares %d by-value parameters and the dispatch supplies %d",
+			k.Name, len(k.Uniforms), len(d.Uniforms))
+	}
+	for i, u := range k.Uniforms {
+		if u.Encode == nil {
+			return fmt.Errorf("%s parameter %d (%s %s) has no std140 encoder, so this "+
+				"kernel was generated before the record carried one; regenerate it",
+				k.Name, i, u.Name, u.Type)
+		}
+		if u.Size <= 0 {
+			return fmt.Errorf("%s parameter %d (%s) has an encoded size of %d",
+				k.Name, i, u.Name, u.Size)
+		}
+	}
+	return nil
+}
+
+// encodeUniforms produces each block's std140 bytes for one submission.
+//
+// Per submission rather than per compile, because a plan's uniform values are
+// part of the dispatch and a caller may rebuild a plan with different ones. The
+// buffers are reused across submissions, since the sizes are fixed by the
+// layout and reallocating them per submit would allocate on the hot path.
+func (e *executable) encodeUniforms(n *driver.PlanNode, into [][]byte) error {
+	for i, u := range n.Dispatch.Kernel.Uniforms {
+		if len(into[i]) != u.Size {
+			into[i] = make([]byte, u.Size)
+		}
+		if err := u.Encode(into[i], n.Dispatch.Uniforms[i]); err != nil {
+			return fmt.Errorf("accel: node %d parameter %d (%s): %w", n.ID, i, u.Name, err)
+		}
+	}
 	return nil
 }
 

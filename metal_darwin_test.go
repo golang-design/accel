@@ -138,6 +138,67 @@ func TestTheSameGraphAgreesOnCPUAndMetal(t *testing.T) {
 	}
 }
 
+// A kernel taking a by-value parameter agrees on both backends.
+//
+// This is specs/021-metal-bringup.md's deviation 1 retired, and the value is
+// what makes it a test rather than a demonstration: 2.5 is not representable as
+// a std140 offset mistake. A block encoded at the wrong offset, or padded the
+// way Go pads rather than the way std140 does, yields zero or garbage -- and
+// zero would multiply to zero, which is why the input is checked non-zero too.
+func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
+	const n = 1024
+	in := make([]float32, n)
+	for i := range in {
+		in[i] = float32(i%17) - 8
+	}
+	params := testkernels.ScaleParams{Factor: 2.5}
+
+	run := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+		p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+			Kernel: &testkernels.ElemScaleKernel, Label: "scale",
+		})
+		if err != nil {
+			t.Fatalf("pipeline: %v", err)
+		}
+		defer p.Close()
+
+		bin := newBuffer(t, d, "in", n, storage)
+		out := newBuffer(t, d, "out", n, storage)
+		r := d.NewRecorder()
+		r.CopyToBuffer(whole(t, bin), in)
+		r.Dispatch(p, []accel.Binding{
+			{Index: 0, Uniform: params},
+			{Index: 0, Buffer: whole(t, bin)},
+			{Index: 1, Buffer: whole(t, out)},
+		}, accel.WorkgroupCount{X: (n + 63) / 64})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := d.Queue().Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readback(t, d, out)
+	}
+
+	cpu := run(t, openDevice(t))
+	gpu := run(t, openMetal(t))
+	for i := range cpu {
+		if cpu[i] != gpu[i] {
+			t.Fatalf("element %d: the CPU backend produced %v and Metal %v: the uniform "+
+				"block reached one of them differently", i, cpu[i], gpu[i])
+		}
+		if want := in[i] * 2.5; gpu[i] != want {
+			t.Fatalf("element %d is %v, want %v: the scale factor did not arrive",
+				i, gpu[i], want)
+		}
+	}
+}
+
 // A kernel outside the MSL subset is refused by name, and never falls back to
 // the Go lowering.
 //

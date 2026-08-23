@@ -208,6 +208,23 @@ type Uniform struct {
 
 	// Size is the encoded std140 block size in bytes.
 	Size int
+
+	// Encode writes v into dst in std140 layout, and reports an error rather
+	// than panicking when v is the wrong type.
+	//
+	// # Why the record carries this at all
+	//
+	// A GPU backend holds a by-value parameter as an any and needs the bytes the
+	// device reads. The generated codec knows how, but it is a named type a
+	// caller writes (ScaleParamsCodec), and a backend has no route to it: the
+	// alternatives were reflecting over the Go struct, which would put a second
+	// std140 implementation beside the generated one, and asking callers to
+	// encode, which moves a compiler-owned fact into code written by hand. So
+	// generation, which already knows the layout, closes over the codec here.
+	//
+	// Nil for a kernel generated before this field existed, and a backend that
+	// needs it says so by name rather than encoding zeros.
+	Encode func(dst []byte, v any) error
 }
 
 // Args carries the host slices a generated kernel runs over.

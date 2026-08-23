@@ -377,6 +377,13 @@ compile, names the kernel, and names the spec that closes it.
 **When it closes.** [022](022-msl-target.md), by giving the record a generated
 encoder hook. Two of the nine kernels currently carrying MSL take uniforms.
 
+**Retired 2026-08-23**, in [022](022-msl-target.md) §3. `kernel.Uniform` gained
+an `Encode` closure the generator fills with the codec that already exists, so
+no second std140 implementation was written. `ElemScale` now runs on both
+backends and agrees; the test was confirmed by shifting the emitted struct's
+offsets by one slot, which makes Metal return zero while the CPU returns the
+right answer.
+
 ### What this child found
 
 **Three divergences, each measured rather than remembered**, and all three now

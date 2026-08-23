@@ -1,6 +1,6 @@
 ---
 title: "The rest of the MSL target, and the Metal numeric profile"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -60,12 +60,38 @@ Metal kernel is the *authored* structure rather than the resumable state machine
 which is what makes the differential meaningful: the CPU runs a program counter
 and Metal runs a barrier, and they must still agree.
 
-## 3. The host side of a uniform
+## 3. The host side of a uniform — built 2026-08-23
 
-[021](021-metal-bringup.md)'s deviation 1 closes here. `kernel.Kernel` gains a
-generated encoder so a backend holding a `[]any` can produce std140 bytes
-without reflection and without a second layout implementation beside the
-generated codec.
+[021](021-metal-bringup.md)'s deviation 1 is retired. `kernel.Uniform` gained
+one field:
+
+```go
+// Encode writes v into dst in std140 layout, and reports an error rather
+// than panicking when v is the wrong type.
+Encode func(dst []byte, v any) error
+```
+
+The generator fills it with a closure over the codec it already emits, so
+**nothing here re-implements std140**:
+
+```go
+{Name: "p", Type: "ScaleParams", Size: 16, Encode: func(dst []byte, v any) error {
+    return accel.EncodeKernelUniform(dst, v, ScaleParamsCodec{}.Encode)
+}},
+```
+
+The two alternatives were both worse. Reflecting over the Go struct would put a
+second layout implementation beside the generated one, and two implementations
+of a padding rule disagree eventually. Asking callers to encode would move a
+compiler-owned fact into code written by hand.
+
+**A nil `Encode` is refused by name**, because it means a record generated
+before this field existed. Binding zeros would be the worst answer available: a
+uniform block of zeros is a plausible set of parameters, so the kernel would run
+and quietly compute something else.
+
+The buffer index is `emit.MSLUniformIndex(len(bindings), i)`, exported by the
+emitter so the scheme has one definition rather than two.
 
 ## 4. Done
 

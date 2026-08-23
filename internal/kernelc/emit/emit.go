@@ -238,13 +238,7 @@ func (e *emitter) kernel(k *ir.Func) {
 		e.printf("\tCaps: %d,\n", k.Caps)
 	}
 	e.mslArtifact(k)
-	if len(k.Uniforms) > 0 {
-		e.printf("\tUniforms: []accel.KernelUniform{\n")
-		for _, u := range k.Uniforms {
-			e.printf("\t\t{Name: %q, Type: %q, Size: %d},\n", u.Name, u.TypeName, u.Size)
-		}
-		e.printf("\t},\n")
-	}
+	e.uniformRecords(k)
 	e.printf("\tFlat: func(t accel.Thread, a accel.KernelArgs) {\n")
 	e.printf("\t\t%s(t", lower)
 	// Parameters are passed in signature order, which interleaves uniforms and
@@ -267,6 +261,27 @@ func (e *emitter) kernel(k *ir.Func) {
 	e.printf(")\n")
 	e.printf("\t},\n")
 	e.printf("}\n\n")
+}
+
+// uniformRecords emits the by-value parameter list, each with its encoder.
+//
+// The encoder is closed over here rather than looked up at run time because
+// only generation knows which codec belongs to which parameter. A backend holds
+// the value as an any and needs std140 bytes; without this it would have to
+// reflect over the Go struct, which would be a second layout implementation
+// beside the codec and would disagree with it eventually.
+func (e *emitter) uniformRecords(k *ir.Func) {
+	if len(k.Uniforms) == 0 {
+		return
+	}
+	e.printf("\tUniforms: []accel.KernelUniform{\n")
+	for _, u := range k.Uniforms {
+		e.printf("\t\t{Name: %q, Type: %q, Size: %d, Encode: func(dst []byte, v any) error {\n",
+			u.Name, u.TypeName, u.Size)
+		e.printf("\t\t\treturn accel.EncodeKernelUniform(dst, v, %sCodec{}.Encode)\n", u.TypeName)
+		e.printf("\t\t}},\n")
+	}
+	e.printf("\t},\n")
 }
 
 // registry emits the package's kernels as one slice.

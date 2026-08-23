@@ -246,8 +246,8 @@ func TestCompileRefusesWhatItCannotLower(t *testing.T) {
 		{"an indirect dispatch", dispatchOf(&testkernels.AddKernel, 3, nil,
 			&driver.Indirect{Count: op, Max: kernel.ID3{X: 1, Y: 1, Z: 1}}), "indirect"},
 		{"a kernel with no MSL", dispatchOf(&testkernels.ReduceSumKernel, 2, nil, nil), "ReduceSum"},
-		{"a kernel taking uniforms", dispatchOf(&testkernels.ElemScaleKernel, 2,
-			[]any{testkernels.ScaleParams{Factor: 2}}, nil), "uniform"},
+		{"a uniform count that disagrees with the kernel",
+			dispatchOf(&testkernels.ElemScaleKernel, 2, nil, nil), "by-value parameters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{tc.node}})
@@ -517,6 +517,23 @@ func TestPipelineRefusalsAreReportedAtCompile(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "ceiling") {
 			t.Errorf("the refusal should say what the ceiling is: %v", err)
+		}
+	})
+
+	t.Run("a uniform with no encoder", func(t *testing.T) {
+		// A record generated before the encoder field existed. Binding zeros
+		// would be the worst answer available: a uniform block of zeros is a
+		// plausible set of parameters, so the kernel would run and quietly
+		// compute something else.
+		k := synthetic("stale", fmt.Sprintf(oneBinding, "stale"), kernel.ID3{X: 1, Y: 1, Z: 1})
+		k.Uniforms = []kernel.Uniform{{Name: "p", Type: "Params", Size: 16}}
+		p := plan(k)
+		p.Nodes[0].Dispatch.Uniforms = []any{struct{}{}}
+		if _, err := c.Compile(p); err == nil {
+			t.Fatal("a uniform with no encoder was accepted, so the dispatch would have " +
+				"bound whatever was in the buffer")
+		} else if !strings.Contains(err.Error(), "regenerate") {
+			t.Errorf("the refusal should say what to do about it: %v", err)
 		}
 	})
 

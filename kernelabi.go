@@ -4,7 +4,11 @@
 
 package accel
 
-import "golang.design/x/accel/internal/kernel"
+import (
+	"fmt"
+
+	"golang.design/x/accel/internal/kernel"
+)
 
 // The generated-kernel ABI.
 //
@@ -196,3 +200,19 @@ func KernelSlice[T any](a KernelArgs, i int) []T { return kernel.Slice[T](a, i) 
 // [Kernel.Bind] has already checked the argument set's shape and a generated
 // caller would be handling an impossible error at every parameter.
 func KernelUniformValue[T any](a KernelArgs, i int) T { return kernel.UniformValue[T](a, i) }
+
+// EncodeKernelUniform is the generated bridge from an untyped uniform value to
+// its std140 codec.
+//
+// It exists so a generated [KernelUniform.Encode] is one line that names the
+// codec, rather than a type switch repeated per uniform type. The type
+// assertion is checked and reported: a backend passing the wrong value gets an
+// error naming both types, where a bare assertion would panic inside a driver
+// with no way for the caller to see which uniform was wrong.
+func EncodeKernelUniform[T any](dst []byte, v any, encode func([]byte, T) error) error {
+	t, ok := v.(T)
+	if !ok {
+		return fmt.Errorf("accel: uniform is %T, and its codec takes %T", v, t)
+	}
+	return encode(dst, t)
+}

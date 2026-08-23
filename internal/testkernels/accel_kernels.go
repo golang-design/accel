@@ -512,7 +512,9 @@ var AttentionDecodeKernel = accel.Kernel{
 		return []any{&s0, &s1}
 	},
 	Uniforms: []accel.KernelUniform{
-		{Name: "d", Type: "AttnDims", Size: 32},
+		{Name: "d", Type: "AttnDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, AttnDimsCodec{}.Encode)
+		}},
 	},
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
 		f, _ := slot.State.(*attentionDecodeFrame)
@@ -964,7 +966,9 @@ kernel void ElemScale(
 }
 `,
 	Uniforms: []accel.KernelUniform{
-		{Name: "p", Type: "ScaleParams", Size: 16},
+		{Name: "p", Type: "ScaleParams", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, ScaleParamsCodec{}.Encode)
+		}},
 	},
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		elemScaleFlat(t, accel.KernelUniformValue[ScaleParams](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
@@ -1092,7 +1096,9 @@ kernel void GatherRows(
 }
 `,
 	Uniforms: []accel.KernelUniform{
-		{Name: "p", Type: "RowParams", Size: 16},
+		{Name: "p", Type: "RowParams", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, RowParamsCodec{}.Encode)
+		}},
 	},
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		gatherRowsFlat(t, accel.KernelUniformValue[RowParams](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1), accel.KernelSlice[float32](a, 2))
@@ -1159,7 +1165,9 @@ kernel void ScatterRows(
 }
 `,
 	Uniforms: []accel.KernelUniform{
-		{Name: "p", Type: "RowParams", Size: 16},
+		{Name: "p", Type: "RowParams", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, RowParamsCodec{}.Encode)
+		}},
 	},
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		scatterRowsFlat(t, accel.KernelUniformValue[RowParams](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1), accel.KernelSlice[float32](a, 2))
@@ -1202,7 +1210,9 @@ var RoPEKernel = accel.Kernel{
 	Digest:    "fee80830a38fdfe6fe8a54127cac61a5",
 	Generator: accel.KernelABIVersion,
 	Uniforms: []accel.KernelUniform{
-		{Name: "p", Type: "RoPEParams", Size: 32},
+		{Name: "p", Type: "RoPEParams", Size: 32, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, RoPEParamsCodec{}.Encode)
+		}},
 	},
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		roPEFlat(t, accel.KernelUniformValue[RoPEParams](a, 0), accel.KernelSlice[float32](a, 0))
@@ -1343,7 +1353,9 @@ var MatMulTiledKernel = accel.Kernel{
 		return []any{&s0, &s1}
 	},
 	Uniforms: []accel.KernelUniform{
-		{Name: "d", Type: "GEMMDims", Size: 16},
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
 	},
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
 		f, _ := slot.State.(*matMulTiledFrame)
@@ -1453,7 +1465,9 @@ var MatVecKernel = accel.Kernel{
 		return []any{&s0}
 	},
 	Uniforms: []accel.KernelUniform{
-		{Name: "d", Type: "GEMMDims", Size: 16},
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
 	},
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
 		f, _ := slot.State.(*matVecFrame)
@@ -1600,7 +1614,9 @@ var LinearTiledKernel = accel.Kernel{
 		return []any{&s0, &s1}
 	},
 	Uniforms: []accel.KernelUniform{
-		{Name: "d", Type: "GEMMDims", Size: 16},
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
 	},
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
 		f, _ := slot.State.(*linearTiledFrame)
@@ -1720,7 +1736,9 @@ var RMSNormKernel = accel.Kernel{
 		return []any{&s0}
 	},
 	Uniforms: []accel.KernelUniform{
-		{Name: "d", Type: "RowDims", Size: 16},
+		{Name: "d", Type: "RowDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, RowDimsCodec{}.Encode)
+		}},
 	},
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
 		f, _ := slot.State.(*rMSNormFrame)
@@ -1891,7 +1909,9 @@ var SoftmaxKernel = accel.Kernel{
 		return []any{&s0}
 	},
 	Uniforms: []accel.KernelUniform{
-		{Name: "d", Type: "RowDims", Size: 16},
+		{Name: "d", Type: "RowDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, RowDimsCodec{}.Encode)
+		}},
 	},
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
 		f, _ := slot.State.(*softmaxFrame)
@@ -2231,7 +2251,9 @@ var TransformKernel = accel.Kernel{
 	Digest:    "2aa00445fb65b63d0082756f22afbf1e",
 	Generator: accel.KernelABIVersion,
 	Uniforms: []accel.KernelUniform{
-		{Name: "p", Type: "Params", Size: 96},
+		{Name: "p", Type: "Params", Size: 96, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, ParamsCodec{}.Encode)
+		}},
 	},
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		transformFlat(t, accel.KernelUniformValue[Params](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))

@@ -728,13 +728,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 		e.printf("}\n")
 		e.printf("\t},\n")
 	}
-	if len(k.Uniforms) > 0 {
-		e.printf("\tUniforms: []accel.KernelUniform{\n")
-		for _, u := range k.Uniforms {
-			e.printf("\t\t{Name: %q, Type: %q, Size: %d},\n", u.Name, u.TypeName, u.Size)
-		}
-		e.printf("\t},\n")
-	}
+	e.uniformRecords(k)
 
 	// The entry point allocates one frame per invocation on first call and
 	// resumes it afterwards. The scheduler owns the frames, so it passes an
