@@ -77,6 +77,7 @@ numbered in.
 | [032-stage-abi.md](032-stage-abi.md) | Drafted | 005's first child: the vertex and fragment signatures, varyings, clip and depth ranges, texel fetch, and what the IR gains |
 | [033-render-api.md](033-render-api.md) | Drafted | 005's second child: render pipelines, pass nodes, load/store actions, declared access, draws and indirect counts |
 | [034-surface-present.md](034-surface-present.md) | Drafted | 005's third child: swapchains, the typed present slot, resize, headless surfaces, and where the windowing line is |
+| [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | Drafted | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
 | [005-graphics.md](005-graphics.md) | Drafted parent | Post-v0 graphics constraints and the four child specs required before implementation |
