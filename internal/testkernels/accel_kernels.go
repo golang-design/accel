@@ -214,6 +214,23 @@ var AddKernel = accel.Kernel{
 	},
 	Digest:    "1c1b9102edd59d8a729a05cc1ce492a7",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+kernel void Add(
+    const device float *a [[buffer(0)]],
+    const device float *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[2])))) {
+        out[i] = (a[i] + b[i]);
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		addFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
 	},
@@ -831,6 +848,23 @@ var ElemAddKernel = accel.Kernel{
 	},
 	Digest:    "db905a9cd0b2f507c3c362acea42bd2d",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+kernel void ElemAdd(
+    const device float *a [[buffer(0)]],
+    const device float *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[2])))) {
+        out[i] = (a[i] + b[i]);
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		elemAddFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
 	},
@@ -859,6 +893,23 @@ var ElemMulKernel = accel.Kernel{
 	},
 	Digest:    "f800ffb1b09a78515a2188a92dabb07e",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+kernel void ElemMul(
+    const device float *a [[buffer(0)]],
+    const device float *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[2])))) {
+        out[i] = (a[i] * b[i]);
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		elemMulFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
 	},
@@ -886,6 +937,28 @@ var ElemScaleKernel = accel.Kernel{
 	},
 	Digest:    "d51f4cc1f4fdd6125d6c6e7f233fcbaa",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+struct ScaleParams {
+    float Factor;
+    char _tail[12];
+};
+
+kernel void ElemScale(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant ScaleParams &p [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        out[i] = (in[i] * p.Factor);
+    }
+}
+`,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "ScaleParams", Size: 16},
 	},
@@ -981,6 +1054,38 @@ var GatherRowsKernel = accel.Kernel{
 	},
 	Digest:    "7dac4797a9bf56ddbcf0466ada474fd9",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+struct RowParams {
+    uint Rows;
+    uint Width;
+    uint Capacity;
+    char _tail[4];
+};
+
+kernel void GatherRows(
+    const device float *table [[buffer(0)]],
+    const device uint *ids [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowParams &p [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < (p.Rows * p.Width))) {
+        uint r = (i / p.Width);
+        uint c = (i % p.Width);
+        uint id = ids[r];
+        if ((id < p.Capacity)) {
+            out[i] = table[((id * p.Width) + c)];
+        } else {
+            out[i] = float(0);
+        }
+    }
+}
+`,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "RowParams", Size: 16},
 	},
@@ -1017,6 +1122,36 @@ var ScatterRowsKernel = accel.Kernel{
 	},
 	Digest:    "d142c44fe6d877d65140eea9b811c263",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+struct RowParams {
+    uint Rows;
+    uint Width;
+    uint Capacity;
+    char _tail[4];
+};
+
+kernel void ScatterRows(
+    const device float *rows [[buffer(0)]],
+    const device uint *ids [[buffer(1)]],
+    device float *state [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowParams &p [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < (p.Rows * p.Width))) {
+        uint r = (i / p.Width);
+        uint c = (i % p.Width);
+        uint id = ids[r];
+        if ((id < p.Capacity)) {
+            state[((id * p.Width) + c)] = rows[i];
+        }
+    }
+}
+`,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "RowParams", Size: 16},
 	},
@@ -1838,6 +1973,41 @@ var CountAboveKernel = accel.Kernel{
 	},
 	Digest:    "d56dfd081a195284a7ad821f8d60d521",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+kernel void CountAbove(
+    const device float *in [[buffer(0)]],
+    device int *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i >= uint(int(_lens[1])))) {
+        return;
+    }
+    int count = int(0);
+    uint limit = uint(int(_lens[0]));
+    for (uint j = uint(0); (j < limit); j = (j + uint(1))) {
+        if ((in[j] <= float(0))) {
+            continue;
+        }
+        count = (count + int(1));
+    }
+    uint j = uint(0);
+    for (; (j < limit); ) {
+        j = (j + uint(1));
+    }
+    for (; ; ) {
+        if ((j >= limit)) {
+            break;
+        }
+        j = (j + uint(1));
+    }
+    out[i] = count;
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		countAboveFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[int32](a, 1))
 	},
@@ -2001,6 +2171,22 @@ var ScaleKernel = accel.Kernel{
 	},
 	Digest:    "61408d149ab5bdfb1b1e24006bf2ea51",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+kernel void Scale(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        out[i] = (in[i] * float(2));
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		scaleFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
 	},
@@ -2168,7 +2354,73 @@ var SubgroupReduceFallbackKernel = accel.Kernel{
 	},
 	Digest:    "9f364410e5d670883ceafb06b3a0c60d",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+
+kernel void SubgroupReduceFallback(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    const device uint *width [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint lid = _lid.x;
+    uint gid = _gid.x;
+    uint w = width[int(0)];
+    uint sid = (lid / w);
+    uint lane = (lid % w);
+    if ((lane == uint(0))) {
+        float acc = float(0);
+        for (uint l = uint(0); (l < w); l = (l + uint(1))) {
+            uint idx = ((gid - lane) + l);
+            if ((idx < uint(int(_lens[0])))) {
+                acc = (acc + in[idx]);
+            }
+        }
+        if ((sid < uint(int(_lens[1])))) {
+            out[sid] = acc;
+        }
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		subgroupReduceFallbackFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[uint32](a, 2))
 	},
+}
+
+// Kernels is every kernel this package generated, in source order.
+//
+// Generated rather than written, so that a pass over the whole corpus cannot
+// silently miss a kernel somebody added.
+var Kernels = []*accel.Kernel{
+	&AddKernel,
+	&HistogramKernel,
+	&AtomicOpsKernel,
+	&CountWorkgroupsKernel,
+	&AttentionDecodeKernel,
+	&ExchangeKernel,
+	&ReduceLoopKernel,
+	&ReduceUnrolledKernel,
+	&ElemAddKernel,
+	&ElemMulKernel,
+	&ElemScaleKernel,
+	&SiLUKernel,
+	&SwiGLUKernel,
+	&GatherRowsKernel,
+	&ScatterRowsKernel,
+	&RoPEKernel,
+	&MatMulTiledKernel,
+	&MatVecKernel,
+	&LinearTiledKernel,
+	&RMSNormKernel,
+	&SoftmaxKernel,
+	&SegmentSumKernel,
+	&CountAboveKernel,
+	&NormalizeKernel,
+	&ReduceSumKernel,
+	&ScaleKernel,
+	&TransformKernel,
+	&SubgroupReduceKernel,
+	&SubgroupReduceFallbackKernel,
 }

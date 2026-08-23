@@ -281,6 +281,21 @@ type Kernel struct {
 	// Suspensions is how many barriers the body reaches, which is what the
 	// scheduler uses to size an epoch bound. Zero for a flat kernel.
 	Suspensions int
+
+	// MSL is the generated Metal Shading Language source, and is empty when
+	// this kernel was not generated for that target.
+	//
+	// A field rather than a member of a TargetArtifacts struct, which is what
+	// specs/004-kernel-authoring.md draws. M2 flattened that struct into fields
+	// here and specs/021-metal-bringup.md section 6 records the divergence
+	// rather than reintroducing a wrapper for one string; the shape is settled
+	// or ratified when a third target arrives.
+	//
+	// Empty is not a fallback. A Metal dispatch of a kernel with no MSL is an
+	// error naming the kernel, because running the Go lowering on a device the
+	// caller selected specifically would be correct, fast enough to miss, and
+	// would mean the GPU was never exercised.
+	MSL string
 }
 
 // Poison fills workgroup-shared storage with a pattern no sensible kernel

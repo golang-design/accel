@@ -96,6 +96,7 @@ func Generate(p Package) ([]byte, error) {
 	for _, k := range p.Kernels {
 		e.kernel(k)
 	}
+	e.registry(p.Kernels)
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -236,6 +237,7 @@ func (e *emitter) kernel(k *ir.Func) {
 	if k.Caps != 0 {
 		e.printf("\tCaps: %d,\n", k.Caps)
 	}
+	e.mslArtifact(k)
 	if len(k.Uniforms) > 0 {
 		e.printf("\tUniforms: []accel.KernelUniform{\n")
 		for _, u := range k.Uniforms {
@@ -265,6 +267,48 @@ func (e *emitter) kernel(k *ir.Func) {
 	e.printf(")\n")
 	e.printf("\t},\n")
 	e.printf("}\n\n")
+}
+
+// registry emits the package's kernels as one slice.
+//
+// It exists so that a test or a selection pass can iterate the corpus without
+// keeping a list beside it. A hand-maintained list goes stale the moment the
+// package gains a kernel, and the failure is silence: the new kernel looks
+// exactly like one that passed.
+func (e *emitter) registry(kernels []*ir.Func) {
+	if len(kernels) == 0 {
+		return
+	}
+	e.printf("// Kernels is every kernel this package generated, in source order.\n")
+	e.printf("//\n")
+	e.printf("// Generated rather than written, so that a pass over the whole corpus cannot\n")
+	e.printf("// silently miss a kernel somebody added.\n")
+	e.printf("var Kernels = []*accel.Kernel{\n")
+	for _, k := range kernels {
+		e.printf("\t&%sKernel,\n", k.Name)
+	}
+	e.printf("}\n\n")
+}
+
+// mslArtifact emits the Metal target's source, when this kernel is inside the
+// subset that target can lower.
+//
+// A kernel outside it emits nothing rather than failing the whole generation.
+// The MSL subset is narrower than the Go one by construction and widens over
+// specs/022-msl-target.md, so a refusal here is a statement about how far the
+// Metal target has got, not about whether the kernel is legal. What makes the
+// gap visible rather than silent is the golden: a kernel losing its MSL shows up
+// as a diff.
+func (e *emitter) mslArtifact(k *ir.Func) {
+	src, err := MSL(k)
+	if err != nil {
+		return
+	}
+	if strings.Contains(src, "`") {
+		e.fail("the MSL for %s contains a backquote, which a raw string literal cannot hold", k.Name)
+		return
+	}
+	e.printf("\tMSL: `%s`,\n", src)
 }
 
 // codec emits a uniform type's std140 encoder.
