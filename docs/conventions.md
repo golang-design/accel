@@ -16,6 +16,14 @@ public API never exposes the divergence.
 
 ---
 
+**Built and not yet built.** Every entry here is normative, and not every entry
+has code behind it. The CPU backend and Metal are built; the GL, GLSL, Vulkan
+and D3D12 entries state what a backend **will be required to do** and bind
+whoever writes it. The graphics entries — clip depth range, face winding,
+readback origin — are implemented today only by the CPU reference rasterizer,
+since there is no GPU render path yet. Where an entry is a requirement rather
+than a description, it says so.
+
 ## Coordinate systems and clip space
 
 ### Clip-space depth range
@@ -99,10 +107,20 @@ order groups) and absent by default.
 **Divergence.** GLSL ES 3.1 cannot pass a storage buffer block to a function.
 MSL can, as a pointer parameter.
 
-**Guarantee.** Kernel helper functions take values, not buffers. Buffer indexing
-stays in the entry point. The kernel compiler rejects a buffer parameter on a
-helper with an error naming the restriction, rather than emitting code that fails
-inside the driver.
+**Guarantee.** A `//accel:helper` **may** take a resource slice, and the access
+it makes is attributed to the caller's binding rather than to the helper — which
+is why access inference records a mode per binding and merges it into the
+caller's (`internal/kernelc/front/front.go:547`). MSL lowers such a parameter to
+a `device T*`, const-qualified where it is never written through
+(`internal/kernelc/emit/msl.go:300`).
+
+A target that cannot pass a buffer to a function must **inline** the helper. That
+always terminates: the call graph is checked acyclic and is finite.
+
+> Earlier revisions of this file stated the opposite — that the compiler rejects
+> a buffer parameter on a helper. It never did, and
+> [`specs/013`](../specs/013-kernel-subset.md) §2 builds the access-propagation
+> machinery precisely because helpers take slices.
 
 ### Integer literals in GLSL
 
@@ -135,16 +153,32 @@ is an out-of-range panic during readback rather than a wrong image.
 
 | Format | Bytes per pixel |
 | --- | --- |
-| RGBA8 | 4 |
-| RGBA16F | 8 |
-| RGBA32F | 16 |
-| Depth32F | 4 |
+| `RGBA8Unorm`, `RGBA8UnormSRGB`, `BGRA8Unorm` | 4 |
+| `R16Float` | 2 |
+| `RG16Float`, `R32Float` | 4 |
+| `RG32Float`, `RGBA16Float` | 8 |
+| `RGBA32Float` | 16 |
+| `Depth32Float` | 4 |
+| `Depth24PlusStencil8` | reports **0**, and is not host-copyable — see below |
 
-`Depth24PlusStencil8` is deliberately absent from that table: it has no single
-defined bytes-per-pixel, because backends are free to store it as 24-plus-8
-packed or as 32-plus-8 padded. `accel` therefore makes it non-host-copyable.
-Reading one back reports an error naming `Depth32Float` as the format to use
-instead, rather than inventing a stride that is wrong somewhere.
+`Device.FormatInfo(f).BytesPerPixel` is the single source of truth. This table is
+a reader's summary of it and will go stale first.
+
+`Depth24PlusStencil8` reports **0** bytes per pixel rather than a number: it has
+no single defined value, because backends are free to store it as 24-plus-8
+packed or as 32-plus-8 padded, and inventing a stride would be wrong somewhere.
+
+**No depth format is host-copyable**, not only that one. `format.go:171` sets
+`HostCopyable = !depth`, so `Depth32Float` cannot be read back directly either.
+Reading any of them reports that the format *is device-private, which several
+backends require of depth formats and this one enforces so the rule is not
+discovered in production* (`texturealloc.go:155`). The way to get depth to the
+host is a texture-to-buffer transfer node, which is device-to-device and works
+on every backend — see [`005`](../specs/005-graphics.md)'s handoff section.
+
+> An earlier revision said `Depth24PlusStencil8` alone was non-host-copyable and
+> that the error names `Depth32Float` as the format to use instead. Neither was
+> true.
 
 ### A driver.Block may be a handle, not your allocation
 
