@@ -107,29 +107,55 @@ func TestOpenDeviceRejectsUnknownID(t *testing.T) {
 // TestOpenBestNeverReturnsAnUnsanctionedBackend is spec 001 section 11.7 and
 // spec 006's selection rule: the CPU backend is not selected unless the policy
 // names it, and no other backend is substituted for the one asked for.
+//
+// What the default policy does depends on what this machine has, so the test
+// asks rather than assuming. It used to assert that OpenBest(Policy{}) fails,
+// on the premise that only the CPU backend was compiled in; that premise stopped
+// being true the moment Metal landed, and the rule it was checking did not
+// change. The rule is the two clauses below, which hold either way.
 func TestOpenBestNeverReturnsAnUnsanctionedBackend(t *testing.T) {
-	// This machine has only the CPU backend compiled in, so the default policy
-	// must fail rather than hand it over.
-	if d, err := accel.OpenBest(accel.Policy{}); err == nil {
+	gpu := false
+	for _, d := range accel.Enumerate().Devices {
+		if d.Backend != accel.BackendCPU {
+			gpu = true
+		}
+	}
+
+	d, err := accel.OpenBest(accel.Policy{})
+	switch {
+	case gpu && err != nil:
+		t.Fatalf("this machine enumerates a GPU adapter, so the default policy should "+
+			"select it: %v", err)
+	case gpu:
+		got := d.Info().Backend
 		d.Close()
-		t.Fatal("OpenBest(Policy{}) returned a device; the CPU backend requires AllowCPU")
-	} else if !strings.Contains(err.Error(), "AllowCPU") {
+		if got == accel.BackendCPU {
+			t.Fatal("OpenBest(Policy{}) selected the CPU backend without AllowCPU")
+		}
+	case err == nil:
+		d.Close()
+		t.Fatal("OpenBest(Policy{}) returned a device on a machine with only the CPU " +
+			"backend; the CPU backend requires AllowCPU")
+	case !strings.Contains(err.Error(), "AllowCPU"):
 		t.Errorf("OpenBest error does not say how to sanction the CPU backend: %v", err)
 	}
 
-	if d, err := accel.OpenBest(accel.Policy{Prefer: []accel.Backend{accel.BackendMetal}}); err == nil {
+	// Asking for one backend never yields another, whichever way round this
+	// machine is. This is the clause that has nothing to do with what is
+	// installed.
+	if d, err := accel.OpenBest(accel.Policy{Prefer: []accel.Backend{accel.BackendVulkan}}); err == nil {
 		got := d.Info().Backend
 		d.Close()
-		t.Fatalf("OpenBest asked for Metal and returned %v", got)
+		t.Fatalf("OpenBest asked for Vulkan and returned %v", got)
 	}
 
-	d, err := accel.OpenBest(accel.Policy{AllowCPU: true})
+	d, err = accel.OpenBest(accel.Policy{AllowCPU: true, Prefer: []accel.Backend{accel.BackendCPU}})
 	if err != nil {
-		t.Fatalf("OpenBest(AllowCPU): %v", err)
+		t.Fatalf("OpenBest(AllowCPU, Prefer CPU): %v", err)
 	}
 	defer d.Close()
 	if got := d.Info().Backend; got != accel.BackendCPU {
-		t.Errorf("OpenBest(AllowCPU) selected %v, want CPU", got)
+		t.Errorf("OpenBest asked for the CPU backend and selected %v", got)
 	}
 	report, ok := d.SelectionReport()
 	if !ok {

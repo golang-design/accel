@@ -128,6 +128,38 @@ func (d *Device) Compile(source, entryPoint string) (*Pipeline, error) {
 	return p, nil
 }
 
+// subgroupProbe is the smallest kernel that makes a pipeline exist.
+//
+// The SIMD width is a property of a compiled pipeline, not of a device:
+// MTLDevice has no query for it, and -threadExecutionWidth lives on
+// MTLComputePipelineState. So the only honest way to report a width is to
+// compile something and ask. This kernel is that something, and it is
+// deliberately trivial so that nothing about its body can influence the answer.
+const subgroupProbe = `#include <metal_stdlib>
+using namespace metal;
+kernel void _accel_width(device uint *out [[buffer(0)]],
+                         uint gid [[thread_position_in_grid]]) {
+  out[gid] = gid;
+}`
+
+// SubgroupSize reports this device's SIMD width, compiled once.
+//
+// Zero if the probe fails, which a caller must treat as unknown rather than as
+// a width: specs/001-device-resources.md section 1.1 forbids an opened device
+// reporting a zero limit, so a zero here has to become a refusal to open rather
+// than a number nobody can use.
+func (d *Device) SubgroupSize() int {
+	d.widthOnce.Do(func() {
+		p, err := d.Compile(subgroupProbe, "_accel_width")
+		if err != nil {
+			return
+		}
+		defer p.Close()
+		d.width = p.ThreadExecutionWidth
+	})
+	return d.width
+}
+
 // Name is the entry point this pipeline runs.
 func (p *Pipeline) Name() string { return p.name }
 

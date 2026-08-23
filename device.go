@@ -45,7 +45,9 @@ func (b Backend) String() string {
 // rather than disappearing, so a caller can tell "no Metal device" from "Metal
 // was not built".
 func adapters() ([]driver.Adapter, []ProbeDiagnostic) {
-	return []driver.Adapter{cpu.Adapter{}}, nil
+	all := []driver.Adapter{cpu.Adapter{}}
+	native, diags := platformAdapters()
+	return append(all, native...), diags
 }
 
 func publicInfo(a driver.Adapter) DeviceInfo {

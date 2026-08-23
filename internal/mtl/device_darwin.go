@@ -6,7 +6,11 @@
 
 package mtl
 
-import "github.com/ebitengine/purego/objc"
+import (
+	"sync"
+
+	"github.com/ebitengine/purego/objc"
+)
 
 // Size is MTLSize: three unsigned lengths, passed and returned by value.
 //
@@ -32,6 +36,11 @@ type Device struct {
 	MaxBufferBytes                int
 	UnifiedMemory                 bool
 	LowPower                      bool
+
+	// The SIMD width, which only a compiled pipeline can report. See
+	// [Device.SubgroupSize].
+	widthOnce sync.Once
+	width     int
 }
 
 var (

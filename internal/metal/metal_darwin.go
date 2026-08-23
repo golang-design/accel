@@ -1,0 +1,377 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+//go:build darwin
+
+package metal
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"math"
+	"sync"
+
+	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/mtl"
+)
+
+// Adapters reports every Metal device on this machine.
+//
+// A machine with no device returns no adapters and no error, which is the case
+// specs/006-backends.md section 6.4 distinguishes from "Metal was not built":
+// the caller gets a probe diagnostic, not a failure.
+func Adapters() ([]driver.Adapter, error) {
+	devs, err := mtl.Devices()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]driver.Adapter, 0, len(devs))
+	for _, d := range devs {
+		info, err := infoFor(d)
+		if err != nil {
+			// A device that cannot answer for itself is not enumerated. It
+			// becomes a probe diagnostic one layer up, which is the difference
+			// specs/006-backends.md section 6.4 draws between a probe failure
+			// and an open error.
+			d.Close()
+			return nil, err
+		}
+		out = append(out, &adapter{dev: d, info: info})
+	}
+	return out, nil
+}
+
+type adapter struct {
+	dev  *mtl.Device
+	info driver.Info
+}
+
+func (a *adapter) Info() driver.Info { return a.info }
+
+// Token identifies this adapter within the process.
+//
+// It is seeded with the device's registryID rather than with an index, so a
+// machine with two GPUs gives two stable tokens and enumerating twice gives the
+// same one for the same device. An index would be stable only until something
+// changed the order.
+func (a *adapter) Token() [16]byte {
+	var t [16]byte
+	sum := sha256.Sum256(fmt.Appendf(nil, "golang.design/x/accel:metal:%d", a.dev.RegistryID()))
+	copy(t[:], sum[:])
+	return t
+}
+
+// Open opens the adapter. opts is nil; Metal has no options at this milestone.
+func (a *adapter) Open(opts any) (driver.Device, error) {
+	if opts != nil {
+		return nil, fmt.Errorf("accel: the Metal backend takes no options yet, got %T", opts)
+	}
+	return &device{dev: a.dev, info: a.info, queue: a.dev.NewQueue()}, nil
+}
+
+type device struct {
+	dev   *mtl.Device
+	info  driver.Info
+	queue *mtl.Queue
+
+	mu     sync.Mutex
+	closed bool
+	blocks int
+
+	// pipelines caches one compiled pipeline per kernel record. Compiling MSL
+	// is a call into the device compiler and takes milliseconds, so a graph
+	// resubmitted a thousand times must not pay it a thousand times. The key is
+	// the record's digest, which is what identifies the generated source.
+	pipelines map[string]*mtl.Pipeline
+}
+
+func (d *device) Info() driver.Info { return d.info }
+
+// Supports reports which memory kinds this device can back.
+//
+// Every kind, because unified memory makes all of them real: there is no kind
+// here that would have to be emulated with a copy the caller cannot see.
+func (d *device) Supports(kind driver.MemoryKind) bool {
+	switch kind {
+	case driver.MemoryDevice, driver.MemoryUpload, driver.MemoryReadback, driver.MemoryShared:
+		return true
+	}
+	return false
+}
+
+// storageFor maps a memory kind to a Metal storage mode.
+//
+// MemoryDevice is private even though unified memory would let it be shared and
+// faster. specs/006-backends.md section 1 makes Block.Bytes the authority on
+// mappability, and a backend that maps device memory on an Apple GPU and not on
+// an Intel one turns a portability bug into a machine-specific one. The cost is
+// a blit in Block.Write and Block.Read, which is the immediate transfer path
+// and is allowed to be slow.
+func storageFor(kind driver.MemoryKind) (mtl.StorageMode, error) {
+	switch kind {
+	case driver.MemoryDevice:
+		return mtl.StoragePrivate, nil
+	case driver.MemoryUpload, driver.MemoryReadback, driver.MemoryShared:
+		return mtl.StorageShared, nil
+	}
+	return 0, fmt.Errorf("accel: the Metal backend has no storage mode for memory kind %d", kind)
+}
+
+func (d *device) Alloc(kind driver.MemoryKind, bytes int, label string) (driver.Block, error) {
+	mode, err := storageFor(kind)
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil, fmt.Errorf("accel: alloc %q: the device is closed", label)
+	}
+	d.mu.Unlock()
+
+	buf, err := d.dev.NewBuffer(bytes, mode)
+	if err != nil {
+		return nil, fmt.Errorf("accel: alloc %q: %w", label, err)
+	}
+	d.mu.Lock()
+	d.blocks++
+	d.mu.Unlock()
+	return &block{dev: d, buf: buf, label: label}, nil
+}
+
+// Lost reports device loss.
+//
+// Always nil at this milestone. Metal reports loss through a command buffer's
+// error rather than through a device-level flag, and specs/023-metal-graph.md
+// owns turning that into the sticky, terminal answer
+// specs/001-device-resources.md section 7.4 requires. Answering nil is a real
+// answer for a device that has not lost anything; what is missing is the path
+// that would notice.
+func (d *device) Lost() error { return nil }
+
+func (d *device) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return nil
+	}
+	d.closed = true
+	for _, p := range d.pipelines {
+		p.Close()
+	}
+	d.pipelines = nil
+	d.queue.Close()
+	return nil
+}
+
+// block is one device allocation, backing one pool.
+type block struct {
+	dev   *device
+	buf   *mtl.Buffer
+	label string
+}
+
+func (b *block) Bytes() []byte { return b.buf.Bytes() }
+func (b *block) Size() int     { return b.buf.Size() }
+
+func (b *block) Free() {
+	b.buf.Close()
+	b.dev.mu.Lock()
+	b.dev.blocks--
+	b.dev.mu.Unlock()
+}
+
+// Write and Read move bytes for memory Bytes does not map.
+//
+// Synchronous, per the driver interface: this is the immediate transfer path of
+// specs/001-device-resources.md section 8.1, not the recorded one. The staging
+// buffer is per call rather than pooled, because the recorded path is what a
+// caller uses when the cost matters.
+func (b *block) Write(off int, src []byte) error {
+	if host := b.buf.Bytes(); host != nil {
+		if err := checkRange(off, len(src), len(host)); err != nil {
+			return err
+		}
+		copy(host[off:], src)
+		return nil
+	}
+	if err := checkRange(off, len(src), b.buf.Size()); err != nil {
+		return err
+	}
+	stage, err := b.dev.dev.NewBuffer(len(src), mtl.StorageShared)
+	if err != nil {
+		return err
+	}
+	defer stage.Close()
+	copy(stage.Bytes(), src)
+	return b.dev.blit(func(e *mtl.BlitEncoder) { e.Copy(b.buf, off, stage, 0, len(src)) })
+}
+
+func (b *block) Read(off int, dst []byte) error {
+	if host := b.buf.Bytes(); host != nil {
+		if err := checkRange(off, len(dst), len(host)); err != nil {
+			return err
+		}
+		copy(dst, host[off:])
+		return nil
+	}
+	if err := checkRange(off, len(dst), b.buf.Size()); err != nil {
+		return err
+	}
+	stage, err := b.dev.dev.NewBuffer(len(dst), mtl.StorageShared)
+	if err != nil {
+		return err
+	}
+	defer stage.Close()
+	if err := b.dev.blit(func(e *mtl.BlitEncoder) { e.Copy(stage, 0, b.buf, off, len(dst)) }); err != nil {
+		return err
+	}
+	copy(dst, stage.Bytes())
+	return nil
+}
+
+func checkRange(off, n, limit int) error {
+	if off < 0 || n < 0 || off > limit || n > limit-off {
+		return fmt.Errorf("accel: range [%d, %d) is outside a %d-byte block", off, off+n, limit)
+	}
+	return nil
+}
+
+// blit runs one synchronous copy pass.
+func (d *device) blit(encode func(*mtl.BlitEncoder)) error {
+	cb := d.queue.Begin()
+	defer cb.Close()
+	e := cb.Blit()
+	encode(e)
+	e.End()
+	cb.Commit()
+	cb.Wait()
+	return cb.Err()
+}
+
+// infoFor builds the capability and limit report for a device.
+//
+// Every row is one of four kinds, and specs/021-metal-bringup.md section 3 says
+// which: queried from the device, derived from a query, a documented constant,
+// or deliberately under-reported. The last is the interesting one. A capability
+// this backend cannot yet lower is reported absent, because over-reporting
+// means a kernel is accepted and then produces a wrong answer, while
+// under-reporting means it is refused with a name.
+func infoFor(d *mtl.Device) (driver.Info, error) {
+	maxThreads := d.MaxThreadsPerThreadgroup
+	// Measured by compiling a trivial kernel and reading its execution width,
+	// because MTLDevice has no query for it. A device that cannot answer is not
+	// enumerated at all: specs/001-device-resources.md section 1.1 forbids an
+	// opened device reporting a zero limit, so the alternative would be handing
+	// a caller a number they cannot use.
+	width := d.SubgroupSize()
+	if width <= 0 {
+		return driver.Info{}, fmt.Errorf("accel: %s reports no SIMD width, so its subgroup "+
+			"limits would be zero and specs/001-device-resources.md section 1.1 forbids that", d.Name())
+	}
+	return driver.Info{
+		Backend: driver.BackendMetal,
+		Name:    d.Name(),
+		Vendor:  "Apple",
+		// Software is false even for a device that is not the fastest one
+		// present: Metal exposes no software rasterizer, and LowPower means an
+		// integrated GPU rather than an emulated one.
+		Software: false,
+		Capabilities: driver.Capabilities{
+			// Reported absent until specs/022-msl-target.md lowers them. The
+			// hardware has all of these; this backend cannot yet emit them, and
+			// the report is about what a caller can use.
+			Subgroups:             false,
+			SubgroupOps:           0,
+			AtomicFloatAddStorage: false,
+			AtomicFloatAddShared:  false,
+			IndirectDispatch:      false,
+
+			InfNaNProduced: true,
+
+			// Verified rather than claimed: the emitter's pragma turns
+			// contraction off and a device test checks that it does, and that
+			// the default does not.
+			ContractionControl: true,
+
+			// Unified memory: a shared allocation is the memory the GPU reads,
+			// not a staging copy of it.
+			SharedMemoryKind: true,
+
+			// Graphics is out of v0 scope entirely (specs/005-graphics.md), and
+			// a command buffer is single-submit so there is no native replay
+			// (specs/006-backends.md section 4.3).
+			Graphics:                false,
+			Presentation:            false,
+			Multisampling:           false,
+			RasterizerOrderedAccess: false,
+			NativeGraphReplay:       false,
+		},
+		Limits: driver.Limits{
+			// Metal requires a buffer offset to be a multiple of 4 on Apple
+			// silicon and 256 for constant buffers on macOS. 256 is the
+			// coarsest of those and is therefore always sufficient; it matches
+			// the portable floor the CPU backend reports, so a graph built
+			// against one runs on the other. Lowering it needs a measurement,
+			// not a reading.
+			MinStorageBufferOffsetAlignment: 256,
+			MinUniformBufferOffsetAlignment: 256,
+			MinBufferCopyOffsetAlignment:    16,
+
+			// Reported rather than used: textures are not in this milestone.
+			// MTLBlitCommandEncoder requires a 256-byte row pitch for
+			// buffer-to-texture copies on macOS.
+			MinBufferCopyRowPitchAlignment: 256,
+			MinTexturePlacementAlignment:   65536,
+			MaxTextureExtent2D:             16384,
+			MaxTextureExtent3D:             2048,
+			MaxTextureArrayLayers:          2048,
+
+			// Queried. maxBufferLength is the largest single allocation, and a
+			// pool is exactly one allocation.
+			MaxBufferBytes:               d.MaxBufferBytes,
+			MaxPoolBytes:                 d.MaxBufferBytes,
+			MaxStorageBufferBindingBytes: d.MaxBufferBytes,
+
+			// Metal documents no ceiling on the number of allocations, so this
+			// is a sanity bound rather than a device fact. It is far above any
+			// pooling strategy this library would produce.
+			MaxPools: 1 << 20,
+
+			// A compute encoder has 31 buffer argument slots, which is a fixed
+			// property of the API rather than of the device.
+			MaxBindingsPerKind: 31,
+
+			// The constant address space is not separately bounded on Apple
+			// silicon. 64 KiB is what every backend in the target set
+			// guarantees, and under-reporting a ceiling costs nothing here.
+			MaxUniformBlockBytes: 65536,
+
+			// Queried: -maxThreadsPerThreadgroup and
+			// -maxThreadgroupMemoryLength.
+			MaxWorkgroupSize: [3]int{
+				int(maxThreads.Width), int(maxThreads.Height), int(maxThreads.Depth),
+			},
+			MaxWorkgroupInvocations: int(maxThreads.Width),
+			MaxSharedMemoryBytes:    d.MaxThreadgroupMemoryBytes,
+
+			// Metal documents no threadgroup-count ceiling. MaxInt32 says so
+			// without pretending to a number the device would confirm.
+			MaxWorkgroupCount: [3]int{math.MaxInt32, math.MaxInt32, math.MaxInt32},
+
+			// Measured, not tabled. The width is a property of a compiled
+			// pipeline rather than of the device, so it is read from one. Min
+			// and Max are equal because Apple silicon has a single width; a
+			// device that varied would report the range it varies over, and
+			// this is the number that would have to change.
+			//
+			// Reported even though Capabilities.Subgroups is false. The two
+			// answer different questions: the width is a fact about the
+			// hardware, and the capability is whether this backend can lower a
+			// kernel that uses it.
+			MinSubgroupSize: width,
+			MaxSubgroupSize: width,
+		},
+	}, nil
+}
