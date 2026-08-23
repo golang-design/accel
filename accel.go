@@ -45,9 +45,23 @@
 // [Recorder.BuildNaive] builds the same graph without any of it, for bisecting
 // a suspected planning bug.
 //
+// Cooperative kernels run: a kernel declaring workgroup-shared memory, calling
+// [Thread.Barrier], or reducing across a subgroup is lowered to a resumable
+// form and driven by a workgroup scheduler. The CPU backend reports what such a
+// kernel does wrong rather than leaving it to a GPU to discover: a read of
+// shared memory nothing wrote, invocations reaching different barriers, and two
+// invocations touching one location with nothing ordering them are each
+// reported with the invocation and the source position, on the first offending
+// run.
+//
+// Atomics, emulated subgroups, and capability inference are built. What a
+// kernel requires is read from its body, never declared, and a device that does
+// not meet it refuses at [Device.NewComputePipeline] rather than at dispatch.
+//
 // Not implemented, and reporting [ErrNotImplemented]: textures, indirect
 // dispatch ([Recorder.DispatchIndirect]), [Queue.SubmitAfter], and
-// [Fence.Stats]. specs/009-sequencing.md is the order they arrive in.
+// [Fence.Stats]. Subgroup shuffles and scans are specified and unbuilt.
+// specs/009-sequencing.md is the order they arrive in.
 //
 // # The model
 //

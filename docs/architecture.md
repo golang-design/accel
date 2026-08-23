@@ -215,8 +215,9 @@ If you contribute a backend, that file is the contract.
 | M1, memory on the CPU backend | done |
 | M2, the minimum kernel compiler and flat CPU execution | done |
 | M3, graph planning and flat submission | done, split into [015](../specs/015-graph-recording.md), [016](../specs/016-graph-execution.md), and [017](../specs/017-graph-aliasing.md) |
-| M4, cooperative execution on the CPU | next |
-| M5 to M7, GEMM, Metal, tensors | specified, not started |
+| M4, cooperative execution on the CPU | done, split into [018](../specs/018-cooperative-lowering.md), [019](../specs/019-cooperative-diagnostics.md), and [020](../specs/020-cooperative-atomics.md); subgroup shuffles and scans deferred |
+| M5, the portable tiled GEMM | next |
+| M6 to M7, Metal, tensors | specified, not started |
 
 M1 built the bottom of the device layer: enumeration and device open, the
 capability and limit profiles, pooled memory with a two-level segregated fit

@@ -166,7 +166,10 @@ bindings are the better choice.
 | Command graphs: inferred edges, sub-range hazards, computed barriers | **Built** on the CPU backend |
 | Compute dispatch in a graph | **Built** on the CPU backend |
 | Command graphs: transient aliasing and the whole-plan fuzz | **Built** on the CPU backend |
-| Cooperative kernels: barriers, shared memory, subgroups | Specified, next |
+| Cooperative kernels: barriers, shared memory, the resumable lowering | **Built** on the CPU backend |
+| Cooperative diagnostics: undefined reads, arrival, conflicting access | **Built** on the CPU backend |
+| Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
+| Portable tiled GEMM | Specified, next |
 | Metal backend | Specified, not started |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
@@ -174,7 +177,7 @@ bindings are the better choice.
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1, M2, and M3](specs/009-sequencing.md).
+rows came from [M1 through M4](specs/009-sequencing.md).
 
 A graph infers its own dependency edges from what each node declares it touches,
 comparing byte ranges rather than whole resources, so two nodes writing disjoint
@@ -182,6 +185,15 @@ halves of one buffer are not serialized. Barriers come from those edges and are
 batched, because a barrier is queue-wide: [spec 003's worked
 graph](specs/003-command-graph.md) has nine hazards and emits seven barriers,
 and the test asserts their positions rather than only their count.
+
+A kernel that needs its invocations to cooperate — shared memory, a barrier, a
+reduction across a subgroup — is compiled to a resumable form and run by a
+scheduler that advances every invocation to its next suspension point before
+releasing the epoch. The point of doing that on a CPU is not speed: it is that
+the schedule is deterministic, so a kernel reading shared memory nothing wrote,
+or whose invocations reach different barriers, is *reported* with a line number
+on the first offending run rather than producing a plausible number on one
+machine and a different one elsewhere.
 
 Transients the builder owns share memory when every node touching one is ordered
 before every node touching the other. That is reachability, not record-order
