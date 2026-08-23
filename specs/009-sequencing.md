@@ -1125,8 +1125,11 @@ that cost the predecessor hours. Building past the gate would be revising a
 locked decision, which [000](000-decisions.md) has a procedure for and which is
 not something a milestone does on its way past.
 
-**Vulkan is blocked by the machine**, and that was checked rather than assumed:
-no loader, no MoltenVK, no SPIR-V validator. [004](004-kernel-authoring.md)
+**Vulkan is blocked by the machine**, and that was checked rather than assumed,
+twice. Re-measured 2026-08-23: no `libvulkan` in `/usr/local/lib`,
+`/opt/homebrew/lib` or `/usr/lib`; no `libMoltenVK`; no `~/VulkanSDK`; no ICD
+manifest directory under either Homebrew prefix; no `spirv-val`, `spirv-as`,
+`spirv-dis` or `glslangValidator` on `PATH`; and no `VK_*` in the environment. [004](004-kernel-authoring.md)
 makes SPIR-V a *binary* target with no source level, so without a device, a
 validator, or a driver compiler an emitter would be code nobody ran — the
 failure mode [M6's outcome](#m6-outcome--complete-2026-08-23) names.
