@@ -1,6 +1,6 @@
 ---
 title: "The vertex and fragment stage ABI"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md

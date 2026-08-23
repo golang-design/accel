@@ -27,8 +27,9 @@ that still reports `ErrNotImplemented`.
 
 **What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
 narrower than this directory: compute only, on the CPU backend and Metal.
-[005](005-graphics.md) is a drafted post-v0 parent whose four child designs are
-not yet written. [006](006-backends.md) specifies three remaining synchronous
+[005](005-graphics.md) is the parent of graphics; its four child designs are
+written ([032](032-stage-abi.md) through [035](035-cpu-rasterizer.md)) and the
+CPU reference rasterizer is being built, but nothing graphics is callable yet. [006](006-backends.md) specifies three remaining synchronous
 backends plus a deferred asynchronous WebGPU shape; all are unbuilt. A spec being
 here means its scope and current decisions are reviewable, not that its code is
 next.
@@ -74,17 +75,16 @@ numbered in.
 | [001-device-resources.md](001-device-resources.md) | Implemented | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
 | [002-compute-model.md](002-compute-model.md) | In progress | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
 | [031-shared-transients.md](031-shared-transients.md) | Implemented | M8: one transient pool shared by several graphs, and the in-flight rule that makes it safe |
-| [032-stage-abi.md](032-stage-abi.md) | Drafted | 005's first child: the vertex and fragment signatures, varyings, clip and depth ranges, texel fetch, and what the IR gains |
+| [032-stage-abi.md](032-stage-abi.md) | In progress | 005's first child: the vertex and fragment signatures, varyings, clip and depth ranges, texel fetch, and what the IR gains |
 | [033-render-api.md](033-render-api.md) | Drafted | 005's second child: render pipelines, pass nodes, load/store actions, declared access, draws and indirect counts |
 | [034-surface-present.md](034-surface-present.md) | Drafted | 005's third child: swapchains, the typed present slot, resize, headless surfaces, and where the windowing line is |
 | [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | In progress | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
 | [037-vulkan-bringup.md](037-vulkan-bringup.md) | Drafted | The cgo-free Vulkan backend through purego: loader, device, memory, descriptors, submission and device loss |
 | [038-spirv-target.md](038-spirv-target.md) | Drafted | Emitting SPIR-V from the shared IR, and how a binary target with no source level is verified |
 | [041-msaa.md](041-msaa.md) | Drafted | 005's fifth child: sample positions, resolve, and what the CPU oracle can still prove once a sample pattern exists |
-| [036-documentation.md](036-documentation.md) | Drafted | Who each document is for, what builder-voice looks like, the ten-tutorial deck, and the public-surface review that gates it |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
-| [005-graphics.md](005-graphics.md) | Normative parent | Graphics constraints, and the parent of 032 through 035; its four open questions are closed in those children |
+| [005-graphics.md](005-graphics.md) | Drafted | The normative parent of 032 through 035: graphics constraints, with its four open questions closed in those children |
 | [006-backends.md](006-backends.md) | In progress | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 | [008-numerics.md](008-numerics.md) | In progress | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
@@ -120,6 +120,7 @@ numbered in.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
+| [036-documentation.md](036-documentation.md) | Drafted | Who each document is for, what builder-voice looks like, the ten-tutorial deck, and the public-surface review that gates it |
 | [009-sequencing.md](009-sequencing.md) | In progress | What gets built in what order, what done means per milestone, the work no spec owns, and the risks with what retires each |
 | [011-conformance-harness.md](011-conformance-harness.md) | In progress | Profiles, comparisons, oracles, fuzzing, E2E scenarios, diagnostics, and greater-than-90% coverage gates |
 
