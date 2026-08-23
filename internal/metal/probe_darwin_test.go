@@ -22,16 +22,7 @@ import (
 // merely printed would let a device that flushes subnormals reach the corpus
 // differential, where the failure would be attributed to a kernel.
 func TestMetalNumericProfile(t *testing.T) {
-	adapters(t) // fails or skips on what the job promised
-	devs, err := mtl.Devices()
-	if err != nil || len(devs) == 0 {
-		t.Fatalf("devices: %v", err)
-	}
-	defer func() {
-		for _, d := range devs {
-			d.Close()
-		}
-	}()
+	devs := requireDevices(t)
 
 	p, err := NewProber(devs[0])
 	if err != nil {
@@ -123,4 +114,21 @@ func TestTheProbeReachesTheDevice(t *testing.T) {
 	if got, fused := ops.MulAdd(x, x, -1), float32(float64(x)*float64(x)-1); got == fused {
 		t.Errorf("x*x-1 came back as the fused value %v: the probe kernel is contracting", got)
 	}
+}
+
+// requireDevices opens the Metal devices, failing or skipping on what the job
+// promised. See .github/workflows/ci-metal.yml.
+func requireDevices(t *testing.T) []*mtl.Device {
+	t.Helper()
+	adapters(t) // applies the promise rule and skips if it must
+	devs, err := mtl.Devices()
+	if err != nil || len(devs) == 0 {
+		t.Fatalf("adapters enumerated and devices did not: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	})
+	return devs
 }

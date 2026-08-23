@@ -380,10 +380,26 @@ one expression. This is the same failure §3 already warns about for Go
 constants, arriving through a different door: *a probe whose inputs cannot
 distinguish the two cases measures nothing and says so confidently.*
 
-### Still open
+### The primitive ceilings, measured 2026-08-23
 
-- Measure v0 division and transcendental primitives across the required corpus;
-  a miss changes the lowering or supported domain, not the ceiling.
+Both backends against f64 rounded once to f32, over each primitive's stated
+domain. That reference is not correctly rounded by construction — a double
+rounding can add half an ULP — and is well inside every ceiling here, none of
+which is tighter than one ULP.
+
+**Metal missed three of them, and the lowering changed.** `exp` was 18 ULP
+against a ceiling of 4; `sin` and `cos` were about 1.9 × 10⁻³ absolute against
+2⁻²⁰, at arguments approaching 2¹⁶ in magnitude. The emitter now emits `precise::` for `sqrt`, `exp`,
+`log`, `sin`, `cos` and `tanh`, which meets every one. `rsqrt` stays in the
+default namespace: it meets its 4 ULP ceiling there and `precise::` has no
+`rsqrt`.
+
+The sin and cos misses are argument reduction, and the domain this section
+admits — arguments out to 2¹⁶ in magnitude — is the RoPE range, so the fast versions were wrong
+exactly where the v0 corpus needs them. **No ceiling was widened and no domain
+narrowed**, which is what the first paragraph of §6 requires.
+
+### Still open
 - Measure v0 division and transcendental primitives across the required corpus;
   a miss changes the lowering or supported domain, not the ceiling.
 - Establish a domain and normative ceiling for `pow` before a kernel corpus adds

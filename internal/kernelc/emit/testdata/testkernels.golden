@@ -648,7 +648,7 @@ kernel void AttentionDecode(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float e = float(0);
     if ((lane < d.KVLen)) {
-        e = exp((scores[lane] - m));
+        e = precise::exp((scores[lane] - m));
     }
     scores[lane] = e;
     red[lane] = e;
@@ -1297,7 +1297,7 @@ kernel void SiLU(
     uint i = _gid.x;
     if ((i < uint(int(_lens[1])))) {
         float x = in[i];
-        out[i] = (x / (float(1) + exp(-x)));
+        out[i] = (x / (float(1) + precise::exp(-x)));
     }
 }
 `,
@@ -1348,7 +1348,7 @@ kernel void SwiGLU(
     uint i = _gid.x;
     if ((i < uint(int(_lens[2])))) {
         float x = a[i];
-        out[i] = ((x / (float(1) + exp(-x))) * b[i]);
+        out[i] = ((x / (float(1) + precise::exp(-x))) * b[i]);
     }
 }
 `,
@@ -1570,10 +1570,10 @@ kernel void RoPE(
         uint k = (i % pairs);
         float pos = float((r + p.Offset));
         float exponent = ((float(-2) * float(k)) / float(p.RotaryDim));
-        float freq = exp((exponent * log(p.Base)));
+        float freq = precise::exp((exponent * precise::log(p.Base)));
         float theta = (pos * freq);
-        float c = cos(theta);
-        float s = sin(theta);
+        float c = precise::cos(theta);
+        float s = precise::sin(theta);
         uint lo = ((r * p.Width) + (uint(2) * k));
         uint hi = (lo + uint(1));
         float x = inout[lo];
@@ -2539,7 +2539,7 @@ kernel void Softmax(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float acc = float(0);
     for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
-        acc = (acc + exp((x[(base + i)] - rowMax)));
+        acc = (acc + precise::exp((x[(base + i)] - rowMax)));
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2551,7 +2551,7 @@ kernel void Softmax(
     }
     float total = sh[int(0)];
     for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
-        out[(base + i)] = (exp((x[(base + i)] - rowMax)) / total);
+        out[(base + i)] = (precise::exp((x[(base + i)] - rowMax)) / total);
     }
 }
 `,
@@ -2787,7 +2787,7 @@ kernel void Normalize(
         return;
     }
     float x = float(in[i]);
-    float magnitude = sqrt((fabs(x) + float(1)));
+    float magnitude = precise::sqrt((fabs(x) + float(1)));
     scratch[i] = magnitude;
     out[i] = (x * rsqrt((magnitude * magnitude)));
 }

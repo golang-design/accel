@@ -699,7 +699,7 @@ than left for a later session to re-derive:
 | | Where |
 | --- | --- |
 | 1 | `Enumerate` reports `Apple M2`; the capability and limit table is queried, not tabled, and the SIMD width comes from a compiled pipeline |
-| 2 | [022](022-msl-target.md)'s recorded profile, and [008](008-numerics.md) §10, which this closed |
+| 2 | [022](022-msl-target.md)'s recorded profile, and [008](008-numerics.md) §10 — see the correction below, which is where division and the transcendentals were actually measured |
 | 3 | All seven `DType`s round-trip, including `bf16`, `i8` and `u8`, which have no kernel and would never appear in a compute test |
 | 4 | The corpus differential covers eight barrier-and-shared-memory kernels |
 | 5 | Four shapes against a straight triple loop, three with tails on every axis |
@@ -776,6 +776,59 @@ std140 stride that would need the index expression rewritten) are each refused
 by name with a reason rather than emitted approximately. An outstanding fence is
 not signalled at the moment of device loss, only when waited on, which would
 need the completion handler [021](021-metal-bringup.md) §2 deliberately avoids.
+
+#### Correction to M6, appended 2026-08-23
+
+Per the maintenance rule at the foot of this file: a correction landing after a
+milestone was recorded complete is appended, never edited in.
+
+**M6's done item 2 was checked off against a measurement that had not been
+made.** The item names "contraction, rounding, division, and v0 transcendental
+probes". What existed measured contraction and rounding — four booleans — and
+nothing measured division or any transcendental against a higher-precision
+reference. The corpus differential does not substitute, and
+[022](022-msl-target.md)'s own outcome says why: it bounds the divergence
+*between two lowerings*, not either one's distance from correctly rounded. Had
+Metal's `exp` sat far from the truth and `kmath.Exp` drifted the same way, that
+comparison would have passed while Metal violated its normative bound.
+
+This is the same transitive-argument hole that was refused for the GEMM —
+*"the transitive argument is true and is not the same evidence"* — and then
+accepted for the transcendentals a few paragraphs later.
+
+**The probe was built and Metal missed three ceilings.** Measured against f64
+rounded once to f32, over each primitive's stated domain:
+
+| Primitive | Ceiling ([008](008-numerics.md) §6) | Default namespace | `precise::` |
+| --- | --- | --- | --- |
+| `exp` | 4 ULP | **18 ULP** | within |
+| `sin` | 2⁻²⁰ absolute | **1.9 × 10⁻³** at large arguments | within |
+| `cos` | 2⁻²⁰ absolute | **1.8 × 10⁻³** at large arguments | within |
+| `sqrt`, `rsqrt`, `log`, `tanh`, `/` | 1, 4, 4, 4, 2.5 ULP | within | — |
+
+**Answered by changing the lowering, which is what the rule requires.** The
+emitter now emits `precise::` for `sqrt`, `exp`, `log`, `sin`, `cos` and `tanh`.
+`rsqrt` stays in the default namespace: it meets its ceiling there and
+`precise::` has no `rsqrt`. No bound was widened and no domain narrowed.
+
+**The sin and cos misses were argument reduction giving up on large arguments**,
+which is exactly where v0 RoPE positions live — §6 admits arguments out to 2¹⁶
+in magnitude *because* that is the range RoPE reaches. The fast versions would have been wrong
+precisely where this corpus needs them, and the corpus differential passed
+anyway, because the CPU and Metal disagreed by less than the ceiling that
+covered their shared error.
+
+**What generalizes.** A milestone item that names four things is met when four
+things are measured. The item was read as "probes exist" rather than as its own
+list, and the profile that did exist made that reading feel complete.
+
+**Also corrected.** [023](023-metal-graph.md)'s item 3, "survives repeated early
+closes", was checked off against a test whose comment said it closed early and
+whose next line waited first. `Submit` is asynchronous, so closing immediately
+raced the queue worker's *start* rather than the GPU and caught an in-flight
+submission once in twenty attempts. The test now yields until the submission is
+observably running, catches it twenty times in twenty, and asserts what actually
+happens: an in-flight close is **refused** with a `LifetimeError`, not tolerated.
 
 ### M7. Tensor decode plus minimal prefill
 

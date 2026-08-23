@@ -1062,23 +1062,42 @@ var mslSubgroup = map[ir.Opcode]string{
 
 // mslIntrinsic is each bounded scalar operation's Metal spelling.
 //
-// These are metal_stdlib's own functions rather than a reimplementation,
-// which is the same choice the Go lowering makes by calling accel/kmath: the
-// point of specs/008-numerics.md section 6 is that each has a normative domain
-// and error ceiling, and the probes are what check a backend meets it. An
-// operation whose bound this device misses is answered by changing the lowering
-// or narrowing the domain, never by widening the bound.
+// These are metal_stdlib's own functions rather than a reimplementation, which
+// is the same choice the Go lowering makes by calling accel/kmath: the point of
+// specs/008-numerics.md section 6 is that each has a normative domain and error
+// ceiling, and the probes are what check a backend meets it. An operation whose
+// bound this device misses is answered by changing the lowering or narrowing the
+// domain, never by widening the bound.
+//
+// # Why precise::
+//
+// This is that rule applied, not a preference. The default namespace missed
+// three ceilings on an M2, measured against a higher-precision reference:
+//
+//	exp   18 ULP against a ceiling of 4
+//	sin   1.9e-3 absolute against a ceiling of 2^-20, near |x| = 2^16
+//	cos   1.8e-3 absolute, the same
+//
+// The sin and cos misses are argument reduction giving up on large arguments,
+// which is exactly where v0 RoPE positions live, so the fast versions would
+// have been wrong precisely where this corpus needs them. specs/008-numerics.md
+// section 6 already required the precise operation for sqrt and said why --
+// "must not substitute a reciprocal-square-root sequence" -- and the
+// measurement extends the same reasoning to the rest.
+//
+// rsqrt stays in the default namespace: it meets its 4 ULP ceiling there, and
+// precise:: has no rsqrt to move it to.
 //
 // abs is fabs because MSL's abs is the integer one, and the C rule that picks
 // between them silently returns an int for a float argument.
 var mslIntrinsic = map[ir.Opcode]string{
-	ir.OpSqrt:  "sqrt",
+	ir.OpSqrt:  "precise::sqrt",
 	ir.OpRSqrt: "rsqrt",
-	ir.OpExp:   "exp",
-	ir.OpLog:   "log",
-	ir.OpSin:   "sin",
-	ir.OpCos:   "cos",
-	ir.OpTanh:  "tanh",
+	ir.OpExp:   "precise::exp",
+	ir.OpLog:   "precise::log",
+	ir.OpSin:   "precise::sin",
+	ir.OpCos:   "precise::cos",
+	ir.OpTanh:  "precise::tanh",
 	ir.OpAbs:   "fabs",
 	ir.OpMin:   "min",
 	ir.OpMax:   "max",

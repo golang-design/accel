@@ -7,8 +7,10 @@
 package accel_test
 
 import (
+	"errors"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -522,21 +524,33 @@ func TestTheWorkedGraphRunsOnMetal(t *testing.T) {
 	}
 }
 
-// Closing a graph while its submission is still in flight is safe, repeatedly.
+// Closing a graph while its submission is in flight is *refused*, repeatedly,
+// and closing after waiting succeeds.
+//
+// The refusal is the design and it is worth stating plainly, because the
+// milestone criterion this answers is worded as "survives repeated early
+// closes" and could be read as "closes and copes". It does not: a graph with a
+// submission outstanding reports a LifetimeError, because a caller who closed
+// it would be releasing resources the GPU is still reading and no error
+// afterwards could tell them what happened.
 //
 // docs/conventions.md records why this is the sharp edge of the backend: a
 // Metal completion handler runs after the enclosing autorelease pool has
 // drained, so releasing an autoreleased object from one is a use-after-free
 // that crashes inside objc_msgSend with a stack pointing nowhere. This backend
 // avoids the trap by having no completion handler at all -- the fence polls
-// status and blocks on waitUntilCompleted -- and this test is what would notice
-// if that ever changed.
+// -status and blocks on -waitUntilCompleted -- so the strongest form of "a
+// handler releases nothing it did not retain" holds vacuously. This test is
+// what would notice if that ever changed.
 //
 // Repeated, and under the race detector in CI, because a lifetime bug that
 // happens once in twenty submissions is a lifetime bug.
 func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 	d := openMetal(t)
-	const n = 1024
+	// Large enough that the submission is usually still running when Close is
+	// called on the next line. "Usually" is why the loop counts how often it
+	// caught one rather than requiring every iteration to.
+	const n = 1 << 20
 	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
@@ -547,29 +561,88 @@ func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 	}
 	defer p.Close()
 
+	refused := 0
 	for range 20 {
 		a := newBuffer(t, d, "a", n, storage)
 		out := newBuffer(t, d, "out", n, storage)
 		r := d.NewRecorder()
 		r.CopyToBuffer(whole(t, a), make([]float32, n))
-		r.Dispatch(p, []accel.Binding{
-			{Index: 0, Buffer: whole(t, a)},
-			{Index: 1, Buffer: whole(t, a)},
-			{Index: 2, Buffer: whole(t, out)},
-		}, accel.WorkgroupCount{X: n / 64})
+		// Several dispatches, so the submission is long enough that the close
+		// on the next line usually lands while it is still running. One was
+		// caught roughly once in twenty, which is a path that would rot.
+		for range 16 {
+			r.Dispatch(p, []accel.Binding{
+				{Index: 0, Buffer: whole(t, a)},
+				{Index: 1, Buffer: whole(t, out)},
+				{Index: 2, Buffer: whole(t, out)},
+			}, accel.WorkgroupCount{X: n / 64})
+		}
 		g, err := r.Build()
 		if err != nil {
 			t.Fatalf("build: %v", err)
 		}
 
 		f := d.Queue().Submit(g)
-		// Close without waiting. The graph must not release anything the
-		// in-flight command buffer still refers to.
+
+		// Submit is asynchronous: it hands the work to the queue's serial
+		// stream and returns, so the graph is not marked in flight until that
+		// worker reaches it. Closing immediately raced the worker's *start*
+		// rather than the GPU, and caught it once in twenty. Yielding until the
+		// submission is observably running reaches the state this test is about
+		// instead of sampling whether the scheduler got there first.
+		for !f.Done() && !inFlight(g) {
+			runtime.Gosched()
+		}
+
+		// Closing now, before waiting, must be refused rather than tolerated.
+		// A submission can complete between the Submit above and this call, in
+		// which case there is nothing in flight and the close is legitimate --
+		// so the assertion is on the pair: either it refused, or the work had
+		// already finished.
+		early := g.Close()
+		if early == nil {
+			// The submission finished before Close was reached, so there was
+			// nothing in flight and closing was legitimate. Nothing left to
+			// wait for: the graph owns the fence and is now shut.
+			continue
+		}
+		refused++
+		var lifetime *accel.LifetimeError
+		if !errors.As(early, &lifetime) {
+			t.Fatalf("closing an in-flight graph failed with %v, want a LifetimeError "+
+				"naming the reason", early)
+		}
+		if !strings.Contains(early.Error(), "in flight") {
+			t.Errorf("the refusal should say the submission is in flight: %v", early)
+		}
+
 		if err := f.Wait(); err != nil {
 			t.Fatalf("wait: %v", err)
 		}
+		// A refused close must not have left the graph half-shut: after the
+		// work completes it closes normally.
 		if err := g.Close(); err != nil {
-			t.Fatalf("close: %v", err)
+			t.Fatalf("close after waiting: %v", err)
 		}
 	}
+
+	// If nothing was ever in flight, this ran twenty times and proved nothing
+	// about the path it exists for.
+	if refused == 0 {
+		t.Fatal("no close was refused in twenty attempts, so the in-flight path never ran")
+	}
+	t.Logf("%d of 20 closes caught a submission in flight", refused)
+}
+
+// inFlight reports whether a graph has a submission outstanding, by asking it
+// to do something it refuses while one is.
+//
+// There is no accessor for this and there should not be: it is a race by
+// construction for a caller, who can only know by holding the fence. A test
+// spinning on it is reaching a state, not depending on one.
+func inFlight(g *accel.Graph) bool {
+	// Rebinding an empty batch: the call reaches the in-flight check and
+	// changes nothing, so it reports the state without disturbing it.
+	err := g.Rebind(nil)
+	return err != nil && strings.Contains(err.Error(), "in flight")
 }
