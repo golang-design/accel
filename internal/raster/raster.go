@@ -124,6 +124,16 @@ type State struct {
 	// interpolated and every interpolation is a place for the oracle to
 	// disagree with itself.
 	Scissor Rect
+
+	// Flat marks the varying slots that take the provoking vertex's value
+	// rather than being interpolated. A nil or short slice leaves the remaining
+	// slots smooth.
+	//
+	// specs/032-stage-abi.md section 3.1 makes integer varyings flat-*only*,
+	// and that is not an accel choice: no target backend interpolates an
+	// integer. The mask lives here rather than being inferred from a type
+	// because this package deliberately has no types -- see the package doc.
+	Flat []bool
 }
 
 // Rect is a window-space rectangle, top-origin, with X,Y its minimum corner.
@@ -176,6 +186,13 @@ func Rasterize(st State, tri [3]Vertex, emit func(Fragment)) bool {
 		return false
 	}
 
+	// The provoking vertex is the *original* primitive's first vertex, captured
+	// before clipping. specs/035-cpu-rasterizer.md section 3 fixes it as first,
+	// and capturing it here is not a micro-optimisation: clipping can remove
+	// that vertex, and the fan hub is then a clip-generated vertex carrying an
+	// interpolated value -- which is exactly what a flat varying must never be.
+	provoking := tri[0].Varyings
+
 	verts, ok := clipNearFar(tri)
 	if !ok {
 		return false
@@ -183,15 +200,18 @@ func Rasterize(st State, tri [3]Vertex, emit func(Fragment)) bool {
 
 	any := false
 	for i := 1; i+1 < len(verts); i++ {
-		if rasterOne(st, [3]Vertex{verts[0], verts[i], verts[i+1]}, n, emit) {
+		if rasterOne(st, [3]Vertex{verts[0], verts[i], verts[i+1]}, n, provoking, emit) {
 			any = true
 		}
 	}
 	return any
 }
 
+// flatAt reports whether slot k takes the provoking vertex's value.
+func (st State) flatAt(k int) bool { return k < len(st.Flat) && st.Flat[k] }
+
 // rasterOne rasterizes one already-clipped triangle.
-func rasterOne(st State, tri [3]Vertex, n int, emit func(Fragment)) bool {
+func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fragment)) bool {
 	var w [3]window
 	for i, v := range tri {
 		w[i] = toWindow(st.Viewport, v)
@@ -259,6 +279,10 @@ func rasterOne(st State, tri [3]Vertex, n int, emit func(Fragment)) bool {
 			// specs/008-numerics.md section 8.1 counts.
 			den := l0*w[0].invW + l1*w[1].invW + l2*w[2].invW
 			for k := range vary {
+				if st.flatAt(k) {
+					vary[k] = provoking[k]
+					continue
+				}
 				num := l0*w[0].vary[k]*w[0].invW +
 					l1*w[1].vary[k]*w[1].invW +
 					l2*w[2].vary[k]*w[2].invW

@@ -138,26 +138,39 @@ broken transform rather than a convention mismatch.
 
 ## 5. Depth, stencil, blend, and the write mask
 
-Fixed function, in this order, matching every target backend:
+Fixed function, in this order, matching every target backend's **late** tests,
+which are the baseline everywhere:
 
-1. **Stencil test**, per face, with its compare function, read mask, and
+1. **Fragment stage.** A discard ends the invocation here and nothing below it
+   runs — no attachment write, and no depth write.
+2. **Stencil test**, per face, with its compare function, read mask, and
    reference value; then the fail / depth-fail / pass operations.
-2. **Depth test**, with its compare function, then the depth write if enabled.
-3. **Fragment stage**, unless an early-Z opportunity applies — see below.
+3. **Depth test**, with its compare function, then the depth write if enabled.
 4. **Blend**, per attachment, with separate colour and alpha factors and
    operations.
 5. **Write mask**, per attachment, per channel.
+
+The stage comes **first** and that is the whole point of the ordering. Early
+depth testing — running steps 2 and 3 before the stage — is an optimization every
+backend performs only when it can prove the stage does not change the answer, and
+a stage that can discard cannot be proven that. Listing the tests first would
+make [032](032-stage-abi.md) §4.2's guarantee unimplementable: a discarding
+fragment would already have written depth before it discarded.
 
 $$
 C_{\text{dst}}' \;=\; \text{op}\big(F_{\text{src}} \cdot C_{\text{src}},\; F_{\text{dst}} \cdot C_{\text{dst}}\big)
 $$
 
-**Early-Z is an observable, not an optimization, and this rasterizer does not
-perform it.** A stage that can discard — [032](032-stage-abi.md) §4.2 records
-`Discards` in the stage record — cannot have its depth test hoisted, and the
-reference implementation running the test in the specified order for every
-fragment is what makes the ordering itself checkable. The cost is speed, which
-this rasterizer explicitly does not have.
+**Early-Z is an observable, not an optimization, and this rasterizer never
+performs it.** [032](032-stage-abi.md) §4.2 records `Discards` in the stage
+record precisely so [033](033-render-api.md) does not promise an early-Z a
+pipeline cannot have; here, the order above is run for every fragment whatever
+the stage does, which is what makes the ordering itself checkable. The cost is
+speed, which this rasterizer explicitly does not have.
+
+A corpus entry follows directly: a discarding stage over a pre-cleared depth
+attachment must leave the depth untouched, which is exactly the assertion that
+distinguishes the two orderings.
 
 sRGB attachment formats convert on write and on read, not in the fragment stage.
 The stage sees linear values on every backend, which is what
@@ -208,6 +221,7 @@ interpret gets deleted the first time it goes red.
 | **Triangle.** A clip-space triangle to an offscreen target; interior pixels match. | bounded interior, exact coverage away from edges | Everything at once. The predecessor's first milestone. |
 | **Occlusion is draw-order independent.** Two overlapping triangles, near and far, drawn in both orders. | exact | A missing or non-functioning depth attachment. The near one must win both times. |
 | **Depth interpolation matches the closed form.** A known plane's interpolated depth against its analytic value. | bounded | §3's linear-versus-perspective error, which otherwise reads as z-fighting. |
+| **Discard writes no depth.** A stage discarding over a pre-cleared depth attachment. | exact | §5's ordering: with the tests run before the stage, the depth is already written when the discard happens. |
 | **MRT attachments are distinct.** Three attachments, a different constant to each. | exact | Aliased attachments, which a single-target test cannot see. |
 | **Winding flip empties coverage.** Same geometry, reversed front face, back-face culling on. | exact | The Metal winding divergence, which otherwise presents as a shading bug. |
 | **Near-plane survival.** Geometry straddling the near plane keeps its near half. | exact | The `[-1,1]`-on-`[0,1]` symptom: no coverage at all, reading like a broken transform. |

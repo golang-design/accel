@@ -457,3 +457,103 @@ func TestClippedVerticesCarryInterpolatedVaryings(t *testing.T) {
 			"carry no gradient", lo)
 	}
 }
+
+// A flat varying takes the provoking vertex's value everywhere, and the
+// provoking vertex is the *original* primitive's first -- which matters most
+// when clipping removed it.
+//
+// specs/032-stage-abi.md section 3.1 makes integer varyings flat-only because no
+// target backend interpolates an integer, and specs/035-cpu-rasterizer.md
+// section 3 fixes "first" rather than "last": a differing provoking vertex
+// changes integer varyings on shared vertices with no other symptom.
+func TestFlatVaryingTakesTheProvokingVertex(t *testing.T) {
+	st := state(32, 32)
+	st.Flat = []bool{true, false}
+
+	// Slot 0 is flat and slot 1 is smooth, from the same three vertices, so a
+	// rasterizer that applied the mask to the wrong slot fails both halves.
+	tri := [3]raster.Vertex{
+		at(-1, -1, 0, 7, 0),
+		at(1, -1, 0, 99, 100),
+		at(0, 1, 0, 99, 200),
+	}
+	n, varied := 0, false
+	raster.Rasterize(st, tri, func(f raster.Fragment) {
+		n++
+		if f.Varyings[0] != 7 {
+			t.Fatalf("a flat varying reads %g at (%d,%d); the provoking vertex carries 7",
+				f.Varyings[0], f.X, f.Y)
+		}
+		if f.Varyings[1] != 0 {
+			varied = true
+		}
+	})
+	if n == 0 {
+		t.Fatal("the triangle covered nothing")
+	}
+	if !varied {
+		t.Error("the smooth slot never varied, so the flat mask was applied to both")
+	}
+}
+
+// And when clipping removes the provoking vertex, the flat value is still the
+// original primitive's first vertex.
+//
+// This is the case that a rasterizer capturing the value from the clipped
+// polygon's fan hub gets wrong: that hub is a clip-generated vertex carrying an
+// interpolated value, which is precisely what a flat varying must never be.
+func TestFlatVaryingSurvivesTheProvokingVertexBeingClipped(t *testing.T) {
+	st := state(32, 32)
+	st.Flat = []bool{true}
+
+	// The first vertex is behind the near plane, so clipping removes it.
+	tri := [3]raster.Vertex{
+		{Pos: raster.Clip{X: -1, Y: -1, Z: -2, W: 1}, Varyings: []float32{7}},
+		{Pos: raster.Clip{X: 1, Y: -1, Z: 0, W: 1}, Varyings: []float32{99}},
+		{Pos: raster.Clip{X: 0, Y: 1, Z: 0, W: 1}, Varyings: []float32{99}},
+	}
+	n := 0
+	raster.Rasterize(st, tri, func(f raster.Fragment) {
+		n++
+		if f.Varyings[0] != 7 {
+			t.Fatalf("a flat varying reads %g after the provoking vertex was clipped "+
+				"away; it must still be the original primitive's first value, 7",
+				f.Varyings[0])
+		}
+	})
+	if n == 0 {
+		t.Fatal("the straddling triangle covered nothing")
+	}
+}
+
+// A clipped triangle becomes a fan, and the fan's internal edges are shared
+// edges like any other: each pixel is covered exactly once.
+//
+// Nothing else asserts this. The fill-rule tests above use unclipped triangles,
+// and double-shading along a clip-internal edge is invisible until something
+// blends -- at which point it looks like a blending bug.
+func TestClipFanInternalEdgesCoverOnce(t *testing.T) {
+	st := state(24, 24)
+	// Two vertices behind the near plane, so the clipped polygon is a
+	// quadrilateral and the fan has two triangles sharing an internal edge.
+	tri := [3]raster.Vertex{
+		{Pos: raster.Clip{X: -1.5, Y: -1, Z: -3, W: 1}},
+		{Pos: raster.Clip{X: 1.5, Y: -1, Z: -3, W: 1}},
+		{Pos: raster.Clip{X: 0, Y: 1, Z: 1, W: 1}},
+	}
+	got := cover(t, st, tri)
+	if len(got) == 0 {
+		t.Fatal("the clipped triangle covered nothing")
+	}
+	var twice []pixel
+	for p, n := range got {
+		if n != 1 {
+			twice = append(twice, p)
+		}
+	}
+	if len(twice) > 0 {
+		t.Errorf("%d pixels covered more than once inside one clipped triangle, first "+
+			"%v; the fan's internal edge is a shared edge and the top-left rule has to "+
+			"partition it too", len(twice), twice[0])
+	}
+}
