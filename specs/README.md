@@ -78,6 +78,9 @@ numbered in.
 | [033-render-api.md](033-render-api.md) | Drafted | 005's second child: render pipelines, pass nodes, load/store actions, declared access, draws and indirect counts |
 | [034-surface-present.md](034-surface-present.md) | Drafted | 005's third child: swapchains, the typed present slot, resize, headless surfaces, and where the windowing line is |
 | [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | In progress | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
+| [037-vulkan-bringup.md](037-vulkan-bringup.md) | Drafted | The cgo-free Vulkan backend through purego: loader, device, memory, descriptors, submission and device loss |
+| [038-spirv-target.md](038-spirv-target.md) | Drafted | Emitting SPIR-V from the shared IR, and how a binary target with no source level is verified |
+| [041-msaa.md](041-msaa.md) | Drafted | 005's fifth child: sample positions, resolve, and what the CPU oracle can still prove once a sample pattern exists |
 | [036-documentation.md](036-documentation.md) | Drafted | Who each document is for, what builder-voice looks like, the ten-tutorial deck, and the public-surface review that gates it |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
@@ -109,6 +112,8 @@ numbered in.
 | [028-sampling.md](028-sampling.md) | Implemented | M8: argmax and categorical sampling, with the random draw as an input so a token is reproducible |
 | [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
 | [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
+| [039-sampling-policy.md](039-sampling-policy.md) | Drafted | Post-v0: temperature, penalties, the composition order, and a seeded stream that makes a whole sequence reproducible rather than one token |
+| [040-batch-scheduler.md](040-batch-scheduler.md) | Drafted | Post-v0: slots over 030's pool, one plan at max batch with parked idle slots, admission, eviction, and the drain a membership-size change costs |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 
 ## Process
