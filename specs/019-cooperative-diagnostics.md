@@ -1,6 +1,6 @@
 ---
 title: "Cooperative diagnostics: shared-memory definition, arrival, and conflicting access"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 018-cooperative-lowering.md
@@ -109,7 +109,60 @@ are found deterministically rather than probabilistically.
   developer mode and off in strict mode, and the gap is what justifies having
   two modes.
 
-## 6. What it does not build
+## 6. Outcome — complete 2026-08-23
+
+All three diagnostics of §1's table are built and §5's cases pass. Each was
+confirmed by reinstating the weaker implementation and watching the right test
+fail, which for a checker is the only evidence worth having: a diagnostic that
+never fires and a diagnostic that cannot fire look identical from a passing
+suite.
+
+| Diagnostic | The weaker version, and what it fails |
+| --- | --- |
+| Shared-memory definition | A sentinel comparison fails the bit-pattern sweep on its first entry |
+| Barrier arrival | Inferring from a count of who is blocked stops reporting both mismatch cases |
+| Conflicting access | Reporting every shared access fails the concurrent-readers case |
+
+### 6.1 The instrumentation is in the generated lowering
+
+Nothing outside the kernel can see a shared-memory access: it is an ordinary
+slice index in generated Go. So the lowering carries the calls, which is what
+[004](004-kernel-authoring.md) means by calling the CPU lowering *instrumented*
+rather than merely generated. A nil tracker makes each one a no-op the compiler
+removes, so strict mode pays nothing for what developer mode wants, and there is
+one lowering rather than two to keep in step.
+
+**One bug this found in itself.** A store's own index was instrumented as a
+read, so every write also reported a read of the element it was about to
+define — a diagnostic that fires on every correct kernel, which is how people
+learn to ignore diagnostics.
+
+### 6.2 The barrier position had to be machine-independent
+
+The generated file is committed, so an absolute path in it would differ between
+machines and fail the freshness check on every checkout but the one that ran the
+generator. It is a base name and a line, which is stable and still actionable
+since a kernel and its generated file share a package.
+
+### 6.3 What it added beyond §§2–4
+
+- **`kernel.Diagnostic` and `Diagnostics`**, carrying kernel, workgroup,
+  invocation, the conflicting invocation, and element. A report saying only that
+  something raced is one nobody can act on.
+- **`kernel.SharedTracker`**, with `Read`, `ReadAt`, `Write`, `Epoch`, and
+  `Reset`. `ReadAt` returns its index so the instrumentation sits inside an
+  expression: a load appears wherever a value does, and hoisting it into a
+  statement would change the order of evaluation.
+- **`kernel.BarrierID`**, an index and a position, because a mismatch report is
+  only useful if a reader can see which two lines disagreed.
+- **`kernel.Options`** and `DispatchCooperativeWith`, which is the
+  developer/strict distinction [006](006-backends.md) §5 asks for. Diagnostics
+  are on by default: the checks are what make this backend an oracle rather than
+  an executor.
+- **`emit.Package.Fset`**, so a generated diagnostic can name a line in the
+  author's file.
+
+## 7. What it does not build
 
 - **No atomics or subgroups**, so no diagnostics for them.
   [020](020-cooperative-atomics.md) adds both together, because a diagnostic for
