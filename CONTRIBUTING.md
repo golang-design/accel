@@ -140,6 +140,7 @@ go run ./internal/conformance/cover/covercheck -profile=cover.out
 | `specs/` | Internal design specs and decisions | People building or reviewing accel |
 | `*.go` | The device layer's public API and its policy | Callers, and everyone |
 | `tensor/` | The tensor layer: builder, plans, operators, state | Callers writing a model |
+| `quant/` | Turning weights into the form a quantized kernel reads | Callers with quantized weights |
 | `internal/driver/` | The backend contract, and the plan a built graph lowers to | Anyone adding a backend |
 | `internal/cpu/` | The pure-Go backend and oracle | Anyone adding a backend |
 | `internal/metal/` | The Metal backend: adapters, memory, and plan execution | Anyone adding a backend |

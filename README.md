@@ -174,12 +174,15 @@ bindings are the better choice.
 | Kernel corpus: the unquantized v0 kernels | **Built** on both backends; the selection registry is not |
 | Metal backend | **Built** on an Apple M2: all 32 corpus kernels compile on the device and agree with the CPU backend, 25 of them bit for bit. Graphs, indirect dispatch and device loss included |
 | Tensor layer | **Built**: a tensor graph compiles once and runs on both backends, with views, broadcasting, normalization, matrix multiplication, a KV cache, and prefill and decode attention that agree |
+| Quantized weights: int8 with a per-block scale | **Built** on both backends, with a derived error bound rather than a measured one |
+| Sampling: argmax and categorical | **Built** on both backends; top-k and top-p are not |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 through M7](specs/009-sequencing.md).
+rows came from [M1 through M7](specs/009-sequencing.md), and the last two from
+[M8](specs/009-sequencing.md#m8-and-later)'s independently scoped work.
 
 A graph infers its own dependency edges from what each node declares it touches,
 comparing byte ranges rather than whole resources, so two nodes writing disjoint

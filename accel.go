@@ -88,6 +88,12 @@
 // attention. It lowers entirely through this package, so a backend never learns
 // what a tensor is.
 //
+// Above the tensor layer, golang.design/x/accel/quant turns weights into the
+// int8-plus-scale form a quantized kernel reads, with an error bound a test can
+// compute rather than a tolerance somebody tuned. Sampling primitives take
+// their random draw as an input rather than generating one, so a token is
+// reproducible and both backends agree on it.
+//
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and
 // scans are specified and unbuilt. specs/009-sequencing.md is the order the
