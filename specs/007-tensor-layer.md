@@ -282,6 +282,64 @@ lacks that capability; v0's required corpus never needs that selection.
 There is no silent dtype promotion. An unsupported requested arithmetic mode is
 a compile error naming the operator, capability, and device.
 
+## What is built, and where it differs from the drawing above — 2026-08-23
+
+The v0 tensor layer exists, in `golang.design/x/accel/tensor`, built across
+[024](024-tensor-bringup.md), [025](025-tensor-operators.md) and
+[026](026-tensor-decode.md). This section audits the built API against the one
+this spec draws, because a spec whose signatures no longer match the code is
+wrong in the way that costs a reader most: they trust it.
+
+**Four signatures differ, and each difference is a decision rather than a
+drift:**
+
+| Drawn here | Built | Why |
+| --- | --- | --- |
+| `ScatterRows(b, state, rows, indexName string)` | `ScatterRows(b, state, rows, ids *Tensor)` | the indices are device data that a previous operator may have produced, not a host-side name; a name would force them through the host |
+| `RoPE(b, x, positions *Tensor, rotaryDim, baseName)` | `RoPE(b, x, rotaryDim, baseName, offsetName)` | the registered kernel takes a *starting offset* and derives each row's position from it, which is what a decode step has; a positions tensor is the general form and needs a kernel that reads one |
+| `SoftmaxOptions{Axis, ScaleName, Mask, Causal}` | `SoftmaxOptions{Axis}` | the registered kernel has no mask parameter and no scale; `Axis` must be the last, which is the only axis it reduces over |
+| `AttentionOptions{CurrentLengthName, Causal}` | `AttentionOptions{CurrentLengthName, ScaleName, BaseName}` | the scale is named for the reason every other per-step value is, and `BaseName` is the prefill's first query position — what decides what the causal mask hides, which a boolean cannot say |
+
+**`Causal` is not a flag anywhere, and that is the substantive change.** This
+spec made it a compile-time attribute; the built form makes it the *kernel*.
+`AttentionDecode` attends over the whole cache and `AttentionPrefill` masks
+causally, and which one runs follows from the query's rank. A boolean would have
+been a third thing that could disagree with the two kernels.
+
+**Two additions this spec does not draw:**
+
+- **`Cast(b, x, to DType)`**, which appears in §"Layouts, views, and
+  broadcasting" as an operation that copies and converts but is absent from the
+  operator contracts below. It is an operator rather than an implicit rule at
+  every dtype boundary for the reason this spec gives elsewhere: a conversion
+  costs a pass over the data and changes the numbers, so a caller writes it.
+  `Add` refusing two dtypes and `Cast` existing are one decision seen from two
+  sides.
+- **`Builder.Err()`, `Runtime.Device()`, `Plan.Scalars()`**, and the accessors on
+  `Shape` and `Tensor`. Small, and each exists because something needed to ask a
+  question the drawing left no way to ask: whether a partly built model is
+  already wrong, which device a runtime lowers to, and what a caller has to bind
+  when they no longer hold the builder.
+
+**Absent, with what each waits on:**
+
+| | |
+| --- | --- |
+| `Contiguous` | a gather kernel with strides in a uniform block; [010](010-kernel-corpus.md) registers none |
+| `Softmax`'s mask and causal | a kernel with a mask binding |
+| `Squeeze`, `Unsqueeze` | `Reshape` expresses both; absent rather than aliased |
+| `LayerState` binding | a slot binds a whole resource, not a range of one; the view arithmetic is built and tested, and a per-layer cache needs one state per layer until the device layer can bind a sub-range |
+| composed attention as a fallback | `Attention` selects the fused kernel or refuses; it does not lower the score-softmax-value graph, and `Selections` says so rather than implying a choice was weighed |
+| a plan cache | post-v0 by this spec's own §"Ownership and core types" |
+
+**One rule this spec states that the built layer had to enforce rather than
+inherit.** A `Plan` "has the Graph's one-submission-in-flight restriction" — but
+a plan *binds* when you submit and the graph *runs* when the queue reaches it,
+so a second submission rebound the first one's slots before it ran. Two
+submissions with different inputs and outputs produced one result and both
+fences reported success. A lifetime rule enforced where a resource is owned does
+not automatically hold where it is bound on someone else's behalf.
+
 ## v0 operator contracts
 
 Operators are package functions taking the builder first. Attributes that affect
@@ -294,6 +352,8 @@ func Mul(b *Builder, x, y *Tensor) *Tensor
 func Scale(b *Builder, x *Tensor, scalarName string) *Tensor
 func SiLU(b *Builder, x *Tensor) *Tensor
 func SwiGLU(b *Builder, gate, value *Tensor) *Tensor
+
+func Cast(b *Builder, x *Tensor, to DType) *Tensor
 
 func Reshape(b *Builder, x *Tensor, shape Shape) *Tensor
 func Permute(b *Builder, x *Tensor, axes ...int) *Tensor
