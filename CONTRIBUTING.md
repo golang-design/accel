@@ -94,10 +94,23 @@ CGO_ENABLED=0 go test ./...
 Requires Go 1.27 or later. There is nothing to install and no GPU required,
 which is deliberate and should stay true.
 
-M0 and M1 are built: a CPU device opens, pooled memory allocates and
-suballocates, buffers slice into views, and bytes move to the device and back.
-Everything past that still returns `ErrNotImplemented`, which is expected: the
-API surface exists so the design can be read as Go and checked by the compiler.
+Metal code is `//go:build darwin`, so building on a Mac stops proving that the
+other platforms still compile. Run the cross-target build before pushing, since
+it is cheap and it is the only thing that catches a darwin-only file that leaked
+a reference into shared code:
+
+```sh
+for os in linux windows darwin; do GOOS=$os CGO_ENABLED=0 go build ./... || break; done
+```
+
+M0 through M5 are built. A CPU device opens, pooled memory allocates and
+suballocates, buffers slice into views and textures, bytes move to the device
+and back, kernels written in ordinary Go compile through a typed IR to a
+generated CPU lowering, graphs record and plan their own barriers and transient
+aliasing, cooperative kernels run against shared memory and barriers with
+deterministic diagnostics, and a portable tiled GEMM matches a higher-precision
+reference. The tensor layer of [007](specs/007-tensor-layer.md) and the Metal
+backend are what still return `ErrNotImplemented`.
 [`specs/009-sequencing.md`](specs/009-sequencing.md) is the order the rest
 arrives in.
 

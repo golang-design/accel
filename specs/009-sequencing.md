@@ -26,6 +26,9 @@ Every implementation milestone after M0 must satisfy all of these:
 - the affected package has greater than 90% statement coverage on the CPU path;
 - generated files are fresh under `go generate ./...` once generation exists;
 - `go test -race ./...`, `go vet ./...`, `gofmt`, and the cgo-free gate pass;
+- the library builds for every supported `GOOS`, not only the host's, which
+  starts mattering at M6 because Metal code is `//go:build darwin` and a Mac
+  stops proving the other platforms still compile;
 - every public API added or changed is documented for a builder audience; and
 - the milestone's named E2E runs through public APIs, not internal shortcuts.
 
@@ -615,34 +618,39 @@ their validation rows, which belong to [005](005-graphics.md) and are post-v0.
 
 ### M6. Metal
 
-**This milestone needs hardware, and cannot be completed without it.** Every
-milestone before it was provable in process — differential oracles, reinstated
-bugs, bit-for-bit comparisons — because the CPU backend is the thing under test
-and the thing running the test. M6 is the first where the subject is a device.
+**Correction, 2026-08-23.** This section previously opened *"this milestone
+needs hardware, and cannot be completed without it"*, and carried a table
+splitting its criteria into verifiable-without-a-device and needs-a-device. Both
+are deleted, because the premise was false: the development machine is an Apple
+M2, `Metal.framework` is present, and a four-line spike opened a device,
+compiled MSL, dispatched, and read back the right answer.
 
-What is verifiable without one, and what is not, decided before any code so that
-nothing is recorded complete on the strength of code nobody ran:
+**What that is worth recording is not the mistake but its class.** It is the
+same class as the bugs this file already lists: *an assumption nobody checked,
+believed because it was written down.* The plan asserted a property of the
+environment, then reasoned for several paragraphs about how to work around it,
+and the check that disproved it cost four lines. The generalization is that an
+environment constraint is a claim like any other, and the cost of testing one is
+usually smaller than the cost of the first paragraph written on top of it.
 
-| Verifiable without a Metal device | Needs a device |
-| --- | --- |
-| The MSL emitter's output: a golden, and a parse of the generated text | That the MSL compiles |
-| Retain-set and close-ordering logic, against a fake | That objects are released on the thread allowed to release them |
-| The capability and limit mapping, table-driven | That the device reports what the table expects |
-| The probe *harness* | Every probe's answer |
+**The Metal toolchain is not installed** — `xcrun metal` reports it missing —
+and that is not a gap. `newLibraryWithSource:options:error:` compiles MSL on the
+device at runtime, which is the path this backend needs anyway and is stronger
+evidence than a parse: the Metal compiler itself accepts or rejects the emitted
+text. What it does mean is that there is no offline compile of a golden file, so
+goldens stay text comparisons and the compile check is a runtime one.
 
-**The risk row below decides the order**, and it is worth reading before cutting
+**The risk row still decides the order**, and it is worth reading before cutting
 children: *MSL cannot meet exact/contraction or primitive ceilings | M6 probes
 before other Metal numeric tests | Change lowering/domain or reject primitive;
-never widen from observation.* The probes come first and a failure is answered
-by changing the lowering rather than loosening a bound — so a session without a
-device can build the emitter and the harness, and must leave the milestone *in
-progress* until someone runs the probes on a Mac.
+never widen from observation.* So the numeric probes of
+[008](008-numerics.md) run against Metal and the profile is recorded before
+anything numeric downstream is derived from it — and a probe that misses a
+normative ceiling is answered by changing the lowering, never by loosening a
+bound from what the device happened to report.
 
-A session that has one should start by running the numeric probes of
-[008](008-numerics.md) against Metal and recording the profile, because
-everything numeric downstream is derived from it.
-
-
+One expectation to carry in: Apple silicon's SIMD width is 32, so the CPU
+subgroup sweep at 1, 4, 32 and 64 does not map one-to-one onto this device.
 
 Build:
 
