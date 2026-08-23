@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
@@ -55,9 +54,7 @@ func adapters(t *testing.T) []driver.Adapter {
 	return nil
 }
 
-func f32(b []byte) []float32 {
-	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
-}
+func f32(b []byte) []float32 { return unsafeFloats(b) }
 
 // The adapter answers for itself before anything is opened, and its token is
 // stable.

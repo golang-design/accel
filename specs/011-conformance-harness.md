@@ -228,7 +228,7 @@ cleanup. Required milestone scenarios are:
 | M3 | Upload → flat Add graph → readback → rebind and replay |
 | M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised |
 | M5 | Upload → portable tiled GEMM graph → readback in strict mode |
-| M6 | M5 scenario selected explicitly on Metal |
+| M6 | M5 scenario selected explicitly on Metal — **built 2026-08-23** for the compute half: `Enumerate` finds the adapter, `OpenDevice` opens it by id, and a recorded graph runs upload → dispatch → readback |
 | M7 | Allocate model/KV/IO → compile explicit prefill/decode plans → prefill → repeated decode → logits |
 
 M7 additionally runs fused Attention present and absent, incremental-decode
@@ -308,6 +308,17 @@ CI fails on a missing manifest obligation even when line coverage remains above
   generation freshness, and cgo-free checks.
 - Tier 2, blocking when its backend milestone lands: Metal on macOS and later
   explicitly provisioned software drivers; full entry gate and relevant E2Es.
+
+  **Built 2026-08-23** as `.github/workflows/ci-metal.yml`, separate from
+  `ci.yml` rather than a row in its matrix. The rule below is why, and it cuts
+  both ways: Tier 1 runs the darwin device tests too and they must *skip* there,
+  because that job promises only the CPU backend and a hosted macOS runner
+  without a GPU must not turn it red. What carries the promise into the tests is
+  `ACCEL_REQUIRE_METAL`, which Tier 2 sets and Tier 1 does not; with it set,
+  every one of those tests fails rather than skipping.
+
+  A developer on a Mac gets the failure without setting anything, since a device
+  is there. The environment variable is the *promise*, not the capability.
 - Tier 3, non-blocking: scavenged/heavy browser or platform integrations.
 - Tier 4, nightly/manual: real multi-vendor hardware and extended fuzz/probe
   corpora.
@@ -338,6 +349,26 @@ unordered map output. Stable ordering is part of every serializer.
 - M4: numeric probes/budgets, cooperative diagnostics, reduction budgets.
 - M5: dot-product budgets and the GEMM E2E.
 - M6: target acceptance, Metal profiles, cross-backend entry gate.
+
+  **What that turned out to mean, 2026-08-23.** Target acceptance is the device
+  compiler itself: `newLibraryWithSource:` compiles MSL at runtime, so every
+  emitted kernel is accepted or rejected by the compiler that will run it, which
+  is stronger than the parse this spec could have settled for. The offline
+  toolchain is not installed and is not needed.
+
+  The cross-backend entry gate is a **differential over the whole corpus**: all
+  29 kernels run on both backends from one generated record, 22 agreeing bit for
+  bit and 7 within a ceiling taken from [008](008-numerics.md) §6 for the
+  bounded primitive each reaches. A kernel reaching none keeps an exact
+  comparison, which is what stops a ceiling spreading. The case table is checked
+  against the generated corpus list, so a kernel added and never compared is an
+  error rather than a silent gap.
+
+  One thing the harness had to learn: **the oracle is configured to the device
+  it checks.** The CPU emulates subgroups at a width a caller chooses, default
+  4, while the device executes 32 — so a reduction over 64 elements was two
+  different computations rather than a disagreement. Mimic mode exists for this
+  (§2), and the differential opens the CPU at the width the device reports.
 - M7: operator/model composition, kernel-manifest completeness, tensor E2Es.
 
 The harness is complete for v0 when every M7 manifest obligation is green on CPU

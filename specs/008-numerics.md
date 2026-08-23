@@ -301,6 +301,36 @@ numeq.Reduction(t, ctx, got, reference, numeq.Sequential(K), magnitudes)
 numeq.Operator(t, ctx, got, reference, budgetTrace)
 ```
 
+### What is built — 2026-08-23
+
+`numeq` is smaller than the sketch above and grows into it, per the rule the
+package's own doc states: every comparison names the *reason* values may differ,
+and a new reason is a new function rather than a tolerance argument added to an
+old one.
+
+| Declaration | Reason it admits |
+| --- | --- |
+| `Exact`, `ExactBits` | none: the values must be identical |
+| `Sum`, `SumBudget`, `Gamma`, `TreeDepth` | §7's reduction bound, from the addition depth |
+| `ULPDistance`, `WithinULP` | §6's ceiling for a bounded primitive |
+
+`ULPDistance` is **ordered-bit**, which is what makes a distance meaningful
+across a binade boundary — the two neighbours of a power of two are different
+absolute sizes, and §6 defines the `sqrt` ceiling in exactly these terms for
+exactly this reason. The sign is folded on the unsigned bit pattern rather than
+by testing a converted integer for negative: widening `uint32` to `int64` never
+produces a negative, which put the two zeros 2³¹ steps apart in the first
+version.
+
+`WithinULP` checks NaN before the distance, because every ordinary comparison
+against a NaN is false and one would otherwise be reported as inside any ceiling
+at all. That is the same trap §11 records for tolerance comparisons, and it is
+worth repeating in code that exists to avoid tolerances.
+
+`Context`, `OracleID` and the per-primitive entry points are not built. They
+arrive with the consumer that needs to distinguish two oracles, which v0 does
+not: there is one oracle, and it is the CPU backend.
+
 There is no public tolerance parameter. Every failure reports backend/device,
 class, input index, got/reference bits, absolute and ULP error, allowed budget,
 and the budget trace. `numeq.Exact` fails immediately if the backend profile has
@@ -313,8 +343,47 @@ sites rather than banning every float literal.
 
 ## 10. Open measurements
 
-- Verify contraction control and class-A rounding on CPU arm64, CPU amd64, and
-  Metal before M4 and M6 claim their respective exact domains.
+### Metal, measured 2026-08-23
+
+The first line below is **closed**, and what it found narrows one domain:
+
+| §3 condition | CPU arm64 | Metal (Apple M2) |
+| --- | --- | --- |
+| round to nearest even | yes | yes |
+| contraction off | yes | yes |
+| subnormals preserved | yes | **no** |
+| inf/NaN produced | yes | yes |
+
+So `ExactAvailable` holds on both — it asks only about rounding and contraction,
+because §3 makes the finite-input and normal-result conditions properties of a
+*comparison* rather than of a machine. **Metal's exact domain therefore excludes
+a subnormal result.** Apple GPUs flush one to zero while preserving a stored
+one: `x + 0.0f` at 2⁻¹⁴⁹, `2⁻¹⁴⁸ * 0.5`, and `(2⁻⁷⁰)²` all return zero with
+runtime operands, so nothing was folded. That narrows a domain and widens no
+ceiling, which is the only direction this section allows. See
+[`conventions.md`](../docs/conventions.md).
+
+**Contraction control was not where it looked.** `MTLCompileOptions` with
+`MTLMathMode.safe` governs reassociation and denormal flushing and leaves a
+multiply-add free to fuse, so §5's requirement is met by a pragma the emitter
+puts in every kernel rather than by a compile option. A device test asserts both
+that the pragma works and that the default contracts, so a Metal release that
+changed its default is noticed here rather than as a one-bit disagreement inside
+some kernel.
+
+**The probe harness had to change to measure contraction at all.** Its `Ops`
+composed a multiply and an add through two calls, which on a GPU are two
+kernels and two compilations — a composition that cannot fuse however the device
+is configured, so it would have reported contraction off on a backend that
+fuses everything it compiles. `Ops` now asks the backend to evaluate `a*b+c` as
+one expression. This is the same failure §3 already warns about for Go
+constants, arriving through a different door: *a probe whose inputs cannot
+distinguish the two cases measures nothing and says so confidently.*
+
+### Still open
+
+- Measure v0 division and transcendental primitives across the required corpus;
+  a miss changes the lowering or supported domain, not the ceiling.
 - Measure v0 division and transcendental primitives across the required corpus;
   a miss changes the lowering or supported domain, not the ceiling.
 - Establish a domain and normative ceiling for `pow` before a kernel corpus adds

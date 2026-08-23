@@ -4,10 +4,11 @@
 
 //go:build darwin
 
-package metal
+package metal_test
 
 import (
 	"fmt"
+	"unsafe"
 
 	"golang.design/x/accel/internal/conformance/probe"
 	"golang.design/x/accel/internal/kernelc/emit"
@@ -15,6 +16,13 @@ import (
 )
 
 // # Measuring Metal's arithmetic
+//
+// This lives in the external test package, not in the backend. It imports
+// internal/conformance/probe, which CONTRIBUTING and docs/architecture.md both
+// describe as test machinery -- and accel links internal/metal into every
+// binary on darwin, so a Prober in the backend would put the conformance
+// harness in every user's program. A measurement tool belongs on the side of
+// the seam that measures.
 //
 // specs/009-sequencing.md's risk table makes this first: "M6 probes before
 // other Metal numeric tests", answered by changing the lowering and never by
@@ -59,6 +67,14 @@ kernel void p_ldexp(const device float *in [[buffer(0)]], device float *out [[bu
   out[0] = ldexp(in[0], int(in[1]));
 }
 `
+
+// unsafeFloats views a shared buffer's bytes as f32.
+func unsafeFloats(b []byte) []float32 {
+	if len(b) < 4 {
+		return nil
+	}
+	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
+}
 
 // Prober runs one arithmetic operation at a time on a device.
 type Prober struct {

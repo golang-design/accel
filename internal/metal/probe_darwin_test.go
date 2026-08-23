@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"golang.design/x/accel/internal/conformance/probe"
-	"golang.design/x/accel/internal/metal"
 	"golang.design/x/accel/internal/mtl"
 )
 
@@ -34,7 +33,7 @@ func TestMetalNumericProfile(t *testing.T) {
 		}
 	}()
 
-	p, err := metal.NewProber(devs[0])
+	p, err := NewProber(devs[0])
 	if err != nil {
 		t.Fatalf("prober: %v", err)
 	}
@@ -104,7 +103,7 @@ func TestTheProbeReachesTheDevice(t *testing.T) {
 			d.Close()
 		}
 	}()
-	p, err := metal.NewProber(devs[0])
+	p, err := NewProber(devs[0])
 	if err != nil {
 		t.Fatalf("prober: %v", err)
 	}

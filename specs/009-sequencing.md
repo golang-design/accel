@@ -693,6 +693,22 @@ Done, in order:
 6. E2E: the same public upload → GEMM → readback scenario as CPU, selected by
    enumerating a Metal `AdapterID` and calling `OpenDevice`.
 
+**Six of six are met as of 2026-08-23**, and the list is checked off here rather
+than left for a later session to re-derive:
+
+| | Where |
+| --- | --- |
+| 1 | `Enumerate` reports `Apple M2`; the capability and limit table is queried, not tabled, and the SIMD width comes from a compiled pipeline |
+| 2 | [022](022-msl-target.md)'s recorded profile, and [008](008-numerics.md) §10, which this closed |
+| 3 | All seven `DType`s round-trip, including `bf16`, `i8` and `u8`, which have no kernel and would never appear in a compute test |
+| 4 | The corpus differential covers eight barrier-and-shared-memory kernels |
+| 5 | Four shapes against a straight triple loop, three with tails on every axis |
+| 6 | A recorded graph runs upload → dispatch → readback through the public API on an adapter opened by id |
+
+**M6 is not complete**, because [023](023-metal-graph.md) is unbuilt: multi-node
+re-encoding is written but unmeasured, indirect dispatch is refused by name, and
+`Lost()` answers nil always rather than reporting Metal's terminal loss.
+
 The numeric probes run before the GEMM. If Metal misses a normative ceiling, the
 lowering or supported domain changes; tests are not widened. Completion-handler
 lifetime is exercised under repeated early closes and asynchronous completion.

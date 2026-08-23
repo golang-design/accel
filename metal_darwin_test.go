@@ -255,3 +255,91 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 	}
 	t.Logf("refused: %v", buildErr)
 }
+
+// A buffer round trip at every v0 dtype, on Metal.
+//
+// specs/009-sequencing.md's M6 done list, item 3. A round trip is a copy and
+// not a dispatch, so it needs nothing from the MSL target -- which is what makes
+// it worth asserting separately: bf16, i8 and u8 have no kernel in the corpus
+// and the compute differential would never touch them. A dtype whose *storage*
+// worked and whose stride was wrong would corrupt whatever the tensor layer
+// later put in it, silently.
+//
+// specs/001-device-resources.md section 3.2 makes a storage buffer a tightly
+// packed array of one dtype, so the element stride is the dtype's size and
+// there is no padding anywhere. The offsets below are non-zero for that reason:
+// a copy that ignored its offset would pass at zero and fail on every real
+// suballocation.
+func TestEveryDTypeRoundTripsOnMetal(t *testing.T) {
+	d := openMetal(t)
+	const n = 64
+	usage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+
+	// Bit patterns rather than values: a round trip moves bytes, and comparing
+	// values would ask a question about conversion that this test is not about.
+	// Every pattern is chosen to have all four bytes distinct where the width
+	// allows, so a transposed or truncated element is visible.
+	for _, dt := range []accel.DType{accel.F32, accel.F16, accel.BF16,
+		accel.I32, accel.U32, accel.I8, accel.U8} {
+		t.Run(dt.String(), func(t *testing.T) {
+			b, err := d.NewBuffer(accel.BufferDescriptor{
+				DType: dt, Count: n, Usage: usage, Label: dt.String(),
+			})
+			if err != nil {
+				t.Fatalf("buffer: %v", err)
+			}
+			defer b.Close()
+
+			switch dt {
+			case accel.F32:
+				roundTrip(t, d, b, func(i int) float32 { return float32(i)*1.5 - 8 })
+			case accel.I32:
+				roundTrip(t, d, b, func(i int) int32 { return int32(i)*7 - 100 })
+			case accel.U32:
+				roundTrip(t, d, b, func(i int) uint32 { return uint32(i)*0x01020304 + 5 })
+			case accel.F16, accel.BF16:
+				roundTrip(t, d, b, func(i int) uint16 { return uint16(i)*0x0102 + 3 })
+			case accel.I8:
+				roundTrip(t, d, b, func(i int) int8 { return int8(i) - 32 })
+			case accel.U8:
+				roundTrip(t, d, b, func(i int) uint8 { return uint8(i) + 7 })
+			}
+		})
+	}
+}
+
+// roundTrip writes a buffer through the queue and reads it back, at an offset.
+func roundTrip[T comparable](t *testing.T, d *accel.Device, b *accel.Buffer, at func(int) T) {
+	t.Helper()
+	n := b.Count()
+	src := make([]T, n)
+	for i := range src {
+		src[i] = at(i)
+	}
+	if err := d.Queue().WriteBuffer(b, 0, src); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got := make([]T, n)
+	if err := d.Queue().ReadBuffer(b, 0, got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for i := range got {
+		if got[i] != src[i] {
+			t.Fatalf("element %d came back as %v, want %v", i, got[i], src[i])
+		}
+	}
+
+	// And a partial read from a non-zero offset, which is what every transfer
+	// into a suballocated pool looks like.
+	const off = 16
+	tail := make([]T, n-off)
+	if err := d.Queue().ReadBuffer(b, off, tail); err != nil {
+		t.Fatalf("read at %d: %v", off, err)
+	}
+	for i := range tail {
+		if tail[i] != src[off+i] {
+			t.Fatalf("element %d of a read at offset %d came back as %v, want %v: the "+
+				"element stride is not the dtype's size", i, off, tail[i], src[off+i])
+		}
+	}
+}
