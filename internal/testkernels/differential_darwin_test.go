@@ -254,6 +254,39 @@ func diffCases() []diffCase {
 			groups:   accel.WorkgroupCount{X: 12},
 		},
 		{
+			// f16 to f32 is exact -- every f16 value is an f32 value -- so this
+			// must agree bit for bit and would be the first thing to fail if a
+			// backend's widening were not a widening.
+			kernel: &testkernels.CastF16ToF32Kernel, counts: []int{256, 256},
+			groups: accel.WorkgroupCount{X: 4},
+		},
+		{
+			// f32 to f16 rounds, and to nearest-even, which is the only
+			// rounding 002 admits. Bit for bit again: the two backends must
+			// round the same way, and a backend that truncated instead would
+			// differ on half its inputs.
+			kernel: &testkernels.CastF32ToF16Kernel, counts: []int{256, 256},
+			groups: accel.WorkgroupCount{X: 4},
+			// Values with bits below f16's precision, so the rounding actually
+			// happens: a seed of small integers would be exact in f16 and would
+			// compare equal however either backend rounded.
+			seed: func(b, i int) float32 { return float32(i)*1.0009765625 - 100 },
+		},
+		{
+			// Four query positions over four cached ones, causally masked, with
+			// grouped query heads. Base zero, so the first query sees one
+			// position and the last sees four -- which exercises the mask
+			// across its whole range rather than at one length.
+			kernel: &testkernels.AttentionPrefillKernel,
+			counts: []int{4 * 2 * 8, 4 * 1 * 8, 4 * 1 * 8, 4 * 2 * 8},
+			uniforms: []any{testkernels.PrefillDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, QSeq: 4, KVLen: 4, Base: 0,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 4 * 2},
+			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
+		},
+		{
 			kernel: &testkernels.AttentionDecodeKernel,
 			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 2 * 8},
 			uniforms: []any{testkernels.AttnDims{

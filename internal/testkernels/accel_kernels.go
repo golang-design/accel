@@ -130,6 +130,30 @@ func (RowDimsCodec) Encode(dst []byte, value RowDims) error {
 	return w.Err()
 }
 
+// PrefillDimsCodec is the generated std140 codec for PrefillDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type PrefillDimsCodec struct{}
+
+// PrefillDimsBlockSize is the encoded size of a PrefillDims block, in bytes.
+const PrefillDimsBlockSize = 32
+
+// EncodedSize reports the std140 block size.
+func (PrefillDimsCodec) EncodedSize() int { return PrefillDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (PrefillDimsCodec) Encode(dst []byte, value PrefillDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.QHeads)
+	w.U32(4, value.KVHeads)
+	w.U32(8, value.HeadDim)
+	w.U32(12, value.QSeq)
+	w.U32(16, value.KVLen)
+	w.U32(20, value.Base)
+	w.F32(24, value.Scale)
+	return w.Err()
+}
+
 // ParamsCodec is the generated std140 codec for Params.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -690,6 +714,100 @@ kernel void AttentionDecode(
 			slot.State = f
 		}
 		return attentionDecodeCoop(t, accel.KernelUniformValue[AttnDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelSlice[float32](a, 3), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]float32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// castF32ToF16Flat is the generated flat lowering of CastF32ToF16.
+//
+// It is what the CPU backend runs. The authored CastF32ToF16 is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func castF32ToF16Flat(t accel.Thread, in []float32, out []accel.Float16) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = accel.ToFloat16(in[i])
+	}
+}
+
+// CastF32ToF16Kernel is the compiled form of CastF32ToF16.
+var CastF32ToF16Kernel = accel.Kernel{
+	Name:          "CastF32ToF16",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF16, Access: accel.KernelWrite},
+	},
+	Digest:    "b2ee3815213d2e6bad1ab9c9a2ae6830",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void CastF32ToF16(
+    const device float *in [[buffer(0)]],
+    device half *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        out[i] = half(in[i]);
+    }
+}
+`,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		castF32ToF16Flat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[accel.Float16](a, 1))
+	},
+}
+
+// castF16ToF32Flat is the generated flat lowering of CastF16ToF32.
+//
+// It is what the CPU backend runs. The authored CastF16ToF32 is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func castF16ToF32Flat(t accel.Thread, in []accel.Float16, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = in[i].F32()
+	}
+}
+
+// CastF16ToF32Kernel is the compiled form of CastF16ToF32.
+var CastF16ToF32Kernel = accel.Kernel{
+	Name:          "CastF16ToF32",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "74378c025e4bad35fb2484be5d47b17c",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void CastF16ToF32(
+    const device half *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        out[i] = float(in[i]);
+    }
+}
+`,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		castF16ToF32Flat(t, accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[float32](a, 1))
 	},
 }
 
@@ -2577,6 +2695,303 @@ kernel void Softmax(
 	},
 }
 
+// attentionPrefillFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type attentionPrefillFrame struct {
+	pc       int
+	group0   uint32
+	lane1    uint32
+	s2       uint32
+	h3       uint32
+	kvHead4  uint32
+	limit5   uint32
+	score6   float32
+	visible7 bool
+	acc8     float32
+	i9       uint32
+	qi10     float32
+	ki11     float32
+	m12      float32
+	stride13 uint32
+	a14      float32
+	b15      float32
+	best16   float32
+	e17      float32
+	stride18 uint32
+	total19  float32
+	acc20    float32
+	j21      uint32
+}
+
+// attentionPrefillCoop runs one invocation of AttentionPrefill to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func attentionPrefillCoop(t accel.Thread, d PrefillDims, q []float32, k []float32, v []float32, out []float32, scores *[128]float32, red *[128]float32, f *attentionPrefillFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.group0 = t.GroupID().X
+			f.lane1 = t.LocalID().X
+			f.s2 = (f.group0 / d.QHeads)
+			f.h3 = (f.group0 % d.QHeads)
+			f.kvHead4 = (f.h3 / (d.QHeads / d.KVHeads))
+			f.limit5 = (d.Base + f.s2)
+			f.score6 = float32(0)
+			f.visible7 = ((f.lane1 <= f.limit5) && (f.lane1 < d.KVLen))
+			if f.visible7 {
+				f.acc8 = float32(0)
+				{
+					f.i9 = uint32(0)
+					for ; f.i9 < d.HeadDim; f.i9 = (f.i9 + uint32(1)) {
+						f.qi10 = q[((((f.s2 * d.QHeads) + f.h3) * d.HeadDim) + f.i9)]
+						f.ki11 = k[((((f.lane1 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim)) + f.i9)]
+						f.acc8 = float32(f.acc8 + float32(f.qi10*f.ki11))
+					}
+				}
+				f.score6 = float32(f.acc8 * d.Scale)
+			}
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.score6
+			f.m12 = f.score6
+			if !f.visible7 {
+				f.m12 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			}
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.m12
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "prefill.go:99:2"}
+			return true
+		case 2:
+			f.stride13 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lane1 < f.stride13 {
+				f.a14 = red[tr.ReadAt(1, int(f.lane1))]
+				f.b15 = red[tr.ReadAt(1, int((f.lane1+f.stride13)))]
+				if f.b15 > f.a14 {
+					tr.Write(1, int(f.lane1))
+					red[f.lane1] = f.b15
+				}
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: "prefill.go:109:3"}
+			return true
+		case 5:
+			f.stride13 = (f.stride13 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride13 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.best16 = red[tr.ReadAt(1, int(int32(0)))]
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = accel.KernelBarrierID{Index: 8, Pos: "prefill.go:112:2"}
+			return true
+		case 9:
+			f.e17 = float32(0)
+			if f.visible7 {
+				f.e17 = kmath.Exp(float32(scores[tr.ReadAt(0, int(f.lane1))] - f.best16))
+			}
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.e17
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.e17
+			f.pc = 10
+			continue
+		case 10:
+			f.pc = 11
+			frame.Barrier = accel.KernelBarrierID{Index: 10, Pos: "prefill.go:122:2"}
+			return true
+		case 11:
+			f.stride18 = uint32(64)
+			f.pc = 15
+			continue
+		case 12:
+			if f.lane1 < f.stride18 {
+				tr.Write(1, int(f.lane1))
+				red[f.lane1] = float32(red[tr.ReadAt(1, int(f.lane1))] + red[tr.ReadAt(1, int((f.lane1+f.stride18)))])
+			}
+			f.pc = 13
+			continue
+		case 13:
+			f.pc = 14
+			frame.Barrier = accel.KernelBarrierID{Index: 13, Pos: "prefill.go:128:3"}
+			return true
+		case 14:
+			f.stride18 = (f.stride18 / uint32(2))
+			f.pc = 15
+			continue
+		case 15:
+			if f.stride18 > uint32(0) {
+				f.pc = 12
+				continue
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.total19 = red[tr.ReadAt(1, int(int32(0)))]
+			if f.lane1 < d.HeadDim {
+				f.acc20 = float32(0)
+				{
+					f.j21 = uint32(0)
+					for ; f.j21 < d.KVLen; f.j21 = (f.j21 + uint32(1)) {
+						f.acc20 = float32(f.acc20 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[((((f.j21*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+					}
+				}
+				out[((((f.s2 * d.QHeads) + f.h3) * d.HeadDim) + f.lane1)] = float32(f.acc20 / f.total19)
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// AttentionPrefillKernel is the compiled form of AttentionPrefill.
+var AttentionPrefillKernel = accel.Kernel{
+	Name:          "AttentionPrefill",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "q", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "k", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "v", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "4b93cce34dda553d5f7a9b41c512212f",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PrefillDims {
+    uint QHeads;
+    uint KVHeads;
+    uint HeadDim;
+    uint QSeq;
+    uint KVLen;
+    uint Base;
+    float Scale;
+    char _tail[4];
+};
+
+kernel void AttentionPrefill(
+    const device float *q [[buffer(0)]],
+    const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant PrefillDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float scores[128];
+    threadgroup float red[128];
+    uint group = _wid.x;
+    uint lane = _lid.x;
+    uint s = (group / d.QHeads);
+    uint h = (group % d.QHeads);
+    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint limit = (d.Base + s);
+    float score = float(0);
+    bool visible = ((lane <= limit) && (lane < d.KVLen));
+    if (visible) {
+        float acc = float(0);
+        for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+            float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
+            float ki = k[((((lane * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
+            acc = (acc + (qi * ki));
+        }
+        score = (acc * d.Scale);
+    }
+    scores[lane] = score;
+    float m = score;
+    if (!visible) {
+        m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    }
+    red[lane] = m;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            float a = red[lane];
+            float b = red[(lane + stride)];
+            if ((b > a)) {
+                red[lane] = b;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float best = red[int(0)];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float e = float(0);
+    if (visible) {
+        e = precise::exp((scores[lane] - best));
+    }
+    scores[lane] = e;
+    red[lane] = e;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            red[lane] = (red[lane] + red[(lane + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float total = red[int(0)];
+    if ((lane < d.HeadDim)) {
+        float acc = float(0);
+        for (uint j = uint(0); (j < d.KVLen); j = (j + uint(1))) {
+            acc = (acc + (scores[j] * v[((((j * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+        }
+        out[((((s * d.QHeads) + h) * d.HeadDim) + lane)] = (acc / total);
+    }
+}
+`,
+	Suspensions: 5,
+	SharedSizes: []int{128, 128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		var s1 [128]float32
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "PrefillDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, PrefillDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*attentionPrefillFrame)
+		if f == nil {
+			f = &attentionPrefillFrame{}
+			slot.State = f
+		}
+		return attentionPrefillCoop(t, accel.KernelUniformValue[PrefillDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelSlice[float32](a, 3), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]float32](a, 1), f, slot, slot.Shared)
+	},
+}
+
 // segmentSumFlat is the generated flat lowering of SegmentSum.
 //
 // It is what the CPU backend runs. The authored SegmentSum is never registered as
@@ -3258,6 +3673,8 @@ var Kernels = []*accel.Kernel{
 	&AtomicOpsKernel,
 	&CountWorkgroupsKernel,
 	&AttentionDecodeKernel,
+	&CastF32ToF16Kernel,
+	&CastF16ToF32Kernel,
 	&ExchangeKernel,
 	&ReduceLoopKernel,
 	&ReduceUnrolledKernel,
@@ -3274,6 +3691,7 @@ var Kernels = []*accel.Kernel{
 	&LinearTiledKernel,
 	&RMSNormKernel,
 	&SoftmaxKernel,
+	&AttentionPrefillKernel,
 	&SegmentSumKernel,
 	&CountAboveKernel,
 	&NormalizeKernel,

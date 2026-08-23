@@ -130,6 +130,38 @@ Minimal prefill may use the composed MatMul → Softmax → MatMul path. Tests c
 remove the fused record from a runtime registry to exercise selection absence on
 any CPU.
 
+### Added for M7 — 2026-08-23
+
+Three kernels the tensor layer needed and the corpus did not have. Each carries
+this section's proof obligations rather than being added because something
+upstream was blocked on it:
+
+| Kernel | Obligation met |
+| --- | --- |
+| `CastF32ToF16` | round-to-nearest-even narrowing; agrees bit for bit between backends, over inputs with bits below f16's precision so the rounding actually happens |
+| `CastF16ToF32` | exact widening: every f16 value is an f32 value, so anything but equality is a bug rather than a rounding difference |
+| `AttentionPrefill` | matched against a straight quadruple loop in f64 at four shapes, and **equal to incremental decode over the same cache** |
+
+**A conversion is a kernel because the alternative is three synchronisation
+points.** A value produced on the device and needed in another format would
+otherwise be read back, looped over on the host, and uploaded again, inside what
+should be one graph.
+
+**Causal masking is built into the prefill rather than an option**, because a
+prefill that let a token attend to its own future is not a slower answer, it is
+a different model — and it would still produce plausible numbers, sum to one,
+and pass every shape check. So the test attacks the mask directly: it changes a
+cached value that only a *later* query position can see, asserts that the
+earlier positions do not move, and asserts that a later one *does* — because
+without that second half the first passes when nothing reads V at all.
+
+**Prefill-versus-decode parity is the reason both exist.** If they disagreed, a
+model would produce different text depending on whether it had been prompted or
+generated, which is the least debuggable failure this project could ship. They
+agree within the softmax's reduction budget rather than bit for bit, because the
+two reduce over different numbers of lanes and §7 bounds that rather than
+forbidding it.
+
 ## 3.1 What is built — 2026-08-23
 
 Every kernel in both tables above exists on the CPU backend, in
