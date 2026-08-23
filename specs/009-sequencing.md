@@ -995,6 +995,42 @@ keyed by tensor pointer, so a *view* of an output — a reshape feeding a
 projection, which is exactly what a logits head is — did not count as a read.
 It is keyed by the producing node now.
 
+#### What the post-M7 audit found, 2026-08-23
+
+Recorded because the pattern generalizes, not because the fixes were large.
+Every one was found by reading a document against the code rather than by a
+test, which is the only thing that finds this class at all.
+
+**Two exported device-layer declarations were documented in a tensor-layer
+spec.** `Graph.SetUniform` and `accel.FailedFence` exist because
+[007](007-tensor-layer.md) needed them, so they were explained where the need
+arose — [024](024-tensor-bringup.md) — and a reader of
+[003](003-command-graph.md), which owns the command graph and the fence, had no
+way to learn they were there. A declaration belongs in the spec that owns the
+*thing*, not the one that wanted it.
+
+**And 003 said three things vary between submissions "and nothing else".**
+`SetUniform` made it four. That is the sharper finding: an addition made
+somewhere else silently falsified a closed list in a spec nobody edited.
+
+**Four tensor signatures differ from what 007 draws**, each for a reason worth
+having, and none of them recorded until now. A spec whose signatures no longer
+match the code is wrong in the way that costs a reader most, because they trust
+it rather than checking.
+
+**Four status paragraphs were a milestone or two out of date**, in
+[004](004-kernel-authoring.md), [006](006-backends.md), `CONTRIBUTING.md`, and
+the README's kernel counts. 004 still listed MSL among the unbuilt targets; 006
+still said one backend met the contract and that its convention-correction rule
+had nothing to correct, which four measured Metal divergences contradict.
+
+**And `tensor/` was a public package in no layout table.**
+
+The generalization: **the things that rot are the ones no test reads.** Every
+one of these compiled, passed, and was wrong. A milestone that lands fast leaves
+prose behind it, and the prose is what a new reader meets first — so the audit
+is not tidying, it is the only check those sentences ever get.
+
 ### M8 and later
 
 Independently scoped later work includes:
