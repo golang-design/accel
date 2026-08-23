@@ -28,7 +28,7 @@ import "math"
 
 // Clip is a clip-space position, before the perspective divide.
 //
-// The convention is specs/032-stage-abi.md section 2.3: z in [-w, w], which
+// The convention is specs/032-stage-abi.md section 2.4: z in [-w, w], which
 // becomes NDC z in [-1, 1] and window z in [0, 1]. A vertex kernel emits this
 // range on every backend, and the backends whose native NDC range is [0, 1]
 // fold the remap into emitted code rather than asking a caller to adjust a

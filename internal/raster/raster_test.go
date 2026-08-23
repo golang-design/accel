@@ -335,7 +335,7 @@ func TestNearPlaneStraddleKeepsTheNearHalf(t *testing.T) {
 	}
 }
 
-// Reverse-Z, which specs/032-stage-abi.md section 2.4 claims needs no API
+// Reverse-Z, which specs/032-stage-abi.md section 2.5 claims needs no API
 // change: near maps to window 1.0 and far to 0.0 under the existing convention,
 // so a reversed projection is a clear value and a compare function.
 func TestReverseZMapsNearToOne(t *testing.T) {

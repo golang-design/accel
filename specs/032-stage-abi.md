@@ -122,9 +122,26 @@ type happens in the fetch. The legal pairs are in [033](033-render-api.md), whic
 owns the descriptor; this spec owns only the rule that the pair is **checked**,
 at generation, against the declared layout.
 
-### 2.3 `accel.Clip` and the one clip convention
+### 2.3 Vector types are Go arrays, which the compiler already understands
 
-`accel.Clip` is a four-component clip-space position. The convention is 005's and
+Before the clip convention, one thing the examples above would otherwise imply
+wrongly. `accel.Vec2`, `accel.Vec3`, `accel.Vec4` and `accel.Clip` are **aliases
+for `[2]float32`, `[3]float32` and `[4]float32`**, not new named types.
+
+The kernel language already spells a vector that way: `std140` maps `[3]float32`
+to a three-component vector consuming twelve bytes aligned to sixteen, and the
+uniform encoder is generated from exactly those Go array types. Introducing a
+parallel set of named vector types for the graphics stages would give the
+compiler two spellings for one thing, and the second one is the one nobody
+teaches the layout code about.
+
+The names exist because `accel.Clip` at a signature's return says what the value
+*is* where `[4]float32` says only how wide it is. An alias buys the reading
+without a second type.
+
+### 2.4 The one clip convention
+
+`accel.Clip` is the four-component clip-space position a vertex stage returns. The convention is 005's and
 is restated here because this is where it is enforced:
 
 $$
@@ -140,7 +157,7 @@ never in a caller's projection matrix. The depth attachment stores window depth,
 so clears and compares are in `[0, 1]` and the two ranges are never the same
 number in the same place.
 
-### 2.4 Decision: reverse-Z needs no API change
+### 2.5 Decision: reverse-Z needs no API change
 
 005 leaves this open and works out its own answer; this spec adopts it.
 

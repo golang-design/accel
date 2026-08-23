@@ -38,7 +38,7 @@ directives; 032 defines them.
 
 **This spec's four open questions are closed**, each in the direction this
 document itself argued, and each in the child that owns the consequence:
-reverse-Z in [032](032-stage-abi.md) §2.4, vertex layout derivation in
+reverse-Z in [032](032-stage-abi.md) §2.5, vertex layout derivation in
 [033](033-render-api.md) §5, pass merging in [033](033-render-api.md) §5, and
 resize-versus-rebuild in [034](034-surface-present.md) §4.1. The former "Open
 questions" section below is retained only for the entries that stay open.
@@ -651,7 +651,7 @@ Each of these is excluded for a reason, not by omission.
 
 Four questions that stood here are closed, each in the child spec that owns the
 consequence, and each in the direction this document argued: reverse-Z needs no
-API change ([032](032-stage-abi.md) §2.4), the vertex layout stays a descriptor
+API change ([032](032-stage-abi.md) §2.5), the vertex layout stays a descriptor
 whose formats the compiler now validates ([033](033-render-api.md) §5), pass
 merging is not attempted while the only handoff in the corpus merges on no
 backend ([033](033-render-api.md) §5), and a resize rebuilds because attachment
