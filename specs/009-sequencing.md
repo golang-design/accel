@@ -1143,6 +1143,7 @@ mistake rather than by watching a test pass.
 | top-k | select by extraction, not by a threshold | a threshold keeps four entries where two were asked |
 | paged KV | `pages[j/B]·B + j mod B` | dropping the multiply fails all five cases — and *ignoring* the table does not compile |
 | shared transients | claim the pool inside the function that *executes* a graph | claiming it in `Queue.Submit` leaves `Queue.SubmitAfter` unguarded, and both entry points then run while another graph holds the pool |
+| shared transients | release the pool's memory and its graph count in one place | two places drift in both directions: a graph with no transients decremented a count it never incremented, and a `Build` that failed after reserving never gave one back. [031](031-shared-transients.md) section 7 records this as a correction, because it landed after that spec was recorded complete |
 
 The last of those is the one to remember: **the kernel compiler refused a
 mutation before a test could see it**, because a binding that is never read is

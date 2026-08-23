@@ -116,6 +116,11 @@ call it. Forgetting to is not subtle — the assertion fails and the error names
 the wrapper — which is why it is a free function rather than a method a backend
 could forget was there.
 
+It has to resolve at *use* and never at compile: a backend that cached the
+concrete block while lowering a plan would hold the pre-growth allocation. The
+CPU backend resolves in one accessor and Metal in three, so the growth case runs
+on Metal too, and removing those three calls fails it by name.
+
 Nothing is copied across a growth. A transient holds no data between
 submissions: `Build` already refuses a graph that reads one before writing it.
 
@@ -168,7 +173,27 @@ sharing sound, and a rule nothing checks is a rule that decays. The tests hold
 the claim directly, which is what a second queue would do. When a backend
 reports a second queue, the tests to add are the same two through `Submit`.
 
-## 7. Done
+## 7. Correction, after this spec was recorded complete
+
+The pool's graph count and the memory it counts were released in two different
+places: `releaseTransients` for the memory, and `Graph.Close` for the count.
+Two paths for one fact drift in both directions, and both were reachable.
+
+| | |
+| --- | --- |
+| A graph with **no transients** | never reserved, but `Close` released anyway. The count went to −1, and the pool then closed while a real graph still held offsets into the memory it freed. It also claimed the pool when it ran, so closing the pool broke a graph that needs nothing from it. |
+| A `Build` that **failed after reserving** | `releaseTransients` ran on that path, but it did not hold the count. The graph was never returned, so `Close` never ran, and the pool refused to close for the rest of the program. |
+
+The fix is one release path, keyed on whether the graph holds a block rather
+than on whether a pool was named: `g.pool` is nil for a graph that reserved
+nothing, so pairing the release with it makes both cases fall out. A graph that
+reserved nothing drops its pool at `Build`, which makes "`g.pool` is set" and
+"this graph holds the pool" one fact rather than two. This is the
+same shape as the claim placement in section 2 — one fact, one place — and it
+was found by asking what the count does on `Build`'s error paths rather than by
+a failing test.
+
+## 8. Done
 
 - graphs sharing a pool allocate once, sized to the largest;
 - a second submission against a pool already executing is refused through its

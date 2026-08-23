@@ -177,7 +177,7 @@ bindings are the better choice.
 | Sampling: argmax, categorical, top-k, top-p | **Built** on both backends; the random draw is an input, so a token is reproducible |
 | Prefill buckets and a plan cache | **Built**; the key is the six things that make reuse safe, not the shape |
 | Paged KV, and batching several sequences in one step | **Built**; sequences of different lengths share one pool |
-| One transient pool, many graphs | **Built**; a bucket set holds the largest plan's transients rather than every plan's |
+| One transient pool, many graphs | **Built** on both backends; a bucket set holds the largest plan's transients rather than every plan's |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
