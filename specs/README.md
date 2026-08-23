@@ -28,7 +28,7 @@ deviations taken.
 
 **What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
 narrower than this directory: compute only, on the CPU backend and Metal.
-[005](005-graphics.md) is the parent of graphics; its four child designs are
+[005](005-graphics.md) is the parent of graphics; its five child designs are
 written — [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md), plus
 [041](041-msaa.md) — and the CPU reference rasterizer is being built, but
 nothing graphics is callable yet. [006](006-backends.md) specifies three remaining synchronous
@@ -86,12 +86,12 @@ numbered in.
 | [041-msaa.md](041-msaa.md) | Drafted | 005's fifth child: sample positions, resolve, and what the CPU oracle can still prove once a sample pattern exists |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
-| [005-graphics.md](005-graphics.md) | Drafted | The normative parent of 032 through 035: graphics constraints, with its four open questions closed in those children |
+| [005-graphics.md](005-graphics.md) | Drafted | The normative parent of [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md) and [041](041-msaa.md): graphics constraints, with its four open questions closed in those children |
 | [006-backends.md](006-backends.md) | In progress | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 | [008-numerics.md](008-numerics.md) | In progress | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
 | [013-kernel-subset.md](013-kernel-subset.md) | Implemented | M2 child: control flow, helpers, and the positioned rejection corpus |
-| [014-kernel-uniforms.md](014-kernel-uniforms.md) | Implemented | M2 child: std140 codecs, typed uniform binding, and the device-side layout check |
+| [014-kernel-uniforms.md](014-kernel-uniforms.md) | Implemented | M2 child: std140 layout, generated uniform codecs, and `UniformBuffer[T]` |
 | [015-graph-recording.md](015-graph-recording.md) | Implemented | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
 | [016-graph-execution.md](016-graph-execution.md) | Implemented | M3 child: edge inference, sub-range hazards, barrier planning, and the flat dispatch node |
 | [017-graph-aliasing.md](017-graph-aliasing.md) | Implemented | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
@@ -111,14 +111,14 @@ numbered in.
 | [025-tensor-operators.md](025-tensor-operators.md) | Implemented | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
 | [026-tensor-decode.md](026-tensor-decode.md) | Implemented | M7 child: persistent state as versions, the KV cache, attention, and the decode step |
 | [027-quantization.md](027-quantization.md) | Implemented | M8: the symmetric int8 block representation, its derived error bound, and quantized Rows and GEMM |
-| [028-sampling.md](028-sampling.md) | Implemented | M8: argmax and categorical sampling, with the random draw as an input so a token is reproducible |
+| [028-sampling.md](028-sampling.md) | Implemented | M8: argmax, categorical sampling, and top-k/top-p truncation, with the random draw as an input so a token is reproducible |
 | [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
 | [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
 | [039-sampling-policy.md](039-sampling-policy.md) | Drafted | Post-v0: temperature, penalties, the composition order, and a seeded stream that makes a whole sequence reproducible rather than one token |
 | [040-batch-scheduler.md](040-batch-scheduler.md) | Drafted | Post-v0: slots over 030's pool, one plan at max batch with parked idle slots, admission, eviction, and the drain a membership-size change costs |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 
-## Process
+## Process and project
 
 | Spec | Status | Covers |
 | --- | --- | --- |
@@ -139,8 +139,9 @@ the order things can actually be demonstrated in is different.
 - **Status** is one of drafted, in progress, implemented, or superseded. *In
   progress* means some of the spec has shipped, and the spec says which parts.
   A spec does not reach *implemented* while any section it owns is unbuilt, so
-  002 stays in progress with strict-mode capability narrowing outstanding even
-  though everything M4 promised of it is done.
+  002 stays in progress while §5's shuffles and scans, and subgroup operations
+  in divergent control flow, are unbuilt — even though everything M4 promised of
+  it is done.
 - Every implementation-bearing spec states its **testing strategy**. Genuine
   unresolved decisions stay under **open questions**; resolved questions are
   removed rather than kept as stale history.
