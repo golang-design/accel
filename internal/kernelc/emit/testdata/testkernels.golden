@@ -216,6 +216,7 @@ var AddKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 kernel void Add(
     const device float *a [[buffer(0)]],
@@ -850,6 +851,7 @@ var ElemAddKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 kernel void ElemAdd(
     const device float *a [[buffer(0)]],
@@ -895,6 +897,7 @@ var ElemMulKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 kernel void ElemMul(
     const device float *a [[buffer(0)]],
@@ -939,6 +942,7 @@ var ElemScaleKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 struct ScaleParams {
     float Factor;
@@ -1056,6 +1060,7 @@ var GatherRowsKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 struct RowParams {
     uint Rows;
@@ -1124,6 +1129,7 @@ var ScatterRowsKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 struct RowParams {
     uint Rows;
@@ -1975,6 +1981,7 @@ var CountAboveKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 kernel void CountAbove(
     const device float *in [[buffer(0)]],
@@ -2173,6 +2180,7 @@ var ScaleKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 kernel void Scale(
     const device float *in [[buffer(0)]],
@@ -2356,6 +2364,7 @@ var SubgroupReduceFallbackKernel = accel.Kernel{
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
+#pragma METAL fp contract(off)
 
 kernel void SubgroupReduceFallback(
     const device float *in [[buffer(0)]],

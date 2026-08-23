@@ -39,11 +39,51 @@ type Pipeline struct {
 
 var (
 	selNewLibraryWithSource = objc.RegisterName("newLibraryWithSource:options:error:")
+	selAlloc                = objc.RegisterName("alloc")
+	selInit                 = objc.RegisterName("init")
+	selRespondsToSelector   = objc.RegisterName("respondsToSelector:")
+	selSetMathMode          = objc.RegisterName("setMathMode:")
+	selSetFastMathEnabled   = objc.RegisterName("setFastMathEnabled:")
 	selNewFunctionWithName  = objc.RegisterName("newFunctionWithName:")
 	selNewComputePipeline   = objc.RegisterName("newComputePipelineStateWithFunction:error:")
 	selMaxTotalThreads      = objc.RegisterName("maxTotalThreadsPerThreadgroup")
 	selThreadExecutionWidth = objc.RegisterName("threadExecutionWidth")
 )
+
+// mathModeSafe is MTLMathModeSafe.
+//
+// It disables the reassociation and denormal-flushing half of fast math and
+// does *not* disable contraction: a multiply-add still fuses under it, measured
+// on an M2 rather than assumed. Contraction is controlled by a pragma the
+// emitter puts in every kernel, emit.MSLContractOff, which is where the reason
+// is written down.
+const mathModeSafe = 0
+
+// compileOptions builds MTLCompileOptions asking for safe math, +1 from alloc.
+//
+// Safe rather than the default, and this is a correctness decision rather than
+// a conservative one. Metal's default permits contraction, so a*b+c may become
+// fma(a,b,c) and differ from the CPU backend in the last bit -- and
+// specs/006-backends.md makes the CPU backend the oracle, so a difference is a
+// failure by definition rather than a tolerance to widen. specs/008-numerics.md
+// section 6 requires contraction to be controlled, not observed.
+//
+// The selector moved: newer SDKs deprecate -setFastMathEnabled: in favour of
+// -setMathMode:. Asking the object which it answers to is not defensive
+// programming here; it is the only way to be right on both, since a selector
+// the receiver does not implement raises rather than being ignored.
+func compileOptions() objc.ID {
+	opts := objc.ID(objc.GetClass("MTLCompileOptions")).Send(selAlloc).Send(selInit)
+	if opts == 0 {
+		return 0
+	}
+	if opts.Send(selRespondsToSelector, selSetMathMode) != 0 {
+		opts.Send(selSetMathMode, uintptr(mathModeSafe))
+		return opts
+	}
+	opts.Send(selSetFastMathEnabled, uintptr(0))
+	return opts
+}
 
 // Compile builds a compute pipeline from MSL source.
 //
@@ -60,7 +100,9 @@ func (d *Device) Compile(source, entryPoint string) (*Pipeline, error) {
 		// writes it only on failure, so a leftover value would turn a success
 		// into a reported error.
 		var nsErr objc.ID
-		p.lib = d.id.Send(selNewLibraryWithSource, nsstring(source), objc.ID(0), unsafe.Pointer(&nsErr))
+		opts := compileOptions()
+		defer release(opts)
+		p.lib = d.id.Send(selNewLibraryWithSource, nsstring(source), opts, unsafe.Pointer(&nsErr))
 		if p.lib == 0 {
 			err = describe("compiling MSL", nsErr)
 			return

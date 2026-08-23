@@ -40,6 +40,20 @@ import (
 // layout that depends on the body is a layout the host has to be told about,
 // and one unused argument slot is cheaper than a second source of truth.
 
+// MSLContractOff is the pragma every emitted kernel carries.
+//
+// It is a pragma rather than a compile option because MTLCompileOptions has no
+// control over contraction: MTLMathMode.safe disables reassociation and
+// denormal flushing and leaves a multiply-add free to fuse, which was measured
+// on an M2 rather than assumed. Metal's default is -ffp-contract=fast, so
+// without this a*b+c becomes fma(a,b,c) and differs from the CPU backend in the
+// last bit -- and specs/006-backends.md makes the CPU backend the oracle, which
+// turns that difference into a failure rather than a tolerance to widen.
+//
+// specs/008-numerics.md section 6 requires contraction to be controlled rather
+// than observed. This is where it is controlled.
+const MSLContractOff = "#pragma METAL fp contract(off)"
+
 // MSLLengthsIndex reports the buffer index the generated slice lengths occupy
 // for a kernel with n bindings.
 func MSLLengthsIndex(n int) int { return n }
@@ -115,7 +129,8 @@ func (m *msl) emit() {
 	}
 
 	m.printf("#include <metal_stdlib>\n")
-	m.printf("using namespace metal;\n\n")
+	m.printf("using namespace metal;\n")
+	m.printf("%s\n\n", MSLContractOff)
 
 	for _, u := range k.Uniforms {
 		m.uniformStruct(u)

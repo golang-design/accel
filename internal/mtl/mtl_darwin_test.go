@@ -11,6 +11,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"golang.design/x/accel/internal/kernelc/emit"
 	"golang.design/x/accel/internal/mtl"
 )
 
@@ -211,5 +212,101 @@ func TestStorageModesAndTheBlitPath(t *testing.T) {
 			t.Fatalf("element %d round-tripped as %v, want %v: an offset was dropped",
 				i, got[i], want)
 		}
+	}
+}
+
+// Contraction is off because the emitter's pragma turns it off, and it is on
+// without it.
+//
+// Both halves are asserted, and the second is the one worth having. It records
+// what this device does by default -- a*b+c fuses -- so a later reader can see
+// that the pragma is load-bearing rather than decorative, and so that a Metal
+// release which changed the default would show up here rather than as a
+// one-bit disagreement inside some kernel's output.
+//
+// This test also disproved the obvious implementation. MTLCompileOptions with
+// MTLMathMode.safe looks like the control for this and is not: safe math
+// disables reassociation and denormal flushing and leaves the multiply-add free
+// to fuse. Measured, not assumed.
+//
+// The inputs are the ones specs/008-numerics.md uses for its contraction probe:
+// with x = 1 + 2^-12, the product x*x is 1 + 2^-11 + 2^-24, which f32 cannot
+// hold and rounds to 1 + 2^-11. Subtracting one leaves exactly 2^-11 when the
+// product was rounded, and 2^-11 + 2^-24 when it was not. The two answers
+// differ, which is the whole reason this input was chosen: a test at ordinary
+// values would agree either way.
+//
+// specs/022-msl-target.md owns the full probe set and the recorded profile.
+// This is the one probe that belongs with the option it checks.
+func TestTheEmittedPragmaDisablesContraction(t *testing.T) {
+	d := open(t)
+	const body = `
+kernel void contract(const device float *in [[buffer(0)]],
+                     device float *out [[buffer(1)]],
+                     uint gid [[thread_position_in_grid]]) {
+  float x = in[0];
+  float c = in[1];
+  out[0] = x * x + c;
+}`
+	const head = "#include <metal_stdlib>\nusing namespace metal;\n"
+
+	in, err := d.NewBuffer(8, mtl.StorageShared)
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer in.Close()
+	out, err := d.NewBuffer(4, mtl.StorageShared)
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer out.Close()
+
+	const x = float32(1) + 1.0/4096 // 1 + 2^-12
+	src := f32s(in.Bytes())
+	src[0], src[1] = x, -1
+
+	q := d.NewQueue()
+	defer q.Close()
+
+	run := func(t *testing.T, source string) float32 {
+		t.Helper()
+		p, err := d.Compile(source, "contract")
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		defer p.Close()
+		f32s(out.Bytes())[0] = 0
+		cb := q.Begin()
+		defer cb.Close()
+		e := cb.Compute()
+		e.SetPipeline(p)
+		e.SetBuffer(in, 0, 0)
+		e.SetBuffer(out, 0, 1)
+		e.Dispatch(mtl.Size{Width: 1, Height: 1, Depth: 1}, mtl.Size{Width: 1, Height: 1, Depth: 1})
+		e.End()
+		cb.Commit()
+		cb.Wait()
+		if err := cb.Err(); err != nil {
+			t.Fatalf("submission: %v", err)
+		}
+		return f32s(out.Bytes())[0]
+	}
+
+	rounded := x*x - 1 // what a separately rounded product gives
+	fused := float32(float64(x)*float64(x) - 1)
+	if rounded == fused {
+		t.Fatal("the chosen inputs no longer distinguish a fused multiply-add from a " +
+			"rounded one, so this test would pass either way")
+	}
+
+	if got := run(t, head+emit.MSLContractOff+"\n"+body); got != rounded {
+		t.Errorf("with the pragma, x*x+c produced %v, want the separately rounded %v: "+
+			"the emitter's contraction control does not reach the device", got, rounded)
+	}
+	if got := run(t, head+body); got != fused {
+		t.Logf("without the pragma this device produced %v rather than the fused %v, so "+
+			"Metal's default no longer contracts; the pragma is now belt and braces "+
+			"rather than load-bearing, which is worth knowing but is not a failure",
+			got, fused)
 	}
 }

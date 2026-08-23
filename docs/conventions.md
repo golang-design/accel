@@ -160,6 +160,21 @@ the context, and replays a recorded command list on it. This is invisible to the
 caller, and is why the recording model costs GL
 nothing: it was going to record anyway.
 
+### Metal fuses a multiply-add unless a pragma says otherwise
+
+**Divergence.** Metal compiles with `-ffp-contract=fast` by default, so `a*b+c`
+becomes `fma(a, b, c)` and differs from a separately rounded product in the last
+bit. `MTLCompileOptions` looks like the control for this and is not:
+`MTLMathMode.safe` disables reassociation and denormal flushing and leaves the
+multiply-add free to fuse. Measured on an M2 with x = 1 + 2⁻¹², where the two
+answers are 2⁻¹¹ and 2⁻¹¹ + 2⁻²⁴.
+
+**Guarantee.** Every emitted kernel carries `#pragma METAL fp contract(off)`,
+and a device test asserts both that the pragma disables contraction and that the
+default does not. [`008`](../specs/008-numerics.md) §6 requires contraction to
+be controlled rather than observed, and a compile option that silently does not
+control it is the worst version of observed.
+
 ### Private buffers are addressable on Apple silicon
 
 **Divergence.** Metal documents `-[MTLBuffer contents]` as nil for
