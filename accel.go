@@ -82,10 +82,16 @@
 // on the device rather than read back, and device loss is reported and is
 // terminal once reported.
 //
+// The tensor layer is in golang.design/x/accel/tensor: a graph of tensors
+// compiles once into a plan and submits many times with different inputs, with
+// views, broadcasting, normalization, matrix multiplication, a KV cache and
+// attention. It lowers entirely through this package, so a backend never learns
+// what a tensor is.
+//
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and
-// scans are specified and unbuilt, and the tensor layer does not exist.
-// specs/009-sequencing.md is the order they arrive in.
+// scans are specified and unbuilt. specs/009-sequencing.md is the order the
+// rest arrives in.
 //
 // # The model
 //

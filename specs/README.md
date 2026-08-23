@@ -95,7 +95,7 @@ numbered in.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
-| [007-tensor-layer.md](007-tensor-layer.md) | Drafted | Caller-owned plans and state, concrete ports, unquantized f16/f32 operators, minimal prefill and decode |
+| [007-tensor-layer.md](007-tensor-layer.md) | In progress | Caller-owned plans and state, concrete ports, unquantized f16/f32 operators, minimal prefill and decode |
 | [024-tensor-bringup.md](024-tensor-bringup.md) | Implemented | M7 child: the builder, shape and dtype inference, lowering to a recorder, plans and bindings, and the elementwise operators on both backends |
 | [025-tensor-operators.md](025-tensor-operators.md) | Implemented | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
 | [026-tensor-decode.md](026-tensor-decode.md) | In progress | M7 child: persistent state as versions, the KV cache, attention, and the decode step |

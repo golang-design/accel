@@ -55,6 +55,12 @@ type Plan struct {
 	// rewrite its by-value parameter before the graph runs.
 	uniformNodes []uniformNode
 
+	// inFlight is the fence of the most recent submission. "In flight" is
+	// derived from it rather than tracked beside it, which is the same choice
+	// the CPU backend's executable makes and for the same reason: two pieces
+	// that must agree eventually disagree.
+	inFlight *accel.Fence
+
 	closed bool
 }
 

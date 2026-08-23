@@ -51,11 +51,34 @@ func (p *Plan) Memory() accel.GraphMemory { return p.graph.Memory() }
 // with one bad name leaves the plan exactly as it was. A failure comes back
 // through an already-signalled fence rather than as a second return value,
 // which matches specs/003-command-graph.md and means a caller checks one thing.
+//
+// # One submission at a time
+//
+// specs/007-tensor-layer.md gives a plan "the Graph's one-submission-in-flight
+// restriction", and this is where it has to be enforced rather than inherited.
+// Binding happens here and synchronously; the submission is handed to the
+// queue's serial stream and runs later. So a second Submit before the first has
+// run would rebind the slots underneath it -- and the graph's own in-flight
+// check does not catch that, because the graph is not marked in flight until
+// its worker reaches it.
+//
+// That was not theoretical. Two submissions with different inputs and different
+// outputs, back to back, produced *one* result: the first submission wrote into
+// the second's output buffer, and both fences reported success. A silently lost
+// result is the worst failure available here, so this refuses instead.
 func (p *Plan) Submit(q *accel.Queue, bindings Bindings) *accel.Fence {
+	if f := p.inFlight; f != nil && !f.Done() {
+		return accel.FailedFence(fmt.Errorf("accel/tensor: Submit %q while a submission is "+
+			"in flight; a plan binds when you submit and runs when the queue reaches it, so "+
+			"a second submission would rebind the first one's resources. Wait on the fence, "+
+			"or compile a second plan", p.label))
+	}
 	if err := p.bind(bindings); err != nil {
 		return accel.FailedFence(err)
 	}
-	return q.Submit(p.graph)
+	f := q.Submit(p.graph)
+	p.inFlight = f
+	return f
 }
 
 // bind validates and applies the whole binding set.

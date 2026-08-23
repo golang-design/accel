@@ -830,7 +830,7 @@ submission once in twenty attempts. The test now yields until the submission is
 observably running, catches it twenty times in twenty, and asserts what actually
 happens: an in-flight close is **refused** with a `LifetimeError`, not tolerated.
 
-### M7. Tensor decode plus minimal prefill
+### M7. Tensor decode plus minimal prefill — in progress
 
 Prerequisites: 007's v0 API is stable, 010's complete unquantized v0 tensor
 kernel list is implemented on CPU and Metal, and 011's operator/model budget and
@@ -875,6 +875,57 @@ Done:
 
 This completes the v0 proof in 000. It is an unquantized correctness milestone,
 not a production model-runtime claim.
+
+#### M7 status — 2026-08-23
+
+**Three of the five done criteria are met, and the other two are blocked on
+kernels that do not exist.** Written out rather than rounded up, because this
+file's maintenance rule is that the definition of done is not rewritten to match
+what happened.
+
+| Criterion | |
+| --- | --- |
+| every 007 v0 operator has unit and plan-level coverage | **partly**: `Contiguous`, a dtype conversion, `Softmax`'s mask and causal option, and the composed-attention fallback are absent |
+| a two-layer model produces reference **logits** on CPU and Metal | **no** — see below |
+| incremental decode for N tokens equals minimal prefill of the same N | **no** — see below |
+| retained plan replay, state hazards, binding errors, memory and selection reports, one-in-flight rejection | **yes** |
+| E2E: prefill → repeated decode → logits readback | **the decode half** |
+
+**What is blocked, and on what.** Both gaps are missing corpus kernels rather
+than missing tensor-layer work, which is why they are not something this
+milestone can finish by trying harder:
+
+1. **A dtype conversion.** The registered GEMM reads f16 and every other
+   operator is f32, so a projection cannot consume a normalization's output.
+   That is what stops the two-layer stack short of logits.
+   [010](010-kernel-corpus.md) registers no conversion kernel.
+2. **A prefill attention.** The registered decode kernel takes a query of one
+   token, so "minimal prefill" has nothing to lower to and the parity criterion
+   has no second half to compare against.
+
+Each is [010](010-kernel-corpus.md)'s scope with its own numeric obligations
+under [008](008-numerics.md), and writing one from up here would be adding a
+kernel to the corpus without the corpus's own proof obligations.
+
+A third narrowness is the device layer's: a slot binds a whole resource, so
+`LayerState` builds a view that cannot be bound and a per-layer cache needs one
+state per layer.
+
+**What did land.** A tensor DAG compiles, binds, submits, and reads back on both
+backends from one builder; views are bookkeeping and broadcasts are reported
+copies; every v0 operator the corpus has a kernel for is built; state is
+SSA-versioned and a superseded version is refused; and a two-layer attention
+stack matches an f64 reference over four tokens on the CPU backend and Metal.
+
+**The bug worth carrying forward.** `Plan.Submit` binds synchronously and
+submits asynchronously, so a second submission rebound the first one's slots
+before it ran: two submissions with different inputs and outputs produced one
+result, and **both fences reported success**. The graph's own in-flight check
+could not catch it, because a graph is not marked in flight until its worker
+reaches it. The generalization is that a lifetime rule enforced at the layer
+that *owns* the resource does not automatically hold at a layer that binds on
+its behalf — and that a silently lost result is the worst failure mode
+available, so the fix is a refusal rather than a queue.
 
 ### M8 and later
 

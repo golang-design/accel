@@ -218,7 +218,7 @@ If you contribute a backend, that file is the contract.
 | M4, cooperative execution on the CPU | done, split into [018](../specs/018-cooperative-lowering.md), [019](../specs/019-cooperative-diagnostics.md), and [020](../specs/020-cooperative-atomics.md); subgroup shuffles and scans deferred |
 | M5, the portable tiled GEMM | done: 000's second v0 proof obligation |
 | M6, Metal | done, split into [021](../specs/021-metal-bringup.md), [022](../specs/022-msl-target.md), and [023](../specs/023-metal-graph.md); the encoder-barrier measurement and indirect command buffers stay behind [006](../specs/006-backends.md) §4.3's measurement |
-| M7, tensor decode and prefill | specified, not started |
+| M7, tensor decode and prefill | in progress, split into [024](../specs/024-tensor-bringup.md), [025](../specs/025-tensor-operators.md), and [026](../specs/026-tensor-decode.md); three of five criteria met, two blocked on corpus kernels |
 
 M1 built the bottom of the device layer: enumeration and device open, the
 capability and limit profiles, pooled memory with a two-level segregated fit

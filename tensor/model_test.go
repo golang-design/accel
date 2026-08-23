@@ -6,6 +6,7 @@ package tensor_test
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	"golang.design/x/accel"
@@ -270,7 +271,7 @@ func kInName(l int) string  { return "kin" + itoa(l) }
 func vInName(l int) string  { return "vin" + itoa(l) }
 func qInName(l int) string  { return "qin" + itoa(l) }
 func aInName(l int) string  { return "ain" + itoa(l) }
-func itoa(n int) string     { return string(rune('0' + n)) }
+func itoa(n int) string     { return strconv.Itoa(n) }
 
 // layerKV generates deterministic per-step values, so both backends see the
 // same inputs without a golden file.

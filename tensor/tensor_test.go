@@ -909,3 +909,82 @@ func TestViews(t *testing.T) {
 		}
 	}
 }
+
+// A second submission before the first has run is refused, not silently
+// merged.
+//
+// This found a real bug and the shape of it is worth keeping. A plan binds when
+// you submit and runs when the queue reaches it, so a second Submit rebound the
+// first one's slots underneath it: two submissions with different inputs and
+// different outputs produced *one* result -- the first wrote into the second's
+// buffer -- and both fences reported success. The graph's own in-flight check
+// does not catch it, because the graph is not marked in flight until its worker
+// reaches it.
+//
+// specs/007-tensor-layer.md gives a plan "the Graph's one-submission-in-flight
+// restriction". This is where that has to be enforced rather than inherited.
+func TestASecondSubmissionInFlightIsRefused(t *testing.T) {
+	// Enough work that the first submission is still queued when the second
+	// arrives. The assertion below does not depend on that -- if the first has
+	// already finished, the second is legitimate and both results are right --
+	// but the interesting path needs it.
+	const n = 1 << 18
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("f")
+	h := tensor.Input(b, value("x", n))
+	for range 8 {
+		h = tensor.SiLU(b, h)
+	}
+	tensor.Output(b, "y", h)
+	plan, err := b.Compile(rt, tensor.CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	ones := make([]float32, n)
+	for i := range ones {
+		ones[i] = 1
+	}
+	y1 := f32Buffer(t, d, "y1", make([]float32, n))
+	y2 := f32Buffer(t, d, "y2", make([]float32, n))
+
+	f1 := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x1", ones), "y": y1,
+	}})
+	f2 := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x2", ones), "y": y2,
+	}})
+
+	if err := f1.Wait(); err != nil {
+		t.Fatalf("the first submission: %v", err)
+	}
+	second := f2.Wait()
+	if second == nil {
+		t.Skip("the first submission finished before the second was made, so nothing was " +
+			"in flight; the path this test is about did not run")
+	}
+	if !strings.Contains(second.Error(), "in flight") {
+		t.Errorf("the refusal should say why: %v", second)
+	}
+
+	// The first submission's own output, which is the part the bug destroyed:
+	// it used to write into y2 and leave y1 untouched.
+	got := make([]float32, n)
+	if err := d.Queue().ReadBuffer(y1.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if got[0] == 0 {
+		t.Fatal("the first submission wrote nothing into its own output, which means the " +
+			"second rebound its slots before it ran")
+	}
+
+	// And after waiting, the plan is usable again.
+	f3 := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x3", ones), "y": y2,
+	}})
+	if err := f3.Wait(); err != nil {
+		t.Fatalf("a submission after the refused one: %v", err)
+	}
+}

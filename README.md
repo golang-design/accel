@@ -173,7 +173,7 @@ bindings are the better choice.
 | Portable tiled GEMM | **Built** on the CPU backend |
 | Kernel corpus: the unquantized v0 kernels | **Built** on the CPU backend; the selection registry is not |
 | Metal backend | **Built** on an Apple M2: all 29 corpus kernels compile on the device and agree with the CPU backend, 22 of them bit for bit. Graphs, indirect dispatch and device loss included |
-| Tensor layer | Specified, not started |
+| Tensor layer | **Mostly built**: a tensor graph compiles and runs on both backends, with views, broadcasting, normalization, matrix multiplication, a KV cache and attention. Logits and prefill wait on two kernels the corpus does not have |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
