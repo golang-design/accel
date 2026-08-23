@@ -160,6 +160,21 @@ the context, and replays a recorded command list on it. This is invisible to the
 caller, and is why the recording model costs GL
 nothing: it was going to record anyway.
 
+### Private buffers are addressable on Apple silicon
+
+**Divergence.** Metal documents `-[MTLBuffer contents]` as nil for
+`MTLStorageModePrivate`. On an Apple M2 it returns a valid pointer, for every
+storage mode, because unified memory means the allocation genuinely is
+addressable and only the API contract says otherwise. Measured, not remembered:
+a buffer created at mode 2 reports `storageMode = 2` and a non-nil `contents`.
+
+**Guarantee.** The requested storage mode decides host visibility, and
+`-contents` is consulted only for modes already known to be mappable. Asking
+the object instead would make every buffer mappable on Apple silicon and not on
+an Intel Mac, which turns a portability rule into a machine-specific one, and
+`Block.Bytes()` is the one place [`006`](../specs/006-backends.md) §1 puts that
+rule.
+
 ### Objective-C object lifetime across completion handlers
 
 **Divergence.** A Metal command buffer completion handler runs *after* the

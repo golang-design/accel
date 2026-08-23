@@ -103,6 +103,12 @@ func load() error {
 		}
 		purego.RegisterFunc(&autoreleasePoolPush, push)
 		purego.RegisterFunc(&autoreleasePoolPop, pop)
+
+		classNSString = objc.GetClass("NSString")
+		if classNSString == 0 {
+			loadErr = errors.New("accel/mtl: Foundation is loaded but NSString is not registered")
+			return
+		}
 	})
 	return loadErr
 }
