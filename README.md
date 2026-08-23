@@ -128,6 +128,10 @@ func main() {
 To run the same thing on a GPU, swap `OpenCPU` for
 `accel.OpenBest(accel.Policy{})`. Nothing else changes.
 
+On a machine with no GPU that returns an error rather than falling back:
+`OpenBest` never selects the CPU backend unless you set `Policy.AllowCPU`. A
+device you asked for is never silently substituted.
+
 ## Two layers, four packages
 
 | Package | You get | Use it for |
@@ -163,10 +167,10 @@ for range steps {
 works out where the barriers go, so you do not write one.
 
 **What it costs you:** errors move. Under an immediate API a bad call fails at
-the call; here it fails at `Build`, possibly far from where you wrote it. Every
-build error names the node, the binding slot, and the source position of the
-call that recorded it — if you ever see one that says only "type mismatch", that
-is a bug worth filing.
+the call; here it fails at `Build`, possibly far from where you wrote it. A
+build error names the node, the binding slot and the numbers involved, so you
+can find the recording call — but it does not yet carry that call's source
+position.
 
 ## What works today
 
@@ -186,9 +190,9 @@ is a bug worth filing.
 | Draw triangles | not yet — no public render API |
 | Use Vulkan, D3D12, OpenGL or WebGPU | not yet |
 
-Every "yes" has tests that fail without it, more than 90% statement coverage on
-its package, and an end-to-end case through the public API. Every kernel in the
-corpus runs on both backends and the two are compared, most of them bit for bit.
+Every "yes" has tests that fail without it and an end-to-end case through the
+public API. Every kernel in the corpus runs on both backends and the two are
+compared, most of them bit for bit.
 
 ## When it fits, and when it does not
 
