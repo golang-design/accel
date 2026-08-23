@@ -13,23 +13,25 @@ The decisions everything here is built on live in
 [`000-decisions.md`](000-decisions.md). It is normative: a spec that contradicts
 it is wrong.
 
-M0 through M3 are complete. A CPU device can be opened, pooled memory allocated
-and suballocated, buffers typed and sliced into views, bytes moved to the device
-and back, and a kernel written in the Go subset compiled to a generated lowering
-that runs and is checked against the source it came from. Graphs of transfers
-and flat compute dispatches can be recorded, validated, built once, bound,
-submitted, waited on, and replayed with a rebound input: dependency edges are
-inferred from declared byte ranges, barriers come from those edges and are
-batched, and transients are aliased by reachability and checked against the
-conservative plan they replaced. Cooperative kernels are next. Everything past
-that still reports `ErrNotImplemented`.
-[009](009-sequencing.md) records what has landed and the deviations taken.
+**M0 through M7 are complete, and M8 is five of seven.** Compute runs end to end
+on the CPU backend and on Metal: pooled memory and typed views; kernels written
+in the Go subset, compiled to a generated lowering and to MSL from one IR;
+command graphs with inferred edges, computed barriers and reachability-based
+transient aliasing; cooperative kernels with shared memory, barriers and
+atomics; a portable tiled GEMM; and the tensor layer above it, with quantized
+weights, sampling, a paged KV cache, and prefill and decode attention.
+
+Graphics is being built: its five child designs are written and the CPU
+reference rasterizer is under way, but nothing graphics is callable.
+[009](009-sequencing.md) records what has landed, in what order, and the
+deviations taken.
 
 **What v0 builds** is stated in [000](000-decisions.md#the-v0-milestone) and is
 narrower than this directory: compute only, on the CPU backend and Metal.
 [005](005-graphics.md) is the parent of graphics; its four child designs are
-written ([032](032-stage-abi.md) through [035](035-cpu-rasterizer.md)) and the
-CPU reference rasterizer is being built, but nothing graphics is callable yet. [006](006-backends.md) specifies three remaining synchronous
+written — [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md), plus
+[041](041-msaa.md) — and the CPU reference rasterizer is being built, but
+nothing graphics is callable yet. [006](006-backends.md) specifies three remaining synchronous
 backends plus a deferred asynchronous WebGPU shape; all are unbuilt. A spec being
 here means its scope and current decisions are reviewable, not that its code is
 next.
@@ -52,10 +54,10 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 
 | | |
 | --- | --- |
-| Done | M0's cgo-free gate, M1's memory on the CPU backend, M2's kernel compiler in full |
-| Next | M3, graph planning and flat compute/transfer submission |
-| Blocked on nothing | M2's inputs are 002, 004, and 011, all of which are drafted or in progress |
-| Retired | 009's compiler-scope risk, by M2's direct flat E2E |
+| Done | M0 through M7, and five of M8's seven items: quantization, sampling, the plan cache, paged KV with batching, and shared transients |
+| In progress | The CPU reference rasterizer ([035](035-cpu-rasterizer.md)), and the stage-ABI compiler work it needs ([032](032-stage-abi.md)) |
+| Written, unbuilt | [037](037-vulkan-bringup.md) Vulkan, [038](038-spirv-target.md) SPIR-V, [039](039-sampling-policy.md) sampling policy, [040](040-batch-scheduler.md) the scheduler, [041](041-msaa.md) MSAA |
+| Not blocked, unscheduled | Vulkan — see 009's correction; it is verifiable in CI on lavapipe today |
 
 [009](009-sequencing.md) has the milestone list, what done means for each, and
 the deviations taken so far. It is the file to read before picking anything up,
