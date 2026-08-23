@@ -133,6 +133,8 @@ go run ./internal/conformance/cover/covercheck -profile=cover.out
 | `*.go` | The device layer's public API and its policy | Callers, and everyone |
 | `internal/driver/` | The backend contract, and the plan a built graph lowers to | Anyone adding a backend |
 | `internal/cpu/` | The pure-Go backend and oracle | Anyone adding a backend |
+| `internal/metal/` | The Metal backend: adapters, memory, and plan execution | Anyone adding a backend |
+| `internal/mtl/` | The Objective-C shim the Metal backend sits on, cgo-free through purego | Nobody, ideally |
 | `internal/alloc/` | Suballocation inside a pool | Nobody, ideally |
 | `internal/kernelc/` | The kernel compiler: loader, subset checker, IR, emitters | Anyone changing the kernel language |
 | `internal/kernel/` | The vocabulary a kernel is written in, declared below accel | Anyone changing the kernel language |

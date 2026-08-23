@@ -113,8 +113,9 @@ GLSL, SPIR-V, and HLSL designed and following their backends.
 - **`CGO_ENABLED=0` and still on the GPU.** Cross-compile freely. No toolchain on
   the build machine. Fast builds.
 - **Write once, run on the CPU or the GPU.** Backends are selected explicitly and
-  never silently swapped underneath you. v0 is the CPU backend and Metal; Vulkan,
-  D3D12, OpenGL, and WebGPU are designed in the specs and not yet built.
+  never silently swapped underneath you. v0 is the CPU backend and Metal, and on
+  a Mac both enumerate today; Vulkan, D3D12, OpenGL, and WebGPU are designed in
+  the specs and not yet built.
 - **Test without a GPU.** The CPU backend is a first-class implementation and the
   correctness oracle, so `go test ./...` works on any machine.
 - **Kernels in Go**, type-checked by the Go compiler, not strings handed to a
@@ -171,14 +172,15 @@ bindings are the better choice.
 | Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
 | Portable tiled GEMM | **Built** on the CPU backend |
 | Kernel corpus: the unquantized v0 kernels | **Built** on the CPU backend; the selection registry is not |
-| Metal backend | Specified, next; needs a Mac to verify |
+| Metal backend | **Bring-up built** on an Apple M2: device, buffers, straight-line kernels, and a bit-for-bit differential against the CPU backend. Threadgroup memory, barriers, atomics and subgroups are not lowered yet |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 through M5](specs/009-sequencing.md).
+rows came from [M1 through M5](specs/009-sequencing.md), and the Metal row from
+[M6's first child](specs/021-metal-bringup.md).
 
 A graph infers its own dependency edges from what each node declares it touches,
 comparing byte ranges rather than whole resources, so two nodes writing disjoint

@@ -1,6 +1,6 @@
 ---
 title: "Metal bring-up: the Objective-C shim, device memory, and one kernel on the GPU"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -317,3 +317,77 @@ Named so the milestone is not read as further along than it is:
 - `OpenBest` preferring Metal over the CPU, which is a policy question
   [006](006-backends.md) §6.3 owns and which should not be decided by whichever
   backend landed most recently.
+
+## Outcome — 2026-08-23
+
+**Every section here is built except one, and that one is named rather than
+rounded up.** `accel` enumerates two adapters on a Mac, `Apple M2` alongside the
+CPU oracle; a graph recorded through the public API uploads, dispatches a
+generated kernel, and reads back; and the emitted MSL is compiled by the device
+compiler itself rather than parsed.
+
+**The criterion that matters is test 5, and it passes.** The same recorded graph
+runs on both backends from one kernel record and agrees **bit for bit** over
+4096 elements. It was confirmed by reinstating a fault rather than by watching it
+pass: editing the emitted MSL alone, `a[i]+b[i]` to `a[i]-b[i]`, flips only the
+Metal result. So the device is an oracle from here, which is what the vertical
+cut was for.
+
+### Deviation 1: a uniform-carrying dispatch is refused
+
+**What this spec required.** §7 says `Compile` accepts every non-indirect
+`OpDispatch`, and §5 says the emitter emits a std140 uniform block. The first
+half is not met.
+
+**What was built.** The emitter emits the block, with its padding spelled out,
+and the device compiler accepts it — `ElemScale` compiles. The *host* cannot
+fill it, so a dispatch carrying uniforms is refused at `Compile` with an error
+naming the kernel and the reason.
+
+**Why.** `kernel.Kernel` carries no std140 encoder. The generated codec is a
+named type a caller writes (`ScaleParamsCodec`), and a backend holding a
+`[]any` has no way to reach it without reflection. That is a gap in the record's
+shape rather than in this backend, and inventing a reflective encoder here would
+put a second std140 implementation next to the generated one.
+
+**What still holds.** Nothing silently produces wrong bytes: the refusal is at
+compile, names the kernel, and names the spec that closes it.
+
+**When it closes.** [022](022-msl-target.md), by giving the record a generated
+encoder hook. Two of the nine kernels currently carrying MSL take uniforms.
+
+### What this child found
+
+**Three divergences, each measured rather than remembered**, and all three now
+in [`conventions.md`](../docs/conventions.md):
+
+1. **`-contents` is non-nil for private storage on Apple silicon**, contradicting
+   what Metal documents, because unified memory makes the allocation genuinely
+   addressable. Trusting the object over the requested mode would have made
+   every buffer mappable here and not on an Intel Mac — a portability rule
+   turned machine-specific.
+2. **`MTLMathMode.safe` does not disable contraction.** It looks exactly like
+   the control for it and governs reassociation and denormals instead, so `x*x+c`
+   returned the fused answer with the option set. Contraction is now turned off
+   by a pragma the emitter puts in every kernel, and a test asserts both that the
+   pragma works and that the default contracts.
+3. **A SIMD width is a property of a compiled pipeline, not of a device.**
+   `MTLDevice` has no query, so enumeration compiles a trivial kernel and reads
+   `threadExecutionWidth`, which reports 32 here.
+
+**And two bugs whose shape generalizes.** `objc.GetClass("NSString")` in a `var`
+initializer runs before Foundation is mapped, so the class was nil, the source
+string became nil, and Metal *aborted the process* on an assertion instead of
+returning the error this package reads carefully — a selector may be registered
+before anything loads, because registering one creates it, and a class may not.
+And the first symbol resolver wrote the package's function pointers as it went,
+so a test injecting fake lookups overwrote the real
+`MTLCreateSystemDefaultDevice` and the next real call jumped to address 1;
+finding symbols and installing them are separate jobs and now say so.
+
+**Two existing tests caught real problems**, which is the argument for the CPU
+milestones having built them first. `TestLimitsArePopulated` rejected a
+zero-valued subgroup limit and forced the width to be measured rather than
+omitted. `TestOpenBestNeverReturnsAnUnsanctionedBackend` failed on a premise
+Metal falsified — "this machine has only the CPU backend compiled in" — and was
+rewritten to check the rule rather than the premise.

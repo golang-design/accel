@@ -68,9 +68,17 @@
 // boundary — row r begins at r*width*bpp — so a caller sizes a readback as
 // width*height*bpp and is always right, whatever pitch the device stores.
 //
+// Metal has begun. On darwin, [Enumerate] reports a Metal adapter beside the
+// CPU one, and a graph of uploads, straight-line dispatches and readbacks runs
+// on it: kernels are lowered to Metal Shading Language by the same compiler
+// that produces the Go lowering, compiled by the device at runtime, and the two
+// backends agree bit for bit. Kernels using workgroup-shared memory, barriers,
+// atomics or subgroups are not lowered to MSL yet and are refused by name
+// rather than run on the CPU instead.
+//
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and
-// scans are specified and unbuilt, and no GPU backend exists yet.
+// scans are specified and unbuilt, and the tensor layer does not exist.
 // specs/009-sequencing.md is the order they arrive in.
 //
 // # The model

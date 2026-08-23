@@ -87,7 +87,7 @@ numbered in.
 | [018-cooperative-lowering.md](018-cooperative-lowering.md) | Implemented | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
 | [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | Implemented | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
 | [020-cooperative-atomics.md](020-cooperative-atomics.md) | In progress | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
-| [021-metal-bringup.md](021-metal-bringup.md) | Drafted | M6 child: the Objective-C shim and its ownership rule, enumeration, storage modes, a straight-line MSL emitter, and one kernel on the GPU |
+| [021-metal-bringup.md](021-metal-bringup.md) | In progress | M6 child: the Objective-C shim and its ownership rule, enumeration, storage modes, a straight-line MSL emitter, and one kernel on the GPU |
 
 ## Layer 2: the tensor
 
