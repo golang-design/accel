@@ -1,6 +1,6 @@
 ---
 title: "Devices, memory, and resources"
-status: in progress
+status: implemented
 layer: device
 depends_on: []
 ---

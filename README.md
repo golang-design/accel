@@ -158,7 +158,7 @@ bindings are the better choice.
 | Device open, capabilities, limits | **Built** on the CPU backend |
 | Pools, suballocation, buffers, views, lifetime | **Built** on the CPU backend |
 | Host and device transfers | **Built** on the CPU backend |
-| Textures and formats | Specified, deferred until graphics |
+| Textures, formats, and row pitch | **Built** on the CPU backend |
 | Kernel compiler: subset checking, IR, Go lowering, generator | **Built** |
 | Kernel language: loops, helpers, narrow storage, scalar math | **Built** |
 | Kernel uniforms: std140 codecs and typed binding | **Built** |

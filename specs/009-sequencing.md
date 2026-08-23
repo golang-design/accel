@@ -580,7 +580,18 @@ plan validator and pipeline creation both required a flat entry point, and the
 generated-source type check read a fixed list of corpus files that went stale
 silently whenever the corpus grew.
 
-#### After M5: 003's remaining sections
+#### After M5: the remaining sections of shipped specs
+
+Rather than open M6, which needs hardware this environment does not have, the
+work after M5 closed gaps in specs already shipped. Both are recorded here
+rather than by reopening a milestone: a milestone recorded complete stays
+complete, and its remainder is tracked forward.
+
+**[001](001-device-resources.md) §4, textures**, is built, which makes 001
+`implemented` — every section of it. What remains in that API is the sampler,
+which has nothing to sample with until a render pass exists.
+
+#### 003's remaining sections
 
 Indirect dispatch, the run-time counters, and `SubmitAfter` were M3's remainder
 — [016](016-graph-execution.md) recorded that V9 was written and the payload was

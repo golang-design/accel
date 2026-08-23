@@ -71,7 +71,7 @@ numbered in.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
-| [001-device-resources.md](001-device-resources.md) | In progress | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
+| [001-device-resources.md](001-device-resources.md) | Implemented | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
 | [002-compute-model.md](002-compute-model.md) | Drafted | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
 | [003-command-graph.md](003-command-graph.md) | Drafted | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | Drafted | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |

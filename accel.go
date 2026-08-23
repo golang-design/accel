@@ -63,8 +63,14 @@
 // debug flag. [Recorder.CollectRunStats] makes the graph report what the count
 // turned out to be, through [Fence.Stats], at the cost of a readback.
 //
-// Not implemented, and reporting [ErrNotImplemented]: textures. Subgroup
-// shuffles and scans are specified and unbuilt, and no GPU backend exists yet.
+// Textures work: formats, pools, allocation, readback, and copies in both
+// directions through a graph. Texture data is tightly packed at this API's
+// boundary — row r begins at r*width*bpp — so a caller sizes a readback as
+// width*height*bpp and is always right, whatever pitch the device stores.
+//
+// Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
+// nothing to sample with until a render pass exists. Subgroup shuffles and
+// scans are specified and unbuilt, and no GPU backend exists yet.
 // specs/009-sequencing.md is the order they arrive in.
 //
 // # The model
