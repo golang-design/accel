@@ -51,8 +51,8 @@ truth can be wrong while nothing fails to build.
 
 ```go
 //accel:vertex
-func Geometry(v accel.Vertex, pos []accel.Vec3, uv []accel.Vec2,
-	xf *Transforms) (accel.Clip, Varyings)
+func Geometry(v accel.Vertex, xf Transforms,
+	pos accel.Vec3, uv accel.Vec2) (accel.Clip, Varyings)
 ```
 
 **Signature rule.** A vertex stage takes an `accel.Vertex` first, then its
@@ -107,14 +107,26 @@ So the authored form is:
 
 ```go
 //accel:vertex
-func Geometry(v accel.Vertex, pos accel.Vec3, uv accel.Vec2, xf *Transforms) (accel.Clip, Varyings)
+func Geometry(v accel.Vertex, xf Transforms, pos accel.Vec3, uv accel.Vec2) (accel.Clip, Varyings)
 ```
 
 `pos` is *one vertex's* position. `xf` is an ordinary uniform, indexed by nothing
 and shared by every vertex, and the difference between the two is the parameter's
-type, not a tag: an attribute is a value type from the attribute-format set, a
-uniform is a pointer to a std140 struct, and a storage buffer is a slice. Three
-categories, three Go spellings, no annotations.
+type, not a tag. The compute subset already classifies parameters this way, and
+the graphics stages add exactly one row:
+
+| Go spelling | Category | Since |
+| --- | --- | --- |
+| `[]T` | storage buffer | the compute subset |
+| `T` where T is a struct | by-value uniform, std140-encoded | the compute subset |
+| `*[N]T` | workgroup-shared memory | the compute subset, and illegal in a graphics stage |
+| **`[N]float32`** | **vertex attribute** | **here** |
+
+Four categories, four Go spellings, no annotations. The new row is unambiguous
+against the existing three because shared memory is a *pointer* to an array where
+an attribute is an array by value, and a by-value array is not a legal compute
+parameter at all today — the front end's classifier rejects it, so nothing has to
+be re-decided to admit it here.
 
 Attribute formats are their own enumeration, per 005: `unorm8x4` and `u8x4` have
 the same width and different meanings, and the conversion to the Go parameter
@@ -253,7 +265,7 @@ UV — silently, on every backend, with no build error anywhere.
 
 ```go
 //accel:fragment
-func Shade(f accel.Fragment, in Varyings, mat *Material) Targets
+func Shade(f accel.Fragment, in Varyings, mat Material) Targets
 ```
 
 A fragment stage takes an `accel.Fragment`, then the varyings struct, then its
@@ -384,7 +396,7 @@ declared:
 | Field | Derived from |
 | --- | --- |
 | `Stage` | the directive |
-| `Attributes []*Attribute` | the value-typed parameters of a vertex stage |
+| `Attributes []*Attribute` | the by-value array parameters of a vertex stage |
 | `Varyings *Type` | the second result, or the varyings parameter |
 | `Outputs []*Target` | the fields of a fragment stage's result struct |
 | `Builtins uint32` | which `Vertex`/`Fragment` methods the body reaches |
