@@ -195,6 +195,106 @@ func TestAFeedForwardBlockAgreesOnCPUAndMetal(t *testing.T) {
 	}
 }
 
+// A decode step agrees between the backends.
+//
+// The last thing M7 needs on both: a state mutation, the barrier the graph
+// inferred between the write and the read, and the fused attention kernel --
+// none of which the earlier differentials touch. The ceiling is the softmax
+// inside attention, which reaches exp.
+func TestADecodeStepAgreesOnCPUAndMetal(t *testing.T) {
+	const qHeads, kvHeads, headDim, capacity = 4, 2, 8, 8
+
+	qs := make([]float32, qHeads*headDim)
+	ks := make([]float32, kvHeads*headDim)
+	vs := make([]float32, kvHeads*headDim)
+	for i := range qs {
+		qs[i] = float32(math.Sin(float64(i))) * 1.5
+	}
+	for i := range ks {
+		ks[i] = float32(math.Cos(float64(i))) * 1.5
+		vs[i] = float32(i)/4 - 1
+	}
+
+	run := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		rt, err := tensor.NewRuntime(d)
+		if err != nil {
+			t.Fatalf("runtime: %v", err)
+		}
+		b := rt.NewBuilder("decode")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+		q := tensor.Input(b, tensor.ValueDesc{
+			Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
+		})
+		nk := tensor.Input(b, tensor.ValueDesc{
+			Name: "nk", DType: accel.F32, Shape: tensor.Shape{1, kvHeads * headDim},
+		})
+		nv := tensor.Input(b, tensor.ValueDesc{
+			Name: "nv", DType: accel.F32, Shape: tensor.Shape{1, kvHeads * headDim},
+		})
+		slot := tensor.Input(b, tensor.ValueDesc{
+			Name: "slot", DType: accel.U32, Shape: tensor.Shape{1},
+		})
+		kc := tensor.Persistent(b, tensor.StateDesc{
+			Name: "kc", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
+		})
+		vc := tensor.Persistent(b, tensor.StateDesc{
+			Name: "vc", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
+		})
+		tensor.Output(b, "out", tensor.Attention(b, q,
+			tensor.ScatterRows(b, kc, nk, slot),
+			tensor.ScatterRows(b, vc, nv, slot),
+			tensor.AttentionOptions{CurrentLengthName: "len", ScaleName: "scale"}))
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "decode"})
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		out := f32Buffer(t, d, "out", make([]float32, qHeads*headDim))
+		f := plan.Submit(d.Queue(), tensor.Bindings{
+			Buffers: map[string]accel.BufferView{
+				"q": f32Buffer(t, d, "q", qs), "nk": f32Buffer(t, d, "nk", ks),
+				"nv":   f32Buffer(t, d, "nv", vs),
+				"slot": u32Buffer(t, d, "slot", []uint32{0}),
+				"kc":   f32Buffer(t, d, "kc", make([]float32, capacity*kvHeads*headDim)),
+				"vc":   f32Buffer(t, d, "vc", make([]float32, capacity*kvHeads*headDim)),
+				"out":  out,
+			},
+			Scalars: map[string]tensor.ScalarValue{
+				"len": tensor.U32(1), "scale": tensor.F32(float32(1 / math.Sqrt(headDim))),
+			},
+		})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		got := make([]float32, qHeads*headDim)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if err := plan.Close(); err != nil {
+			t.Fatalf("plan close: %v", err)
+		}
+		if err := rt.Close(); err != nil {
+			t.Fatalf("runtime close: %v", err)
+		}
+		return got
+	}
+
+	cpuDev, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("open CPU: %v", err)
+	}
+	defer cpuDev.Close()
+	cpu := run(t, cpuDev)
+	gpu := run(t, openMetalRuntimeDevice(t))
+
+	if r := numeq.WithinULP(gpu, cpu, 16); !r.Equal {
+		t.Fatalf("a decode step disagrees between backends: %v\n  the ceiling is the "+
+			"softmax inside attention, which reaches exp", r)
+	}
+}
+
 func openMetalRuntimeDevice(t *testing.T) *accel.Device {
 	t.Helper()
 	e := accel.Enumerate()

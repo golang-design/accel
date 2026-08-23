@@ -103,12 +103,30 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	// Every external port is a slot, so one plan serves many submissions with
 	// different buffers. specs/003-command-graph.md's slots are exactly this
 	// and there is no reason to invent a second mechanism.
+	// An output that something else also reads is read-write, not write-only.
+	// A model that names an intermediate as an output and keeps using it is
+	// ordinary, and the alternative is refusing it or writing it twice.
+	readAgain := map[*Tensor]bool{}
+	for i := range b.nodes {
+		for _, in := range b.nodes[i].inputs {
+			readAgain[in] = true
+		}
+	}
+	consumed := map[string]bool{}
+	for _, o := range b.outputs {
+		if readAgain[o.t] {
+			consumed[o.name] = true
+		}
+	}
+
 	for _, d := range b.ports {
 		access := accel.AccessRead
-		switch d.Kind {
-		case PortOutput:
+		switch {
+		case d.Kind == PortOutput && consumed[d.Name]:
+			access = accel.AccessReadWrite
+		case d.Kind == PortOutput:
 			access = accel.AccessWrite
-		case PortState:
+		case d.Kind == PortState:
 			access = accel.AccessReadWrite
 		}
 		p.slots[d.Name] = r.Slot(accel.SlotDescriptor{
@@ -121,6 +139,10 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	// planning apply unchanged. A tensor layer allocating its own would
 	// reimplement specs/017-graph-aliasing.md, worse.
 	views := make([]accel.BufferView, len(b.nodes))
+	// A node that wrote into a caller-owned port has no transient, so its
+	// consumers bind that port's slot instead. Parallel to views because a node
+	// has exactly one result and it is one or the other.
+	wroteSlot := make([]accel.Slot, len(b.nodes))
 	outputOf := map[*Tensor]string{}
 	for _, o := range b.outputs {
 		outputOf[o.t] = o.name
@@ -129,7 +151,7 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	var errs []error
 	for i := range b.nodes {
 		n := &b.nodes[i]
-		if err := p.lowerNode(r, n, views, outputOf, i); err != nil {
+		if err := p.lowerNode(r, n, views, wroteSlot, outputOf, i); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -161,7 +183,7 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 
 // lowerNode turns one operator into a dispatch.
 func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
-	outputOf map[*Tensor]string, i int) error {
+	wroteSlot []accel.Slot, outputOf map[*Tensor]string, i int) error {
 
 	pipe, err := p.rt.pipeline(n.kernel, fmt.Sprintf("%s.%s", p.label, n.op))
 	if err != nil {
@@ -191,7 +213,15 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	// the same binding, so its operand *is* the result.
 	outIndex := len(n.inputs)
 	var result accel.Binding
-	if name, wanted := outputOf[n.out]; wanted {
+	if n.outPort != "" {
+		// A mutation of caller-owned state: the node writes into the bound
+		// buffer rather than into a transient, which is what makes the write
+		// visible after the submission and what lets the graph order a later
+		// read against it.
+		result = accel.Binding{Slot: p.slots[n.outPort]}
+		wroteSlot[i] = result.Slot
+	} else if name, wanted := outputOf[n.out]; wanted {
+		wroteSlot[i] = p.slots[name]
 		result = accel.Binding{Slot: p.slots[name]}
 	} else {
 		v := r.Transient(accel.BufferDescriptor{
@@ -204,7 +234,7 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	}
 
 	for j, in := range n.inputs {
-		bind, err := p.operand(in, views)
+		bind, err := p.operand(in, views, wroteSlot)
 		if err != nil {
 			return fmt.Errorf("accel/tensor: %s operand %d: %w", n.op, j, err)
 		}
@@ -306,7 +336,8 @@ func (p *Plan) copyInto(r *accel.Recorder, dst, src accel.Binding, count int) er
 //
 // An external port becomes a slot, so the same plan serves many submissions; a
 // computed value becomes the transient its producer wrote.
-func (p *Plan) operand(t *Tensor, views []accel.BufferView) (accel.Binding, error) {
+func (p *Plan) operand(t *Tensor, views []accel.BufferView,
+	wroteSlot []accel.Slot) (accel.Binding, error) {
 	if t.node < 0 {
 		slot, ok := p.slots[t.port]
 		if !ok {
@@ -314,14 +345,15 @@ func (p *Plan) operand(t *Tensor, views []accel.BufferView) (accel.Binding, erro
 		}
 		return accel.Binding{Slot: slot}, nil
 	}
-	v := views[t.node]
-	if v.Buffer == nil {
-		// The producing node wrote straight into an output slot, so there is no
-		// transient to read. Declaring a value as an output *and* consuming it
-		// is legal in principle and needs the slot on both sides, which
-		// specs/025-tensor-operators.md can add when something needs it.
-		return accel.Binding{}, fmt.Errorf("it reads a value written directly into an " +
-			"output; a value that is both an output and an operand is not lowered yet")
+	if v := views[t.node]; v.Buffer != nil {
+		return accel.Binding{Buffer: v}, nil
 	}
-	return accel.Binding{Buffer: v}, nil
+	// The producing node wrote into a caller-owned buffer rather than a
+	// transient -- a mutation of state, or a value the caller named as an
+	// output. Either way the consumer binds the same slot, which is also what
+	// makes the graph order the two: they declare overlapping byte ranges.
+	if slot := wroteSlot[t.node]; slot != 0 {
+		return accel.Binding{Slot: slot}, nil
+	}
+	return accel.Binding{}, fmt.Errorf("it reads a value that was written nowhere")
 }

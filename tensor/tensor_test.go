@@ -497,16 +497,19 @@ func TestLoweringRefusals(t *testing.T) {
 	})
 
 	t.Run("a value that is both an output and an operand", func(t *testing.T) {
+		// Ordinary rather than refused: a model that names an intermediate as
+		// an output and keeps using it is normal, and the alternative is
+		// writing the value twice. The slot becomes read-write.
 		b := rt.NewBuilder("both")
 		x := tensor.Input(b, value("x", 8))
 		mid := tensor.SiLU(b, x)
 		tensor.Output(b, "mid", mid)
 		tensor.Output(b, "y", tensor.Add(b, mid, x))
-		if _, err := b.Compile(rt, tensor.CompileOptions{}); err == nil {
-			t.Fatal("a value read after being written into an output lowered")
-		} else if !strings.Contains(err.Error(), "not lowered yet") {
-			t.Errorf("the refusal should say it is unbuilt rather than illegal: %v", err)
+		plan, err := b.Compile(rt, tensor.CompileOptions{})
+		if err != nil {
+			t.Fatalf("an output consumed downstream should compile: %v", err)
 		}
+		defer plan.Close()
 	})
 
 	t.Run("a duplicate output name", func(t *testing.T) {

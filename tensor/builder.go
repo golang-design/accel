@@ -134,6 +134,11 @@ type Builder struct {
 	scalars   []ScalarDesc
 	scalarPos map[string]int
 
+	// stateVersion is the latest version of each persistent binding. Reading an
+	// older one is refused rather than silently reading the newer contents: see
+	// ReadState.
+	stateVersion map[string]int
+
 	outputs []output
 	errs    []error
 }
@@ -174,6 +179,12 @@ type node struct {
 	// family and false for everything else, whose operands have shapes of their
 	// own: a gather's table is not the shape of its result.
 	bcast bool
+
+	// outPort names the external port this node writes into, rather than a
+	// transient. It is how a mutation of caller-owned state is expressed: the
+	// node's result *is* that buffer, so a later reader of the next version
+	// binds the same slot and the graph orders the two by their byte ranges.
+	outPort string
 
 	// inPlace marks a kernel that rewrites the buffer it reads. Its operand is
 	// copied into the result's storage first, because a tensor is an immutable
