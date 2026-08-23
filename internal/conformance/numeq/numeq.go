@@ -21,6 +21,7 @@ package numeq
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -109,5 +110,90 @@ func ExactBits[T float32 | float64](got, want []T, bits func(T) uint64) Report {
 		}
 	}
 	r.Equal = r.Diffs == 0
+	return r
+}
+
+// ULPDistance is the ordered-bit distance between two f32 values.
+//
+// Ordered-bit, which is what makes it meaningful across a binade boundary: the
+// two neighbours of a power of two are different absolute sizes, and a
+// difference measured in absolute terms would count them differently depending
+// on which side of the boundary the value fell. specs/008-numerics.md section 6
+// defines the sqrt ceiling in exactly these terms and for exactly this reason.
+//
+// The sign bit is folded so that -0 and +0 are one step apart from each other
+// and zero steps from themselves, rather than 2^32 apart as a raw bit
+// comparison would make them.
+func ULPDistance(a, b float32) uint64 {
+	ordered := func(v float32) int64 {
+		bits := math.Float32bits(v)
+		if bits&0x80000000 != 0 {
+			// Negative floats descend as their bit patterns ascend, so the sign
+			// bit is stripped and the magnitude negated, which makes the whole
+			// range monotone and puts the two zeros in the same place.
+			//
+			// The sign is tested on the *unsigned* pattern. Converting to a
+			// signed integer first and testing for negative does not work:
+			// widening uint32 to int64 never produces a negative, so -0 came
+			// out 2^31 steps from +0.
+			return -int64(bits & 0x7FFFFFFF)
+		}
+		return int64(bits)
+	}
+	d := ordered(a) - ordered(b)
+	if d < 0 {
+		d = -d
+	}
+	return uint64(d)
+}
+
+// WithinULP compares two f32 slices against a ceiling in ULP.
+//
+// A ceiling rather than a tolerance, and the distinction is
+// specs/008-numerics.md's: the number comes from that spec's normative table
+// for the primitive involved, not from what a run happened to produce. A
+// backend whose worst case exceeds its ceiling changes its lowering.
+//
+// NaN is checked first and separately, because every ordinary comparison
+// against a NaN is false: a NaN where a number was expected would otherwise be
+// reported as within any ceiling at all.
+func WithinULP(got, want []float32, ceiling uint64) Report {
+	r := Report{Equal: true, FirstDiff: -1, Len: len(got), WantLen: len(want)}
+	if len(got) != len(want) {
+		r.Equal = false
+		return r
+	}
+	worst := uint64(0)
+	for i := range got {
+		g, w := got[i], want[i]
+		gNaN, wNaN := g != g, w != w
+		var bad bool
+		var d uint64
+		switch {
+		case gNaN || wNaN:
+			// A NaN is checked first and separately, because every ordinary
+			// comparison against one is false: a NaN where a number was
+			// expected would otherwise be reported as within any ceiling at
+			// all.
+			bad = gNaN != wNaN
+		default:
+			d = ULPDistance(g, w)
+			bad = d > ceiling
+			if d > worst {
+				worst = d
+			}
+		}
+		if !bad {
+			continue
+		}
+		r.Diffs++
+		if r.FirstDiff < 0 {
+			r.FirstDiff = i
+			r.Equal = false
+			r.Got = fmt.Sprintf("%v (%#08x)", g, math.Float32bits(g))
+			r.Want = fmt.Sprintf("%v (%#08x), %d ULP away, ceiling %d",
+				w, math.Float32bits(w), d, ceiling)
+		}
+	}
 	return r
 }

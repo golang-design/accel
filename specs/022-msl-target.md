@@ -126,7 +126,63 @@ and quietly compute something else.
 The buffer index is `emit.MSLUniformIndex(len(bindings), i)`, exported by the
 emitter so the scheme has one definition rather than two.
 
-## 4. Done
+## 4. Outcome — 2026-08-23
+
+**All twenty-nine corpus kernels lower to MSL, compile on the device, and agree
+with the CPU oracle.** Twenty-two agree **bit for bit**; the other seven reach a
+bounded primitive and agree within a ceiling derived from §6's table, named per
+kernel.
+
+| | |
+| --- | --- |
+| carry MSL | 29 / 29 |
+| compile on an M2 | 29 / 29 |
+| agree exactly | 22 |
+| agree within a §6 ceiling | 7 |
+
+**What the differential proves, and what it does not.** It compares two
+lowerings of one IR against each other, not against a higher-precision
+reference: the CPU runs a resumable state machine with a program counter and
+Metal runs the authored structure with a real barrier. So a disagreement is the
+transform's. It is **not** §8's composed budget, which needs a reference the CPU
+corpus tests already supply; what a ceiling here bounds is the divergence
+attributable to two implementations of a bounded primitive each sitting up to
+its own ceiling from correctly rounded, on opposite sides. Every ceiling is
+recorded with its derivation, and a kernel reaching no bounded primitive keeps
+zero — which is what stops a tolerance spreading from the kernels that need one
+to the kernels that do not.
+
+Confirmed by reinstating a fault: changing `exp` to `exp2` in one kernel's
+emitted MSL reports 3,965,045 ULP against a ceiling of 16.
+
+**Two things the oracle had to be told.** The CPU emulates subgroups at a width
+a caller chooses and defaults to 4, while this device executes 32, so a
+reduction over 64 elements was two different computations; the oracle is now
+opened at the device's reported width, which is what
+[006](006-backends.md) §5 makes the option for. And the f16 bindings move as
+`[]uint16`, because the API boundary carries bit patterns.
+
+**`numeq` gained `ULPDistance` and `WithinULP`.** Ordered-bit, so a distance is
+meaningful across a binade boundary, which is how §6 defines the `sqrt` ceiling
+and why. The sign is folded on the unsigned pattern rather than by testing a
+converted integer for negative — widening `uint32` to `int64` never produces a
+negative, which put the two zeros 2³¹ steps apart in the first version. NaN is
+checked before the distance, because every comparison against one is false and
+it would otherwise pass every ceiling there is.
+
+## 5. Still outstanding
+
+- `simd_ballot` returns a `simd_vote` rather than an integer, so `Ballot` is
+  refused by name; shuffles and scans are deferred on both backends by
+  [020](020-cooperative-atomics.md).
+- `atomic<float>` is a Metal *version* capability rather than a spelling, so an
+  f32 atomic is refused until the capability table can make the family query.
+- An **array** member of a uniform block: std140 gives it a 16-byte stride
+  whatever its element type, so it cannot be one C array a caller indexes with
+  one index, and reconciling that rewrites the index expression rather than the
+  declaration. No corpus kernel needs it.
+
+## 6. Done
 
 - the Metal numeric profile is recorded, from probes, before anything derives
   from it;

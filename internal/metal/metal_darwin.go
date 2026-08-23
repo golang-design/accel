@@ -290,14 +290,29 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 		// integrated GPU rather than an emulated one.
 		Software: false,
 		Capabilities: driver.Capabilities{
-			// Reported absent until specs/022-msl-target.md lowers them. The
-			// hardware has all of these; this backend cannot yet emit them, and
-			// the report is about what a caller can use.
-			Subgroups:             false,
-			SubgroupOps:           0,
+			// Reported present because the MSL target lowers them
+			// (specs/022-msl-target.md section 2). A capability is about what a
+			// caller can use, so it follows the emitter rather than the
+			// hardware: this device has had SIMD reductions all along, and
+			// reporting them before anything could emit them would have let a
+			// kernel be accepted and then refused at graph build.
+			Subgroups: true,
+			// Basic gives the size, lane index and group index; arithmetic
+			// gives simd_sum, simd_min and simd_max; vote gives simd_any,
+			// simd_all and simd_is_first. Ballot is absent because simd_ballot
+			// returns a simd_vote rather than an integer, and shuffles and
+			// scans are deferred by specs/020-cooperative-atomics.md on both
+			// backends.
+			SubgroupOps: driver.SubgroupBasic | driver.SubgroupArithmetic | driver.SubgroupVote,
+
+			// Still absent. atomic<float> is a Metal *version* capability
+			// rather than a spelling, so it needs the family query this table
+			// does not make yet, and the emitter refuses an f32 atomic by name.
 			AtomicFloatAddStorage: false,
 			AtomicFloatAddShared:  false,
-			IndirectDispatch:      false,
+
+			// Absent until specs/023-metal-graph.md encodes it.
+			IndirectDispatch: false,
 
 			InfNaNProduced: true,
 

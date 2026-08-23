@@ -80,3 +80,64 @@ func TestExactBits(t *testing.T) {
 		t.Errorf("an equal report says %q", got)
 	}
 }
+
+// The ULP distance is ordered-bit, which is what makes it meaningful across a
+// binade boundary and around zero.
+func TestULPDistance(t *testing.T) {
+	next := func(v float32, n int32) float32 {
+		return math.Float32frombits(uint32(int32(math.Float32bits(v)) + n))
+	}
+	cases := []struct {
+		name string
+		a, b float32
+		want uint64
+	}{
+		{"identical", 1, 1, 0},
+		{"one step", 1, next(1, 1), 1},
+		// Below one the steps are half the size, so the neighbour on that side
+		// is a different absolute distance and the same ordered distance. A
+		// comparison in absolute terms would count these two cases differently.
+		{"one step below a binade boundary", 1, next(1, -1), 1},
+		{"across zero", next(0, 1), -next(0, 1), 2},
+		{"the two zeros", 0, float32(math.Copysign(0, -1)), 0},
+		{"a large gap", 1, 2, 1 << 23},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := numeq.ULPDistance(c.a, c.b); got != c.want {
+				t.Errorf("ULPDistance(%v, %v) = %d, want %d", c.a, c.b, got, c.want)
+			}
+			if got := numeq.ULPDistance(c.b, c.a); got != c.want {
+				t.Errorf("ULPDistance is not symmetric at %v, %v", c.a, c.b)
+			}
+		})
+	}
+}
+
+// WithinULP accepts up to its ceiling, refuses past it, and never lets a NaN
+// through.
+func TestWithinULP(t *testing.T) {
+	next := func(v float32, n int32) float32 {
+		return math.Float32frombits(uint32(int32(math.Float32bits(v)) + n))
+	}
+	want := []float32{1, 2, 3}
+
+	if r := numeq.WithinULP([]float32{1, next(2, 4), 3}, want, 4); !r.Equal {
+		t.Errorf("four steps should be within a ceiling of four: %v", r)
+	}
+	if r := numeq.WithinULP([]float32{1, next(2, 5), 3}, want, 4); r.Equal {
+		t.Error("five steps should exceed a ceiling of four")
+	}
+	// The case a tolerance comparison silently passes: NaN > anything is false,
+	// so a NaN is inside every ceiling unless it is checked first.
+	nan := float32(math.NaN())
+	if r := numeq.WithinULP([]float32{1, nan, 3}, want, 1<<62); r.Equal {
+		t.Error("a NaN passed a ceiling, so it is not being checked before the distance")
+	}
+	if r := numeq.WithinULP([]float32{1, nan, 3}, []float32{1, nan, 3}, 0); !r.Equal {
+		t.Errorf("two NaNs in the same place agree: %v", r)
+	}
+	if r := numeq.WithinULP([]float32{1, 2}, want, 4); r.Equal {
+		t.Error("slices of different lengths do not agree")
+	}
+}
