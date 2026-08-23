@@ -5,10 +5,12 @@
 package intrin_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"sort"
 	"strings"
 	"testing"
 
@@ -211,28 +213,31 @@ func (*Thread) GlobalID() uint32 { return 0 }
 func TestNamesAndDigestAreStable(t *testing.T) {
 	names := intrin.Names()
 	want := []string{
-		"accel.BFloat16.F32",
-		"accel.Float16.F32",
+		// Thread ids and the barrier.
 		"accel.Thread.Barrier",
-		"accel.Thread.GlobalID",
-		"accel.Thread.GlobalIndex",
-		"accel.Thread.GroupID",
-		"accel.Thread.GroupIndex",
-		"accel.Thread.LocalID",
-		"accel.Thread.LocalIndex",
-		"accel.ToBFloat16",
-		"accel.ToFloat16",
-		"accel/kmath.Abs",
-		"accel/kmath.Cos",
-		"accel/kmath.Exp",
-		"accel/kmath.Log",
-		"accel/kmath.Max",
-		"accel/kmath.Min",
-		"accel/kmath.RSqrt",
-		"accel/kmath.Sin",
-		"accel/kmath.Sqrt",
-		"accel/kmath.Tanh",
+		"accel.Thread.GlobalID", "accel.Thread.GlobalIndex",
+		"accel.Thread.GroupID", "accel.Thread.GroupIndex",
+		"accel.Thread.LocalID", "accel.Thread.LocalIndex",
+
+		// Narrow storage conversions.
+		"accel.BFloat16.F32", "accel.Float16.F32",
+		"accel.ToBFloat16", "accel.ToFloat16",
+
+		// Atomics: free functions taking a buffer and an index, since GLSL
+		// cannot form a pointer into a buffer.
+		"accel.AddF32", "accel.AddI32", "accel.AddU32",
+		"accel.AndU32", "accel.OrU32", "accel.XorU32",
+		"accel.CompareExchangeI32", "accel.CompareExchangeU32",
+		"accel.ExchangeI32", "accel.ExchangeU32",
+		"accel.MaxI32", "accel.MaxU32", "accel.MinI32", "accel.MinU32",
+		"accel.SubI32", "accel.SubU32",
+
+		// Bounded and exact scalar math.
+		"accel/kmath.Abs", "accel/kmath.Cos", "accel/kmath.Exp", "accel/kmath.Log",
+		"accel/kmath.Max", "accel/kmath.Min", "accel/kmath.RSqrt",
+		"accel/kmath.Sin", "accel/kmath.Sqrt", "accel/kmath.Tanh",
 	}
+	sort.Strings(want)
 	if len(names) != len(want) {
 		t.Fatalf("Names() = %v, want %v", names, want)
 	}
@@ -242,8 +247,12 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		}
 	}
 
+	// The version is read from the constant rather than written out, so a bump
+	// does not need this test edited. What the test is for is the *contents*
+	// changing silently, which the name list above catches; the version line's
+	// job is to make a table whose shape changed produce a different digest.
 	d := intrin.Digest()
-	if !strings.HasPrefix(d, "intrin/1\n") {
+	if !strings.HasPrefix(d, fmt.Sprintf("intrin/%d\n", intrin.ABIVersion)) {
 		t.Errorf("digest does not start with its ABI version: %q", strings.SplitN(d, "\n", 2)[0])
 	}
 	if intrin.Digest() != d {
