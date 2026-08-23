@@ -1,6 +1,6 @@
 ---
 title: "Tensor layer: values, state, operators, and plans"
-status: drafted
+status: in progress
 layer: tensor
 depends_on:
   - 001-device-resources.md

@@ -1,6 +1,6 @@
 ---
 title: "Metal bring-up: the Objective-C shim, device memory, and one kernel on the GPU"
-status: in progress
+status: implemented
 layer: device
 depends_on:
   - 001-device-resources.md

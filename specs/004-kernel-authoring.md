@@ -13,9 +13,16 @@ checker, the closed IR, the intrinsic table, the generated Go lowering with its
 explicit rounding points, the digest and freshness check, both the flat and the
 resumable cooperative lowerings, and the positioned rejection corpus.
 
-**What is not.** The MSL, GLSL, SPIR-V and HLSL emitters, which need the
-backends that consume them. This spec is *in progress* for that reason: the IR
-and the analyses are shared by every target and are done; the targets are not.
+**What is not — corrected 2026-08-23.** The MSL emitter is built: every one of
+[010](010-kernel-corpus.md)'s kernels lowers to Metal Shading Language and
+compiles on a device, so the sentence that used to stand here, listing MSL among
+the unbuilt targets, was a milestone out of date.
+
+What remains unbuilt is the GLSL, SPIR-V and HLSL emitters, which need the
+backends that consume them, and the `//accel:vertex` and `//accel:fragment`
+directives that [000](000-decisions.md) keeps reserved while graphics is post-v0.
+This spec is *in progress* on that basis: the IR and the analyses are shared by
+every target and are done, one text target is done, and three are not.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 5. A kernel is written
 once, in Go, type-checked once, and lowered from one typed IR to every backend.

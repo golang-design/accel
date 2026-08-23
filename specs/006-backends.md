@@ -18,10 +18,15 @@ modes. R1 through R8 and R10 of §1 are implemented for it. The plan crosses the
 seam as a value, which is §4's answer to 003's open question about graph
 lowering.
 
-**What is not.** Every other backend in §2, and R9's convention corrections,
-which have nothing to correct until a backend diverges. §4's per-backend lowering
-strategies are decided and unbuilt. This spec is *in progress* on that basis: the
-contract is settled and one backend meets it.
+**What is not — corrected 2026-08-23.** Two backends meet the contract now, not
+one: §2.2's Metal is built, and §4.3's re-encode-per-submission is the strategy
+it uses. R9's convention corrections turned out to have something to correct
+after all — four Metal divergences are recorded in
+[`conventions.md`](../docs/conventions.md), measured rather than remembered.
+
+What remains is every backend in §2 other than the CPU and Metal, and §4's
+lowering strategies for those. This spec is *in progress* on that basis: the
+contract is settled and two of six backends meet it.
 
 What a backend has to do, which backends exist, what each one can and cannot do,
 and how [003](003-command-graph.md)'s graph reaches each one.
