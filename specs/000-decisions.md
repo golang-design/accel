@@ -321,20 +321,29 @@ spec that contradicts it is wrong in the same way as one that contradicts a
 decision, and because two of the specs disagreed about it before it was written.
 
 **v0 is compute only.** [005](005-graphics.md) remains the normative parent
-design and is not implemented, but it is drafted rather than frozen. No graphics
-public API is promised until its stage ABI, render API, surface/present contract,
-and CPU rasterizer have their own implementation-ready child specs. Attachment
-formats, blend state, and stencil operations remain design inputs now so the
-device layer does not accidentally foreclose them. [004](004-kernel-authoring.md)
-correspondingly keeps `//accel:vertex` and `//accel:fragment` reserved and
-unimplemented.
+design. No graphics public API was promised until its stage ABI, render API,
+surface/present contract, and CPU rasterizer had their own implementation-ready
+child specs. Attachment formats, blend state, and stencil operations remained
+design inputs so the device layer would not accidentally foreclose them.
 
-The cost, stated: **the graphics half of
-[`conventions.md`](../docs/conventions.md) is unverified at v0.** Clip-space
-depth range, face winding, and the readback origin are exactly the entries that
-cost the predecessor hours, and nothing in v0 exercises them. The predecessor's
-known gap, a Metal present path that was never written, also stays open. This is
-a deferral with a bill attached, not a simplification.
+**The gate is satisfied, 2026-08-23.** The four child specs are
+[032](032-stage-abi.md), [033](033-render-api.md),
+[034](034-surface-present.md), and [035](035-cpu-rasterizer.md). This is the gate
+being *met* rather than revised: the condition it named is the condition that was
+done, no decision above changed, and 005's own four open questions were closed in
+the direction 005 argued rather than reopened. [004](004-kernel-authoring.md)
+correspondingly un-defers `//accel:vertex` and `//accel:fragment` and points at
+032.
+
+Implementation follows 035's order, and until it lands the cost stands as it
+always did: **the graphics half of
+[`conventions.md`](../docs/conventions.md) is unverified.** Clip-space depth
+range, face winding, and the readback origin are exactly the entries that cost
+the predecessor hours. The predecessor's known gap, a Metal present path that was
+never written, is now scheduled rather than open — 034 puts it before every other
+on-screen backend, for the reason that it was the brick that project left for
+last. This is a deferral with a bill attached, not a simplification, and the
+bill now has a due date.
 
 **v0 backends are the CPU backend and Metal.** Vulkan, D3D12, OpenGL ES, and
 WebGPU stay specified in [006](006-backends.md) and unbuilt. Three consequences

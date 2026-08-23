@@ -15,23 +15,33 @@ render pass becomes a node in the graph of [003](003-command-graph.md), how draw
 are issued, how a rasterized G-buffer is handed to a compute pass without leaving
 the device, and how a frame reaches a screen.
 
-**Status: drafted parent design, post-v0.**
+**Status: normative parent design. The four child specs exist as of
+2026-08-23.**
 [`000-decisions.md`](000-decisions.md)'s v0 milestone is compute only. This spec
 fixes the architectural boundaries and the cross-component invariants, but it
 does not freeze a public graphics API before any implementation has tested that
-shape. Implementation starts only after four tightly scoped child specs cover:
+shape. Implementation was gated on four tightly scoped child specs, which are:
 
-1. the vertex/fragment stage ABI and kernel lowering;
-2. render pipeline, pass, attachment, and draw APIs;
-3. surfaces, acquisition, resize, and present;
-4. the CPU reference rasterizer and its conformance corpus.
+| | Child | Covers |
+| --- | --- | --- |
+| 1 | [032](032-stage-abi.md) | the vertex/fragment stage ABI and kernel lowering |
+| 2 | [033](033-render-api.md) | render pipeline, pass, attachment, and draw APIs |
+| 3 | [034](034-surface-present.md) | surfaces, acquisition, resize, and present |
+| 4 | [035](035-cpu-rasterizer.md) | the CPU reference rasterizer and its conformance corpus |
 
 Each child may refine names and descriptor layout while preserving this parent's
-decisions: render passes are graph nodes, attachment formats are pipeline state,
-resource hazards are inferred, presentation remains external to the graph, and
-the CPU path is the oracle. [004](004-kernel-authoring.md) keeps the vertex and
-fragment directives reserved and unimplemented until the stage-ABI child spec
-exists.
+decisions, and each does: render passes are graph nodes, attachment formats are
+pipeline state, resource hazards are inferred, presentation remains external to
+the graph, and the CPU path is the oracle.
+[004](004-kernel-authoring.md) no longer defers the vertex and fragment
+directives; 032 defines them.
+
+**This spec's four open questions are closed**, each in the direction this
+document itself argued, and each in the child that owns the consequence:
+reverse-Z in [032](032-stage-abi.md) §2.4, vertex layout derivation in
+[033](033-render-api.md) §5, pass merging in [033](033-render-api.md) §5, and
+resize-versus-rebuild in [034](034-surface-present.md) §4.1. The former "Open
+questions" section below is retained only for the entries that stay open.
 
 The design target is a deferred renderer: a geometry pass writing several colour
 attachments plus depth, then compute doing the shading. That target is chosen
@@ -639,41 +649,29 @@ Each of these is excluded for a reason, not by omission.
 
 ## Open questions
 
-- **Reverse-Z within a `[-1, 1]` clip convention.** The remap itself is one
-  multiply-add and loses nothing. What the convention complicates is the standard
-  fix for depth precision at long view distances, which is placing the near plane
-  at the far end of a float depth range with a `greater` compare. That is
-  expressible today: clip `+1` (near) stores as `1.0`, clip `-1` (far) stores as
-  `0.0`, so reverse-Z is "clear to `0.0`, `greater` compare, float depth format"
-  with no API change at all. So this may be a documentation problem rather than
-  an API one. The alternative, changing the single presented clip convention to
-  `[0, 1]`, is a breaking change to every authored vertex kernel and to
-  `conventions.md`. Unresolved, and worth resolving before the first caller
-  writes a projection matrix.
-- **Whether the vertex input layout should be derived from the Go vertex kernel
-  signature.** Declaring it twice, once in the kernel and once in the descriptor,
-  is a mismatch waiting to happen, and the compiler already knows the types.
-  Against: byte offsets, strides, and step modes are properties of the buffer, not
-  of the kernel, and inferring them would either guess a packing or need
-  annotations that are a descriptor by another name.
-- **Pass merging on tilers.** Vulkan subpasses and Metal imageblocks let a
-  deferred renderer keep its G-buffer in tile memory and never write it to main
-  memory at all, which on mobile hardware is the difference between viable and
-  not. The graph builder has the information to detect the pattern (a pass writing
-  attachments consumed by exactly one following pass at the same pixel). Whether
-  it attempts the merge automatically, exposes it as a hint, or ignores it, is
-  undecided, and the compute-consumer shape in the handoff section above does not
-  merge on any backend.
-- **Whether a resize can avoid a graph rebuild.** If render area and attachment
-  extents were dynamic rather than validated at build, a swapchain resize would
-  rebind rather than rebuild. That trades a validation guarantee for convenience
-  at an event that happens rarely, and the current answer (rebuild) is chosen for
-  now rather than settled.
+Four questions that stood here are closed, each in the child spec that owns the
+consequence, and each in the direction this document argued: reverse-Z needs no
+API change ([032](032-stage-abi.md) §2.4), the vertex layout stays a descriptor
+whose formats the compiler now validates ([033](033-render-api.md) §5), pass
+merging is not attempted while the only handoff in the corpus merges on no
+backend ([033](033-render-api.md) §5), and a resize rebuilds because attachment
+extents are what build-time size validation is made of
+([034](034-surface-present.md) §4.1). They are removed rather than kept, per
+[`README.md`](README.md)'s rule.
+
+What stays open:
+
 - **Bindless resource access.** A geometry pass over many materials wants to index
   a table of textures from the fragment stage. Vulkan descriptor indexing, D3D12
   bindless, and Metal argument buffers all provide it; GLES 3.1 has nothing
   comparable, and the CPU backend would need a matching model. A capability, if it
-  arrives at all.
+  arrives at all. Carried in [033](033-render-api.md) §8.
+- **Multisampling**, which is out of scope below rather than undecided, but whose
+  child spec does not exist. The obligations it must discharge are listed in the
+  render-pipeline section.
+- Each child spec carries its own, and they are the ones a reader should check
+  first: [032](032-stage-abi.md) §11, [033](033-render-api.md) §8,
+  [034](034-surface-present.md) §9, [035](035-cpu-rasterizer.md) §10.
 
 ## Testing
 

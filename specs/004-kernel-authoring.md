@@ -111,7 +111,9 @@ It matches Go's recognized directive shape, so `gofmt` leaves it alone
 (verified on go1.27).
 Undirected functions in the same package are ordinary Go and are never lowered.
 `//accel:helper` marks a callee. The `//accel:` namespace is reserved; `vertex`
-and `fragment` are held for the graphics stages this spec defers.
+and `fragment` are **no longer held** — [032](032-stage-abi.md) defines them, and
+what a graphics stage's signature must look like is that spec's subject rather
+than this one's.
 
 ## The signature is the binding layout
 
@@ -650,9 +652,12 @@ Every rejection carries a `token.Pos` and is formatted as
 
 ## Out of scope for v0
 
-- **Graphics stages.** Compute only. The predecessor shipped vertex and fragment
-  kernels, so this is a sequencing decision, not a doubt. The directive
-  namespace is reserved.
+- **Graphics stages**, until [032](032-stage-abi.md). Compute only was a
+  sequencing decision rather than a doubt — the predecessor shipped vertex and
+  fragment kernels — and 032 is where the sequence reached them. The subset, the
+  `go/types` resolution, and both lowerings are unchanged there; what 032 adds is
+  the signature shape and the stage-to-stage interface, which are fixed-function
+  hardware and so are not things a Go signature describes by accident.
 - **Sampled textures in kernels.** Deferred on evidence: the predecessor
   established that its CPU sampler and a hardware sampler cannot be reconciled
   bit-exactly (addressing at `u*(dx-1)` rather than the half-texel convention,

@@ -315,9 +315,11 @@ with genuinely churning object counts will feel it.
 Indirect **arguments** fit the model with no tension: graph structure is
 unchanged and only numbers vary, which is 003's third kind of variation.
 
-**This spec carries 005's proposed amendment to 003 and makes it concrete:**
-003's third kind of variation reads "dispatch counts" and must read "dispatch and
-draw counts", because someone reading 003 alone will not find draw counts there.
+005 proposed an amendment to [003](003-command-graph.md) here — its third kind of
+variation read "dispatch counts", and someone reading 003 alone would not find
+draw counts there. **That amendment is already accepted in 003**, which now reads
+"dispatch and draw counts" and records where the widening came from. Nothing is
+outstanding; it is noted because this spec is where the draws that need it live.
 
 Indirect **draw count**, where the device decides how many draws happen, is
 genuinely in tension with immutability. The resolution matches what the compute
@@ -409,8 +411,7 @@ of these names the node, the slot, and the recording call's source position.
   alignment rather than from `sizeof(T)`;
 - an indirect draw matches the equivalent direct draw, and on a device with the
   count capability a device-written count above the build-time maximum is clamped
-  and reported; and
-- 003's third kind of variation reads "dispatch and draw counts".
+  and reported.
 
 ## 8. Open questions
 

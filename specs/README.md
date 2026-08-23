@@ -80,7 +80,7 @@ numbered in.
 | [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | Drafted | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
-| [005-graphics.md](005-graphics.md) | Drafted parent | Post-v0 graphics constraints and the four child specs required before implementation |
+| [005-graphics.md](005-graphics.md) | Normative parent | Graphics constraints, and the parent of 032 through 035; its four open questions are closed in those children |
 | [006-backends.md](006-backends.md) | In progress | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 | [008-numerics.md](008-numerics.md) | In progress | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
