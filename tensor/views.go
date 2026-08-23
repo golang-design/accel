@@ -12,10 +12,11 @@ package tensor
 // only thing that has to be true is that the kernel reading it can index what
 // the view describes.
 //
-// specs/024-tensor-bringup.md's lowering refuses a non-contiguous operand,
-// which is where [Contiguous] comes in: it materializes a view into packed
-// storage so the corpus kernels can read it. Refusing rather than silently
-// copying is the choice specs/007-tensor-layer.md makes -- "v0 requires unit
+// specs/024-tensor-bringup.md's lowering refuses a non-contiguous operand.
+// Packing one into contiguous storage needs a gather operator that does not
+// exist yet, so today such an operand is refused and there is no way to convert
+// it -- see specs/025-tensor-operators.md's open questions. Refusing rather than
+// silently copying is the choice specs/007-tensor-layer.md makes -- "v0 requires unit
 // stride ... which admits ordinary contiguous row-major operands without
 // silently materializing either one" -- because a copy nobody asked for is a
 // cost nobody can see.
@@ -45,7 +46,8 @@ func normalizeAxis(axis, rank int) (int, bool) {
 // implementation but of what reshaping means: a strided view's elements are not
 // adjacent, so a different extent over them describes different elements. The
 // error says so rather than saying "unsupported", because the fix is
-// [Contiguous] and a reader should not have to guess that.
+// reshaping before the transpose or slice that made it strided, and a reader
+// should not have to guess that.
 func Reshape(b *Builder, x *Tensor, shape Shape) *Tensor {
 	if poisoned(x) {
 		return b.poison()
@@ -61,9 +63,10 @@ func Reshape(b *Builder, x *Tensor, shape Shape) *Tensor {
 			"renames axes and never adds or drops values", x.shape, want, shape, got)
 	}
 	if !x.contiguousLayout() {
-		return b.fail(1, "Reshape", "the operand is a strided view, whose elements are not "+
-			"adjacent, so a different extent over them names different elements; insert "+
-			"Contiguous first")
+		return b.fail(1, "Reshape", "the operand is a strided view, whose elements are "+
+			"not adjacent, so a different extent over them names different elements. "+
+			"There is no operator that packs one yet, so reshape before the transpose or "+
+			"slice that made it strided")
 	}
 	return x.view(shape, contiguous(shape), x.offset)
 }
@@ -152,7 +155,8 @@ func Slice(b *Builder, x *Tensor, axis, start, end int) *Tensor {
 // The expansion is a **zero stride**, which is the whole trick: every index
 // along that axis reads the same element, so nothing is materialized and
 // nothing is copied. A kernel that indexes contiguously cannot read it, which
-// is why lowering refuses a broadcast operand and [Contiguous] exists.
+// is why lowering refuses a broadcast operand it cannot express as a repeated
+// contiguous run.
 func Broadcast(b *Builder, x *Tensor, shape Shape) *Tensor {
 	if poisoned(x) {
 		return b.poison()

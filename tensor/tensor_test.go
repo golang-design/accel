@@ -988,3 +988,33 @@ func TestASecondSubmissionInFlightIsRefused(t *testing.T) {
 		t.Fatalf("a submission after the refused one: %v", err)
 	}
 }
+
+// The Reshape refusal must not name an operator that does not exist.
+//
+// Four places named a Contiguous operator, including this error, and it was
+// never written — so a caller who hit the refusal went looking for an API that
+// is not there. The spec audit of specs/025-tensor-operators.md found it.
+//
+// This asserts the shape of the advice rather than its wording: it must not
+// name Contiguous, and it must say something the caller can actually do.
+func TestReshapeRefusalDoesNotNameAMissingOperator(t *testing.T) {
+	rt := newRuntime(t)
+	b := rt.NewBuilder("reshape")
+	x := tensor.Input(b, tensor.ValueDesc{
+		Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 6},
+	})
+	// A transpose makes it strided, so the reshape below is refused.
+	xt := tensor.Transpose(b, x, 0, 1)
+	tensor.Reshape(b, xt, tensor.Shape{24})
+
+	err := b.Err()
+	if err == nil {
+		t.Fatal("reshaping a strided view was accepted")
+	}
+	if strings.Contains(err.Error(), "Contiguous") {
+		t.Errorf("the refusal names an operator that does not exist: %v", err)
+	}
+	if !strings.Contains(err.Error(), "reshape before") {
+		t.Errorf("the refusal should say what to do instead: %v", err)
+	}
+}

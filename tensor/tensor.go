@@ -142,7 +142,7 @@ func (t *Tensor) DType() DType { return t.dtype }
 // Shape reports the extent.
 func (t *Tensor) Shape() Shape { return t.shape }
 
-// Contiguous reports whether this tensor's strides are the densely packed ones,
+// contiguousLayout reports whether this tensor's strides are the densely packed ones,
 // which is what the corpus kernels index.
 func (t *Tensor) contiguousLayout() bool {
 	want := contiguous(t.shape)

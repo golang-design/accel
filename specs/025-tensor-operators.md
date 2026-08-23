@@ -32,8 +32,9 @@ Two rules follow, and each is a refusal rather than a silent repair:
 
 - **`Reshape` requires a contiguous operand.** A strided view's elements are not
   adjacent, so a different extent over them names *different elements*. The
-  error says that, because the fix is `Contiguous` and a reader should not have
-  to guess.
+  error says that, and says what to do instead: reshape before the transpose or
+  slice that made the view strided. **There is no `Contiguous` operator** — see
+  the open questions.
 - **`Slice` is unit-step.** A strided step would still be a view and nothing in
   v0 needs one, so it is absent rather than untested.
 
@@ -49,7 +50,9 @@ and the difference is what [007](007-tensor-layer.md) asks for:
 | `MatMul` operands | **refused**, because that spec requires unit stride on the contracted axes "without silently materializing either one" |
 
 The distinction is cost. Repeating a gain vector across rows is small; copying a
-weight matrix is not, and a caller must ask for it.
+weight matrix is not, and a caller must ask for it — which today means shaping
+the operand before it becomes strided, since the operator that would pack one
+does not exist.
 
 **Every materialization appears in `Plan.Selections`**, with how many copies and
 of what size. A copy nobody can see is a performance cliff nobody can explain,
@@ -135,3 +138,12 @@ materialization is.
 - a transformer feed-forward block — normalize, project, activate — compiles,
   runs, and agrees between the backends, which is the smallest thing that shows
   the set composes.
+
+## Open questions
+
+- **A `Contiguous` operator.** Four places in `tensor/views.go` named one,
+  including an error telling a caller to insert it, and it was never written —
+  so a user following the error went looking for an API that does not exist.
+  The messages now say what is actually possible. Packing an arbitrary strided
+  view needs a gather kernel: `Plan.materialize` handles only a contiguous run
+  repeated a whole number of times, which is broadcast, not transposition.
