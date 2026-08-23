@@ -155,6 +155,10 @@ type recorderState struct {
 
 	built bool
 
+	// shared is the caller-owned transient pool this graph will plan into, or
+	// nil when it owns its transients. See Recorder.UseTransientPool.
+	shared *TransientPool
+
 	// collectStats is whether the graph carries back the counters only the
 	// device knows. Off by default, because they cost a readback.
 	collectStats bool

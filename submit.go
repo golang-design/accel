@@ -296,6 +296,7 @@ func (g *Graph) run() error {
 		return err
 	}
 	g.inFlight = true
+	shared := g.shared
 	g.mu.Unlock()
 
 	defer func() {
@@ -303,6 +304,25 @@ func (g *Graph) run() error {
 		g.inFlight = false
 		g.mu.Unlock()
 	}()
+
+	// A shared transient pool widens the rule above from this graph to every
+	// graph planned into the same bytes: see specs/031-shared-transients.md.
+	//
+	// The claim is taken here, and not in Queue.Submit, for two reasons. This
+	// function is the only one that executes a graph, so Queue.SubmitAfter is
+	// covered by the same three lines rather than by a second copy somebody has
+	// to remember. And the claim then spans execution and nothing else: taken
+	// at call time it would also span the wait for everything already on the
+	// queue, so a back-to-back pair of submissions that a serial queue could
+	// never overlap would be refused, or not, depending on goroutine
+	// scheduling. The refusal reaches the caller through the fence, which is
+	// how every other submission failure arrives.
+	if shared != nil {
+		if err := shared.begin(); err != nil {
+			return err
+		}
+		defer shared.end()
+	}
 
 	df, err := g.exe.Submit()
 	if err != nil {

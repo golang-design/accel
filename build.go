@@ -79,6 +79,7 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 		slots:        r.state.slots,
 		transients:   r.state.transients,
 		collectStats: r.state.collectStats,
+		shared:       r.state.shared,
 	}
 	g.naive = naive
 	g.inferEdges()
@@ -165,11 +166,25 @@ func (g *Graph) placeTransients() error {
 		return nil
 	}
 
-	blk, err := g.dev.dev.Alloc(driver.MemoryDevice, total, "graph transients")
-	if err != nil {
-		return fmt.Errorf("accel: Build: transient pool: %w", err)
+	// A caller-owned pool is grown to fit rather than allocated per graph, and
+	// the offsets computed above are relative to it. Two graphs sharing one
+	// overlap completely, which is sound because they never run together --
+	// see specs/031-shared-transients.md.
+	var blk driver.Block
+	if g.shared != nil {
+		var err error
+		blk, err = g.shared.reserve(total, "graph")
+		if err != nil {
+			return err
+		}
+	} else {
+		var err error
+		blk, err = g.dev.dev.Alloc(driver.MemoryDevice, total, "graph transients")
+		if err != nil {
+			return fmt.Errorf("accel: Build: transient pool: %w", err)
+		}
+		g.dev.countImplicit(1)
 	}
-	g.dev.countImplicit(1)
 	g.pool = blk
 	for _, t := range g.transients {
 		t.pool = blk
@@ -327,6 +342,14 @@ func (d *Device) countGraphs(delta int) {
 }
 
 func (g *Graph) releaseTransients() {
+	// A shared pool belongs to the caller and outlives this graph. Freeing it
+	// here would pull the memory out from under every other graph planned into
+	// it, and the symptom would be one graph's results appearing in another's
+	// buffers rather than a crash.
+	if g.shared != nil {
+		g.pool = nil
+		return
+	}
 	if g.pool != nil {
 		g.pool.Free()
 		g.dev.countImplicit(-1)

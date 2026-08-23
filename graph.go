@@ -212,6 +212,21 @@ func (r *Recorder) Transient(desc BufferDescriptor) BufferView {
 // there rather than being discovered at bind.
 func (r *Recorder) Slot(desc SlotDescriptor) Slot { return r.slotImpl(desc) }
 
+// UseTransientPool makes this graph plan its intermediates into a caller-owned
+// pool rather than allocating its own.
+//
+// Several graphs may share one pool, which is what makes a set of plans over one
+// model cost one plan's transients rather than all of them: five prefill buckets
+// at 200 MiB is a gigabyte of device memory of which 800 MiB is idle.
+//
+// The rule that makes it safe is one a graph already has, widened to the set:
+// graphs sharing a pool cannot be in flight together, and a second submission is
+// refused rather than queued -- a pool that queued silently would turn a design
+// mistake into a latency mystery.
+//
+// See [TransientPool] and specs/031-shared-transients.md.
+func (r *Recorder) UseTransientPool(p *TransientPool) { r.state.shared = p }
+
 // SlotDescriptor declares a rebindable binding point.
 type SlotDescriptor struct {
 	Name   string // appears in every error about this slot
@@ -288,6 +303,11 @@ type Graph struct {
 	transients []*transient
 
 	pool driver.Block
+
+	// shared is the caller-owned pool this graph planned into, or nil when it
+	// owns its transients. specs/031-shared-transients.md.
+	shared *TransientPool
+
 	plan *driver.Plan
 	exe  driver.Executable
 
@@ -495,6 +515,15 @@ func (g *Graph) Close() error {
 		}
 	}
 	g.releaseTransients()
+	// Under the lock, because run reads the same field inside the critical
+	// section that marks the graph in flight.
+	g.mu.Lock()
+	shared := g.shared
+	g.shared = nil
+	g.mu.Unlock()
+	if shared != nil {
+		shared.release()
+	}
 	g.dev.countGraphs(-1)
 	return nil
 }
@@ -539,7 +568,6 @@ func (q *Queue) Submit(g *Graph) *Fence {
 	if fail := q.reject(g); fail != nil {
 		return fail
 	}
-
 	// The pending host writes join the same stream rather than being flushed
 	// alongside it. Flushing here would let a write race a submission already
 	// running, which is exactly what the queue's ordering guarantee forbids.
