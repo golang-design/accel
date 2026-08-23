@@ -52,19 +52,6 @@ type Package struct {
 
 // Generate produces the generated file's contents, gofmt'd.
 func Generate(p Package) ([]byte, error) {
-	// A cooperative kernel needs the resumable lowering, and until that exists
-	// the honest answer is a refusal here rather than a flat lowering that runs
-	// the barrier as a no-op. A no-op barrier does not fail: it produces a
-	// different program that happens to compile, which is the failure mode this
-	// project spends its diagnostics budget avoiding.
-	for _, k := range p.Kernels {
-		if k.Cooperative {
-			return nil, fmt.Errorf("accel: kernel %s is cooperative and the resumable "+
-				"lowering it needs is not built yet (specs/018-cooperative-lowering.md); "+
-				"the front end admits barriers so the uniformity analysis has something "+
-				"to check", k.Name)
-		}
-	}
 
 	// The body is emitted first and the header second, because which imports the
 	// file needs is only known once every kernel has been lowered.
@@ -134,6 +121,21 @@ type emitter struct {
 	// the import is present exactly when it is used. An unused import does not
 	// compile, and a missing one does not either, so this cannot be guessed.
 	needsKMath bool
+
+	// frameLocals redirects a local's name to a frame field while emitting the
+	// resumable lowering, so that a value declared before a suspension point
+	// survives the return. Nil while emitting the flat lowering, which needs no
+	// frame because it never suspends. See coop.go.
+	frameLocals map[*ir.Local]bool
+}
+
+// local is a local's spelling: its own name, or the frame field standing in for
+// it inside the resumable lowering.
+func (e *emitter) local(l *ir.Local) string {
+	if e.frameLocals[l] {
+		return "f." + localField(l)
+	}
+	return l.Name
 }
 
 func (e *emitter) fail(format string, args ...any) {
@@ -150,6 +152,10 @@ func (e *emitter) printf(format string, args ...any) {
 
 // kernel emits one kernel's lowering, record, and entry point.
 func (e *emitter) kernel(k *ir.Func) {
+	if k.Cooperative {
+		e.cooperativeKernel(k)
+		return
+	}
 	lower := lowerName(k.Name)
 
 	e.printf("// %s is the generated flat lowering of %s.\n", lower, k.Name)
@@ -359,6 +365,16 @@ func (e *emitter) stmt(s ir.Stmt, depth int) {
 		e.printf("%s}\n", indent(depth))
 
 	case *ir.Declare:
+		if e.frameLocals[s.Local] {
+			// The frame already declares it, so this is an assignment. Keeping
+			// the `var` would shadow the field and lose the value at the next
+			// suspension point, which is a wrong answer rather than a compile
+			// error.
+			e.printf("%s%s = ", indent(depth), e.local(s.Local))
+			e.value(s.Init)
+			e.printf("\n")
+			break
+		}
 		e.printf("%svar %s %s = ", indent(depth), s.Local.Name, e.goType(s.Local.Type()))
 		e.value(s.Init)
 		e.printf("\n")
@@ -521,7 +537,7 @@ func (e *emitter) value(v ir.Value) {
 		e.printf("%s", v.Name)
 
 	case *ir.Local:
-		e.printf("%s", v.Name)
+		e.printf("%s", e.local(v))
 
 	case *ir.FieldSel:
 		// An id component and a uniform member are both an ordinary field

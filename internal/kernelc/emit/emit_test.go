@@ -363,21 +363,24 @@ type missingImport struct{ path string }
 
 func (e *missingImport) Error() string { return "no such import: " + e.path }
 
-// A cooperative kernel is refused at emission until the resumable lowering
-// exists.
+// A barrier the split cannot express is refused by position rather than
+// mis-lowered.
 //
-// The alternative — lowering it flat and treating the barrier as a no-op — does
-// not fail. It produces a different program that compiles and runs, which is
-// the failure mode this project spends its diagnostics budget avoiding. The
-// front end admits barriers so the uniformity analysis has something to check;
-// this is what stops one reaching a backend.
-func TestACooperativeKernelIsRefused(t *testing.T) {
-	k := &ir.Func{Name: "Reduce", Kernel: true, Cooperative: true, Body: ir.NewBlock(0)}
+// A barrier inside a loop is legal by spec 002 and is what a tree reduction is
+// made of, so this is a scheduling gap rather than a rule. Lowering it as a
+// no-op instead would produce a different program that compiles and runs, which
+// is the failure this project spends its diagnostics budget avoiding.
+func TestABarrierInsideALoopIsRefused(t *testing.T) {
+	body := ir.NewBlock(0, ir.NewFor(0, nil, nil, nil,
+		ir.NewBlock(0, ir.NewExprStmt(0,
+			ir.NewIntrinsic(0, &ir.Type{Kind: ir.Invalid}, ir.OpBarrier, nil, nil)))))
+	k := &ir.Func{Name: "Reduce", Kernel: true, Cooperative: true, Body: body}
+
 	_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
 	if err == nil {
-		t.Fatal("a cooperative kernel should be refused")
+		t.Fatal("a barrier inside a loop should be refused")
 	}
-	for _, want := range []string{"Reduce", "resumable lowering", "018"} {
+	for _, want := range []string{"Reduce", "hoist it to the top level", "018"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should say %q, got:\n%v", want, err)
 		}

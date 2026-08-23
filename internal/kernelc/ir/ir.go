@@ -466,6 +466,17 @@ type Binding struct {
 	Read, Write bool
 }
 
+// SharedMem is one workgroup-shared array a kernel's signature declares.
+//
+// Its extent is fixed at pipeline creation on every backend -- it appears in
+// the GLSL layout qualifier and in Metal's threadgroup attribute -- which is
+// why the authored form is a pointer to a fixed-size array rather than a slice.
+type SharedMem struct {
+	Name  string
+	Index int
+	Type  *Type
+}
+
 // Func is a kernel or a helper.
 type Func struct {
 	pos
@@ -482,6 +493,11 @@ type Func struct {
 	Params   []*Param
 	Bindings []*Binding
 	Body     *Block
+
+	// Shared is the workgroup-shared storage the signature declares, in
+	// signature order. Its element type and extent come from the Go array type,
+	// so the IR never invents const generics.
+	Shared []*SharedMem
 
 	// Cooperative reports that the body reaches a barrier, shared memory, or a
 	// subgroup operation, so it needs the resumable lowering rather than the

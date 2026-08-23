@@ -33,6 +33,11 @@ type (
 
 	// KernelUniform is one by-value parameter a kernel declares.
 	KernelUniform = kernel.Uniform
+
+	// KernelFrame is one invocation's saved state between suspension points in
+	// a cooperative kernel. The scheduler owns it and the generated lowering
+	// decides what it holds.
+	KernelFrame = kernel.Frame
 )
 
 // Binding element types, as generated code names them. They mirror the public
@@ -52,6 +57,14 @@ const (
 	KernelRead  = kernel.Read
 	KernelWrite = kernel.Write
 )
+
+// KernelShared recovers one workgroup-shared array from an argument set, as a
+// pointer, because a workgroup shares one copy.
+func KernelShared[T any](a KernelArgs, i int) *T { return kernel.SharedSlice[T](a, i) }
+
+// KernelPoison fills workgroup-shared storage with a pattern no sensible
+// kernel computes, so a read before a write is loud rather than plausible.
+func KernelPoison[T any](s []T) { kernel.Poison(s) }
 
 // KernelABIVersion is the contract between a generated kernel and this runtime.
 // A generated file records it, and a mismatch refuses to run rather than

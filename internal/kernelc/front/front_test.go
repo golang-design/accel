@@ -168,12 +168,6 @@ func K(t accel.Thread, out []float32) {
 			line: 3, want: "launched by the dispatch",
 		},
 		{
-			name: "shared parameter",
-			body: `//accel:kernel workgroup=64
-func K(t accel.Thread, tile *[64]float32, out []float32) { out[0] = 1 }`,
-			line: 2, want: "cooperative kernels arrive at M4",
-		},
-		{
 			name: "no thread",
 			body: `//accel:kernel workgroup=64
 func K(out []float32) { out[0] = 1 }`,
@@ -1172,6 +1166,60 @@ func K(t accel.Thread, out []float32) {
 	if !fns[0].Cooperative {
 		t.Error("a kernel calling Barrier is cooperative, and the flag is what selects " +
 			"the resumable lowering")
+	}
+}
+
+// Shared memory makes a kernel cooperative even with no barrier: it is storage
+// a workgroup shares, so its invocations have to run together.
+func TestSharedMemoryMakesAKernelCooperative(t *testing.T) {
+	pkg := checkSource(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, tile *[64]float32, out []float32) {
+	tile[t.LocalID().X] = 1
+	out[t.GlobalID().X] = tile[t.LocalID().X]
+}
+`)
+	if pkg == nil {
+		t.Fatal("the source did not type-check")
+	}
+	fns, diags := front.Check(pkg)
+	if len(diags) > 0 {
+		t.Fatalf("shared memory should be admitted: %v", diags)
+	}
+	if !fns[0].Cooperative {
+		t.Error("a kernel declaring shared memory is cooperative")
+	}
+	if len(fns[0].Shared) != 1 {
+		t.Fatalf("got %d shared arrays, want 1", len(fns[0].Shared))
+	}
+	if sh := fns[0].Shared[0]; sh.Name != "tile" || sh.Type.Len != 64 {
+		t.Errorf("got %+v, want tile of extent 64", sh)
+	}
+}
+
+// A pointer to anything but a fixed-size array is still outside the subset: the
+// extent is fixed at pipeline creation on every backend, so it cannot be a
+// runtime length.
+func TestOnlyAPointerToAnArrayIsSharedMemory(t *testing.T) {
+	pkg := checkSource(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, p *float32, out []float32) { out[0] = 1 }
+`)
+	if pkg == nil {
+		t.Fatal("the source did not type-check")
+	}
+	_, diags := front.Check(pkg)
+	if len(diags) == 0 {
+		t.Fatal("a pointer to a scalar should be rejected")
+	}
+	if !strings.Contains(diags.Error(), "pointer to a fixed-size array") {
+		t.Errorf("the message should say what the subset admits, got:\n%v", diags)
 	}
 }
 

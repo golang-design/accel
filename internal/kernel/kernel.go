@@ -19,6 +19,7 @@ package kernel
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -93,14 +94,24 @@ func (t Thread) GroupIndex() uint32 {
 
 // Barrier synchronises a workgroup.
 //
-// It exists at M2 so that a kernel using it is rejected by name and position,
-// saying when barriers arrive, rather than failing as a call to a method that
-// plainly exists. Its body is never what runs: a barrier's meaning is the
-// workgroup scheduler's, and a flat kernel has no scheduler to rendezvous with.
-func (t Thread) Barrier() {
-	panic("accel: a barrier only has meaning inside a kernel executed by a backend; " +
-		"cooperative kernels arrive at M4 (specs/009-sequencing.md)")
-}
+// # Why its body does nothing
+//
+// A barrier's meaning is the workgroup scheduler's, not this function's. What
+// actually runs is the generated resumable lowering, where the barrier is a
+// return to the scheduler and a resume afterwards; the authored function is
+// type-checking input, and this method exists so that input names something.
+//
+// It does nothing rather than panicking so that the authored function can be
+// run as a reference, which is what spec 004's fifth testing level compares the
+// generated lowering against. A panic here would make a cooperative kernel the
+// one kind whose authored form nothing can execute, and an unexecutable
+// reference is not a reference.
+//
+// Calling it does not synchronise anything, and a caller who runs an authored
+// cooperative kernel invocation by invocation gets a different program. That is
+// why specs/018-cooperative-lowering.md emulates the rendezvous explicitly
+// wherever it runs an authored cooperative kernel.
+func (t Thread) Barrier() {}
 
 // linear is an extent's invocation count.
 func linear(e ID3) uint32 { return max(e.X, 1) * max(e.Y, 1) * max(e.Z, 1) }
@@ -183,6 +194,17 @@ type Args struct {
 
 	// Uniforms are the by-value parameters, in signature order.
 	Uniforms []any
+
+	// Shared is the workgroup-shared storage, in signature order. One entry per
+	// declared array, and the *same* backing for every invocation of one
+	// workgroup: that is what "shared" means, and handing each invocation its
+	// own copy compiles and computes something else.
+	//
+	// The scheduler allocates it per workgroup rather than per dispatch,
+	// because two workgroups sharing storage would be a hazard no barrier
+	// covers -- specs/002-compute-model.md section 2.7 gives no ordering
+	// between workgroups at all.
+	Shared []any
 }
 
 // Kernel is everything generation inferred about one kernel, plus the entry
@@ -204,6 +226,88 @@ type Kernel struct {
 	// Flat runs one invocation. It is nil for a cooperative kernel, which has no
 	// direct-call form by construction.
 	Flat func(t Thread, a Args)
+
+	// Cooperative runs one invocation to its next suspension point and reports
+	// whether it suspended. It is nil for a flat kernel.
+	//
+	// The frame is the scheduler's, not the kernel's: two workgroups run
+	// concurrently, and a kernel keeping state of its own would alias them.
+	Cooperative func(t Thread, a Args, f *Frame) bool
+
+	// NewShared allocates this kernel's workgroup-shared storage, poisoned.
+	//
+	// Generated, because only the generated code knows each array's element
+	// type and extent; the runtime would need reflection to do it. Called once
+	// per workgroup, since two workgroups sharing storage would be a hazard no
+	// barrier covers.
+	NewShared func() []any
+
+	// Suspensions is how many barriers the body reaches, which is what the
+	// scheduler uses to size an epoch bound. Zero for a flat kernel.
+	Suspensions int
+}
+
+// Poison fills workgroup-shared storage with a pattern no sensible kernel
+// computes.
+//
+// Not zero. Zero is a value a kernel legitimately expects, so a read before a
+// write would return something plausible and the mistake would survive every
+// test. This makes the same mistake produce a number nobody mistakes for an
+// answer, which is what specs/002-compute-model.md requires of this backend.
+//
+// specs/019-cooperative-diagnostics.md makes the read itself *detected*, which
+// is stronger and is the reason this is not the whole answer: a sentinel is a
+// value a kernel could compute, so a check comparing against one either misses
+// the read or fires on a correct kernel.
+func Poison[T any](s []T) {
+	var zero T
+	switch any(zero).(type) {
+	case float32:
+		p := any(math.Float32frombits(poisonBits)).(T)
+		for i := range s {
+			s[i] = p
+		}
+	case uint32:
+		p := any(uint32(poisonBits)).(T)
+		for i := range s {
+			s[i] = p
+		}
+	case int32:
+		p := any(int32(poisonBits)).(T)
+		for i := range s {
+			s[i] = p
+		}
+	}
+}
+
+// poisonBits is a quiet NaN when read as an f32, so arithmetic on it propagates
+// rather than producing a plausible number, and a value with bits set in every
+// byte when read as an integer.
+const poisonBits = 0x7FC0DEAD
+
+// SharedSlice recovers one workgroup-shared array from an argument set.
+//
+// It returns a pointer, because a workgroup shares one copy and a value would
+// give each invocation its own.
+func SharedSlice[T any](a Args, i int) *T {
+	if i < 0 || i >= len(a.Shared) {
+		return nil
+	}
+	p, _ := a.Shared[i].(*T)
+	return p
+}
+
+// Frame is one invocation's saved state between suspension points.
+//
+// Its contents belong to the generated lowering, which is the only thing that
+// knows what a particular kernel has to carry across a barrier. The scheduler
+// owns the slot and hands the same one back to the same invocation.
+type Frame struct {
+	// State is the generated frame, allocated by the kernel on its first call.
+	State any
+
+	// Done reports that this invocation has run to completion.
+	Done bool
 }
 
 // Bind checks a whole argument set against the declared bindings, once.

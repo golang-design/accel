@@ -631,11 +631,8 @@ func (c *checker) param(k *ir.Func, index int, id *ast.Ident, obj types.Object) 
 		return ir.NewParam(id.Pos(), it, index, id.Name, obj), true
 
 	case *types.Pointer:
-		if _, isArray := u.Elem().Underlying().(*types.Array); isArray {
-			c.errorf(id.Pos(), "kernel %s: parameter %q is workgroup-shared memory, which is out "+
-				"of scope for now: cooperative kernels arrive at M4 "+
-				"(specs/009-sequencing.md)", k.Name, id.Name)
-			return nil, false
+		if arr, isArray := u.Elem().Underlying().(*types.Array); isArray {
+			return c.sharedParam(k, index, id, obj, arr)
 		}
 		c.errorf(id.Pos(), "kernel %s: parameter %q is a pointer, and the only pointer the subset "+
 			"admits is a pointer to a fixed-size array, as workgroup-shared memory", k.Name, id.Name)
@@ -648,6 +645,37 @@ func (c *checker) param(k *ir.Func, index int, id *ast.Ident, obj types.Object) 
 	c.errorf(id.Pos(), "kernel %s: parameter %q has type %s, which is not a resource: a binding is "+
 		"a slice, and the first parameter is accel.Thread", k.Name, id.Name, t)
 	return nil, false
+}
+
+// sharedParam places a pointer-to-array parameter as workgroup-shared memory.
+//
+// A pointer to a fixed-size array rather than a slice, because the size is
+// fixed at pipeline creation on every backend: it appears in the GLSL layout
+// qualifier and in Metal's threadgroup attribute, so it cannot be a runtime
+// length. Go's array type is where that size already lives.
+//
+// A pointer rather than a value because a workgroup shares one copy: passing
+// the array by value would give every invocation its own, which compiles and
+// computes something else.
+func (c *checker) sharedParam(k *ir.Func, index int, id *ast.Ident, obj types.Object, arr *types.Array) (*ir.Param, bool) {
+	elem, err := elementKind(arr.Elem())
+	if err != nil {
+		c.errorf(id.Pos(), "kernel %s: shared memory %q is *[%d]%s, and %s",
+			k.Name, id.Name, arr.Len(), arr.Elem(), err)
+		return nil, false
+	}
+	n := int(arr.Len())
+	if n <= 0 {
+		c.errorf(id.Pos(), "kernel %s: shared memory %q has length %d", k.Name, id.Name, n)
+		return nil, false
+	}
+	// Shared memory makes the kernel cooperative even without a barrier: it is
+	// storage a workgroup shares, so the invocations have to run together.
+	k.Cooperative = true
+
+	it := &ir.Type{Kind: ir.Array, Elem: &ir.Type{Kind: elem}, Len: n}
+	k.Shared = append(k.Shared, &ir.SharedMem{Name: id.Name, Index: index, Type: it})
+	return ir.NewParam(id.Pos(), it, index, id.Name, obj), true
 }
 
 // uniformParam places a by-value struct parameter.

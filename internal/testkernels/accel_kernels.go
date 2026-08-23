@@ -96,6 +96,69 @@ var AddKernel = accel.Kernel{
 	},
 }
 
+// exchangeFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type exchangeFrame struct {
+	pc    int
+	lid0  uint32
+	gid1  uint32
+	next2 uint32
+}
+
+// exchangeCoop runs one invocation of Exchange to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. The switch is flat because every barrier
+// sits in uniform control flow, so the suspension points are a sequence.
+func exchangeCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, f *exchangeFrame) bool {
+	switch f.pc {
+	case 0:
+		f.lid0 = t.LocalID().X
+		f.gid1 = t.GlobalID().X
+		sh[f.lid0] = in[f.gid1]
+		f.pc = 1
+		return true
+	case 1:
+		f.next2 = (f.lid0 + uint32(1))
+		if f.next2 == uint32(64) {
+			f.next2 = uint32(0)
+		}
+		if f.gid1 < uint32(int32(len(out))) {
+			out[f.gid1] = sh[f.next2]
+		}
+	}
+	return false
+}
+
+// ExchangeKernel is the compiled form of Exchange.
+var ExchangeKernel = accel.Kernel{
+	Name:          "Exchange",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "c1346cd0bf93b2f9dcefa59e47f8f4fd",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 1,
+	NewShared: func() []any {
+		var s0 [64]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*exchangeFrame)
+		if f == nil {
+			f = &exchangeFrame{}
+			slot.State = f
+		}
+		return exchangeCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f)
+	},
+}
+
 // segmentSumFlat is the generated flat lowering of SegmentSum.
 //
 // It is what the CPU backend runs. The authored SegmentSum is never registered as
