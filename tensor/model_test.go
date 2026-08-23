@@ -37,7 +37,7 @@ import (
 //
 // One state per layer rather than a layered cache, because a slot binds a whole
 // resource and specs/026-tensor-decode.md records that gap.
-func TestATwoLayerAttentionStackComposes(t *testing.T) {
+func TestATwoLayerModelProducesLogits(t *testing.T) {
 	const (
 		layers   = 2
 		vocab    = 16
@@ -59,6 +59,9 @@ func TestATwoLayerAttentionStackComposes(t *testing.T) {
 	}
 	table := fill("table", vocab*width, func(i int) float32 {
 		return float32(math.Sin(float64(i)*0.7)) * 0.5
+	})
+	fill("wout", width*vocab, func(i int) float32 {
+		return float32(math.Cos(float64(i)*0.11)) * 0.3
 	})
 	for l := range layers {
 		fill(gainName(l), width, func(i int) float32 { return 1 + float32(i%3)/16 })
@@ -120,6 +123,15 @@ func TestATwoLayerAttentionStackComposes(t *testing.T) {
 				tensor.AttentionOptions{CurrentLengthName: "len", ScaleName: "scale"})
 			h = tensor.Add(b, h, tensor.Reshape(b, attn, tensor.Shape{1, width}))
 		}
+
+		// The projection to logits, which is what makes this a model rather
+		// than a stack: Cast is what lets an f32 result reach the f16 GEMM, and
+		// its absence is what this test used to stop short of.
+		wout := tensor.Weight(b, tensor.ValueDesc{
+			Name: "wout", DType: accel.F16, Shape: tensor.Shape{width, vocab},
+		})
+		logits := tensor.MatMul(b, tensor.Cast(b, h, accel.F16), wout)
+		tensor.Output(b, "logits", logits)
 		tensor.Output(b, "h", h)
 
 		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "stack"})
@@ -134,6 +146,7 @@ func TestATwoLayerAttentionStackComposes(t *testing.T) {
 
 		bufs := map[string]accel.BufferView{
 			"table": f32Buffer(t, d, "table", table),
+			"wout":  f16Buffer(t, d, "wout", weights["wout"]),
 		}
 		for l := range layers {
 			bufs[gainName(l)] = f32Buffer(t, d, gainName(l), weights[gainName(l)])
@@ -141,7 +154,9 @@ func TestATwoLayerAttentionStackComposes(t *testing.T) {
 			bufs[vName(l)] = f32Buffer(t, d, vName(l), make([]float32, capacity*kvHeads*headDim))
 		}
 		hOut := f32Buffer(t, d, "h", make([]float32, width))
+		logitsOut := f32Buffer(t, d, "logits", make([]float32, vocab))
 		bufs["h"] = hOut
+		bufs["logits"] = logitsOut
 
 		var last []float32
 		for step, tok := range tokens {
@@ -161,8 +176,11 @@ func TestATwoLayerAttentionStackComposes(t *testing.T) {
 			if err := f.Wait(); err != nil {
 				t.Fatalf("step %d: %v", step, err)
 			}
-			last = make([]float32, width)
-			if err := d.Queue().ReadBuffer(hOut.Buffer, 0, last); err != nil {
+			last = make([]float32, width+vocab)
+			if err := d.Queue().ReadBuffer(hOut.Buffer, 0, last[:width]); err != nil {
+				t.Fatalf("readback: %v", err)
+			}
+			if err := d.Queue().ReadBuffer(logitsOut.Buffer, 0, last[width:]); err != nil {
 				t.Fatalf("readback: %v", err)
 			}
 		}
@@ -180,7 +198,23 @@ func TestATwoLayerAttentionStackComposes(t *testing.T) {
 	want := referenceStack(table, weights, tokens, layers, vocab, width, qHeads, kvHeads, headDim)
 	for i := range want {
 		if math.Abs(float64(cpu[i])-want[i]) > 1e-3*(1+math.Abs(want[i])) {
-			t.Fatalf("element %d is %v, want about %v", i, cpu[i], want[i])
+			t.Fatalf("hidden state %d is %v, want about %v", i, cpu[i], want[i])
+		}
+	}
+
+	// And the logits, from the same reference through the same projection. The
+	// f16 round trip is applied to the reference too, because it is part of the
+	// model rather than an artefact: the weights are f16 and the projection
+	// reads them as such.
+	wout := weights["wout"]
+	for c := range vocab {
+		var acc float64
+		for i := range width {
+			acc += float64(accel.ToFloat16(float32(want[i])).F32()) *
+				float64(accel.ToFloat16(wout[i*vocab+c]).F32())
+		}
+		if got := float64(cpu[width+c]); math.Abs(got-acc) > 1e-2*(1+math.Abs(acc)) {
+			t.Fatalf("logit %d is %v, want about %v", c, got, acc)
 		}
 	}
 

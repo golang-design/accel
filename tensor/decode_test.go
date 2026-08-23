@@ -237,13 +237,21 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "both",
 	}, {
-		name: "a query that is a sequence",
+		name: "a prefill with no base",
 		build: func(b *tensor.Builder) {
 			scalars(b)
 			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 4, 2, 8),
 				cache(b, "v", 4, 2, 8), opts)
 		},
-		want: "the prefill plan's",
+		want: "a prefill needs BaseName",
+	}, {
+		name: "a query of the wrong rank",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Attention(b, f32(b, "q", 8), cache(b, "k", 4, 2, 8),
+				cache(b, "v", 4, 2, 8), opts)
+		},
+		want: "for a prefill",
 	}, {
 		name: "a cache longer than the kernel scores",
 		build: func(b *tensor.Builder) {

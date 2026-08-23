@@ -215,3 +215,45 @@ func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, offsetName stri
 		reason: "the in-place rotation, preceded by a copy because a tensor is a value",
 	}, x.dtype, x.shape)
 }
+
+// Cast converts between storage formats.
+//
+// An operator rather than an implicit rule at every boundary, and
+// specs/007-tensor-layer.md's reason is the one that matters: a conversion
+// costs a pass over the data and changes the numbers, so it is something a
+// caller writes rather than something that happens to them. `Add` refusing two
+// dtypes and `Cast` existing are the same decision seen from two sides.
+//
+// f16 to f32 is exact; f32 to f16 rounds to nearest-even and a value outside
+// f16's range becomes an infinity rather than a saturated maximum, because a
+// silently clamped weight is a plausible weight.
+func Cast(b *Builder, x *Tensor, to DType) *Tensor {
+	if poisoned(x) {
+		return b.poison()
+	}
+	if x.dtype == to {
+		// Not an error and not a dispatch: a conversion to the format a value
+		// already has is the identity, and making it a copy would charge a pass
+		// over the data for nothing.
+		return x
+	}
+	var k *accel.Kernel
+	switch {
+	case x.dtype == accel.F32 && to == accel.F16:
+		k = &testkernels.CastF32ToF16Kernel
+	case x.dtype == accel.F16 && to == accel.F32:
+		k = &testkernels.CastF16ToF32Kernel
+	default:
+		return b.fail(1, "Cast", "%v to %v; specs/010-kernel-corpus.md registers f32 to f16 "+
+			"and f16 to f32, and a conversion it does not register is a kernel rather than "+
+			"something this layer can compose", x.dtype, to)
+	}
+	reason := "the exact widening: every f16 value is an f32 value"
+	if to == accel.F16 {
+		reason = "the narrowing, rounding to nearest even; a value outside f16's range " +
+			"becomes an infinity rather than a saturated maximum"
+	}
+	return b.record(node{
+		op: "Cast", inputs: []*Tensor{x}, kernel: k, bcast: true, reason: reason,
+	}, to, x.shape)
+}

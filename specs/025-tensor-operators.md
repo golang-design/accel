@@ -72,6 +72,7 @@ is refused with the shape it can build named in the message.
 | `RMSNorm` | `RMSNorm` | one workgroup per row |
 | `Softmax` | `Softmax` | one workgroup per row |
 | `RoPE` | `RoPE` | one invocation per rotated pair |
+| `Cast` | `CastF32ToF16`, `CastF16ToF32` | per element; the identity is a no-op rather than a copy |
 | `MatMul` | `MatMulTiled`, or `MatVec` when M = 1 | tiles of the output |
 | `Linear` | `LinearTiled` | tiles of the output |
 
@@ -85,8 +86,12 @@ Recorded rather than glossed, because each is a real gap a caller meets:
 
 1. **`MatMul`, `Linear` and `MatVec` take f16 operands and produce f32.** That
    is what [010](010-kernel-corpus.md) registers. 007 admits f16 *or* f32
-   storage; an f32 GEMM is a corpus kernel that does not exist yet, and adding
-   one is 010's rather than something to improvise from up here.
+   storage; an f32 GEMM is a corpus kernel that does not exist. `Cast` is what
+   bridges the two, and it is an operator rather than an implicit rule for the
+   reason 007 gives: a conversion costs a pass over the data and changes the
+   numbers, so it is something a caller writes rather than something that
+   happens to them. `Add` refusing two dtypes and `Cast` existing are the same
+   decision seen from two sides.
 2. **`RMSNorm` and `Softmax` take f32 only**, for the same reason.
 3. **`Softmax`'s mask and causal option are absent.** The corpus kernel has no
    mask parameter. `Axis` must be the last, which is the only axis that kernel

@@ -1,6 +1,6 @@
 ---
 title: "Persistent state, attention, and the decode step"
-status: in progress
+status: implemented
 layer: tensor
 depends_on:
   - 003-command-graph.md
@@ -76,10 +76,11 @@ written from the model's definition rather than from the kernels, over four
 tokens, on both backends. Every value in it is produced by the previous
 operator.
 
-**It stops short of logits, and the gap is an operator rather than a test.** The
-registered GEMM reads f16 and every other operator here is f32, so a projection
-cannot consume a normalization's output without a dtype-conversion operator, and
-[010](010-kernel-corpus.md) registers no conversion kernel.
+**It produces logits**, through a `Cast` to f16 and a projection to the
+vocabulary. That was blocked when this section was first written: the registered
+GEMM reads f16, every other operator is f32, and no conversion kernel existed.
+[010](010-kernel-corpus.md) has one now, with its proof obligations attached,
+and `Cast` lowers to it.
 
 That is worth recording precisely because the first version of the test hid it:
 it supplied the f16 operands from the host and discarded the f32 results, which
@@ -89,17 +90,11 @@ the tell was two assignments to the blank identifier in the middle of the graph.
 
 ## 5. Where v0 is narrower than 007
 
-0. **There is no dtype-conversion operator**, so an f32 result cannot feed the
-   f16 GEMM. This is what stops the stack above from producing logits.
 1. **`LayerState` builds the view and cannot be bound.** A slot binds a whole
    resource rather than a range of one, so a per-layer cache needs one state per
    layer until the device layer can bind a sub-range. The view arithmetic is
    built and tested; what is missing is underneath it.
-2. **The prefill plan is absent.** The registered attention kernel takes one
-   query token, so the "minimal prefill" half of M7's parity criterion has no
-   kernel to lower to. `MatMul` and `Softmax` can express the composed form and
-   nothing yet assembles them.
-3. **`Rows`, `ScatterRows`, `RMSNorm`, `Softmax`, `RoPE` and `Attention` are
+2. **`Rows`, `ScatterRows`, `RMSNorm`, `Softmax`, `RoPE` and `Attention` are
    f32**, and `MatMul` is f16. That is what [010](010-kernel-corpus.md)
    registers.
 
@@ -113,8 +108,10 @@ the tell was two assignments to the blank identifier in the middle of the graph.
   line; and
 - the whole step agrees between the CPU backend and Metal within
   [008](008-numerics.md) §6's ceiling for the softmax inside attention; and
-- a two-layer attention stack composes and matches an independently written f64
-  reference over four tokens, on both backends.
+- a two-layer model produces logits matching an independently written f64
+  reference over four tokens, on both backends; and
+- a prefill plan and a decode plan over one cache agree, which is M7's parity
+  criterion at the plan level.
 
 ## Testing
 

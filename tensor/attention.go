@@ -22,6 +22,12 @@ type AttentionOptions struct {
 	// rather than computed here so a caller can use a different convention
 	// without a different plan.
 	ScaleName string
+
+	// BaseName is a declared u32 scalar, required for a prefill: the position
+	// of its first query token within the cache. It decides what the causal
+	// mask hides, so a prefill that extends an existing cache masks correctly
+	// rather than letting its first token see nothing.
+	BaseName string
 }
 
 // Attention scores a query against a cached key/value pair.
@@ -49,10 +55,22 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		return b.fail(1, "Attention", "q is %v and the cache is %v; the registered decode "+
 			"kernel reads f32", q.dtype, k.desc.DType)
 	}
-	// q is [qHeads, headDim] at a decode step: one token, every head.
-	if len(q.shape) != 2 {
-		return b.fail(1, "Attention", "q is %v; the decode kernel takes one token as "+
-			"[qHeads, headDim], and a longer query is the prefill plan's", q.shape)
+	// [qHeads, headDim] is one token and [qSeq, qHeads, headDim] is a prefill.
+	// Which one a caller wrote decides which kernel runs, and Selections says
+	// so: a rank is not a hint, it is the shape of the computation.
+	qSeq := 1
+	prefill := false
+	switch len(q.shape) {
+	case 2:
+	case 3:
+		qSeq, prefill = q.shape[0], true
+		q = &Tensor{
+			b: b, dtype: q.dtype, shape: Shape{q.shape[1], q.shape[2]},
+			strides: contiguous(Shape{q.shape[1], q.shape[2]}), node: q.node, port: q.port,
+		}
+	default:
+		return b.fail(1, "Attention", "q is %v; it is [qHeads, headDim] for one token or "+
+			"[qSeq, qHeads, headDim] for a prefill", q.shape)
 	}
 	if len(k.shape) != 3 || !k.shape.Equal(v.shape) {
 		return b.fail(1, "Attention", "the key cache is %v and the value cache is %v; both "+
@@ -100,6 +118,38 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			"specs/010-kernel-corpus.md does not register", k.shape[0], lanes)
 	}
 
+	out := Shape{qHeads, headDim}
+	if prefill {
+		out = Shape{qSeq, qHeads, headDim}
+		if opts.BaseName == "" {
+			return b.fail(1, "Attention", "a prefill needs BaseName: the position of its "+
+				"first query within the cache, which decides what the causal mask hides")
+		}
+		if kind, ok := b.scalarKind(opts.BaseName); !ok || kind != ScalarU32 {
+			return b.fail(1, "Attention", "%q is not a declared u32 scalar", opts.BaseName)
+		}
+		return b.record(node{
+			op: "Attention", inputs: []*Tensor{q, readState(b, k), readState(b, v)},
+			kernel: &testkernels.AttentionPrefillKernel,
+			reads:  []string{opts.CurrentLengthName, opts.ScaleName, opts.BaseName},
+			uniform: func(vals map[string]ScalarValue) any {
+				return testkernels.PrefillDims{
+					QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
+					HeadDim: uint32(headDim), QSeq: uint32(qSeq),
+					KVLen: vals[opts.CurrentLengthName].U32,
+					Base:  vals[opts.BaseName].U32,
+					Scale: vals[opts.ScaleName].F32,
+				}
+			},
+			grid: func(*Tensor) accel.WorkgroupCount {
+				return accel.WorkgroupCount{X: qSeq * qHeads}
+			},
+			reason: fmt.Sprintf("the causal prefill kernel: one workgroup per query "+
+				"position and head, %d of them", qSeq*qHeads),
+			rejected: []string{"the decode kernel: it takes one query token"},
+		}, accel.F32, out)
+	}
+
 	return b.record(node{
 		op: "Attention", inputs: []*Tensor{q, readState(b, k), readState(b, v)},
 		kernel: &testkernels.AttentionDecodeKernel,
@@ -117,7 +167,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		},
 		reason: fmt.Sprintf("the fused decode kernel: one workgroup per query head over %d "+
 			"cached positions", k.shape[0]),
-		rejected: []string{"the composed score-softmax-value graph, which is the " +
-			"correctness reference and which v0 does not lower"},
-	}, accel.F32, q.shape)
+		rejected: []string{"the causal prefill kernel: it takes a sequence of query tokens"},
+	}, accel.F32, out)
 }
