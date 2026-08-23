@@ -46,7 +46,7 @@ func TestCommittedFileIsFresh(t *testing.T) {
 		t.Error("check mode wrote a file")
 	}
 	// Sorted, so adding a kernel to the corpus does not reorder this.
-	want := []string{"Add", "AtomicOps", "AttentionDecode", "CountAbove", "CountWorkgroups", "Exchange", "Histogram", "LinearTiled", "MatMulTiled", "MatVec", "Normalize", "RMSNorm", "ReduceLoop", "ReduceSum", "ReduceUnrolled", "Scale", "SegmentSum", "Softmax", "SubgroupReduce", "SubgroupReduceFallback", "Transform"}
+	want := []string{"Add", "AtomicOps", "AttentionDecode", "CountAbove", "CountWorkgroups", "ElemAdd", "ElemMul", "ElemScale", "Exchange", "GatherRows", "Histogram", "LinearTiled", "MatMulTiled", "MatVec", "Normalize", "RMSNorm", "ReduceLoop", "ReduceSum", "ReduceUnrolled", "RoPE", "Scale", "ScatterRows", "SegmentSum", "SiLU", "Softmax", "SubgroupReduce", "SubgroupReduceFallback", "SwiGLU", "Transform"}
 	if len(results[0].Kernels) != len(want) {
 		t.Fatalf("kernels = %v, want %v", results[0].Kernels, want)
 	}

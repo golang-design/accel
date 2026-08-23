@@ -30,6 +30,66 @@ func (AttnDimsCodec) Encode(dst []byte, value AttnDims) error {
 	return w.Err()
 }
 
+// ScaleParamsCodec is the generated std140 codec for ScaleParams.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type ScaleParamsCodec struct{}
+
+// ScaleParamsBlockSize is the encoded size of a ScaleParams block, in bytes.
+const ScaleParamsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (ScaleParamsCodec) EncodedSize() int { return ScaleParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (ScaleParamsCodec) Encode(dst []byte, value ScaleParams) error {
+	w := accel.NewUniformWriter(dst)
+	w.F32(0, value.Factor)
+	return w.Err()
+}
+
+// RowParamsCodec is the generated std140 codec for RowParams.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type RowParamsCodec struct{}
+
+// RowParamsBlockSize is the encoded size of a RowParams block, in bytes.
+const RowParamsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (RowParamsCodec) EncodedSize() int { return RowParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (RowParamsCodec) Encode(dst []byte, value RowParams) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Rows)
+	w.U32(4, value.Width)
+	w.U32(8, value.Capacity)
+	return w.Err()
+}
+
+// RoPEParamsCodec is the generated std140 codec for RoPEParams.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type RoPEParamsCodec struct{}
+
+// RoPEParamsBlockSize is the encoded size of a RoPEParams block, in bytes.
+const RoPEParamsBlockSize = 32
+
+// EncodedSize reports the std140 block size.
+func (RoPEParamsCodec) EncodedSize() int { return RoPEParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (RoPEParamsCodec) Encode(dst []byte, value RoPEParams) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Rows)
+	w.U32(4, value.Width)
+	w.U32(8, value.RotaryDim)
+	w.F32(12, value.Base)
+	w.U32(16, value.Offset)
+	return w.Err()
+}
+
 // GEMMDimsCodec is the generated std140 codec for GEMMDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -745,6 +805,266 @@ var ReduceUnrolledKernel = accel.Kernel{
 			slot.State = f
 		}
 		return reduceUnrolledCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// elemAddFlat is the generated flat lowering of ElemAdd.
+//
+// It is what the CPU backend runs. The authored ElemAdd is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func elemAddFlat(t accel.Thread, a []float32, b []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = float32(a[i] + b[i])
+	}
+}
+
+// ElemAddKernel is the compiled form of ElemAdd.
+var ElemAddKernel = accel.Kernel{
+	Name:          "ElemAdd",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "db905a9cd0b2f507c3c362acea42bd2d",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		elemAddFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
+// elemMulFlat is the generated flat lowering of ElemMul.
+//
+// It is what the CPU backend runs. The authored ElemMul is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func elemMulFlat(t accel.Thread, a []float32, b []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = float32(a[i] * b[i])
+	}
+}
+
+// ElemMulKernel is the compiled form of ElemMul.
+var ElemMulKernel = accel.Kernel{
+	Name:          "ElemMul",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "f800ffb1b09a78515a2188a92dabb07e",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		elemMulFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
+// elemScaleFlat is the generated flat lowering of ElemScale.
+//
+// It is what the CPU backend runs. The authored ElemScale is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func elemScaleFlat(t accel.Thread, p ScaleParams, in []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = float32(in[i] * p.Factor)
+	}
+}
+
+// ElemScaleKernel is the compiled form of ElemScale.
+var ElemScaleKernel = accel.Kernel{
+	Name:          "ElemScale",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "d51f4cc1f4fdd6125d6c6e7f233fcbaa",
+	Generator: accel.KernelABIVersion,
+	Uniforms: []accel.KernelUniform{
+		{Name: "p", Type: "ScaleParams", Size: 16},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		elemScaleFlat(t, accel.KernelUniformValue[ScaleParams](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
+	},
+}
+
+// siLUFlat is the generated flat lowering of SiLU.
+//
+// It is what the CPU backend runs. The authored SiLU is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func siLUFlat(t accel.Thread, in []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		var x float32 = in[i]
+		out[i] = float32(x / float32(float32(1)+kmath.Exp(float32(-x))))
+	}
+}
+
+// SiLUKernel is the compiled form of SiLU.
+var SiLUKernel = accel.Kernel{
+	Name:          "SiLU",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "260f5b481c75af9c97c7b340e26e6801",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		siLUFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
+	},
+}
+
+// swiGLUFlat is the generated flat lowering of SwiGLU.
+//
+// It is what the CPU backend runs. The authored SwiGLU is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func swiGLUFlat(t accel.Thread, a []float32, b []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		var x float32 = a[i]
+		out[i] = float32(float32(x/float32(float32(1)+kmath.Exp(float32(-x)))) * b[i])
+	}
+}
+
+// SwiGLUKernel is the compiled form of SwiGLU.
+var SwiGLUKernel = accel.Kernel{
+	Name:          "SwiGLU",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "902706f2e1040486de21a358cda4fc8c",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		swiGLUFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
+// gatherRowsFlat is the generated flat lowering of GatherRows.
+//
+// It is what the CPU backend runs. The authored GatherRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func gatherRowsFlat(t accel.Thread, p RowParams, table []float32, ids []uint32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < (p.Rows * p.Width) {
+		var r uint32 = (i / p.Width)
+		var c uint32 = (i % p.Width)
+		var id uint32 = ids[r]
+		if id < p.Capacity {
+			out[i] = table[((id * p.Width) + c)]
+		} else {
+			out[i] = float32(0)
+		}
+	}
+}
+
+// GatherRowsKernel is the compiled form of GatherRows.
+var GatherRowsKernel = accel.Kernel{
+	Name:          "GatherRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "table", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "ids", DType: accel.KernelU32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "7dac4797a9bf56ddbcf0466ada474fd9",
+	Generator: accel.KernelABIVersion,
+	Uniforms: []accel.KernelUniform{
+		{Name: "p", Type: "RowParams", Size: 16},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		gatherRowsFlat(t, accel.KernelUniformValue[RowParams](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
+// scatterRowsFlat is the generated flat lowering of ScatterRows.
+//
+// It is what the CPU backend runs. The authored ScatterRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func scatterRowsFlat(t accel.Thread, p RowParams, rows []float32, ids []uint32, state []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < (p.Rows * p.Width) {
+		var r uint32 = (i / p.Width)
+		var c uint32 = (i % p.Width)
+		var id uint32 = ids[r]
+		if id < p.Capacity {
+			state[((id * p.Width) + c)] = rows[i]
+		}
+	}
+}
+
+// ScatterRowsKernel is the compiled form of ScatterRows.
+var ScatterRowsKernel = accel.Kernel{
+	Name:          "ScatterRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "rows", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "ids", DType: accel.KernelU32, Access: accel.KernelRead},
+		{Name: "state", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "d142c44fe6d877d65140eea9b811c263",
+	Generator: accel.KernelABIVersion,
+	Uniforms: []accel.KernelUniform{
+		{Name: "p", Type: "RowParams", Size: 16},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		scatterRowsFlat(t, accel.KernelUniformValue[RowParams](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
+// roPEFlat is the generated flat lowering of RoPE.
+//
+// It is what the CPU backend runs. The authored RoPE is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func roPEFlat(t accel.Thread, p RoPEParams, inout []float32) {
+	var i uint32 = t.GlobalID().X
+	var pairs uint32 = (p.RotaryDim / uint32(2))
+	if i < (p.Rows * pairs) {
+		var r uint32 = (i / pairs)
+		var k uint32 = (i % pairs)
+		var pos float32 = float32((r + p.Offset))
+		var exponent float32 = (float32(float32(-2)*float32(k)) / float32(p.RotaryDim))
+		var freq float32 = kmath.Exp(float32(exponent * kmath.Log(p.Base)))
+		var theta float32 = (pos * freq)
+		var c float32 = kmath.Cos(theta)
+		var s float32 = kmath.Sin(theta)
+		var lo uint32 = ((r * p.Width) + (uint32(2) * k))
+		var hi uint32 = (lo + uint32(1))
+		var x float32 = inout[lo]
+		var y float32 = inout[hi]
+		inout[lo] = float32(float32(x*c) - float32(y*s))
+		inout[hi] = float32(float32(x*s) + float32(y*c))
+	}
+}
+
+// RoPEKernel is the compiled form of RoPE.
+var RoPEKernel = accel.Kernel{
+	Name:          "RoPE",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "inout", DType: accel.KernelF32, Access: accel.KernelRead | accel.KernelWrite},
+	},
+	Digest:    "fee80830a38fdfe6fe8a54127cac61a5",
+	Generator: accel.KernelABIVersion,
+	Uniforms: []accel.KernelUniform{
+		{Name: "p", Type: "RoPEParams", Size: 32},
+	},
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		roPEFlat(t, accel.KernelUniformValue[RoPEParams](a, 0), accel.KernelSlice[float32](a, 0))
 	},
 }
 
