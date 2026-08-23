@@ -170,9 +170,9 @@ bindings are the better choice.
 | Cooperative kernels: barriers, shared memory, the resumable lowering | **Built** on the CPU backend |
 | Cooperative diagnostics: undefined reads, arrival, conflicting access | **Built** on the CPU backend |
 | Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
-| Portable tiled GEMM | **Built** on the CPU backend |
-| Kernel corpus: the unquantized v0 kernels | **Built** on the CPU backend; the selection registry is not |
-| Metal backend | **Built** on an Apple M2: all 29 corpus kernels compile on the device and agree with the CPU backend, 22 of them bit for bit. Graphs, indirect dispatch and device loss included |
+| Portable tiled GEMM | **Built** on both backends, each against a higher-precision reference |
+| Kernel corpus: the unquantized v0 kernels | **Built** on both backends; the selection registry is not |
+| Metal backend | **Built** on an Apple M2: all 32 corpus kernels compile on the device and agree with the CPU backend, 25 of them bit for bit. Graphs, indirect dispatch and device loss included |
 | Tensor layer | **Built**: a tensor graph compiles once and runs on both backends, with views, broadcasting, normalization, matrix multiplication, a KV cache, and prefill and decode attention that agree |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |

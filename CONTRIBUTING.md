@@ -103,14 +103,22 @@ a reference into shared code:
 for os in linux windows darwin; do GOOS=$os CGO_ENABLED=0 go build ./... || break; done
 ```
 
-M0 through M5 are built. A CPU device opens, pooled memory allocates and
-suballocates, buffers slice into views and textures, bytes move to the device
-and back, kernels written in ordinary Go compile through a typed IR to a
-generated CPU lowering, graphs record and plan their own barriers and transient
-aliasing, cooperative kernels run against shared memory and barriers with
+M0 through M7 are built, which is the v0 proof
+[000](specs/000-decisions.md#the-v0-milestone) names. A CPU device opens, pooled
+memory allocates and suballocates, buffers slice into views and textures, bytes
+move to the device and back, kernels written in ordinary Go compile through a
+typed IR to a generated CPU lowering and to Metal Shading Language, graphs record
+and plan their own barriers and transient aliasing, cooperative kernels run with
 deterministic diagnostics, and a portable tiled GEMM matches a higher-precision
-reference. The tensor layer of [007](specs/007-tensor-layer.md) and the Metal
-backend are what still return `ErrNotImplemented`.
+reference on both backends. Above that,
+[`tensor`](https://pkg.go.dev/golang.design/x/accel/tensor) compiles a graph of
+tensors into a plan and runs a transformer decode step whose output matches the
+same tokens prefilled in one pass.
+
+What is not built is post-v0 by design: graphics, quantization, and the Vulkan,
+D3D12, OpenGL and WebGPU backends. `Sampler` is the one thing that still returns
+`ErrNotImplemented`, because it has nothing to sample until a render pass
+exists.
 [`specs/009-sequencing.md`](specs/009-sequencing.md) is the order the rest
 arrives in.
 
@@ -131,6 +139,7 @@ go run ./internal/conformance/cover/covercheck -profile=cover.out
 | `docs/` | Documentation | People using or contributing to accel |
 | `specs/` | Internal design specs and decisions | People building or reviewing accel |
 | `*.go` | The device layer's public API and its policy | Callers, and everyone |
+| `tensor/` | The tensor layer: builder, plans, operators, state | Callers writing a model |
 | `internal/driver/` | The backend contract, and the plan a built graph lowers to | Anyone adding a backend |
 | `internal/cpu/` | The pure-Go backend and oracle | Anyone adding a backend |
 | `internal/metal/` | The Metal backend: adapters, memory, and plan execution | Anyone adding a backend |
