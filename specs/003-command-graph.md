@@ -42,19 +42,52 @@ is the cost the model exists to avoid.
 
 ## What varies between submissions
 
-Three things, and nothing else:
+Four things, and nothing else:
 
 1. **Buffer contents.** Written through the normal write path.
 2. **Bound resources.** A binding slot declared at record time can be pointed at
    a different resource before submission, provided the new resource matches the
    slot's declared type, dtype, and access.
 3. **Dispatch and draw counts**, where a node was recorded with a dynamic count.
+4. **A recorded dispatch's by-value parameters**, through `Graph.SetUniform`.
 
 Item 3 read "dispatch counts" in the first draft of this spec.
 [005](005-graphics.md) proposed widening it to draws, and the amendment is
 accepted here: an indirect draw's vertex count, instance count, and first-index
 offsets vary exactly as a dispatch's workgroup count does, through a
 device-written argument buffer, with the graph structure unchanged.
+
+### Item 4, added 2026-08-23
+
+This list said *three* things and nothing else until
+[007](007-tensor-layer.md)'s named runtime scalars needed a fourth. Recorded as
+an amendment rather than quietly widened, because "and nothing else" is the
+sentence a reader relies on.
+
+A kernel's by-value parameters are compiled into the plan when the graph is
+built, which makes them fast and makes them fixed. Most should be. But a softmax
+scale, a RoPE frequency base, a current sequence length change every step and
+change *nothing structural*, and rebuilding a graph for each would defeat the
+point of building one.
+
+**The line is whether the value changes the shape of the work.** One that does —
+an extent, a layout, a kernel selection — still needs another plan, because the
+barriers and the transient layout were computed from it. `SetUniform` cannot
+express that and does not try: it replaces one recorded dispatch's parameter and
+nothing else.
+
+Three properties make it safe rather than a hole in immutability:
+
+- **It is refused while a submission is in flight**, for the reason `Bind` is: a
+  value changing under a running graph would give the first half of it one
+  number and the second half another, and no caller could tell which they got.
+- **The type must be the one the kernel declares**, checked as a *type* rather
+  than a size. A struct of the same shape and a different name encodes
+  identically today and diverges the first time either gains a field.
+- **The plan reads what it writes.** The driver's dispatch shares the recorded
+  node's parameter slice, so this is a write to the thing the next submission
+  encodes rather than to a copy of it. That sharing is load-bearing: a defensive
+  copy would make the call silently do nothing.
 
 **A per-step *address* is not on this list, and that is a real gap.** A KV cache
 write offset, for instance, is none of the three: it is neither the contents of a
@@ -1069,6 +1102,18 @@ fence. There is no validate-then-retain gap.
 ---
 
 ## Submission ordering and fences
+
+### Reporting a failure that happens before submission
+
+A layer above this one validates before it submits — [007](007-tensor-layer.md)
+checks a whole binding set atomically — and that validation can fail. It reports
+through the fence, like every other submission failure, rather than as a second
+return value: `accel.FailedFence(err)` returns a fence that has already failed.
+
+The alternative was every layer above inventing its own two-value convention, or
+reaching into this package for the unexported constructor. Both end with a
+caller checking two things where one would do, and the one they forget is the
+one that only fails on a bad day.
 
 Submission is asynchronous and returns a fence. A fence can be waited on, polled,
 or used as a dependency for a later submission. Nothing in the API blocks
