@@ -13,7 +13,7 @@ import (
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
-	"golang.design/x/accel/internal/kernelc/emit"
+	"golang.design/x/accel/internal/mslabi"
 	"golang.design/x/accel/internal/mtl"
 )
 
@@ -377,7 +377,7 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 		// so this is the second line rather than the first.
 		lens[i] = uint32(r.size / elemBytes(k.Bindings[i].DType))
 	}
-	enc.SetBytes(u32Bytes(lens), emit.MSLLengthsIndex(len(d.Bindings)))
+	enc.SetBytes(u32Bytes(lens), mslabi.LengthsIndex(len(d.Bindings)))
 
 	// The uniform blocks follow the lengths slot, in signature order, which is
 	// the layout the emitter fixed and exported so there is one copy of it.
@@ -390,7 +390,7 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 			return err
 		}
 		for i := range bufs {
-			enc.SetBytes(bufs[i], emit.MSLUniformIndex(len(d.Bindings), i))
+			enc.SetBytes(bufs[i], mslabi.UniformIndex(len(d.Bindings), i))
 		}
 	}
 	threads := mtl.Size{

@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel/internal/kernel"
-	"golang.design/x/accel/internal/kernelc/emit"
+	"golang.design/x/accel/internal/mslabi"
 	"golang.design/x/accel/internal/mtl"
 )
 
@@ -39,7 +39,7 @@ import (
 // would cost more than the stores.
 const clampSource = `#include <metal_stdlib>
 using namespace metal;
-` + emit.MSLContractOff + `
+` + mslabi.ContractOff + `
 
 kernel void _accel_clamp(const device uint *count [[buffer(0)]],
                          device uint *clamped [[buffer(1)]],

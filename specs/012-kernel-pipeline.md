@@ -60,7 +60,7 @@ Everything needed to take that from source to a checked result:
 - **The tool.** `cmd/accel-kernel`, with the reusable compiler in
   `internal/kernelc`, invoked under `go generate`. `golang.org/x/tools/go/packages`
   becomes a build-tool dependency; neither the root package nor a deployed binary
-  imports it, and a test asserts that.
+  imports it, and a test asserts that (`importgraph_test.go`).
 - **The front end.** Package loading, type checking, and subset validation over
   the constructs above, with every rejection positioned.
 - **The IR.** [004](004-kernel-authoring.md)'s closed node set, restricted to
@@ -308,3 +308,33 @@ in the workflow where a reviewer sees it.
   expressions.** Folding at IR construction loses the position a diagnostic
   would name; not folding leaves the target compilers to do it. Not decided,
   and it only becomes visible when a folded expression is the thing rejected.
+
+## Correction: the guarantee held for the loader and leaked for the type checker
+
+Recorded 2026-08-24, appended rather than edited in.
+
+§2 and §7 assert that the root package does not depend on the kernel compiler's
+toolchain, and that a test proves it. **No such test existed.** The fact was
+true of `golang.org/x/tools/go/packages` — the loader — and false of the
+standard library's type checker: on every platform, the root package pulled in
+`go/types`, `go/parser` and `go/ast`.
+
+The path was three declarations. `internal/metal` needed `MSLContractOff`,
+`MSLLengthsIndex` and `MSLUniformIndex` — one string constant and two additions
+— and importing `internal/kernelc/emit` to reach them dragged `intrin` and `ir`
+behind it, and `ir` imports `go/types` for the positions it carries.
+
+So a program that only *ran* a compiled kernel linked a type checker, which is
+exactly the cost this spec's guarantee exists to prevent, arrived at by a route
+the guarantee's wording did not cover.
+
+The fix moved the numbering to `internal/mslabi`, a leaf package with no
+imports, which both the emitter and the backend use. The numbering stays shared
+rather than restated because two copies of a layout are one too many: a
+disagreement is a kernel reading another kernel's argument.
+
+`importgraph_test.go` now checks the whole transitive graph rather than this
+package's import block, because the way this regresses is indirect — a helper
+added to `internal/kernel` reaching for `go/packages` is the plausible mistake,
+not an import written at the top of a file. Confirmed by pointing the Metal
+backend back at `emit` and watching it fail.

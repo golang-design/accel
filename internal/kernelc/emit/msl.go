@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"golang.design/x/accel/internal/kernelc/ir"
+	"golang.design/x/accel/internal/mslabi"
 )
 
 // # The Metal Shading Language target
@@ -40,27 +41,21 @@ import (
 // layout that depends on the body is a layout the host has to be told about,
 // and one unused argument slot is cheaper than a second source of truth.
 
-// MSLContractOff is the pragma every emitted kernel carries.
+// The MSL argument numbering lives in internal/mslabi, not here.
 //
-// It is a pragma rather than a compile option because MTLCompileOptions has no
-// control over contraction: MTLMathMode.safe disables reassociation and
-// denormal flushing and leaves a multiply-add free to fuse, which was measured
-// on an M2 rather than assumed. Metal's default is -ffp-contract=fast, so
-// without this a*b+c becomes fma(a,b,c) and differs from the CPU backend in the
-// last bit -- and specs/006-backends.md makes the CPU backend the oracle, which
-// turns that difference into a failure rather than a tolerance to widen.
-//
-// specs/008-numerics.md section 6 requires contraction to be controlled rather
-// than observed. This is where it is controlled.
-const MSLContractOff = "#pragma METAL fp contract(off)"
+// The Metal backend binds against it and needs nothing else from this package,
+// and importing this one reaches go/types through ir — which put a type checker
+// in every darwin binary linking accel, for one constant and two additions. See
+// that package's doc and specs/012-kernel-pipeline.md.
+const MSLContractOff = mslabi.ContractOff
 
 // MSLLengthsIndex reports the buffer index the generated slice lengths occupy
 // for a kernel with n bindings.
-func MSLLengthsIndex(n int) int { return n }
+func MSLLengthsIndex(n int) int { return mslabi.LengthsIndex(n) }
 
 // MSLUniformIndex reports the buffer index uniform i occupies for a kernel with
 // n bindings.
-func MSLUniformIndex(n, i int) int { return n + 1 + i }
+func MSLUniformIndex(n, i int) int { return mslabi.UniformIndex(n, i) }
 
 // MSL lowers one kernel to Metal Shading Language.
 func MSL(k *ir.Func) (string, error) {
