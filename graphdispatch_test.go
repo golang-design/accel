@@ -386,11 +386,23 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 		t.Errorf("a kernel from another ABI should be rejected, got %v", err)
 	}
 
-	coop := testkernels.AddKernel
-	coop.Flat = nil
-	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &coop}); err == nil ||
-		!strings.Contains(err.Error(), "arrives at M4") {
-		t.Errorf("a cooperative kernel should be rejected naming M4, got %v", err)
+	// A record with neither entry point is an incomplete generated file, not a
+	// cooperative kernel: a kernel has exactly one, chosen by whether its body
+	// reaches a barrier, shared memory, or a subgroup operation.
+	neither := testkernels.AddKernel
+	neither.Flat = nil
+	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &neither}); err == nil ||
+		!strings.Contains(err.Error(), "re-run go generate") {
+		t.Errorf("a record with no entry point should say the file is incomplete, got %v", err)
+	}
+
+	// And a cooperative one is accepted, since the resumable lowering exists.
+	if p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.ExchangeKernel,
+	}); err != nil {
+		t.Errorf("a cooperative kernel should be accepted: %v", err)
+	} else if err := p.Close(); err != nil {
+		t.Errorf("close: %v", err)
 	}
 
 	zero := testkernels.AddKernel
@@ -421,5 +433,77 @@ func TestADeviceWillNotCloseUnderAPipeline(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Errorf("close device: %v", err)
+	}
+}
+
+// A kernel requiring a capability the device lacks is refused at pipeline
+// creation, naming the capability and the device.
+//
+// Checked against a mimicked profile rather than against hardware, which is the
+// same reasoning spec 014 used for the uniform block limit: a rule that waits
+// for a device nobody here owns is a rule nobody runs. Spec 000's decision 6 is
+// what this implements — an absent feature is a typed answer before anything is
+// dispatched, not a failure at dispatch time.
+func TestAKernelRequiringAnAbsentCapabilityIsRefused(t *testing.T) {
+	base, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	profile := accel.DeviceProfile{Info: base.Info()}
+	if err := base.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// A device with no subgroups at all, which several real ones are.
+	profile.Info.Capabilities.Subgroups = false
+	profile.Info.Capabilities.SubgroupOps = 0
+
+	d, err := accel.OpenCPU(accel.CPUOptions{Mode: accel.CPUMimic, Mimic: &profile})
+	if err != nil {
+		t.Fatalf("open mimicking: %v", err)
+	}
+	defer d.Close()
+
+	_, err = d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.SubgroupReduceKernel, Label: "reduce",
+	})
+	if err == nil {
+		t.Fatal("a kernel reducing across lanes should be refused on a device with no " +
+			"subgroups")
+	}
+	for _, want := range []string{"reduce", "SubgroupReduce", "capability"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message should say %q, got:\n%v", want, err)
+		}
+	}
+
+	// And the fallback, which requires nothing, is accepted on the same device.
+	// Without this the refusal above would be passing against a device that
+	// refuses everything.
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.SubgroupReduceFallbackKernel, Label: "fallback",
+	})
+	if err != nil {
+		t.Fatalf("the fallback requires no capability and should be accepted: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// The capability the device does have is accepted, so the refusal is about the
+// capability rather than about subgroups generally.
+func TestAKernelRequiringAPresentCapabilityIsAccepted(t *testing.T) {
+	d := openDevice(t)
+	if !d.Info().Capabilities.Subgroups {
+		t.Skip("the CPU backend's default profile reports no subgroups")
+	}
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.SubgroupReduceKernel, Label: "reduce",
+	})
+	if err != nil {
+		t.Fatalf("the CPU backend emulates subgroups and should accept this: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 }

@@ -1246,3 +1246,105 @@ func K(t accel.Thread, in []float32, out []float32) {
 		t.Error("a kernel with no barrier, shared memory, or subgroup operation is flat")
 	}
 }
+
+// The //accel:requires directive is an assertion checked against what the body
+// implies, and a mismatch fails in **either** direction.
+//
+// Declaring less than the body needs is the obvious bug. Declaring more is
+// equally one and quieter: it makes the kernel unavailable on devices that
+// could run it, and the symptom is a device being skipped rather than an error
+// anybody sees.
+func TestRequiresIsCheckedAgainstTheBody(t *testing.T) {
+	cases := []struct {
+		name     string
+		requires string
+		body     string
+		says     string
+	}{{
+		name:     "declaring less than the body needs",
+		requires: "//accel:requires subgroup_basic",
+		body:     "v := t.SubgroupAddF32(in[t.GlobalID().X])\n\tout[0] = v",
+		says:     "which //accel:requires does not declare",
+	}, {
+		name:     "declaring more than the body uses",
+		requires: "//accel:requires subgroup_arithmetic, atomic_float_add_storage",
+		body:     "v := t.SubgroupAddF32(in[t.GlobalID().X])\n\tout[0] = v",
+		says:     "which its body does not use",
+	}, {
+		name:     "naming something that is not a capability",
+		requires: "//accel:requires telepathy",
+		body:     "out[0] = in[0]",
+		says:     `names "telepathy", which is not a capability`,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package k\n\nimport \"golang.design/x/accel\"\n\n" +
+				"//accel:kernel workgroup=64\n" + c.requires + "\n" +
+				"func K(t accel.Thread, in []float32, out []float32) {\n\t" + c.body + "\n}\n"
+			pkg := checkSource(t, src)
+			if pkg == nil {
+				t.Fatalf("the source did not type-check:\n%s", src)
+			}
+			_, diags := front.Check(pkg)
+			if len(diags) == 0 {
+				t.Fatalf("expected a rejection:\n%s", src)
+			}
+			if !strings.Contains(diags.Error(), c.says) {
+				t.Errorf("the message should say %q, got:\n%v", c.says, diags)
+			}
+		})
+	}
+}
+
+// An assertion that agrees is accepted, or the rejections above would be
+// rejecting every directive.
+func TestARequiresThatAgreesIsAccepted(t *testing.T) {
+	pkg := checkSource(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+//accel:requires subgroup_arithmetic
+func K(t accel.Thread, in []float32, out []float32) {
+	v := t.SubgroupAddF32(in[t.GlobalID().X])
+	out[0] = v
+}
+`)
+	if pkg == nil {
+		t.Fatal("the source did not type-check")
+	}
+	fns, diags := front.Check(pkg)
+	if len(diags) > 0 {
+		t.Fatalf("an assertion matching the body should be accepted: %v", diags)
+	}
+	if fns[0].Caps == 0 {
+		t.Error("the inferred capability set is empty for a kernel that reduces across lanes")
+	}
+}
+
+// A kernel with no directive is not required to have one: the set is inferred
+// either way, and the directive is an optional assertion rather than a
+// declaration the compiler depends on.
+func TestRequiresIsOptional(t *testing.T) {
+	pkg := checkSource(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, in []float32, out []float32) {
+	v := t.SubgroupAddF32(in[t.GlobalID().X])
+	out[0] = v
+}
+`)
+	if pkg == nil {
+		t.Fatal("the source did not type-check")
+	}
+	fns, diags := front.Check(pkg)
+	if len(diags) > 0 {
+		t.Fatalf("the directive is optional: %v", diags)
+	}
+	if fns[0].Caps == 0 {
+		t.Error("the capability set is inferred whether or not a directive asserts it")
+	}
+}

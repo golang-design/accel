@@ -821,7 +821,7 @@ var SubgroupReduceKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "56d0d51a09e342dc439ece33449f4e21",
+	Digest:      "13a1a366d8c302729183a8dd065ee5dd",
 	Generator:   accel.KernelABIVersion,
 	Caps:        17,
 	Suspensions: 2,

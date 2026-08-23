@@ -317,6 +317,54 @@ var table = map[key]*Intrinsic{
 	},
 }
 
+// capNames is each capability's spelling in an //accel:requires directive.
+//
+// The public spelling rather than the constant's Go name, so a kernel author
+// writes what they would read in the capability table.
+var capNames = map[string]Capability{
+	"subgroup_basic":           CapSubgroupBasic,
+	"subgroup_vote":            CapSubgroupVote,
+	"subgroup_ballot":          CapSubgroupBallot,
+	"subgroup_shuffle":         CapSubgroupShuffle,
+	"subgroup_arithmetic":      CapSubgroupArithmetic,
+	"f16_arithmetic":           CapF16Arithmetic,
+	"bf16_arithmetic":          CapBF16Arithmetic,
+	"atomic_float_add_storage": CapAtomicFloatAddStorage,
+	"atomic_float_add_shared":  CapAtomicFloatAddShared,
+	"i8_dot_product":           CapI8DotProduct,
+}
+
+// CapByName resolves a capability's directive spelling.
+func CapByName(name string) (Capability, bool) {
+	c, ok := capNames[name]
+	return c, ok
+}
+
+// CapNames lists every capability's directive spelling, sorted, which is what a
+// diagnostic offers when a directive names something that is not one.
+func CapNames() []string {
+	out := make([]string, 0, len(capNames))
+	for n := range capNames {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DescribeCaps names the capabilities in a set, sorted, for a diagnostic.
+func DescribeCaps(c Capability) string {
+	if c == 0 {
+		return "none"
+	}
+	var out []string
+	for _, n := range CapNames() {
+		if capNames[n]&c != 0 {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
 // Lookup resolves a func object to an intrinsic.
 //
 // It takes the object go/types resolved, never a name, which is what makes a

@@ -785,7 +785,7 @@ func subgroupReduceCoop(t accel.Thread, in []float32, out []float32, f *subgroup
 			frame.Sub = accel.KernelSubAddF32
 			frame.SubF32 = f.v1
 			f.pc = 2
-			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "subgroup.go:30:2"}
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "subgroup.go:31:2"}
 			return true
 		case 2:
 			f.total2 = frame.SubF32
@@ -794,7 +794,7 @@ func subgroupReduceCoop(t accel.Thread, in []float32, out []float32, f *subgroup
 		case 3:
 			frame.Sub = accel.KernelSubElect
 			f.pc = 4
-			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: "subgroup.go:35:2"}
+			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: "subgroup.go:36:2"}
 			return true
 		case 4:
 			f.elected3 = frame.SubBool
@@ -821,7 +821,7 @@ var SubgroupReduceKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "56d0d51a09e342dc439ece33449f4e21",
+	Digest:      "13a1a366d8c302729183a8dd065ee5dd",
 	Generator:   accel.KernelABIVersion,
 	Caps:        17,
 	Suspensions: 2,

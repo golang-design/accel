@@ -20,6 +20,7 @@ import "golang.design/x/accel"
 // subgroup path's rather than the kernel's.
 //
 //accel:kernel workgroup=64
+//accel:requires subgroup_arithmetic, subgroup_basic
 func SubgroupReduce(t accel.Thread, in []float32, out []float32) {
 	gid := t.GlobalID().X
 	v := float32(0)

@@ -45,10 +45,13 @@ func (d *Device) newComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 			"ABI %d and this runtime is ABI %d; re-run go generate",
 			label, k.Name, k.Generator, KernelABIVersion)
 	}
-	if k.Flat == nil {
-		return nil, fmt.Errorf("accel: NewComputePipeline %q: kernel %q is cooperative, and the "+
-			"resumable lowering its invocations need arrives at M4 "+
-			"(specs/009-sequencing.md)", label, k.Name)
+	// A kernel has exactly one entry point: flat if its body reaches no
+	// barrier, shared memory, or subgroup operation, and cooperative otherwise.
+	// Neither is a kernel the generator did not finish.
+	if k.Flat == nil && k.Cooperative == nil {
+		return nil, fmt.Errorf("accel: NewComputePipeline %q: kernel %q has neither a flat "+
+			"nor a cooperative entry point, so the generated file is incomplete; re-run "+
+			"go generate", label, k.Name)
 	}
 
 	size := k.WorkgroupSize
@@ -100,7 +103,7 @@ func describeUnmet(u []Unmet) string {
 		if m.Limit != "" {
 			parts[i] = fmt.Sprintf("%s needs %d and the device reports %d", m.Limit, m.Required, m.Available)
 		} else {
-			parts[i] = fmt.Sprintf("capability %v is absent", m.Cap)
+			parts[i] = fmt.Sprintf("the capability %v is absent", m.Cap)
 		}
 	}
 	return strings.Join(parts, "; ")

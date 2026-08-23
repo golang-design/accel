@@ -40,6 +40,7 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.design/x/accel/internal/kernelc/intrin"
 	"golang.design/x/accel/internal/kernelc/ir"
 	"golang.design/x/accel/internal/kernelc/std140"
 	"golang.org/x/tools/go/packages"
@@ -47,6 +48,20 @@ import (
 
 // KernelDirective marks an entry function.
 const KernelDirective = "//accel:kernel"
+
+// RequiresDirective asserts which capabilities a kernel needs.
+//
+// An **assertion**, not a source. What a kernel requires is inferred from its
+// body, because a declaration can be forgotten and the failure is silent: a
+// kernel using a feature the device lacks would produce wrong results rather
+// than an error. This directive is checked against the inferred set and a
+// mismatch in either direction fails generation.
+//
+// Declaring more than the body needs is as much a bug as declaring less. It
+// makes the kernel unavailable on devices that could run it, and nobody
+// notices, because the symptom is a device being skipped. See
+// specs/020-cooperative-atomics.md section 3.
+const RequiresDirective = "//accel:requires"
 
 // HelperDirective marks a function callable from a kernel. Helpers are spec
 // 013's; the directive is recognized here so that using one reports that it
@@ -168,6 +183,7 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 	for _, d := range decls {
 		if d.kind == KernelDirective {
 			if k := c.kernel(d.fn, d.extent); k != nil {
+				c.checkRequires(k, d.fn)
 				c.funcs = append(c.funcs, k)
 			}
 		}
@@ -278,6 +294,69 @@ func directiveOf(fn *ast.FuncDecl) (kind string, extent [3]uint32, ok bool) {
 		}
 	}
 	return "", extent, false
+}
+
+// checkRequires compares an //accel:requires assertion against what the body
+// implies.
+//
+// A mismatch fails in **either** direction. Declaring less than the body needs
+// is the obvious bug; declaring more is equally one, and quieter: it makes the
+// kernel unavailable on devices that could run it, and the symptom is a device
+// being skipped rather than an error anybody sees.
+func (c *checker) checkRequires(k *ir.Func, fn *ast.FuncDecl) {
+	names, ok := requiresOf(fn)
+	if !ok {
+		return
+	}
+	var declared intrin.Capability
+	for _, n := range names {
+		cap, known := intrin.CapByName(n)
+		if !known {
+			c.errorf(fn.Pos(), "kernel %s: //accel:requires names %q, which is not a "+
+				"capability; the set is %s", k.Name, n, strings.Join(intrin.CapNames(), ", "))
+			return
+		}
+		declared |= cap
+	}
+
+	inferred := intrin.Capability(k.Caps)
+	if declared == inferred {
+		return
+	}
+	if missing := inferred &^ declared; missing != 0 {
+		c.errorf(fn.Pos(), "kernel %s: its body requires %s, which //accel:requires does "+
+			"not declare: a device without it would run this kernel and produce wrong "+
+			"results rather than an error", k.Name, intrin.DescribeCaps(missing))
+	}
+	if extra := declared &^ inferred; extra != 0 {
+		c.errorf(fn.Pos(), "kernel %s: //accel:requires declares %s, which its body does "+
+			"not use: over-declaring makes the kernel unavailable on devices that could "+
+			"run it, and the symptom is a device being skipped rather than an error",
+			k.Name, intrin.DescribeCaps(extra))
+	}
+}
+
+// requiresOf reads the //accel:requires assertion, if the declaration carries
+// one, as a set of capability names.
+func requiresOf(fn *ast.FuncDecl) ([]string, bool) {
+	if fn.Doc == nil {
+		return nil, false
+	}
+	for _, cm := range fn.Doc.List {
+		text := strings.TrimSpace(cm.Text)
+		if !strings.HasPrefix(text, RequiresDirective) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(text, RequiresDirective))
+		var out []string
+		for _, name := range strings.Split(rest, ",") {
+			if n := strings.TrimSpace(name); n != "" {
+				out = append(out, n)
+			}
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // parseWorkgroup reads `workgroup=X[,Y[,Z]]`, defaulting the omitted axes to 1.

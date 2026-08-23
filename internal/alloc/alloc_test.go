@@ -427,31 +427,57 @@ func TestAllocationIsConstantTime(t *testing.T) {
 			"variable this ratio is measuring")
 	}
 
-	// perAlloc times enough independent runs to clear the clock's granularity,
-	// then divides by the allocations performed.
+	// perAlloc measures the per-allocation cost, taking the **fastest** of
+	// several batches.
 	//
-	// Repeating is not about noise, it is about resolution. Windows advances
-	// time.Now in steps of up to about 15ms, so one run of a few thousand fast
-	// allocations measures as exactly zero, and any ratio taken from a zero is
-	// meaningless rather than merely imprecise. The loop is bounded by wall
-	// clock, so a coarse timer makes it do more repetitions rather than spin.
+	// Two different problems are being solved here, and it is worth separating
+	// them because each was found the hard way.
+	//
+	// **Resolution.** Windows advances time.Now in steps of up to about 15ms,
+	// so one batch of a few thousand fast allocations measures as exactly zero,
+	// and a ratio taken from a zero is meaningless rather than imprecise. Each
+	// batch therefore runs against a wall-clock floor: a coarse timer makes it
+	// do more repetitions rather than spin.
+	//
+	// **Interference.** The two measurements are taken at different moments,
+	// and anything else running on the machine inflates one of them — which
+	// showed up as this test failing at a ratio of 3.6 while passing five times
+	// in a row when run alone. The minimum of several batches is the standard
+	// answer: noise only ever adds time, so the smallest sample is the one
+	// least perturbed, and taking it makes the comparison about the allocator
+	// rather than about what else the machine was doing.
+	//
+	// A mean would not do this. It moves with the interference, which is
+	// precisely the variable that must not reach the ratio.
 	perAlloc := func(n int) (time.Duration, int) {
-		const floor = 50 * time.Millisecond
-		start := time.Now()
-		reps := 0
-		for time.Since(start) < floor {
-			a, err := alloc.NewTLSF(n*granularity*2, granularity)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for range n {
-				if _, err := a.Alloc(granularity, 4); err != nil {
+		const (
+			floor   = 20 * time.Millisecond
+			batches = 5
+		)
+		best := time.Duration(0)
+		total := 0
+		for range batches {
+			start := time.Now()
+			reps := 0
+			for time.Since(start) < floor {
+				a, err := alloc.NewTLSF(n*granularity*2, granularity)
+				if err != nil {
 					t.Fatal(err)
 				}
+				for range n {
+					if _, err := a.Alloc(granularity, 4); err != nil {
+						t.Fatal(err)
+					}
+				}
+				reps++
 			}
-			reps++
+			each := time.Since(start) / time.Duration(n*reps)
+			if best == 0 || each < best {
+				best = each
+			}
+			total += reps
 		}
-		return time.Since(start) / time.Duration(n*reps), reps
+		return best, total
 	}
 
 	const factor = 10
