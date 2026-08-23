@@ -470,6 +470,49 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("AttentionDecodePaged", func(t *testing.T) {
+		const qHeads, kvHeads, headDim, block, kvLen, blocks = 2, 1, 8, 4, 6, 8
+		d := testkernels.PagedDims{
+			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+			KVLen: kvLen, Block: block, Scale: float32(1) / float32(math.Sqrt(headDim)),
+		}
+		q := make([]float32, qHeads*headDim)
+		pk := make([]float32, blocks*block*kvHeads*headDim)
+		pv := make([]float32, blocks*block*kvHeads*headDim)
+		for i := range q {
+			q[i] = float32(math.Sin(float64(i) * 0.3))
+		}
+		for i := range pk {
+			pk[i] = float32(math.Cos(float64(i) * 0.11))
+			pv[i] = float32(i%7) - 3
+		}
+		// Out of order, so the two forms agree about the addressing.
+		pages := []uint32{5, 2}
+
+		authored := make([]float32, qHeads*headDim)
+		for g := range uint32(qHeads) {
+			var scores, red [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+				kernel.ID3{X: qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+					testkernels.AttentionDecodePaged(th, d, q, pk, pv, pages, authored,
+						&scores, &red)
+				})
+		}
+		generated := make([]float32, qHeads*headDim)
+		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
+			accel.ID3{X: qHeads},
+			accel.KernelArgs{
+				Slices: []any{q, pk, pv, pages, generated}, Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
 	t.Run("AttentionPrefill", func(t *testing.T) {
 		const qHeads, kvHeads, headDim, qSeq = 2, 1, 8, 4
 		dims := testkernels.PrefillDims{

@@ -102,6 +102,7 @@ numbered in.
 | [027-quantization.md](027-quantization.md) | Implemented | M8: the symmetric int8 block representation, its derived error bound, and quantized Rows and GEMM |
 | [028-sampling.md](028-sampling.md) | Implemented | M8: argmax and categorical sampling, with the random draw as an input so a token is reproducible |
 | [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
+| [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 
 ## Process
