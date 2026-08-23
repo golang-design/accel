@@ -569,14 +569,55 @@ type SharedMem struct {
 	Type  *Type
 }
 
-// Func is a kernel or a helper.
+// Stage is what a Func is: a helper, or one of the three entry points.
+//
+// An enum rather than a boolean because a boolean cannot answer "which stage",
+// and every consumer would end up inferring it from the presence of a workgroup
+// extent -- which is a second source of truth for something the directive
+// already said. See specs/032-stage-abi.md section 6.
+type Stage uint8
+
+const (
+	// StageHelper is a function a stage calls, not an entry point.
+	StageHelper Stage = iota
+	StageCompute
+	StageVertex
+	StageFragment
+)
+
+func (s Stage) String() string {
+	switch s {
+	case StageHelper:
+		return "helper"
+	case StageCompute:
+		return "compute kernel"
+	case StageVertex:
+		return "vertex stage"
+	case StageFragment:
+		return "fragment stage"
+	}
+	return "unknown stage"
+}
+
+// Entry reports whether this stage is an entry point rather than a helper.
+func (s Stage) Entry() bool { return s != StageHelper }
+
+// Graphics reports whether this stage runs in a render pipeline.
+//
+// The graphics stages have no workgroup, no barrier, no shared memory and no
+// subgroup, so this is what the front end tests before refusing one of those
+// with an error naming the stage -- a compiler guarantee rather than a
+// convention.
+func (s Stage) Graphics() bool { return s == StageVertex || s == StageFragment }
+
+// Func is an entry point or a helper.
 type Func struct {
 	pos
-	Name   string
-	Kernel bool
+	Name  string
+	Stage Stage
 
 	// Workgroup is the extent from the //accel:kernel directive. Zero for a
-	// helper.
+	// helper and for a graphics stage.
 	Workgroup [3]uint32
 
 	// Thread is the index of the accel.Thread parameter, or -1 for a helper that

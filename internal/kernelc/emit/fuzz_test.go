@@ -118,7 +118,7 @@ func corpusCopy(*testing.T) *ir.Func {
 	pos := token.Pos(1)
 	f32s := &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}
 	return &ir.Func{
-		Name: "Scale", Kernel: true, Workgroup: [3]uint32{64, 1, 1}, Thread: 0,
+		Name: "Scale", Stage: ir.StageCompute, Workgroup: [3]uint32{64, 1, 1}, Thread: 0,
 		Params: []*ir.Param{
 			ir.NewParam(pos, &ir.Type{Kind: ir.Struct, Name: "Thread"}, 0, "t", nil),
 			ir.NewParam(pos, f32s, 1, "in", nil),

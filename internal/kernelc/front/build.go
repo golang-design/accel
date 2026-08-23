@@ -395,14 +395,20 @@ func inferAccess(k *ir.Func) {
 	walkStmt(k.Body)
 }
 
-// returnStmt builds a return, which a kernel and a helper mean differently.
+// returnStmt builds a return, which a compute kernel and a helper mean
+// differently.
 //
-// A kernel returns nothing: it writes through its bindings, and a value would
-// have nowhere to go. A helper returns one value or none, and the two have to
-// agree with the signature go/types already checked, so the only thing left to
-// reject here is a kernel that tries.
+// A compute kernel returns nothing: it writes through its bindings, and a value
+// would have nowhere to go. A helper returns one value or none, and the two have
+// to agree with the signature go/types already checked, so the only thing left
+// to reject here is a compute kernel that tries.
+//
+// The graphics stages of specs/032-stage-abi.md are the exception and are
+// excluded here rather than in a second place: a vertex stage returns a position
+// and its varyings, and a fragment stage returns its attachment struct, because
+// those values go somewhere fixed-function rather than into a binding.
 func (c *checker) returnStmt(s *ast.ReturnStmt) ir.Stmt {
-	if c.current != nil && c.current.Kernel && len(s.Results) > 0 {
+	if c.current != nil && c.current.Stage == ir.StageCompute && len(s.Results) > 0 {
 		c.errorf(s.Pos(), "a kernel returns nothing: it writes through its bindings")
 		return nil
 	}

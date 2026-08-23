@@ -128,8 +128,8 @@ func (m *msl) printf(format string, args ...any) {
 
 func (m *msl) emit() {
 	k := m.fn
-	if !k.Kernel {
-		m.fail("MSL is emitted for kernels, and %s is a helper", k.Name)
+	if !k.Stage.Entry() {
+		m.fail("MSL is emitted for entry points, and %s is a helper", k.Name)
 		return
 	}
 	// A cooperative kernel is emitted as the author wrote it. MSL has real

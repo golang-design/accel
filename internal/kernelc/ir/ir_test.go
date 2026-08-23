@@ -48,7 +48,7 @@ func scaleBody(t *testing.T) (*ir.Func, ir.Value) {
 	cons := ir.NewIf(p, cond, ir.NewBlock(p, store), nil)
 
 	fn := &ir.Func{
-		Name: "Scale", Kernel: true, Workgroup: [3]uint32{64, 1, 1}, Thread: 0,
+		Name: "Scale", Stage: ir.StageCompute, Workgroup: [3]uint32{64, 1, 1}, Thread: 0,
 		Params:     []*ir.Param{ir.NewParam(p, nil, 0, "t", nil), in, out},
 		Bindings:   []*ir.Binding{{Name: "in", Index: 1, Type: f32s, Read: true}, {Name: "out", Index: 2, Type: f32s, Write: true}},
 		Body:       ir.NewBlock(p, decl, cons),
@@ -264,5 +264,37 @@ func TestAllNodeConstructorsWork(t *testing.T) {
 	}
 	if len(stmts) != 9 {
 		t.Errorf("the statement set has %d members; spec 004 closes it at 9", len(stmts))
+	}
+}
+
+// Stage answers "which one", which is the whole reason it replaced a boolean.
+//
+// A boolean can only say entry-point-or-helper, and every consumer needing more
+// would infer the stage from the presence of a workgroup extent -- a second
+// source of truth for something the directive already said, and one that is
+// wrong for a graphics stage, which has no extent at all.
+func TestStageClassifies(t *testing.T) {
+	for _, tc := range []struct {
+		s          ir.Stage
+		name       string
+		entry, gfx bool
+	}{
+		{ir.StageHelper, "helper", false, false},
+		{ir.StageCompute, "compute kernel", true, false},
+		{ir.StageVertex, "vertex stage", true, true},
+		{ir.StageFragment, "fragment stage", true, true},
+	} {
+		if got := tc.s.String(); got != tc.name {
+			t.Errorf("%d prints %q, want %q", tc.s, got, tc.name)
+		}
+		if got := tc.s.Entry(); got != tc.entry {
+			t.Errorf("%s: Entry is %v, want %v", tc.name, got, tc.entry)
+		}
+		if got := tc.s.Graphics(); got != tc.gfx {
+			t.Errorf("%s: Graphics is %v, want %v", tc.name, got, tc.gfx)
+		}
+	}
+	if got := ir.Stage(99).String(); got != "unknown stage" {
+		t.Errorf("an out-of-range stage prints %q", got)
 	}
 }

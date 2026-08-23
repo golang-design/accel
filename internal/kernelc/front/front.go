@@ -411,7 +411,7 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 		return nil
 	}
 
-	k := &ir.Func{Name: name, Kernel: true, Workgroup: extent, Thread: -1}
+	k := &ir.Func{Name: name, Stage: ir.StageCompute, Workgroup: extent, Thread: -1}
 	k.P = fn.Pos()
 	k.Source = c.normalize(fn)
 	c.order = append(c.order, k)

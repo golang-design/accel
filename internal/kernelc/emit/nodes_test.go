@@ -159,7 +159,7 @@ func TestEmitsEveryBindingType(t *testing.T) {
 			elem := &ir.Type{Kind: tc.kind}
 			slice := &ir.Type{Kind: ir.Slice, Elem: elem}
 			k := &ir.Func{
-				Name: "K", Kernel: true, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
+				Name: "K", Stage: ir.StageCompute, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
 				Params: []*ir.Param{
 					ir.NewParam(p, &ir.Type{Kind: ir.Struct, Name: "Thread"}, 0, "t", nil),
 					ir.NewParam(p, slice, 1, "buf", nil),

@@ -33,7 +33,7 @@ func newChecker(t *testing.T) *checker {
 		info:    &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}},
 		locals:  map[types.Object]*ir.Local{},
 		layouts: map[string]*std140.Layout{},
-		current: &ir.Func{Name: "K", Kernel: true},
+		current: &ir.Func{Name: "K", Stage: ir.StageCompute},
 	}
 }
 
@@ -553,7 +553,7 @@ func TestUniformFieldIndexRejectsWhatItCannotFind(t *testing.T) {
 // subset's rather than the language's.
 func TestReturnRejectsSeveralValues(t *testing.T) {
 	c := newChecker(t)
-	c.current.Kernel = false
+	c.current.Stage = ir.StageHelper
 	stmt := &ast.ReturnStmt{Return: 1, Results: []ast.Expr{
 		&ast.BadExpr{From: 1}, &ast.BadExpr{From: 2},
 	}}

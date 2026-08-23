@@ -286,7 +286,7 @@ func kernelWith(s ir.Stmt) *ir.Func {
 	p := token.Pos(1)
 	f32s := &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}
 	return &ir.Func{
-		Name: "K", Kernel: true, Workgroup: [3]uint32{64, 1, 1}, Thread: 0,
+		Name: "K", Stage: ir.StageCompute, Workgroup: [3]uint32{64, 1, 1}, Thread: 0,
 		Params: []*ir.Param{
 			ir.NewParam(p, &ir.Type{Kind: ir.Struct, Name: "Thread"}, 0, "t", nil),
 			ir.NewParam(p, f32s, 1, "out", nil),
@@ -398,7 +398,7 @@ func TestABarrierInsideAConditionalIsRefused(t *testing.T) {
 		ir.NewBlock(0, ir.NewExprStmt(0,
 			ir.NewIntrinsic(0, &ir.Type{Kind: ir.Invalid}, ir.OpBarrier, nil, nil))),
 		nil))
-	k := &ir.Func{Name: "Branchy", Kernel: true, Cooperative: true, Body: body}
+	k := &ir.Func{Name: "Branchy", Stage: ir.StageCompute, Cooperative: true, Body: body}
 
 	_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
 	if err == nil {
@@ -434,7 +434,7 @@ func TestFractionalConstantsAreNotEmittedAsFractions(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			k := &ir.Func{
-				Name: "K", Kernel: true, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
+				Name: "K", Stage: ir.StageCompute, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
 				Body: ir.NewBlock(0, ir.NewAssign(0,
 					ir.NewIndex(0, &ir.Type{Kind: ir.F32},
 						ir.NewParam(0, &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, 1, "out", nil),
@@ -472,7 +472,7 @@ func TestFractionalConstantsAreNotEmittedAsFractions(t *testing.T) {
 // literal would do makes the generated file harder to read for no gain.
 func TestWholeNumberConstantsStayReadable(t *testing.T) {
 	k := &ir.Func{
-		Name: "K", Kernel: true, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
+		Name: "K", Stage: ir.StageCompute, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
 		Body: ir.NewBlock(0, ir.NewAssign(0,
 			ir.NewIndex(0, &ir.Type{Kind: ir.F32},
 				ir.NewParam(0, &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, 1, "out", nil),
@@ -523,7 +523,7 @@ func TestANestedSubgroupRendezvousIsRefused(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			k := &ir.Func{
-				Name: "Nested", Kernel: true, Cooperative: true,
+				Name: "Nested", Stage: ir.StageCompute, Cooperative: true,
 				Body: ir.NewBlock(0, c.stmt),
 			}
 			_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
@@ -545,7 +545,7 @@ func TestADirectlyAssignedRendezvousIsAccepted(t *testing.T) {
 	f32 := &ir.Type{Kind: ir.F32}
 	local := ir.NewLocal(0, f32, 0, "v", nil)
 	k := &ir.Func{
-		Name: "Direct", Kernel: true, Cooperative: true,
+		Name: "Direct", Stage: ir.StageCompute, Cooperative: true,
 		Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
 		Params: []*ir.Param{ir.NewParam(0, &ir.Type{Kind: ir.ID3Kind}, 0, "t", nil)},
 		Body: ir.NewBlock(0, ir.NewDeclare(0, local,
