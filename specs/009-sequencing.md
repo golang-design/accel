@@ -1111,19 +1111,52 @@ Written out rather than left to a reader to infer from the strikethroughs above.
 | prefill bucketing and the plan cache | **[029](029-plan-cache.md)** |
 | paged KV and multi-sequence | **[030](030-paged-kv.md)**, mechanism complete; the *scheduler* is policy over it |
 | additional transient sets | **[031](031-shared-transients.md)** |
-| textures/formats and graphics | textures, formats and row pitch shipped at M1; **graphics is gated** |
+| textures/formats and graphics | textures, formats and row pitch shipped at M1; **the graphics gate is cleared**, implementation in progress |
 | Vulkan and the SPIR-V emitter | **blocked here**, measured |
 
-**Graphics is gated by [000](000-decisions.md), not by effort.** That file
-promises no graphics public API "until its stage ABI, render API,
-surface/present contract, and CPU rasterizer have their own implementation-ready
-child specs", and [005](005-graphics.md) is a drafted parent with those four
-children unwritten. The gate is deliberate and its cost is already recorded
-there: the graphics half of [`conventions.md`](../docs/conventions.md) — clip
-depth, face winding, readback origin — is unverified, and those are the entries
-that cost the predecessor hours. Building past the gate would be revising a
-locked decision, which [000](000-decisions.md) has a procedure for and which is
-not something a milestone does on its way past.
+**Graphics was gated by [000](000-decisions.md), not by effort, and the gate is
+now cleared.** That file promised no graphics public API "until its stage ABI,
+render API, surface/present contract, and CPU rasterizer have their own
+implementation-ready child specs". Those four are
+[032](032-stage-abi.md), [033](033-render-api.md),
+[034](034-surface-present.md) and [035](035-cpu-rasterizer.md), written
+2026-08-23, and 000 records the gate as met rather than revised — the condition
+it named is the condition that was done.
+
+Three things about how it was cleared are worth recording, because each was a
+way to clear it wrongly.
+
+1. **005's four open questions were closed in the direction 005 argued**, not
+   reopened. Each had a worked answer in the parent already; the children state
+   the reasoning and the cost rather than re-deriving it. Reverse-Z needs no API
+   change, the vertex layout stays a descriptor whose formats are now validated
+   against the stage, pass merging is not attempted while the only handoff in the
+   corpus merges on no backend, and a resize rebuilds.
+2. **004's sampler refusal was not quietly overridden.** 005's flagship handoff
+   reads an attachment from a compute kernel, and 004 defers *sampled* textures
+   on measured evidence. [032](032-stage-abi.md) admits an integer-coordinate
+   unfiltered **texel fetch** and still refuses sampling, because a fetch is an
+   indexed load with nothing to reconcile where a sample carries half-texel
+   addressing, an LOD off-by-one, and truncating lerps. Widening the refusal to
+   cover the fetch would have made the worked example unimplementable; ignoring
+   it would have put a permanent tolerance in the oracle.
+3. **The corpus is split before it is written.** 005 makes an exact-versus-bounded
+   distinction normative; [035](035-cpu-rasterizer.md) requires every entry to
+   declare its side and says an entry with no declared side is not in the corpus.
+   That is aimed at this file's own recurring finding — a criterion checked off
+   against a test that nearly tests it — which is recorded three times above.
+
+The cost 000 attached stands until the rasterizer lands: the graphics half of
+[`conventions.md`](../docs/conventions.md) — clip depth, face winding, readback
+origin — is still unverified. What changed is that the predecessor's never-written
+Metal present path is scheduled rather than open, and [034](034-surface-present.md)
+puts it before every other on-screen backend for exactly the reason that project
+left it last.
+
+Implementation follows [035](035-cpu-rasterizer.md) §8's order: an offscreen
+triangle, then depth, then fixed-function breadth, then the graph integration,
+then the headless surface, and Metal last — against a corpus that is by then an
+oracle rather than an aspiration.
 
 **Vulkan is blocked by the machine**, and that was checked rather than assumed,
 twice. Re-measured 2026-08-23: no `libvulkan` in `/usr/local/lib`,
