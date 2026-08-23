@@ -1093,6 +1093,55 @@ Independently scoped later work includes:
 Vulkan is the first backend priority because it gives the CPU oracle a second
 vendor/API opinion and pays the cost of the real SPIR-V IR.
 
+#### M8 status — 2026-08-23
+
+**Four of the six items are complete**, and the two that are not are blocked by
+different things — one by this project's own design gate and one by the machine.
+Written out rather than left to a reader to infer from the strikethroughs above.
+
+| Item | |
+| --- | --- |
+| quantization | **[027](027-quantization.md)** |
+| sampling primitives | **[028](028-sampling.md)**, including top-k and top-p; policy integration remains |
+| prefill bucketing and the plan cache | **[029](029-plan-cache.md)** |
+| paged KV and multi-sequence | **[030](030-paged-kv.md)**, mechanism complete; the *scheduler* is policy over it |
+| textures/formats and graphics | textures, formats and row pitch shipped at M1; **graphics is gated** |
+| Vulkan and the SPIR-V emitter | **blocked here**, measured |
+
+**Graphics is gated by [000](000-decisions.md), not by effort.** That file
+promises no graphics public API "until its stage ABI, render API,
+surface/present contract, and CPU rasterizer have their own implementation-ready
+child specs", and [005](005-graphics.md) is a drafted parent with those four
+children unwritten. The gate is deliberate and its cost is already recorded
+there: the graphics half of [`conventions.md`](../docs/conventions.md) — clip
+depth, face winding, readback origin — is unverified, and those are the entries
+that cost the predecessor hours. Building past the gate would be revising a
+locked decision, which [000](000-decisions.md) has a procedure for and which is
+not something a milestone does on its way past.
+
+**Vulkan is blocked by the machine**, and that was checked rather than assumed:
+no loader, no MoltenVK, no SPIR-V validator. [004](004-kernel-authoring.md)
+makes SPIR-V a *binary* target with no source level, so without a device, a
+validator, or a driver compiler an emitter would be code nobody ran — the
+failure mode [M6's outcome](#m6-outcome--complete-2026-08-23) names.
+
+**What the four completed items have in common** is worth recording, because it
+is the same shape four times: each turned out to rest on a decision that the
+obvious implementation gets wrong, and each was confirmed by reinstating that
+mistake rather than by watching a test pass.
+
+| Item | The decision | What reinstating it showed |
+| --- | --- | --- |
+| quantization | clamp to ±127, so the range is symmetric | a weight one ulp below the peak wraps to the most negative value |
+| sampling | ties go to the lowest index | a non-strict comparison sends them to the highest, and both backends disagree |
+| top-k | select by extraction, not by a threshold | a threshold keeps four entries where two were asked |
+| paged KV | `pages[j/B]·B + j mod B` | dropping the multiply fails all five cases — and *ignoring* the table does not compile |
+
+The last of those is the one to remember: **the kernel compiler refused a
+mutation before a test could see it**, because a binding that is never read is
+an error. A guarantee in the compiler is worth more than the same guarantee in a
+test.
+
 **Vulkan is blocked in this environment, measured rather than assumed.** There
 is no Vulkan loader, no MoltenVK, and no SPIR-V validator on the development
 machine. Unlike M6 — whose premise that no Metal device existed turned out to be

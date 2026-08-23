@@ -175,7 +175,9 @@ bindings are the better choice.
 | Metal backend | **Built** on an Apple M2: all 32 corpus kernels compile on the device and agree with the CPU backend, 25 of them bit for bit. Graphs, indirect dispatch and device loss included |
 | Tensor layer | **Built**: a tensor graph compiles once and runs on both backends, with views, broadcasting, normalization, matrix multiplication, a KV cache, and prefill and decode attention that agree |
 | Quantized weights: int8 with a per-block scale | **Built** on both backends, with a derived error bound rather than a measured one |
-| Sampling: argmax and categorical | **Built** on both backends; top-k and top-p are not |
+| Sampling: argmax, categorical, top-k, top-p | **Built** on both backends; the random draw is an input, so a token is reproducible |
+| Prefill buckets and a plan cache | **Built**; the key is the six things that make reuse safe, not the shape |
+| Paged KV, and batching several sequences in one step | **Built**; sequences of different lengths share one pool |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 

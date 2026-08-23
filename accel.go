@@ -92,7 +92,9 @@
 // int8-plus-scale form a quantized kernel reads, with an error bound a test can
 // compute rather than a tolerance somebody tuned. Sampling primitives take
 // their random draw as an input rather than generating one, so a token is
-// reproducible and both backends agree on it.
+// reproducible and both backends agree on it. A KV cache can be paged, so
+// sequences of different lengths share one pool and several of them step in one
+// dispatch.
 //
 // Not implemented, and reporting [ErrNotImplemented]: [Sampler], which has
 // nothing to sample with until a render pass exists. Subgroup shuffles and
