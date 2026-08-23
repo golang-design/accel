@@ -144,9 +144,7 @@ func throwawayModule(t *testing.T) string {
 		}
 	}
 
-	write(filepath.Join(dir, "go.mod"),
-		"module example.com/cmdtest\n\ngo 1.27\n\nrequire golang.design/x/accel v0.0.0\n\n"+
-			"replace golang.design/x/accel => "+repo+"\n")
+	write(filepath.Join(dir, "go.mod"), moduleFile(t, repo, "example.com/cmdtest"))
 	if b, err := os.ReadFile(filepath.Join(repo, "go.sum")); err == nil {
 		write(filepath.Join(dir, "go.sum"), string(b))
 	}
@@ -160,4 +158,22 @@ func throwawayModule(t *testing.T) string {
 		"//go:generate go run golang.design/x/accel/cmd/accel-kernel -C ../.. ./internal/testkernels\n", "", 1)
 	write(filepath.Join(dir, "kernels", "scale.go"), body)
 	return dir
+}
+
+// moduleFile builds the throwaway module's go.mod from the repository's own.
+//
+// Derived rather than written, because a hand-written require line goes stale
+// the moment accel gains a dependency, and the failure is opaque: the generator
+// reports "updates to go.mod needed" from inside a temp directory the reader
+// cannot see. Taking the repository's requirements verbatim means the throwaway
+// module has exactly what the replace target needs, always.
+func moduleFile(t *testing.T, repo, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repo, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(b), "module golang.design/x/accel", "module "+name, 1)
+	return body + "\nrequire golang.design/x/accel v0.0.0\n\n" +
+		"replace golang.design/x/accel => " + repo + "\n"
 }
