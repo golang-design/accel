@@ -5,6 +5,7 @@
 package accel_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -505,5 +506,102 @@ func TestAKernelRequiringAPresentCapabilityIsAccepted(t *testing.T) {
 	}
 	if err := p.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+}
+
+// M5's end-to-end criterion: a public graph runs upload → tiled GEMM →
+// readback, in strict mode.
+//
+// Strict mode is the point of the "in strict mode" clause: it is the profile
+// that reports the intersection of what every target allows, so a kernel that
+// runs there runs anywhere. It also turns the instrumentation off, which means
+// this is the path a caller actually gets rather than the checked one.
+func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
+	const m, n, k = 17, 19, 23 // no dimension a multiple of any tile dimension
+
+	d, err := accel.OpenCPU(accel.CPUOptions{
+		Mode:          accel.CPUStrict,
+		StrictTargets: []accel.Backend{accel.BackendMetal},
+	})
+	if err != nil {
+		t.Fatalf("open strict: %v", err)
+	}
+	defer d.Close()
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.MatMulTiledKernel, Label: "gemm",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	mk := func(label string, count int, dt accel.DType) *accel.Buffer {
+		b, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: dt, Count: count, Usage: storage, Label: label,
+		})
+		if err != nil {
+			t.Fatalf("buffer %q: %v", label, err)
+		}
+		t.Cleanup(func() { _ = b.Close() })
+		return b
+	}
+	aBuf := mk("a", m*k, accel.F16)
+	bBuf := mk("b", k*n, accel.F16)
+	outBuf := mk("out", m*n, accel.F32)
+
+	// The inputs go up as f16 bits, which is what the format is on the wire.
+	aBits := make([]uint16, m*k)
+	bBits := make([]uint16, k*n)
+	for i := range aBits {
+		aBits[i] = accel.ToFloat16(float32(i%7) - 3).Bits()
+	}
+	for i := range bBits {
+		bBits[i] = accel.ToFloat16(float32(i%5) - 2).Bits()
+	}
+	if err := d.Queue().WriteBuffer(aBuf, 0, aBits); err != nil {
+		t.Fatalf("upload a: %v", err)
+	}
+	if err := d.Queue().WriteBuffer(bBuf, 0, bBits); err != nil {
+		t.Fatalf("upload b: %v", err)
+	}
+
+	r := d.NewRecorder()
+	r.Dispatch(p, []accel.Binding{
+		{Index: 0, Uniform: testkernels.GEMMDims{M: m, N: n, K: k}},
+		{Index: 0, Buffer: whole(t, aBuf)},
+		{Index: 1, Buffer: whole(t, bBuf)},
+		{Index: 2, Buffer: whole(t, outBuf)},
+	}, accel.WorkgroupCount{
+		X: (n + testkernels.TileN - 1) / testkernels.TileN,
+		Y: (m + testkernels.TileM - 1) / testkernels.TileM,
+	})
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	got := make([]float32, m*n)
+	if err := d.Queue().ReadBuffer(outBuf, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+
+	// Against the same independent reference the kernel tests use.
+	for i := range got {
+		row, col := i/n, i%n
+		var want float64
+		for kk := range k {
+			want += float64(accel.Float16FromBits(aBits[row*k+kk]).F32()) *
+				float64(accel.Float16FromBits(bBits[kk*n+col]).F32())
+		}
+		if diff := math.Abs(float64(got[i]) - want); diff > 1e-3 {
+			t.Fatalf("element (%d,%d) is %v, want about %v", row, col, got[i], want)
+		}
 	}
 }

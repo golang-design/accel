@@ -341,9 +341,12 @@ func (p *Plan) checkDispatch(node int, n *PlanNode) error {
 	if d.Kernel == nil {
 		return fmt.Errorf("accel: plan node %d dispatches no kernel", node)
 	}
-	if d.Kernel.Flat == nil {
-		return fmt.Errorf("accel: plan node %d dispatches %q, which is cooperative and has no "+
-			"flat entry point", node, d.Kernel.Name)
+	// A kernel has exactly one entry point, chosen by whether its body reaches
+	// a barrier, shared memory, or a subgroup operation. Neither being present
+	// is an incomplete generated file rather than a kernel of some third kind.
+	if d.Kernel.Flat == nil && d.Kernel.Cooperative == nil {
+		return fmt.Errorf("accel: plan node %d dispatches %q, which has neither a flat nor "+
+			"a cooperative entry point", node, d.Kernel.Name)
 	}
 	if len(d.Bindings) != len(d.Kernel.Bindings) {
 		return fmt.Errorf("accel: plan node %d binds %d resources to %q, which declares %d",

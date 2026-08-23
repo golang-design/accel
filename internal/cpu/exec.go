@@ -157,6 +157,11 @@ type resolvedNode struct {
 	// would.
 	dispatch *driver.Dispatch
 	args     kernel.Args
+
+	// subgroupSize and diagnostics come from the device's options, so a graph
+	// submitted in developer mode is checked and one in strict mode is not.
+	subgroupSize uint32
+	diagnostics  bool
 }
 
 func (e *executable) resolve() ([]resolvedNode, error) {
@@ -245,6 +250,8 @@ func (e *executable) resolveDispatch(r *resolvedNode, n *driver.PlanNode) error 
 		slices[i] = s
 	}
 	r.args = kernel.Args{Slices: slices, Uniforms: d.Uniforms}
+	r.subgroupSize = e.dev.subgroupSizeU32()
+	r.diagnostics = e.dev.diagnostics
 	return nil
 }
 
@@ -359,7 +366,16 @@ func dispatch(n *resolvedNode) (err error) {
 				n.dispatch.Kernel.Name, n.id, r)
 		}
 	}()
-	return kernel.Dispatch(n.dispatch.Kernel, n.dispatch.Count, n.args)
+	// A kernel has exactly one entry point, chosen by whether its body reaches
+	// a barrier, shared memory, or a subgroup operation. Dispatching a
+	// cooperative kernel through the flat path would run its invocations one
+	// after another, which is a different program rather than a slower one.
+	k := n.dispatch.Kernel
+	if k.Cooperative != nil {
+		return kernel.DispatchCooperativeWith(k, n.dispatch.Count, n.args,
+			kernel.Options{SubgroupSize: n.subgroupSize, Diagnostics: n.diagnostics})
+	}
+	return kernel.Dispatch(k, n.dispatch.Count, n.args)
 }
 
 func (e *executable) Close() error {

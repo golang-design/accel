@@ -51,9 +51,10 @@ type recNode struct {
 	// barrier names on each side.
 	stage stage
 
-	// pipeline and count are a dispatch node's payload.
+	// pipeline, count and uniforms are a dispatch node's payload.
 	pipeline *ComputePipeline
 	count    kernel.ID3
+	uniforms []any
 }
 
 // access is one resource range one node touches, in bytes.

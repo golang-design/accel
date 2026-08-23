@@ -382,4 +382,12 @@ type Binding struct {
 	// zero value is not a slot, so a Binding that set none of the four is rejected
 	// rather than silently referring to the first one.
 	Slot Slot
+
+	// Uniform is a by-value parameter, and Index then names the kernel's
+	// by-value list rather than its binding layout.
+	//
+	// A separate field because a caller supplies a uniform as a value and a
+	// binding as a slice: conflating them would let a mismatched argument set be
+	// reinterpreted rather than refused. See specs/014-kernel-uniforms.md.
+	Uniform any
 }

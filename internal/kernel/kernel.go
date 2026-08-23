@@ -300,6 +300,18 @@ func Poison[T any](s []T) {
 		for i := range s {
 			s[i] = p
 		}
+	case Float16:
+		// A quiet NaN in the narrow format, so a read before a write propagates
+		// through the widening rather than arriving as a plausible number.
+		p := any(Float16FromBits(quietNaNF16)).(T)
+		for i := range s {
+			s[i] = p
+		}
+	case BFloat16:
+		p := any(BFloat16FromBits(quietNaNBF16)).(T)
+		for i := range s {
+			s[i] = p
+		}
 	}
 }
 

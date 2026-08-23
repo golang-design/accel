@@ -8,6 +8,26 @@ import (
 	"math"
 )
 
+// GEMMDimsCodec is the generated std140 codec for GEMMDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type GEMMDimsCodec struct{}
+
+// GEMMDimsBlockSize is the encoded size of a GEMMDims block, in bytes.
+const GEMMDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (GEMMDimsCodec) EncodedSize() int { return GEMMDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (GEMMDimsCodec) Encode(dst []byte, value GEMMDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.M)
+	w.U32(4, value.N)
+	w.U32(8, value.K)
+	return w.Err()
+}
+
 // ParamsCodec is the generated std140 codec for Params.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -465,6 +485,152 @@ var ReduceUnrolledKernel = accel.Kernel{
 			slot.State = f
 		}
 		return reduceUnrolledCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// matMulTiledFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type matMulTiledFrame struct {
+	pc    int
+	lx0   uint32
+	ly1   uint32
+	tid2  uint32
+	row3  uint32
+	col4  uint32
+	acc5  float32
+	zero6 accel.Float16
+	k07   uint32
+	kk8   uint32
+	nn9   uint32
+	kk210 uint32
+	k11   uint32
+	av12  float32
+	bv13  float32
+}
+
+// matMulTiledCoop runs one invocation of MatMulTiled to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func matMulTiledCoop(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16, out []float32, tileA *[128]accel.Float16, tileB *[256]accel.Float16, f *matMulTiledFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lx0 = t.LocalID().X
+			f.ly1 = t.LocalID().Y
+			f.tid2 = ((f.ly1 * uint32(16)) + f.lx0)
+			f.row3 = ((t.GroupID().Y * uint32(8)) + f.ly1)
+			f.col4 = ((t.GroupID().X * uint32(16)) + f.lx0)
+			f.acc5 = float32(0)
+			f.zero6 = accel.ToFloat16(float32(0))
+			f.pc = 1
+			continue
+		case 1:
+			f.k07 = uint32(0)
+			f.pc = 7
+			continue
+		case 2:
+			if (f.row3 < d.M) && ((f.k07 + f.lx0) < d.K) {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = a[(((f.row3 * d.K) + f.k07) + f.lx0)]
+			} else {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = f.zero6
+			}
+			f.kk8 = (f.tid2 / uint32(16))
+			f.nn9 = (f.tid2 % uint32(16))
+			if ((f.k07 + f.kk8) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = b[((((f.k07 + f.kk8) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)]
+			} else {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = f.zero6
+			}
+			f.kk210 = (f.kk8 + uint32(8))
+			if ((f.k07 + f.kk210) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = b[((((f.k07 + f.kk210) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)]
+			} else {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = f.zero6
+			}
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: "gemm.go:86:3"}
+			return true
+		case 4:
+			{
+				f.k11 = uint32(0)
+				for ; f.k11 < uint32(16); f.k11 = (f.k11 + uint32(1)) {
+					f.av12 = tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k11)))].F32()
+					f.bv13 = tileB[tr.ReadAt(1, int(((f.k11*uint32(16))+f.lx0)))].F32()
+					f.acc5 = float32(f.acc5 + float32(f.av12*f.bv13))
+				}
+			}
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = accel.KernelBarrierID{Index: 5, Pos: "gemm.go:96:3"}
+			return true
+		case 6:
+			f.k07 = (f.k07 + uint32(16))
+			f.pc = 7
+			continue
+		case 7:
+			if f.k07 < d.K {
+				f.pc = 2
+				continue
+			}
+			f.pc = 8
+			continue
+		case 8:
+			if (f.row3 < d.M) && (f.col4 < d.N) {
+				out[((f.row3 * d.N) + f.col4)] = f.acc5
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// MatMulTiledKernel is the compiled form of MatMulTiled.
+var MatMulTiledKernel = accel.Kernel{
+	Name:          "MatMulTiled",
+	WorkgroupSize: accel.ID3{X: 16, Y: 8, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "7d5374776e289634a322b661335b61b9",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 2,
+	SharedSizes: []int{128, 256},
+	NewShared: func() []any {
+		var s0 [128]accel.Float16
+		accel.KernelPoison(s0[:])
+		var s1 [256]accel.Float16
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "GEMMDims", Size: 16},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*matMulTiledFrame)
+		if f == nil {
+			f = &matMulTiledFrame{}
+			slot.State = f
+		}
+		return matMulTiledCoop(t, accel.KernelUniformValue[GEMMDims](a, 0), accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[accel.Float16](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelShared[[128]accel.Float16](a, 0), accel.KernelShared[[256]accel.Float16](a, 1), f, slot, slot.Shared)
 	},
 }
 

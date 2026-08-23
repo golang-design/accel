@@ -82,9 +82,23 @@ func TestGeneratedSourceTypeChecks(t *testing.T) {
 
 	// The authored sources are type-checked alongside it, because they share a
 	// package: the generated lowering calls the helpers they declare and names
-	// the types they import.
+	// the types they declare, such as a uniform struct.
+	//
+	// Read from the directory rather than from a list. A list goes stale
+	// silently every time the corpus gains a file, and the failure is a
+	// type-check error about a name the reader has to trace back to a missing
+	// source rather than to a real problem.
 	files := []*ast.File{f}
-	for _, name := range []string{"scale.go", "reduce.go", "scaled.go"} {
+	entries, err := os.ReadDir(filepath.Join("..", "..", "testkernels"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") ||
+			strings.HasSuffix(name, "_test.go") || name == "accel_kernels.go" {
+			continue
+		}
 		authored, err := os.ReadFile(filepath.Join("..", "..", "testkernels", name))
 		if err != nil {
 			t.Fatal(err)

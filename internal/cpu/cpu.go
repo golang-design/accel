@@ -69,6 +69,7 @@ func (Adapter) Open(opts any) (driver.Device, error) {
 		info:         info,
 		subgroupSize: subgroupSize,
 		shuffleSeed:  o.ShuffleSeed,
+		diagnostics:  o.Mode != Strict,
 		loseAt:       o.LoseAtSubmission,
 	}, nil
 }
@@ -78,6 +79,12 @@ type device struct {
 	info         driver.Info
 	subgroupSize int
 	shuffleSeed  uint64
+
+	// diagnostics is whether cooperative kernels are instrumented, which is what
+	// developer mode means: the checks are what make this backend an oracle
+	// rather than an executor, so they are on unless a caller asks for the
+	// speed. See specs/006-backends.md section 5.
+	diagnostics bool
 
 	// loseAt is the submission number at which this device reports itself lost,
 	// or zero. See [Options].LoseAtSubmission.
@@ -95,6 +102,14 @@ func (d *device) Info() driver.Info { return d.info }
 // SubgroupSize reports the emulated lane count. It is not part of the driver
 // contract: the kernel executor reads it directly once it exists (M2 onward).
 func (d *device) SubgroupSize() int { return d.subgroupSize }
+
+// subgroupSizeU32 is the emulated lane count as the kernel runtime wants it.
+func (d *device) subgroupSizeU32() uint32 {
+	if d.subgroupSize < 0 {
+		return 0
+	}
+	return uint32(d.subgroupSize)
+}
 
 // ShuffleSeed reports the seed for shuffled invocation advancement, or zero when
 // advancement is not shuffled.

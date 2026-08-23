@@ -144,7 +144,7 @@ func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, count Workgrou
 		return r.node(NodeDispatch, p.label, nil, nil)
 	}
 
-	accesses, ok := r.bindingAccesses(p, bs)
+	accesses, uniforms, ok := r.bindingAccesses(p, bs)
 	if !ok {
 		return r.node(NodeDispatch, p.label, nil, nil)
 	}
@@ -153,6 +153,7 @@ func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, count Workgrou
 	n := &r.state.nodes[id]
 	n.pipeline = p
 	n.count = c
+	n.uniforms = uniforms
 	for _, a := range accesses {
 		r.touch(id, a)
 	}
@@ -179,13 +180,41 @@ func (r *Recorder) normalizeCount(label string, count WorkgroupCount) (kernel.ID
 
 // bindingAccesses turns a caller's bindings into declarations, one per entry of
 // the kernel's layout and in that order.
-func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, bool) {
+func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, []any, bool) {
 	layout := p.kernel.Bindings
 	out := make([]access, len(layout))
 	filled := make([]bool, len(layout))
+	uniforms := make([]any, len(p.kernel.Uniforms))
 	ok := true
 
+	// A by-value parameter travels with the node rather than through a binding:
+	// a caller supplies one as a value and the other as a slice, and a record
+	// that conflated them would reinterpret a mismatched argument set rather
+	// than refusing it. See specs/014-kernel-uniforms.md.
 	for _, b := range bs {
+		if b.Uniform == nil {
+			continue
+		}
+		if b.Index < 0 || b.Index >= len(uniforms) {
+			r.fail("Dispatch %q: uniform index %d is outside the kernel's %d by-value "+
+				"parameters", p.label, b.Index, len(uniforms))
+			ok = false
+			continue
+		}
+		uniforms[b.Index] = b.Uniform
+	}
+	for i, u := range p.kernel.Uniforms {
+		if uniforms[i] == nil {
+			r.fail("Dispatch %q: by-value parameter %q at index %d has no value",
+				p.label, u.Name, i)
+			ok = false
+		}
+	}
+
+	for _, b := range bs {
+		if b.Uniform != nil {
+			continue
+		}
 		// V1's index half: an entry outside the layout names nothing.
 		if b.Index < 0 || b.Index >= len(layout) {
 			r.fail("Dispatch %q: binding index %d is outside the kernel's %d entries",
@@ -217,7 +246,7 @@ func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, 
 			ok = false
 		}
 	}
-	return out, ok
+	return out, uniforms, ok
 }
 
 func (r *Recorder) bindingAccess(p *ComputePipeline, b Binding, slot kernel.Binding) (access, bool) {
@@ -310,5 +339,6 @@ func (g *Graph) dispatchOperands(n *recNode) (*driver.Dispatch, error) {
 	}
 	return &driver.Dispatch{
 		Kernel: n.pipeline.kernel, Count: n.count, Bindings: ops,
+		Uniforms: n.uniforms,
 	}, nil
 }
