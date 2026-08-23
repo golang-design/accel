@@ -116,6 +116,68 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 	return nil
 }
 
+// checkArrival reports invocations that did not all reach the same barrier.
+//
+// # Two failures, one rule
+//
+// An invocation that returned while its peers wait, and one that reached a
+// different barrier, are the same mistake seen from two sides: the epoch is
+// keyed by barrier identity, so arriving at A while a peer waits at B is a
+// reported mismatch rather than a silent pairing.
+//
+// It is a detection rather than a timeout, so it is not flaky and it fires on
+// the first offending run. specs/002-compute-model.md section 3.4 says the CPU
+// backend catching this is a large part of why it is worth having.
+func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTracker) error {
+	if tracker == nil {
+		return nil
+	}
+	// The expected barrier is the first active invocation's, in invocation
+	// order, so the report names the same pair every run.
+	expect := BarrierID{Index: -1}
+	var expectBy ID3
+	found := false
+	for i := range frames {
+		if frames[i].Done || frames[i].Barrier.Index < 0 {
+			continue
+		}
+		expect, expectBy, found = frames[i].Barrier, threads[i].LocalID(), true
+		break
+	}
+	if !found {
+		return nil
+	}
+
+	var ds Diagnostics
+	for i := range frames {
+		switch {
+		case frames[i].Done:
+			// It returned while its peers are waiting. Not a suspicion drawn
+			// from a count: this invocation has finished and can never arrive.
+			ds = append(ds, Diagnostic{
+				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+				Invocation: threads[i].LocalID(), Other: expectBy, HasOther: true,
+				Element: -1,
+				Detail: "it returned while its peers wait at " + expect.Describe() +
+					", so that barrier can never be reached by every invocation",
+			})
+		case frames[i].Barrier != expect:
+			ds = append(ds, Diagnostic{
+				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+				Invocation: threads[i].LocalID(), Other: expectBy, HasOther: true,
+				Element: -1,
+				Detail: "it suspended at " + frames[i].Barrier.Describe() +
+					" while its peer waits at " + expect.Describe(),
+			})
+		}
+	}
+	if len(ds) == 0 {
+		return nil
+	}
+	ds.sortStable()
+	return ds
+}
+
 // fill computes every invocation's ids for one workgroup, in x-fastest order.
 //
 // x-fastest is guaranteed by specs/002-compute-model.md section 1.4 rather than
@@ -156,6 +218,7 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 				continue
 			}
 			tracker.Begin(threads[i].LocalID())
+			frames[i].Barrier = BarrierID{Index: -1}
 			if k.Cooperative(threads[i], args, &frames[i]) {
 				active++
 				continue
@@ -164,6 +227,9 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 		}
 		if active == 0 {
 			return nil
+		}
+		if err := checkArrival(k, threads, frames, tracker); err != nil {
+			return err
 		}
 		// The epoch ends here, which is what a barrier means and what bounds
 		// the window conflicting accesses are compared in.

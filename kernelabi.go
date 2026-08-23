@@ -39,6 +39,10 @@ type (
 	// is nil in strict mode, where every call on it is a no-op.
 	KernelSharedTracker = kernel.SharedTracker
 
+	// KernelBarrierID identifies one suspension point, with the source position
+	// a report needs to name the line rather than only the index.
+	KernelBarrierID = kernel.BarrierID
+
 	// KernelFrame is one invocation's saved state between suspension points in
 	// a cooperative kernel. The scheduler owns it and the generated lowering
 	// decides what it holds.

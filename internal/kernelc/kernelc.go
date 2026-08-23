@@ -126,7 +126,7 @@ func compile(pkg *packages.Package, name string, check bool) (*Result, front.Dia
 	for _, k := range kernels {
 		k.Digest = emit.Digest(k)
 	}
-	out, err := emit.Generate(emit.Package{Name: pkg.Types.Name(), Kernels: kernels})
+	out, err := emit.Generate(emit.Package{Name: pkg.Types.Name(), Kernels: kernels, Fset: pkg.Fset})
 	if err != nil {
 		return nil, nil, err
 	}

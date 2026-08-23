@@ -323,6 +323,28 @@ type Frame struct {
 	// the scheduler without going through the generator. A generated lowering
 	// keeps its own counter inside State.
 	Pass int
+
+	// Barrier is which suspension point this invocation stopped at, set by the
+	// generated lowering before it returns true. Every active invocation must
+	// report the same one at each rendezvous.
+	//
+	// A stable id rather than a count of arrivals: counting live invocations
+	// against the number blocked catches one way an arrival becomes impossible
+	// and not the only one, so it misses the case where an invocation is still
+	// running and will never arrive. Keying on identity also makes reaching A
+	// while a peer waits at B a reported mismatch rather than a silent pairing.
+	// See specs/002-compute-model.md section 3.4.
+	Barrier BarrierID
+}
+
+// BarrierID identifies one suspension point in a kernel.
+//
+// It carries the source position as well as an index, because a report saying
+// two invocations reached different barriers is only useful if a reader can see
+// which two lines they are.
+type BarrierID struct {
+	Index int
+	Pos   string
 }
 
 // Bind checks a whole argument set against the declared bindings, once.

@@ -110,6 +110,15 @@ func linearOf(id ID3) uint64 {
 	return uint64(id.Z)<<42 | uint64(id.Y)<<21 | uint64(id.X)
 }
 
+// Describe names a barrier for a report: its index, and its source position
+// where one is known.
+func (b BarrierID) Describe() string {
+	if b.Pos != "" {
+		return fmt.Sprintf("barrier %d (%s)", b.Index, b.Pos)
+	}
+	return fmt.Sprintf("barrier %d", b.Index)
+}
+
 // definedBits tracks which shared elements have been written.
 //
 // # Why a shadow bit and not a sentinel value

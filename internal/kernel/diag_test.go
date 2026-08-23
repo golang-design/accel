@@ -284,3 +284,185 @@ func TestDiagKindsName(t *testing.T) {
 		}
 	}
 }
+
+// Invocations that do not all reach the same barrier are reported, with both
+// positions, rather than hanging.
+//
+// Three cases, because they are three different mistakes with the same symptom
+// on a GPU: an invocation returning early, two reaching different barriers, and
+// a non-uniform arrival where only some invocations suspend.
+func TestBarrierArrivalMismatchesAreReported(t *testing.T) {
+	cases := []struct {
+		name string
+		says string
+		coop func(t kernel.Thread, a kernel.Args, f *kernel.Frame) bool
+	}{{
+		name: "an invocation returns while its peers wait",
+		says: "it returned while its peers wait",
+		coop: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if th.LocalID().X == 2 {
+				return false // finishes without ever reaching the barrier
+			}
+			if f.Pass == 0 {
+				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:10:2"}
+				return true
+			}
+			return false
+		},
+	}, {
+		name: "two invocations reach different barriers",
+		says: "while its peer waits at",
+		coop: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if f.Pass > 0 {
+				return false
+			}
+			f.Pass = 1
+			// Half suspend at one barrier, half at another. On a GPU this is a
+			// hang or a silent pairing; here it is a mismatch.
+			if th.LocalID().X < 2 {
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:10:2"}
+			} else {
+				f.Barrier = kernel.BarrierID{Index: 1, Pos: "k.go:14:2"}
+			}
+			return true
+		},
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			k := &kernel.Kernel{
+				Name: "Arrive", WorkgroupSize: kernel.ID3{X: 4, Y: 1, Z: 1},
+				Generator: kernel.ABIVersion, SharedSizes: []int{1}, Suspensions: 2,
+				NewShared: func() []any {
+					var sh [1]float32
+					return []any{&sh}
+				},
+				Cooperative: c.coop,
+			}
+			err := kernel.DispatchCooperative(k, kernel.ID3{X: 1}, kernel.Args{})
+			if err == nil {
+				t.Fatal("expected an arrival diagnostic")
+			}
+			if !strings.Contains(err.Error(), "barrier arrival mismatch") {
+				t.Fatalf("got %v", err)
+			}
+			if !strings.Contains(err.Error(), c.says) {
+				t.Errorf("the message should say %q, got:\n%v", c.says, err)
+			}
+			// Both positions, or a reader cannot see which two lines disagreed.
+			if !strings.Contains(err.Error(), "k.go:10:2") {
+				t.Errorf("the report should name the barrier's position, got:\n%v", err)
+			}
+		})
+	}
+}
+
+// A workgroup where every invocation reaches the same barrier reports nothing,
+// or the checks above would be firing on every correct kernel.
+func TestUniformArrivalIsNotReported(t *testing.T) {
+	k := &kernel.Kernel{
+		Name: "Fine", WorkgroupSize: kernel.ID3{X: 4, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, SharedSizes: []int{1}, Suspensions: 1,
+		NewShared: func() []any {
+			var sh [1]float32
+			return []any{&sh}
+		},
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if f.Pass == 0 {
+				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:10:2"}
+				return true
+			}
+			return false
+		},
+	}
+	if err := kernel.DispatchCooperative(k, kernel.ID3{X: 1}, kernel.Args{}); err != nil {
+		t.Fatalf("every invocation reached the same barrier: %v", err)
+	}
+}
+
+// The report is the same whatever order the invocations happen to be advanced
+// in, which is what "on the first offending run rather than on an unlucky
+// interleaving" means: it is a detection from recorded state, not a timeout.
+func TestArrivalReportsAreDeterministic(t *testing.T) {
+	build := func() *kernel.Kernel {
+		return &kernel.Kernel{
+			Name: "Arrive", WorkgroupSize: kernel.ID3{X: 8, Y: 1, Z: 1},
+			Generator: kernel.ABIVersion, SharedSizes: []int{1}, Suspensions: 1,
+			NewShared: func() []any {
+				var sh [1]float32
+				return []any{&sh}
+			},
+			Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+				if f.Pass > 0 {
+					return false
+				}
+				f.Pass = 1
+				if th.LocalID().X%3 == 0 {
+					return false
+				}
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:10:2"}
+				return true
+			},
+		}
+	}
+	first := kernel.DispatchCooperative(build(), kernel.ID3{X: 1}, kernel.Args{})
+	if first == nil {
+		t.Fatal("expected a diagnostic")
+	}
+	for range 25 {
+		again := kernel.DispatchCooperative(build(), kernel.ID3{X: 1}, kernel.Args{})
+		if again == nil || again.Error() != first.Error() {
+			t.Fatalf("the report differs between runs:\n%v\nwant\n%v", again, first)
+		}
+	}
+	// Every offending invocation is named, not just the first: a report that
+	// stopped at one would send a reader round the loop once per mistake.
+	if n := strings.Count(first.Error(), "barrier arrival mismatch"); n != 3 {
+		t.Errorf("got %d reports for 3 offending invocations of 8", n)
+	}
+}
+
+// The check does not infer from a count of who is blocked. That count falling
+// short is one way an arrival becomes impossible and not the only one, so a
+// kernel where every invocation suspends at the same barrier is fine however
+// few they are.
+func TestArrivalIsNotInferredFromACount(t *testing.T) {
+	k := &kernel.Kernel{
+		Name: "One", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, SharedSizes: []int{1}, Suspensions: 1,
+		NewShared: func() []any {
+			var sh [1]float32
+			return []any{&sh}
+		},
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if f.Pass == 0 {
+				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0}
+				return true
+			}
+			return false
+		},
+	}
+	if err := kernel.DispatchCooperative(k, kernel.ID3{X: 1}, kernel.Args{}); err != nil {
+		t.Fatalf("a single-invocation workgroup reaching its barrier is fine: %v", err)
+	}
+}
+
+func TestABarrierIDDescribesItself(t *testing.T) {
+	withPos := kernel.BarrierID{Index: 2, Pos: "k.go:9:3"}
+	err := kernel.Diagnostic{
+		Kind: kernel.DiagArrival, Kernel: "K", Element: -1,
+		Detail: "it suspended at " + withPos.Describe(),
+	}
+	if !strings.Contains(err.Error(), "barrier 2 (k.go:9:3)") {
+		t.Errorf("got %v", err.Error())
+	}
+	if !strings.Contains(kernel.BarrierID{Index: 1}.Describe(), "barrier 1") {
+		t.Error("a barrier with no position still names its index")
+	}
+	if strings.Contains(err.Error(), "element") {
+		t.Error("an arrival mismatch has no element and should not claim one")
+	}
+}

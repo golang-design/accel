@@ -6,6 +6,8 @@ package emit
 
 import (
 	"fmt"
+	"go/token"
+	"path/filepath"
 	"strings"
 
 	"golang.design/x/accel/internal/kernelc/ir"
@@ -47,6 +49,36 @@ import (
 // accumulators a kernel declares is a few words per invocation. A liveness
 // analysis can shrink it later without changing anything a caller sees, which
 // is the argument for taking the correct-and-larger version first.
+
+// barrierPositions is each top-level barrier's source position, in order.
+//
+// The position rather than only an index, because a report saying two
+// invocations reached different barriers is only actionable if a reader can see
+// which two lines they are.
+func (e *emitter) barrierPositions(k *ir.Func) []string {
+	var out []string
+	for _, s := range k.Body.List {
+		if isBarrier(s) {
+			out = append(out, e.position(s.Pos()))
+		}
+	}
+	return out
+}
+
+// position resolves an IR position to a file name, line, and column.
+//
+// The base name rather than the full path, because this string is written into
+// a committed generated file: an absolute path would differ between machines
+// and make the freshness check fail on every checkout but the one that ran the
+// generator. The base name is stable and still actionable, since a kernel and
+// its generated file sit in one package.
+func (e *emitter) position(p token.Pos) string {
+	if e.fset == nil || !p.IsValid() {
+		return ""
+	}
+	pos := e.fset.Position(p)
+	return fmt.Sprintf("%s:%d:%d", filepath.Base(pos.Filename), pos.Line, pos.Column)
+}
 
 // paramType is a parameter's Go spelling in a generated lowering.
 //
@@ -174,7 +206,7 @@ func isBarrier(s ir.Stmt) bool {
 }
 
 // coopLowering emits the frame type and the resumable function.
-func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt) {
+func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt, barrierPos []string) {
 	frame := frameName(k.Name)
 	lower := coopName(k.Name)
 
@@ -209,13 +241,19 @@ func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt) {
 		}
 		e.printf("%s %s", p.Name, e.paramType(p.Type()))
 	}
-	e.printf(", f *%s, tr *accel.KernelSharedTracker) bool {\n", frame)
+	e.printf(", f *%s, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {\n", frame)
 	e.printf("\tswitch f.pc {\n")
 	for i, seg := range segs {
 		e.printf("\tcase %d:\n", i)
 		e.coopSegment(seg, locals, 2)
 		if i < len(segs)-1 {
+			// The barrier's identity travels with the suspension, so the
+			// scheduler can say which two lines disagreed rather than only that
+			// they did. A count of arrivals could not: it would know that
+			// somebody was missing and not who, nor where they were instead.
 			e.printf("\t\tf.pc = %d\n", i+1)
+			e.printf("\t\tframe.Barrier = accel.KernelBarrierID{Index: %d, Pos: %q}\n",
+				i, barrierPos[i])
 			e.printf("\t\treturn true\n")
 		}
 	}
@@ -314,7 +352,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 		e.fail("kernel %s: %v", k.Name, err)
 		return
 	}
-	e.coopLowering(k, segs)
+	e.coopLowering(k, segs, e.barrierPositions(k))
 
 	e.printf("// %s is the compiled form of %s.\n", k.Name+"Kernel", k.Name)
 	e.printf("var %s = accel.Kernel{\n", k.Name+"Kernel")
@@ -393,7 +431,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 			uniformSlot++
 		}
 	}
-	e.printf(", f, slot.Shared)\n")
+	e.printf(", f, slot, slot.Shared)\n")
 	e.printf("\t},\n")
 	e.printf("}\n\n")
 }

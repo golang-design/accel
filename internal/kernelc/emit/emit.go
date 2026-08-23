@@ -36,6 +36,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"go/token"
 	"strings"
 
 	"golang.design/x/accel/internal/kernelc/ir"
@@ -48,6 +49,12 @@ type Package struct {
 
 	// Kernels are the kernels found in it, in source order.
 	Kernels []*ir.Func
+
+	// Fset resolves the positions the IR carries, so a generated diagnostic can
+	// name a line in the author's file rather than an offset only the compiler
+	// understands. Optional: without it a barrier is identified by index alone,
+	// which is enough to detect a mismatch and not enough to explain one.
+	Fset *token.FileSet
 }
 
 // Generate produces the generated file's contents, gofmt'd.
@@ -56,7 +63,7 @@ func Generate(p Package) ([]byte, error) {
 	// The body is emitted first and the header second, because which imports the
 	// file needs is only known once every kernel has been lowered.
 	var body bytes.Buffer
-	e := &emitter{buf: &body}
+	e := &emitter{buf: &body, fset: p.Fset}
 
 	// Uniform codecs first, one per type however many kernels take it. A codec
 	// belongs to the type rather than to a kernel: two kernels taking the same
@@ -127,6 +134,9 @@ type emitter struct {
 	// survives the return. Nil while emitting the flat lowering, which needs no
 	// frame because it never suspends. See coop.go.
 	frameLocals map[*ir.Local]bool
+
+	// fset resolves IR positions to file:line, or nil.
+	fset *token.FileSet
 
 	// sharedIndex maps a shared parameter's name to its position in the
 	// kernel's shared list, which is how the tracker keys its shadow bits.
