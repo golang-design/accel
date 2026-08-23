@@ -261,6 +261,12 @@ structs that happen to line up today drift apart in a later edit, and the
 symptom is a fragment stage reading a normal out of the field that now holds a
 UV — silently, on every backend, with no build error anywhere.
 
+The check compares the `types.Object` the two names resolve to, which matters
+most in the degenerate case: `accel.NoVaryings` is an empty struct, and so is
+any empty struct a caller writes. Structural comparison would pair a vertex
+stage returning `NoVaryings` with a fragment stage taking an unrelated empty
+`type Lighting struct{}`, and the pairing would look deliberate.
+
 ## 4. The fragment stage
 
 ```go
@@ -271,6 +277,22 @@ func Shade(f accel.Fragment, in Varyings, mat Material) Targets
 A fragment stage takes an `accel.Fragment`, then the varyings struct, then its
 bindings, and returns one struct whose fields map **in declaration order** onto
 the pipeline's colour attachments.
+
+**Parameter order is load-bearing, not a convention.** The front end classifies
+a parameter by its type, and after §2.3 a varyings struct and a uniform struct
+are both `*types.Struct` — indistinguishable. So position decides, and only
+position can:
+
+| Stage | Parameter 0 | Parameter 1 | Parameters 2+ |
+| --- | --- | --- | --- |
+| vertex | `accel.Vertex` | *classified by type* | *classified by type* |
+| fragment | `accel.Fragment` | **the varyings struct** | *classified by type* |
+
+A vertex stage needs no such rule because its two categories — a by-value array
+attribute and a by-value struct uniform — are distinguishable by type alone. A
+fragment stage's do not, so its second parameter is the varyings struct by
+position, whatever its type, and a fragment stage that omits it is refused
+rather than having its first uniform silently interpreted as varyings.
 
 ```go
 type Targets struct {
@@ -464,7 +486,10 @@ never at pipeline creation:
 
 - an integer varying without the flat tag, naming the field and the tag;
 - a fragment stage whose varyings parameter is not the identical named type the
-  vertex stage returns, naming both types;
+  vertex stage returns, naming both types — compared by resolved object, so two
+  unrelated empty structs do not pair;
+- a fragment stage with no varyings parameter at all, since position rather than
+  type is what identifies it;
 - a barrier, shared memory, or subgroup operation in a graphics stage;
 - a slice parameter written by a fragment stage, naming ROA;
 - an attribute parameter whose Go type does not match the declared attribute
@@ -486,7 +511,11 @@ never at pipeline creation:
   tag;
 - a fragment stage whose varyings type is merely structurally identical is
   refused, confirmed by making the two structs match field for field and
-  checking it still fails;
+  checking it still fails, and again with two *empty* structs, which is the case
+  a structural comparison gets wrong most quietly;
+- a fragment stage's second parameter is its varyings whatever its type, so a
+  stage that omits it is refused rather than reading its first uniform as
+  varyings;
 - attachment routing is exact: a stage writing a distinct constant per field is
   read back per attachment, each holding its own value;
 - `accel.Discard` writes neither colour nor depth, checked against a target
