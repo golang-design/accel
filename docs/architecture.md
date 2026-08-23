@@ -206,6 +206,47 @@ highlights:
 
 If you contribute a backend, that file is the contract.
 
+## Three things the graph does that are worth knowing
+
+These moved here from the README, where they were answering a question a user
+had not asked. They are the parts of the design a contributor most often needs
+explained, and the reasoning for each is in the spec it names.
+
+**Edges come from declared access, not from record order.** A graph infers its
+own dependency edges from what each node says it touches, comparing byte ranges
+rather than whole resources — so two nodes writing disjoint halves of one buffer
+are not serialized. Barriers come from those edges and are batched, because a
+barrier is queue-wide: [spec 003's worked
+graph](../specs/003-command-graph.md) has nine hazards and emits seven barriers,
+and the test asserts their positions rather than only their count.
+
+**Transient aliasing is reachability, not intervals.** Transients the builder
+owns share memory when every node touching one is ordered before every node
+touching the other. The difference from an interval-based planner is not
+theoretical: intervals alias two transients on opposite arms of a diamond and
+corrupt one of them on any backend that runs the arms at once. See
+[017](../specs/017-graph-aliasing.md).
+
+**The conservative plan is kept as an oracle.** The plan that ran before edges
+were inferred is not deleted. Every random graph is built twice, once optimized
+and once naively, and the results compared. It found three real bugs in minutes.
+`Recorder.BuildNaive` exposes it for bisecting a suspected planning bug.
+
+## Why cooperative kernels run on a scheduler
+
+A kernel that needs its invocations to cooperate — shared memory, a barrier, a
+reduction across a subgroup — is compiled to a resumable form and run by a
+scheduler that advances every invocation to its next suspension point before
+releasing the epoch.
+
+The point of doing that on a CPU is not speed. It is that the schedule is
+deterministic, so a kernel reading shared memory nothing wrote, or whose
+invocations reach different barriers, is *reported* with a line number on the
+first offending run — rather than producing a plausible number on one machine
+and a different one elsewhere. See
+[018](../specs/018-cooperative-lowering.md) and
+[019](../specs/019-cooperative-diagnostics.md).
+
 ## What is built so far
 
 | Milestone | State |

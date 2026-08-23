@@ -1,7 +1,7 @@
 <h1 align="center">accel</h1>
 
 <p align="center">
-  <strong>GPU compute and graphics for Go. Backend-selectable, and free of cgo.</strong>
+  <strong>Run compute on the GPU from Go. No cgo, no vendor SDK, no toolchain.</strong>
 </p>
 
 <p align="center">
@@ -15,213 +15,210 @@
 
 ---
 
+You write a kernel in a subset of Go. accel compiles it ahead of time and runs
+it on whichever backend the machine has — today the CPU or Metal — with
+`CGO_ENABLED=0` the whole way.
+
 > [!IMPORTANT]
-> **Early, and the API will change.** Compute works end to end on the CPU
-> backend and on Metal: memory, command graphs, cooperative kernels, the tensor
-> layer, quantized weights, sampling and a paged KV cache. Graphics is designed
-> and unbuilt, and Vulkan, D3D12, OpenGL and WebGPU are specified and not
-> scheduled for v0. The [status table](#status) says which is which, row by row.
-> Feedback on the design is still the most useful thing you can give it.
+> **Early. The API will change.** Compute works end to end and is tested on
+> every push. Graphics is partly built and has no public render API yet.
+> Vulkan, D3D12, OpenGL and WebGPU are designed and not started. The
+> [status table](#what-works-today) says which is which.
 
-## What it is
+## Install
 
-One Go API for running work on a GPU, over whichever backend the machine
-actually has, with no cgo anywhere.
+```sh
+go get golang.design/x/accel
+```
+
+## Run something
+
+Kernels go in their own package. Write one:
 
 ```go
-dev, err := accel.OpenBest(accel.Policy{Prefer: []accel.Backend{accel.BackendMetal}})
-if err != nil {
-    log.Fatal(err)
-}
-defer dev.Close()
+// kernels/scale.go
+package kernels
 
-// Record work once.
+import "golang.design/x/accel"
+
+//go:generate go run golang.design/x/accel/cmd/accel-kernel .
+
+//accel:kernel workgroup=64
+func Scale(t accel.Thread, in []float32, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		out[i] = in[i] * 2
+	}
+}
+```
+
+`go generate ./...` turns that into `kernels.ScaleKernel`: a compiled record
+carrying the workgroup size and the bindings, with the read and write access of
+each one *inferred from the body*, so you never declare them.
+
+> [!TIP]
+> Keep kernels in a package of their own, as above. The generator type-checks
+> the package it compiles, so a package that already refers to `ScaleKernel`
+> cannot be generated for the first time — the symbol does not exist yet.
+
+Then use it:
+
+```go
+// main.go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	"example.com/hello/kernels"
+	"golang.design/x/accel"
+)
+
+func main() {
+	dev, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer dev.Close()
+
+	pipe, err := dev.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &kernels.ScaleKernel,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pipe.Close()
+
+	const n = 256
+	usage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	in, _ := dev.NewBuffer(accel.BufferDescriptor{DType: accel.F32, Count: n, Usage: usage, Label: "in"})
+	out, _ := dev.NewBuffer(accel.BufferDescriptor{DType: accel.F32, Count: n, Usage: usage, Label: "out"})
+	defer in.Close()
+	defer out.Close()
+
+	src := make([]float32, n)
+	for i := range src {
+		src[i] = float32(i)
+	}
+	if err := dev.Queue().WriteBuffer(in, 0, src); err != nil {
+		log.Fatal(err)
+	}
+	inView, _ := in.View(0, n)
+	outView, _ := out.View(0, n)
+
+	err = dev.Queue().Run(func(r *accel.Recorder) {
+		r.Dispatch(pipe, []accel.Binding{
+			{Index: 0, Buffer: inView},
+			{Index: 1, Buffer: outView},
+		}, accel.WorkgroupCount{X: n / 64})
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	got := make([]float32, n)
+	if err := dev.Queue().ReadBuffer(out, 0, got); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(got[:4]) // [0 2 4 6]
+}
+```
+
+To run the same thing on a GPU, swap `OpenCPU` for
+`accel.OpenBest(accel.Policy{})`. Nothing else changes.
+
+## Two layers, four packages
+
+| Package | You get | Use it for |
+| --- | --- | --- |
+| [`accel`](https://pkg.go.dev/golang.design/x/accel) | buffers, kernels, command graphs, textures | simulation, image and signal processing, anything with custom kernels |
+| [`accel/tensor`](https://pkg.go.dev/golang.design/x/accel/tensor) | dtypes, shapes, operators, a computation graph | inference — you never touch a bind group |
+| [`accel/quant`](https://pkg.go.dev/golang.design/x/accel/quant) | int8 weights with a per-block scale | fitting a model in less memory |
+| [`accel/kmath`](https://pkg.go.dev/golang.design/x/accel/kmath) | scalar math callable from a kernel | inside kernel bodies |
+
+The tensor layer contains no backend-specific code. Everything it does, it does
+by asking the device layer.
+
+## Replay instead of re-issuing
+
+One transformer layer is roughly a hundred operations, and a model has dozens of
+layers. Re-issuing thousands of commands per token, and asking for every
+intermediate allocation again, is most of the cost.
+
+So you **record** work into a `Graph` and keep it:
+
+```go
 rec := dev.NewRecorder()
 rec.Dispatch(pipeline, bindings, accel.WorkgroupCount{X: 1024})
 g, err := rec.Build() // validates, plans memory, computes barriers
 
-// Replay it as often as you like.
 for range steps {
-    g.Rebind(nextInputs)
-    dev.Queue().Submit(g).Wait()
+	g.Rebind(nextInputs)
+	dev.Queue().Submit(g).Wait()
 }
 ```
 
-That runs today. Underneath it, memory comes from pools rather than one
-allocation per resource, because a model has thousands of tensors and drivers
-cap how many allocations you may hold:
+`Build` does the analysis once; every submission after that is a replay. It also
+works out where the barriers go, so you do not write one.
 
-```go
-dev, err := accel.OpenCPU(accel.CPUOptions{})
-if err != nil {
-    log.Fatal(err)
-}
-defer dev.Close()
+**What it costs you:** errors move. Under an immediate API a bad call fails at
+the call; here it fails at `Build`, possibly far from where you wrote it. Every
+build error names the node, the binding slot, and the source position of the
+call that recorded it — if you ever see one that says only "type mismatch", that
+is a bug worth filing.
 
-weights, err := dev.NewPool(accel.MemoryDevice, 1<<30)
-defer weights.Close()
+## What works today
 
-w, err := weights.Alloc(accel.BufferDescriptor{
-    DType: accel.F16,
-    Count: 4096 * 4096,
-    Usage: accel.UsageStorage | accel.UsageCopyDst,
-    Label: "blk.0.attn_q.weight", // labels show up in every error
-})
-defer w.Close()
+| You want to | Today |
+| --- | --- |
+| Run a compute kernel on the CPU | yes |
+| Run the same kernel on a GPU | yes, on Metal |
+| Cross-compile with `CGO_ENABLED=0` | yes, every `GOOS` |
+| Test without a GPU | yes — the CPU backend is a full implementation, not a stub |
+| Use shared memory, barriers and atomics | yes |
+| Use subgroup shuffles and scans | not yet |
+| Multiply matrices (tiled GEMM) | yes, on both backends |
+| Build a tensor graph and run inference | yes — decode and prefill, with a KV cache |
+| Use int8 quantized weights | yes |
+| Sample a token (argmax, categorical, top-k, top-p) | yes; temperature and repetition penalties are not built |
+| Page a KV cache, and batch several sequences in one step | yes |
+| Draw triangles | not yet — no public render API |
+| Use Vulkan, D3D12, OpenGL or WebGPU | not yet |
 
-dev.Queue().WriteBuffer(w, 0, hostData) // returns once your slice is free
-head, err := w.View(0, 128)             // a slice, in elements, with no copy
-```
+Every "yes" has tests that fail without it, more than 90% statement coverage on
+its package, and an end-to-end case through the public API. Every kernel in the
+corpus runs on both backends and the two are compared, most of them bit for bit.
 
-Kernels are written in a subset of Go and compiled by a generator, not by a
-driver at runtime:
+## When it fits, and when it does not
 
-```go
-//accel:kernel workgroup=64
-func Scale(t accel.Thread, in []float32, out []float32) {
-    i := t.GlobalID().X
-    if i < uint32(len(out)) {
-        out[i] = in[i] * 2
-    }
-}
-```
+**It fits** if you want GPU compute from Go without cgo: cross-compilation that
+works, fast builds, no toolchain on the build machine, and a test suite that
+runs anywhere.
 
-`go generate` turns that into a lowering with an explicit rounding point at
-every arithmetic operation, plus a record carrying the workgroup extent and the
-bindings with the read and write accesses **inferred from the body**. Anything
-outside the subset is rejected with a source position and a reason.
+**It does not fit** if:
 
-The subset has loops, helpers, the scalar math in
-[`kmath`](https://pkg.go.dev/golang.design/x/accel/kmath), 16-bit storage types
-that deliberately carry no arithmetic operators, and by-value uniform structs
-whose std140 encoder is generated so a caller never writes a padding offset.
-A narrow value has to widen before it can be used, which makes f32 accumulation
-the only thing that compiles rather than a rule to remember.
-
-Two layers. The **device layer** gives you buffers, kernels, and recorded command
-graphs, for renderers and simulations. The **tensor layer** gives you dtypes,
-shapes, operators, and a computation graph, for inference, and never asks you to
-think about a bind group.
-
-Kernels are written once in a subset of Go. One typed IR produces an instrumented
-Go runner for the CPU backend and the GPU's shading language: MSL at v0, with
-GLSL, SPIR-V, and HLSL designed and following their backends.
-
-## Why you might want it
-
-- **`CGO_ENABLED=0` and still on the GPU.** Cross-compile freely. No toolchain on
-  the build machine. Fast builds.
-- **Write once, run on the CPU or the GPU.** Backends are selected explicitly and
-  never silently swapped underneath you. v0 is the CPU backend and Metal, and on
-  a Mac both enumerate today; Vulkan, D3D12, OpenGL, and WebGPU are designed in
-  the specs and not yet built.
-- **Test without a GPU.** The CPU backend is a first-class implementation and the
-  correctness oracle, so `go test ./...` works on any machine.
-- **Kernels in Go**, type-checked by the Go compiler, not strings handed to a
-  driver at runtime.
-
-## Why you might not
-
-We would rather you knew this from the README than found out in a month.
-
-- **No training, and no autodiff.** The tensor layer targets inference. Training
-  is not a serious conversation until a competitive GEMM exists here.
-- **No CUDA backend planned for v0.** If your workload is training on NVIDIA
-  hardware, this is the wrong tool today.
-- **cgo-free rules out the C ecosystem.** No cuBLAS, no cuDNN, no GGML. Every
-  kernel has to be written here, and it will not beat vendor libraries on raw
-  throughput for a long time, possibly ever.
-- **It is not a WebGPU implementation.** The submission model is deliberately
-  different and the API does not aim to match `wgpu`.
-- **Graphics is designed, not built.** Its parent design identifies the child
-  specs still needed for the stage ABI, render API, surfaces, and CPU rasterizer.
-  If you need rasterization today, this is not it yet.
-
-The bet is that a pure-Go stack which cross-compiles and tests without a GPU is
-worth more to some people than peak throughput. If that is not you, existing
-bindings are the better choice.
+- **You need training.** The tensor layer targets inference. There is no
+  autodiff.
+- **You are training on NVIDIA.** No CUDA backend is planned for v0.
+- **You need peak throughput.** cgo-free rules out cuBLAS, cuDNN and GGML. Every
+  kernel is written here, and it will not beat vendor libraries for a long time,
+  possibly ever.
+- **You need rasterization today.** Graphics is designed and partly built; the
+  render API is not exposed.
+- **You expected `wgpu`.** The submission model is deliberately different and the
+  API does not aim to match it.
 
 ## Documentation
 
 | | |
 | --- | --- |
-| [Architecture](docs/architecture.md) | How it is put together and why. Start here. |
-| [Backend conventions](docs/conventions.md) | Where GPU backends actually disagree. Useful even if you never use accel. |
-| [Specs](specs/) | Internal design documents, full reasoning, open questions. |
-| [Contributing](CONTRIBUTING.md) | What would help most right now. |
+| [Architecture](docs/architecture.md) | How it fits together, and the decisions behind it |
+| [Backend conventions](docs/conventions.md) | Where GPU backends actually disagree. Useful even if you never use accel |
+| [Specs](specs/) | Internal design documents, full reasoning, open questions |
+| [Contributing](CONTRIBUTING.md) | What would help most right now |
 
-## Status
-
-| Component | State |
-| --- | --- |
-| Architecture and decisions | Decision record locked; bounded specs drafted |
-| Device open, capabilities, limits | **Built** on the CPU backend |
-| Pools, suballocation, buffers, views, lifetime | **Built** on the CPU backend |
-| Host and device transfers | **Built** on the CPU backend |
-| Textures, formats, and row pitch | **Built** on the CPU backend |
-| Kernel compiler: subset checking, IR, Go lowering, generator | **Built** |
-| Kernel language: loops, helpers, narrow storage, scalar math | **Built** |
-| Kernel uniforms: std140 codecs and typed binding | **Built** |
-| Command graphs: recording, slots, validation, submission, fences | **Built** on the CPU backend |
-| Command graphs: inferred edges, sub-range hazards, computed barriers | **Built** on the CPU backend |
-| Compute dispatch in a graph | **Built** on the CPU backend |
-| Command graphs: transient aliasing and the whole-plan fuzz | **Built** on the CPU backend |
-| Cooperative kernels: barriers, shared memory, the resumable lowering | **Built** on the CPU backend |
-| Cooperative diagnostics: undefined reads, arrival, conflicting access | **Built** on the CPU backend |
-| Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
-| Portable tiled GEMM | **Built** on both backends, each against a higher-precision reference |
-| Kernel corpus: the unquantized v0 kernels | **Built** on both backends; the selection registry is not |
-| Metal backend | **Built** on an Apple M2: all 32 corpus kernels compile on the device and agree with the CPU backend, 25 of them bit for bit. Graphs, indirect dispatch and device loss included |
-| Tensor layer | **Built**: a tensor graph compiles once and runs on both backends, with views, broadcasting, normalization, matrix multiplication, a KV cache, and prefill and decode attention that agree |
-| Quantized weights: int8 with a per-block scale | **Built** on both backends, with a derived error bound rather than a measured one |
-| Sampling: argmax, categorical, top-k, top-p | **Built** on both backends; the random draw is an input, so a token is reproducible |
-| Prefill buckets and a plan cache | **Built**; the key is the six things that make reuse safe, not the shape |
-| Paged KV, and batching several sequences in one step | **Built**; sequences of different lengths share one pool |
-| One transient pool, many graphs | **Built** on both backends; a bucket set holds the largest plan's transients rather than every plan's |
-| Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
-| Graphics | Parent design drafted, child APIs and implementation post-v0 |
-
-Built means it has tests that fail without it, greater than 90% statement
-coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 through M7](specs/009-sequencing.md), and the last five from
-[M8](specs/009-sequencing.md#m8-and-later)'s independently scoped work.
-
-A graph infers its own dependency edges from what each node declares it touches,
-comparing byte ranges rather than whole resources, so two nodes writing disjoint
-halves of one buffer are not serialized. Barriers come from those edges and are
-batched, because a barrier is queue-wide: [spec 003's worked
-graph](specs/003-command-graph.md) has nine hazards and emits seven barriers,
-and the test asserts their positions rather than only their count.
-
-A kernel that needs its invocations to cooperate — shared memory, a barrier, a
-reduction across a subgroup — is compiled to a resumable form and run by a
-scheduler that advances every invocation to its next suspension point before
-releasing the epoch. The point of doing that on a CPU is not speed: it is that
-the schedule is deterministic, so a kernel reading shared memory nothing wrote,
-or whose invocations reach different barriers, is *reported* with a line number
-on the first offending run rather than producing a plausible number on one
-machine and a different one elsewhere.
-
-Transients the builder owns share memory when every node touching one is ordered
-before every node touching the other. That is reachability, not record-order
-position, and the difference is not theoretical: an interval-based planner
-aliases two transients on opposite arms of a diamond and corrupts one of them on
-any backend that runs the arms at once.
-
-The conservative plan that ran before edges were inferred is kept rather than
-deleted. It is the oracle: every random graph is built twice, once optimized and
-once naively, and the results compared. It found three real bugs in minutes.
-
-**v0 is compute only, on the CPU backend and Metal.** The other backends and the
-graphics half are designed and normative so their shape cannot break callers
-later, and neither is scheduled. What gets built in what order, and what counts as
-done for each step, is [`specs/009-sequencing.md`](specs/009-sequencing.md).
-
-## Contributing
-
-The design is still soft, so an argument against one of its decisions is worth
-more than a patch right now. Every spec ends with the questions we have not
-resolved. See [CONTRIBUTING.md](CONTRIBUTING.md).
+## Testing
 
 ```sh
 CGO_ENABLED=0 go build ./...
@@ -229,6 +226,17 @@ go test -race ./...
 ```
 
 No GPU required, which is deliberate and should stay true.
+
+> [!NOTE]
+> On a Mac, `go test ./...` **skips** the Metal tests when it finds no adapter,
+> and says so only in the skip message. Set `ACCEL_REQUIRE_METAL=1` to turn that
+> skip into a failure, which is what CI does.
+
+## Contributing
+
+The design is still soft, so an argument against one of its decisions is worth
+more than a patch right now. Every spec ends with the questions we have not
+resolved. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 
