@@ -305,3 +305,114 @@ func TestSlotOperandChecksWhatItCan(t *testing.T) {
 		t.Errorf("a large offset is legal until a resource is bound: %v", err)
 	}
 }
+
+func TestValidateRejectsMalformedRowCopies(t *testing.T) {
+	dev := openCPU(t, cpu.Options{})
+	b := alloc(t, dev, 1024)
+	op := func(off, size int) driver.Operand {
+		o, err := driver.BlockOperand(b, off, size)
+		if err != nil {
+			t.Fatalf("operand: %v", err)
+		}
+		return o
+	}
+
+	cases := []struct {
+		name string
+		node driver.PlanNode
+		says string
+	}{
+		{"no payload", driver.PlanNode{Op: driver.OpCopyRows,
+			Dst: op(0, 64), Src: op(64, 64)}, "no payload"},
+		{"no rows", driver.PlanNode{Op: driver.OpCopyRows, Dst: op(0, 64), Src: op(64, 64),
+			Rows: &driver.RowCopy{Rows: 0, RowBytes: 8, DstPitch: 8, SrcPitch: 8}},
+			"copies 0 rows"},
+		{"a pitch shorter than a row", driver.PlanNode{Op: driver.OpCopyRows,
+			Dst: op(0, 64), Src: op(64, 64),
+			Rows: &driver.RowCopy{Rows: 2, RowBytes: 16, DstPitch: 8, SrcPitch: 16}},
+			"cannot be shorter than one"},
+		{"a destination too small", driver.PlanNode{Op: driver.OpCopyRows,
+			Dst: op(0, 8), Src: op(64, 64),
+			Rows: &driver.RowCopy{Rows: 4, RowBytes: 8, DstPitch: 8, SrcPitch: 8}},
+			"destination is 8 bytes"},
+		{"a source too small", driver.PlanNode{Op: driver.OpCopyRows,
+			Dst: op(0, 64), Src: op(64, 8),
+			Rows: &driver.RowCopy{Rows: 4, RowBytes: 8, DstPitch: 8, SrcPitch: 8}},
+			"source is 8 bytes"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := driver.Plan{Nodes: []driver.PlanNode{c.node}}
+			err := p.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("the message should say %q, got %v", c.says, err)
+			}
+		})
+	}
+
+	// The last row needs only its own bytes, not a full pitch: a tightly packed
+	// image's final row has no padding after it, and requiring one would refuse
+	// a correctly sized buffer.
+	exact := driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpCopyRows, Dst: op(0, 4*8), Src: op(64, 3*16+8),
+		Rows: &driver.RowCopy{Rows: 4, RowBytes: 8, DstPitch: 8, SrcPitch: 16},
+	}}}
+	if err := exact.Validate(); err != nil {
+		t.Fatalf("a buffer sized for its last row without trailing padding was refused: %v", err)
+	}
+	if driver.OpCopyRows.String() != "row copy" {
+		t.Errorf("OpCopyRows names itself %q", driver.OpCopyRows.String())
+	}
+}
+
+// A pitched copy moves each row by its own stride, which is what a
+// texture-buffer copy is.
+func TestARowCopyStepsByEachSidesPitch(t *testing.T) {
+	dev, c := openCompiler(t, cpu.Options{})
+	src := alloc(t, dev, 64)
+	dst := alloc(t, dev, 64)
+
+	// Three rows of four bytes: the source strides by eight and the
+	// destination by four, so the padding between source rows is dropped.
+	for i := range src.Bytes() {
+		src.Bytes()[i] = byte(i)
+	}
+	srcOp, _ := driver.BlockOperand(src, 0, 3*8)
+	dstOp, _ := driver.BlockOperand(dst, 0, 3*4)
+
+	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpCopyRows, Dst: dstOp, Src: srcOp,
+		Rows: &driver.RowCopy{Rows: 3, RowBytes: 4, DstPitch: 4, SrcPitch: 8},
+	}}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := f.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	for row := range 3 {
+		for i := range 4 {
+			want := byte(row*8 + i)
+			if got := dst.Bytes()[row*4+i]; got != want {
+				t.Fatalf("row %d byte %d is %d, want %d: each side steps by its own pitch",
+					row, i, got, want)
+			}
+		}
+	}
+}
+
+func openCompiler(t *testing.T, o cpu.Options) (driver.Device, driver.GraphCompiler) {
+	t.Helper()
+	dev := openCPU(t, o)
+	c, ok := dev.(driver.GraphCompiler)
+	if !ok {
+		t.Fatal("the CPU device should compile graphs")
+	}
+	return dev, c
+}

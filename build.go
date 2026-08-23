@@ -237,6 +237,32 @@ func (g *Graph) lower() error {
 				return err
 			}
 			node.Dst, node.Src = dst, src
+		case NodeCopyTextureToBuffer, NodeCopyBufferToTexture:
+			node.Op = driver.OpCopyRows
+			dst, err := g.operand(n, n.accesses[0])
+			if err != nil {
+				return err
+			}
+			src, err := g.operand(n, n.accesses[1])
+			if err != nil {
+				return err
+			}
+			node.Dst, node.Src = dst, src
+			tex := n.texture
+			tight := tightRowPitch(tex.desc.Format, tex.desc.Size.Width)
+			padded := g.dev.AlignedRowPitch(tex.desc.Format, tex.desc.Size.Width)
+			// The texture side steps by the device's pitch and the buffer side
+			// by the tight one, whichever direction the copy runs. Where the
+			// two agree this is one contiguous copy.
+			rows := &driver.RowCopy{
+				Rows: tex.desc.Size.Height, RowBytes: tight,
+				DstPitch: tight, SrcPitch: padded,
+			}
+			if n.kind == NodeCopyBufferToTexture {
+				rows.DstPitch, rows.SrcPitch = padded, tight
+			}
+			node.Rows = rows
+
 		case NodeDispatch, NodeDispatchIndirect:
 			node.Op = driver.OpDispatch
 			d, err := g.dispatchOperands(n)
@@ -265,6 +291,13 @@ func (g *Graph) operand(n *recNode, a access) (driver.Operand, error) {
 	case a.res.buf != nil:
 		blk, base := blockFor(a.res.buf)
 		o, err := driver.BlockOperand(blk, base+a.off, a.size)
+		if err != nil {
+			return driver.Operand{}, fmt.Errorf("accel: Build: node %d on %s: %w", n.id, a.res, err)
+		}
+		return o, nil
+	case a.res.tex != nil:
+		t := a.res.tex
+		o, err := driver.BlockOperand(t.pool.block, t.alloc.Offset+a.off, a.size)
 		if err != nil {
 			return driver.Operand{}, fmt.Errorf("accel: Build: node %d on %s: %w", n.id, a.res, err)
 		}

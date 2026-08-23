@@ -181,12 +181,12 @@ func (r *Recorder) slotOperand(op string, s Slot, off, size int, mode Access) de
 // to the host and back. Readback follows caller row order regardless of the
 // backend's native origin; see docs/conventions.md.
 func (r *Recorder) CopyTextureToBuffer(dst BufferView, src *Texture) NodeID {
-	panic(ErrNotImplemented)
+	return r.textureCopy("CopyTextureToBuffer", dst, src, true)
 }
 
 // CopyBufferToTexture records an on-device copy from a buffer into a texture.
 func (r *Recorder) CopyBufferToTexture(dst *Texture, src BufferView) NodeID {
-	panic(ErrNotImplemented)
+	return r.textureCopy("CopyBufferToTexture", src, dst, false)
 }
 
 // Transient reserves a buffer whose lifetime the builder owns.

@@ -102,6 +102,10 @@ type Texture struct {
 	alloc *alloc.Allocation
 	bytes int
 	state resourceState
+
+	// ownsPool marks a texture from [Device.NewTexture], whose pool exists only
+	// for it and is closed with it.
+	ownsPool bool
 }
 
 // Format reports the texture's format.
@@ -121,6 +125,9 @@ func (t *Texture) Close() error {
 	}
 	if t.state.release() {
 		t.free()
+	}
+	if t.ownsPool {
+		return t.pool.Close()
 	}
 	return nil
 }

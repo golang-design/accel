@@ -491,15 +491,37 @@ func TestDTypeSizeAndName(t *testing.T) {
 	}
 }
 
-// TestErrNotImplementedStillCovers records what M1 has not built yet, so the
+// TestErrNotImplementedStillCovers records what is still unbuilt, so the
 // boundary is visible rather than discovered by a caller.
+//
+// It named NewTexture until textures landed. What is left is the sampler, which
+// has nothing to sample with until a render pass exists: spec 005 is a drafted
+// post-v0 parent whose four child designs are not yet written, and a sampler
+// that could be created and not used would be an API surface with no meaning
+// behind it.
 func TestErrNotImplementedStillCovers(t *testing.T) {
-	d := openCPU(t, accel.CPUOptions{})
 	defer func() {
 		r := recover()
 		if err, ok := r.(error); !ok || !errors.Is(err, accel.ErrNotImplemented) {
-			t.Errorf("NewTexture panicked with %v, want ErrNotImplemented", r)
+			t.Errorf("Sampler.Close panicked with %v, want ErrNotImplemented", r)
 		}
 	}()
-	d.NewTexture(accel.TextureDescriptor{})
+	var s accel.Sampler
+	_ = s.Close()
+}
+
+// And what *was* on that list is now built, which is the other half: a boundary
+// nobody moves is a boundary nobody is working on.
+func TestTexturesAreNoLongerAStub(t *testing.T) {
+	d := openCPU(t, accel.CPUOptions{})
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: 4, Height: 4},
+		Usage: accel.TextureCopyDst, Label: "tex",
+	})
+	if err != nil {
+		t.Fatalf("NewTexture: %v", err)
+	}
+	if err := tex.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 }

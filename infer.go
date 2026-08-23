@@ -88,6 +88,9 @@ func sameResource(a, b resourceRef) bool {
 	if a.buf != nil || b.buf != nil {
 		return a.buf == b.buf
 	}
+	if a.tex != nil || b.tex != nil {
+		return a.tex == b.tex
+	}
 	return a.slot != 0 && a.slot == b.slot
 }
 
@@ -168,6 +171,9 @@ func (g *Graph) inferEdges() {
 func key(r resourceRef) resourceRef {
 	if r.buf != nil {
 		return resourceRef{buf: r.buf}
+	}
+	if r.tex != nil {
+		return resourceRef{tex: r.tex}
 	}
 	return resourceRef{slot: r.slot}
 }

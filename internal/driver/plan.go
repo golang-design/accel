@@ -67,6 +67,15 @@ const (
 
 	// OpDispatch runs a compiled kernel over a grid of workgroups.
 	OpDispatch
+
+	// OpCopyRows moves a rectangle whose two sides have different row pitches,
+	// which is what a texture-buffer copy is: the device pads rows to its own
+	// alignment and the accel API boundary does not.
+	//
+	// A separate op rather than a flag on OpCopy, because the sizes mean
+	// different things: a plain copy's operands are equal-length ranges, and
+	// these two are equal *rectangles* whose byte lengths differ.
+	OpCopyRows
 )
 
 func (o PlanOp) String() string {
@@ -77,6 +86,8 @@ func (o PlanOp) String() string {
 		return "host write"
 	case OpDispatch:
 		return "dispatch"
+	case OpCopyRows:
+		return "row copy"
 	}
 	return "invalid"
 }
@@ -93,6 +104,9 @@ type PlanNode struct {
 
 	// Dispatch is OpDispatch's payload.
 	Dispatch *Dispatch
+
+	// Rows is OpCopyRows's payload.
+	Rows *RowCopy
 
 	// BarrierBefore asks for every prior write to be visible before this node
 	// runs. A backend with real barriers emits one; a backend that executes
@@ -165,6 +179,18 @@ type Dispatch struct {
 	// Indirect is non-nil when the workgroup count comes from a buffer. Count
 	// on the Dispatch is then the maximum rather than the actual.
 	Indirect *Indirect
+}
+
+// RowCopy describes a rectangle whose two sides are pitched differently.
+//
+// The row length is what actually moves; the two pitches are how far to step on
+// each side. Where they are equal this degenerates to one contiguous copy,
+// which is the common case and costs nothing extra to express this way.
+type RowCopy struct {
+	Rows     int
+	RowBytes int
+	DstPitch int
+	SrcPitch int
 }
 
 // OperandKind distinguishes bytes known at build from bytes supplied later.
@@ -381,6 +407,44 @@ func (p *Plan) Validate() error {
 			if err := p.checkDispatch(i, n); err != nil {
 				return err
 			}
+		case OpCopyRows:
+			if err := p.checkOperand(i, "source", n.Src); err != nil {
+				return err
+			}
+			if err := p.checkRows(i, n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Plan) checkRows(node int, n *PlanNode) error {
+	r := n.Rows
+	if r == nil {
+		return fmt.Errorf("accel: plan node %d is a row copy with no payload", node)
+	}
+	if r.Rows <= 0 || r.RowBytes <= 0 {
+		return fmt.Errorf("accel: plan node %d copies %d rows of %d bytes",
+			node, r.Rows, r.RowBytes)
+	}
+	if r.DstPitch < r.RowBytes || r.SrcPitch < r.RowBytes {
+		return fmt.Errorf("accel: plan node %d has a %d-byte row and pitches of %d and "+
+			"%d: a pitch is the distance between rows and cannot be shorter than one",
+			node, r.RowBytes, r.DstPitch, r.SrcPitch)
+	}
+	for _, c := range []struct {
+		what  string
+		o     Operand
+		pitch int
+	}{{"destination", n.Dst, r.DstPitch}, {"source", n.Src, r.SrcPitch}} {
+		// The last row needs only its own bytes, not a full pitch: a tightly
+		// packed image's final row has no padding after it, and requiring one
+		// would refuse a correctly sized buffer.
+		need := (r.Rows-1)*c.pitch + r.RowBytes
+		if c.o.size < need {
+			return fmt.Errorf("accel: plan node %d's %s is %d bytes and %d rows at a "+
+				"pitch of %d need %d", node, c.what, c.o.size, r.Rows, c.pitch, need)
 		}
 	}
 	return nil

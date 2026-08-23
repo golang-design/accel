@@ -162,6 +162,7 @@ type resolvedNode struct {
 	// would.
 	dispatch *driver.Dispatch
 	args     kernel.Args
+	rows     *driver.RowCopy
 
 	// subgroupSize and diagnostics come from the device's options, so a graph
 	// submitted in developer mode is checked and one in strict mode is not.
@@ -192,8 +193,8 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 				return nil, fmt.Errorf("accel: node %d destination: %w", n.ID, err)
 			}
 		}
-		r := resolvedNode{op: n.Op, dst: dst, data: n.Data, id: n.ID}
-		if n.Op == driver.OpCopy {
+		r := resolvedNode{op: n.Op, dst: dst, data: n.Data, id: n.ID, rows: n.Rows}
+		if n.Op == driver.OpCopy || n.Op == driver.OpCopyRows {
 			src, err := e.bytes(n.Src)
 			if err != nil {
 				return nil, fmt.Errorf("accel: node %d source: %w", n.ID, err)
@@ -361,6 +362,12 @@ func run(nodes []resolvedNode) error {
 			copy(n.dst, n.src)
 		case driver.OpHostWrite:
 			copy(n.dst, n.data)
+		case driver.OpCopyRows:
+			r := n.rows
+			for row := range r.Rows {
+				copy(n.dst[row*r.DstPitch:row*r.DstPitch+r.RowBytes],
+					n.src[row*r.SrcPitch:row*r.SrcPitch+r.RowBytes])
+			}
 		case driver.OpDispatch:
 			if err := dispatch(n); err != nil {
 				return err

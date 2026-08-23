@@ -200,3 +200,139 @@ func (q *Queue) readTexture(src *Texture, into []byte) error {
 	}
 	return nil
 }
+
+// newTexture allocates a texture from an implicit texture pool.
+//
+// The convenience form, for a caller who wants one image rather than an arena.
+// It is a real pool underneath — a texture pool, since the placement alignment
+// makes that a different kind of pool — and the device owns it, which is why a
+// texture from here is a live child of the device exactly as one from an
+// explicit pool is a live child of that pool.
+func (d *Device) newTexture(desc TextureDescriptor) (*Texture, error) {
+	if err := d.state.checkOpen("NewTexture"); err != nil {
+		return nil, err
+	}
+	if lost := d.dev.Lost(); lost != nil {
+		return nil, lost
+	}
+	if err := validateTexture(d, desc); err != nil {
+		return nil, err
+	}
+
+	// One pool per texture rather than a shared arena. A shared one would need
+	// the growth policy the implicit buffer pool has, and a texture's placement
+	// alignment makes the wasted tail much larger; a caller allocating many
+	// images wants an explicit pool and should be nudged toward one rather than
+	// quietly given a worse arena.
+	size := textureBytes(d, desc)
+	p, err := d.NewPoolWith(PoolDescriptor{
+		Kind: MemoryDevice, Bytes: size + d.info.Limits.MinTexturePlacementAlignment,
+		Textures: true, Label: "implicit texture pool for " + desc.Label,
+	})
+	if err != nil {
+		return nil, err
+	}
+	t, err := p.allocTexture(desc)
+	if err != nil {
+		_ = p.Close()
+		return nil, err
+	}
+	t.ownsPool = true
+	return t, nil
+}
+
+// copyTextureToBuffer and copyBufferToTexture record a texture-buffer copy.
+//
+// The buffer side is tightly packed and the texture side is padded to the
+// device's row alignment, so the plan carries both pitches and the backend
+// steps by each. Where they agree it degenerates to one contiguous copy.
+//
+// This is where the guarantee of specs/001-device-resources.md section 4.2 is
+// paid for in a graph, rather than in an intermediate as the immediate path
+// does: a recorded copy knows both pitches at build, so there is nothing to
+// allocate and nothing to copy twice.
+func (r *Recorder) textureCopy(op string, buf BufferView, tex *Texture, toBuffer bool) NodeID {
+	if tex == nil {
+		r.fail("%s: no texture", op)
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+	if err := tex.state.checkOpen(op); err != nil {
+		r.state.errs = append(r.state.errs, err)
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+	if tex.pool.dev != r.state.dev {
+		r.fail("%s %q: the texture belongs to a different device", op, tex.desc.Label)
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+
+	need := TextureCopyDst
+	if toBuffer {
+		need = TextureCopySrc
+	}
+	if tex.desc.Usage&need == 0 {
+		r.fail("%s %q: it needs %v and was created with %v",
+			op, tex.desc.Label, need, tex.desc.Usage)
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+
+	tight := tightRowPitch(tex.desc.Format, tex.desc.Size.Width)
+	if tight == 0 {
+		r.fail("%s %q: %v has a device-defined layout, so a host-side copy has no "+
+			"pitch to pack to", op, tex.desc.Label, tex.desc.Format)
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+	want := tight * tex.desc.Size.Height
+	if _, size := buf.byteRange(); size != want {
+		r.fail("%s %q: the buffer side is %d bytes and a tightly packed %dx%d %v is %d",
+			op, tex.desc.Label, size, tex.desc.Size.Width, tex.desc.Size.Height,
+			tex.desc.Format, want)
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+
+	mode := AccessWrite
+	if toBuffer {
+		mode = AccessRead
+	}
+	bufAccess, ok := r.declare(op, buf, oppositeAccess(mode))
+	if !ok {
+		return r.node(textureNodeKind(toBuffer), op, nil, nil)
+	}
+
+	// The texture's access is declared against its whole extent, because every
+	// v0 operation addresses the base level and a single layer: there is no
+	// sub-range to name and pretending otherwise would be a hazard the barrier
+	// plan sees more precisely than it can.
+	texAccess := access{
+		res: resourceRef{tex: tex}, off: 0, size: tex.bytes, mode: mode,
+	}
+
+	kind := textureNodeKind(toBuffer)
+	var accesses []access
+	if toBuffer {
+		accesses = []access{bufAccess, texAccess} // destination first
+	} else {
+		accesses = []access{texAccess, bufAccess}
+	}
+	id := r.node(kind, op, accesses, nil)
+	n := &r.state.nodes[id]
+	n.texture = tex
+	for _, a := range accesses {
+		r.touch(id, a)
+	}
+	return id
+}
+
+func textureNodeKind(toBuffer bool) NodeKind {
+	if toBuffer {
+		return NodeCopyTextureToBuffer
+	}
+	return NodeCopyBufferToTexture
+}
+
+// oppositeAccess is the buffer side's mode given the texture side's.
+func oppositeAccess(tex Access) Access {
+	if tex == AccessRead {
+		return AccessWrite
+	}
+	return AccessRead
+}

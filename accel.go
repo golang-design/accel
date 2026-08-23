@@ -286,7 +286,7 @@ type QueueInfo struct {
 // and depth formats carry backend constraints the implementation enforces; see
 // docs/conventions.md.
 func (d *Device) NewTexture(desc TextureDescriptor) (*Texture, error) {
-	panic(ErrNotImplemented)
+	return d.newTexture(desc)
 }
 
 // NewComputePipeline compiles a kernel into a pipeline.

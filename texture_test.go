@@ -352,3 +352,180 @@ func TestTextureUsageNamesItself(t *testing.T) {
 		t.Errorf("the empty set is %q", accel.TextureUsage(0).String())
 	}
 }
+
+// A texture round-trips through a graph: buffer in, texture, buffer out.
+//
+// The width is chosen so the device pads: a 100-pixel RGBA8Unorm row is 400
+// bytes, not a multiple of 256, so the texture side steps by 512 while the
+// buffer side steps by 400. A copy that used one pitch for both would shear the
+// image — every row after the first offset by the difference — which is a
+// plausible-looking picture rather than an error.
+func TestATextureRoundTripsThroughAGraph(t *testing.T) {
+	const w, h = 100, 5
+	const bpp = 4
+
+	d := openDevice(t)
+	if !d.AlignedRowPitchRepacks(accel.RGBA8Unorm, w) {
+		t.Skip("this device does not pad a 400-byte row, so the two pitches agree")
+	}
+
+	p, err := d.NewPoolWith(accel.PoolDescriptor{
+		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "images",
+	})
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer p.Close()
+
+	tex, err := p.AllocTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureCopySrc | accel.TextureCopyDst, Label: "image",
+	})
+	if err != nil {
+		t.Fatalf("texture: %v", err)
+	}
+	defer tex.Close()
+
+	tight := w * h * bpp
+	src := newBytes(t, d, "src", tight)
+	dst := newBytes(t, d, "dst", tight)
+
+	// A pattern whose row is identifiable, so a sheared copy is visible rather
+	// than merely different.
+	pattern := make([]byte, tight)
+	for r := range h {
+		for i := range w * bpp {
+			pattern[r*w*bpp+i] = byte(r*16 + i%16)
+		}
+	}
+	if err := d.Queue().WriteBuffer(src, 0, pattern); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	r := d.NewRecorder()
+	r.CopyBufferToTexture(tex, whole(t, src))
+	r.CopyTextureToBuffer(whole(t, dst), tex)
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	// The two nodes touch one texture, one writing, so they are ordered and a
+	// barrier separates them. Without that the readback could precede the
+	// upload.
+	if g.Hazards() != 1 {
+		t.Errorf("got %d hazards, want the read-after-write on the texture", g.Hazards())
+	}
+	if n := g.NodeStats(1); n.BarriersBefore != 1 {
+		t.Errorf("the readback needs a barrier after the upload, got %d", n.BarriersBefore)
+	}
+
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]byte, tight)
+	if err := d.Queue().ReadBuffer(dst, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	for i := range pattern {
+		if got[i] != pattern[i] {
+			row, col := i/(w*bpp), i%(w*bpp)
+			t.Fatalf("row %d byte %d is %d, want %d: the two sides have different row "+
+				"pitches and a copy using one for both shears the image",
+				row, col, got[i], pattern[i])
+		}
+	}
+}
+
+func newBytes(t *testing.T, d *accel.Device, label string, n int) *accel.Buffer {
+	t.Helper()
+	b, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.U8, Count: n, Label: label,
+		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+	})
+	if err != nil {
+		t.Fatalf("buffer %q: %v", label, err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+	return b
+}
+
+// The validation rows a texture copy adds.
+func TestTextureCopyValidationRows(t *testing.T) {
+	d := openDevice(t)
+	p, err := d.NewPoolWith(accel.PoolDescriptor{
+		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "images",
+	})
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer p.Close()
+
+	mk := func(t *testing.T, usage accel.TextureUsage, f accel.Format) *accel.Texture {
+		t.Helper()
+		tex, err := p.AllocTexture(accel.TextureDescriptor{
+			Format: f, Size: accel.Extent{Width: 8, Height: 4},
+			Usage: usage, Label: "tex",
+		})
+		if err != nil {
+			t.Fatalf("texture: %v", err)
+		}
+		t.Cleanup(func() { _ = tex.Close() })
+		return tex
+	}
+
+	cases := []struct {
+		name string
+		says string
+		rec  func(t *testing.T, r *accel.Recorder)
+	}{{
+		name: "a texture without copy-source usage",
+		says: "it needs TextureCopySrc",
+		rec: func(t *testing.T, r *accel.Recorder) {
+			tex := mk(t, accel.TextureCopyDst, accel.RGBA8Unorm)
+			r.CopyTextureToBuffer(whole(t, newBytes(t, d, "b", 8*4*4)), tex)
+		},
+	}, {
+		name: "a texture without copy-destination usage",
+		says: "it needs TextureCopyDst",
+		rec: func(t *testing.T, r *accel.Recorder) {
+			tex := mk(t, accel.TextureCopySrc, accel.RGBA8Unorm)
+			r.CopyBufferToTexture(tex, whole(t, newBytes(t, d, "b", 8*4*4)))
+		},
+	}, {
+		name: "a buffer of the wrong size",
+		says: "tightly packed 8x4",
+		rec: func(t *testing.T, r *accel.Recorder) {
+			tex := mk(t, accel.TextureCopySrc, accel.RGBA8Unorm)
+			r.CopyTextureToBuffer(whole(t, newBytes(t, d, "b", 8*4*4-1)), tex)
+		},
+	}, {
+		name: "a format with a device-defined layout",
+		says: "device-defined layout",
+		rec: func(t *testing.T, r *accel.Recorder) {
+			tex := mk(t, accel.TextureCopySrc, accel.Depth24PlusStencil8)
+			r.CopyTextureToBuffer(whole(t, newBytes(t, d, "b", 8*4*4)), tex)
+		},
+	}, {
+		name: "no texture at all",
+		says: "no texture",
+		rec: func(t *testing.T, r *accel.Recorder) {
+			r.CopyTextureToBuffer(whole(t, newBytes(t, d, "b", 16)), nil)
+		},
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := d.NewRecorder()
+			c.rec(t, r)
+			_, err := r.Build()
+			if err == nil {
+				t.Fatal("expected a rejection")
+			}
+			if !strings.Contains(err.Error(), c.says) {
+				t.Errorf("the message should say %q, got:\n%v", c.says, err)
+			}
+		})
+	}
+}

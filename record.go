@@ -56,6 +56,9 @@ type recNode struct {
 	count    kernel.ID3
 	uniforms []any
 
+	// texture is a texture-copy node's image.
+	texture *Texture
+
 	// indirect marks a node whose workgroup count the device supplies, in which
 	// case count is the build-time maximum and the last access is the count
 	// buffer rather than a binding.
@@ -82,6 +85,7 @@ func (a access) writes() bool { return a.mode == AccessWrite || a.mode == Access
 // defend itself.
 type resourceRef struct {
 	buf  *Buffer
+	tex  *Texture
 	slot Slot
 }
 
@@ -89,6 +93,8 @@ func (r resourceRef) String() string {
 	switch {
 	case r.buf != nil:
 		return fmt.Sprintf("buffer %q", r.buf.desc.Label)
+	case r.tex != nil:
+		return fmt.Sprintf("texture %q", r.tex.desc.Label)
 	case r.slot != 0:
 		return fmt.Sprintf("slot %d", int(r.slot))
 	}
