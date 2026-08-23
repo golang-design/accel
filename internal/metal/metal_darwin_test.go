@@ -223,6 +223,8 @@ func TestCompileRefusesWhatItCannotLower(t *testing.T) {
 		t.Fatalf("operand: %v", err)
 	}
 
+	noMSL := synthetic("unlowered", "", kernel.ID3{X: 1, Y: 1, Z: 1})
+
 	dispatchOf := func(k *kernel.Kernel, n int, uniforms []any, ind *driver.Indirect) driver.PlanNode {
 		binds := make([]driver.Operand, n)
 		for i := range binds {
@@ -245,7 +247,11 @@ func TestCompileRefusesWhatItCannotLower(t *testing.T) {
 		}, "row copy"},
 		{"an indirect dispatch", dispatchOf(&testkernels.AddKernel, 3, nil,
 			&driver.Indirect{Count: op, Max: kernel.ID3{X: 1, Y: 1, Z: 1}}), "indirect"},
-		{"a kernel with no MSL", dispatchOf(&testkernels.ReduceSumKernel, 2, nil, nil), "ReduceSum"},
+		// A synthetic record rather than a corpus one. Every corpus kernel now
+		// carries MSL, so a test that named one would quietly stop testing the
+		// refusal the moment the subset widened -- which is exactly what
+		// happened to the version that named ReduceSum.
+		{"a kernel with no MSL", dispatchOf(noMSL, 1, nil, nil), "no MSL artifact"},
 		{"a uniform count that disagrees with the kernel",
 			dispatchOf(&testkernels.ElemScaleKernel, 2, nil, nil), "by-value parameters"},
 	} {

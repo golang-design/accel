@@ -74,6 +74,7 @@ func MSL(k *ir.Func) (string, error) {
 		m.binding[b.Name] = i
 	}
 	m.atomic = atomicBindings(k)
+	m.need = map[string]bool{}
 	m.emit()
 	if m.err != nil {
 		return "", m.err
@@ -94,6 +95,11 @@ type msl struct {
 	// before the signature is printed rather than discovered while printing the
 	// body.
 	atomic map[string]bool
+
+	// need records the built-in helpers the body reached, so they are emitted
+	// once and only when used. MSL has no statement expression, so an operation
+	// that needs more than one statement becomes a function.
+	need map[string]bool
 
 	err error
 }
@@ -126,19 +132,79 @@ func (m *msl) emit() {
 		m.fail("MSL is emitted for kernels, and %s is a helper", k.Name)
 		return
 	}
-	if k.Cooperative {
-		m.refuse("a cooperative kernel (shared memory, a barrier, or a subgroup operation)", k.Pos())
-		return
-	}
-	if len(k.Shared) > 0 {
-		m.refuse("workgroup-shared memory", k.Pos())
-		return
-	}
+	// A cooperative kernel is emitted as the author wrote it. MSL has real
+	// barriers and real threadgroup memory, so the resumable state machine
+	// specs/018-cooperative-lowering.md generates for the CPU has no reason to
+	// exist here -- it is a way to run a barrier on a target that has none.
+	//
+	// Both forms come from one IR, which is what makes the differential
+	// meaningful: the CPU advances a program counter and Metal executes a
+	// barrier, and they must still agree on every element.
+
+	// The body is emitted into a scratch buffer first, because which built-in
+	// helpers it needs is only known once it has been lowered -- the same
+	// reason Generate emits the Go body before its import list.
+	head := m.buf
+	m.buf = bytes.Buffer{}
+	m.body(k)
+	body := m.buf
+	m.buf = head
 
 	m.printf("#include <metal_stdlib>\n")
 	m.printf("using namespace metal;\n")
 	m.printf("%s\n\n", MSLContractOff)
+	m.prelude()
+	m.buf.Write(body.Bytes())
+}
 
+// prelude emits the built-in helpers the body reached.
+func (m *msl) prelude() {
+	for _, h := range mslPrelude {
+		if m.need[h.name] {
+			m.printf("%s\n", h.text)
+		}
+	}
+}
+
+// mslPrelude is every built-in helper, in a fixed order so output is stable.
+//
+// # Why compare-exchange is a function
+//
+// MSL offers only the *weak* form, which may fail spuriously: it can report no
+// swap while the value did equal the expected one. This model's operation
+// returns the previous value, so a caller compares it against what they
+// expected -- and a spurious failure would return the expected value while
+// nothing was swapped, which reads as success. The loop distinguishes the two:
+// a genuine mismatch leaves a different value in e and returns it, and a
+// spurious failure leaves the expected value and retries.
+//
+// The Go lowering has no equivalent because a mutex-free CPU emulation cannot
+// fail spuriously in the first place.
+var mslPrelude = []struct{ name, text string }{
+	{"cas_u32", `static uint _accel_cas_u32(device atomic_uint *p, uint expected, uint desired) {
+    uint e = expected;
+    while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+        if (e != expected) { return e; }
+        e = expected;
+    }
+    return expected;
+}
+`},
+	{"cas_i32", `static int _accel_cas_i32(device atomic_int *p, int expected, int desired) {
+    int e = expected;
+    while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+        if (e != expected) { return e; }
+        e = expected;
+    }
+    return expected;
+}
+`},
+}
+
+// body emits the uniform blocks, the helpers, and the kernel itself.
+func (m *msl) body(k *ir.Func) {
 	for _, u := range k.Uniforms {
 		m.uniformStruct(u)
 	}
@@ -166,7 +232,26 @@ func (m *msl) emit() {
 	// function of the binding layout alone.
 	m.printf("\n    uint3 _gid [[thread_position_in_grid]],")
 	m.printf("\n    uint3 _lid [[thread_position_in_threadgroup]],")
-	m.printf("\n    uint3 _wid [[threadgroup_position_in_grid]]) {\n")
+	m.printf("\n    uint3 _wid [[threadgroup_position_in_grid]],")
+	// The subgroup attributes are always declared for the same reason the ids
+	// are: the signature stays a function of the binding layout alone, and MSL
+	// does not object to a parameter nothing reads.
+	m.printf("\n    uint _sgsize [[threads_per_simdgroup]],")
+	m.printf("\n    uint _sglane [[thread_index_in_simdgroup]],")
+	m.printf("\n    uint _sgid [[simdgroup_index_in_threadgroup]]) {\n")
+	// Threadgroup storage is declared in the body rather than passed as a
+	// [[threadgroup(k)]] parameter. Its extent is fixed at pipeline creation
+	// either way, and declaring it here means the host binds nothing and cannot
+	// bind the wrong size: specs/002-compute-model.md makes the extent the
+	// compiler's, and the authored form is a pointer to a fixed-size array for
+	// exactly this reason.
+	for _, sh := range k.Shared {
+		if sh.Type == nil || sh.Type.Kind != ir.Array {
+			m.fail("shared %s is %v, and shared storage is a fixed-size array", sh.Name, sh.Type)
+			return
+		}
+		m.printf("    threadgroup %s %s[%d];\n", m.dtype(sh.Type.Elem), sh.Name, sh.Type.Len)
+	}
 	m.block(k.Body, 1)
 	m.printf("}\n")
 }
@@ -315,8 +400,8 @@ func (m *msl) uniformStruct(u *ir.Uniform) {
 	m.printf("struct %s {\n", u.TypeName)
 	at := 0
 	for i, f := range u.Fields {
-		if f.Kind != "scalar" {
-			m.refuse("a "+f.Kind+" member of uniform block "+u.TypeName, m.fn.Pos())
+		decl, size, ok := m.uniformField(u, f)
+		if !ok {
 			return
 		}
 		if f.Offset < at {
@@ -327,13 +412,62 @@ func (m *msl) uniformStruct(u *ir.Uniform) {
 		if pad := f.Offset - at; pad > 0 {
 			m.printf("    char _pad%d[%d];\n", i, pad)
 		}
-		m.printf("    %s %s;\n", m.scalar(f.Scalar), f.Name)
-		at = f.Offset + 4
+		m.printf("    %s\n", decl)
+		at = f.Offset + size
 	}
 	if pad := u.Size - at; pad > 0 {
 		m.printf("    char _tail[%d];\n", pad)
 	}
 	m.printf("};\n\n")
+}
+
+// uniformField declares one member, and reports how many bytes it occupies.
+//
+// # Why nothing here uses an MSL vector or matrix type
+//
+// float3 is sixteen bytes in MSL and twelve in std140, and the difference is not
+// padding nobody can see: std140 packs the *next* scalar into the remainder, so
+// a block with Origin at 16 puts Steps at 28. Declaring float3 would place Steps
+// at 32 and every value after it would be read from the wrong offset -- a kernel
+// that compiles, runs, and computes something else.
+//
+// So a vector is its components and a matrix is its columns, spelled as plain C
+// arrays whose element stride is the one the generated codec wrote at. The Go
+// source indexes them the same way, so nothing in the body changes.
+func (m *msl) uniformField(u *ir.Uniform, f ir.UniformField) (decl string, size int, ok bool) {
+	elem := m.scalar(f.Scalar)
+	switch f.Kind {
+	case "scalar":
+		return fmt.Sprintf("%s %s;", elem, f.Name), 4, true
+
+	case "vector":
+		// Components are contiguous in std140, which is what lets the next
+		// member share the tail.
+		if f.Len < 2 || f.Len > 4 {
+			m.fail("uniform block %s field %s is a vector of %d", u.TypeName, f.Name, f.Len)
+			return "", 0, false
+		}
+		return fmt.Sprintf("%s %s[%d];", elem, f.Name, f.Len), f.Len * 4, true
+
+	case "matrix":
+		// Stride is the byte distance between columns, which std140 rounds up
+		// to sixteen. The extra components are the padding, declared rather
+		// than skipped so the array indexes the way the source does.
+		if f.Stride%4 != 0 || f.Stride == 0 || f.Len == 0 {
+			m.fail("uniform block %s field %s is a matrix with %d columns of stride %d",
+				u.TypeName, f.Name, f.Len, f.Stride)
+			return "", 0, false
+		}
+		return fmt.Sprintf("%s %s[%d][%d];", elem, f.Name, f.Len, f.Stride/4),
+			f.Len * f.Stride, true
+	}
+	// An array member's std140 stride is sixteen whatever its element type, so
+	// it cannot be one C array of the element type and a caller indexes it with
+	// one index. Reconciling those needs the index expression rewritten, which
+	// is a change to the body rather than to this declaration, and no corpus
+	// kernel needs it yet.
+	m.refuse("a "+f.Kind+" member of uniform block "+u.TypeName, m.fn.Pos())
+	return "", 0, false
 }
 
 func (m *msl) scalar(goSpelling string) string {
@@ -754,6 +888,27 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.printf("_wid")
 		return
 
+	case ir.OpBarrier:
+		// Threadgroup scope only, which is what Thread.Barrier means in
+		// specs/002-compute-model.md section 3: it orders shared memory within
+		// one workgroup and says nothing about device memory, which the graph's
+		// barriers order between dispatches.
+		m.printf("threadgroup_barrier(mem_flags::mem_threadgroup)")
+		return
+
+	case ir.OpSubgroupSize:
+		m.printf("_sgsize")
+		return
+	case ir.OpSubgroupInvocationID:
+		m.printf("_sglane")
+		return
+	case ir.OpSubgroupID:
+		m.printf("_sgid")
+		return
+	case ir.OpElect:
+		m.printf("simd_is_first()")
+		return
+
 	// The narrow-float conversions. MSL has half natively, so these are casts
 	// rather than the bit-packing sequence a target without the format needs --
 	// which is why specs/012-kernel-pipeline.md makes them intrinsics instead of
@@ -785,6 +940,17 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		return
 	}
 
+	if fn, ok := mslSubgroup[v.Op]; ok {
+		if len(v.Args) != 1 {
+			m.fail("subgroup operation %v takes one value at %v", v.Op, v.Pos())
+			return
+		}
+		m.printf("%s(", fn)
+		m.value(v.Args[0])
+		m.printf(")")
+		return
+	}
+
 	if fn, ok := mslIntrinsic[v.Op]; ok {
 		m.printf("%s(", fn)
 		for i, a := range v.Args {
@@ -808,6 +974,33 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 // stronger order would make Metal pay for a guarantee the model does not offer
 // and the CPU oracle does not provide.
 func (m *msl) atomicCall(v *ir.IntrinsicCall) {
+	// Compare-exchange takes its expected value by pointer in MSL and by value
+	// here, and the weak form it offers can fail spuriously, so it is a helper
+	// rather than a call. See mslPrelude.
+	switch v.Op {
+	case ir.OpAtomicCompareExchangeU32, ir.OpAtomicCompareExchangeI32:
+		name := "cas_u32"
+		if v.Op == ir.OpAtomicCompareExchangeI32 {
+			name = "cas_i32"
+		}
+		if len(v.Args) != 4 {
+			m.fail("compare-exchange takes a buffer, an index, an expected and a desired "+
+				"value at %v", v.Pos())
+			return
+		}
+		m.need[name] = true
+		m.printf("_accel_%s(&", name)
+		m.value(v.Args[0])
+		m.printf("[")
+		m.value(v.Args[1])
+		m.printf("], ")
+		m.value(v.Args[2])
+		m.printf(", ")
+		m.value(v.Args[3])
+		m.printf(")")
+		return
+	}
+
 	fn, ok := mslAtomic[v.Op]
 	if !ok {
 		m.refuse(v.Op.String(), v.Pos())
@@ -850,6 +1043,21 @@ var mslAtomic = map[ir.Opcode]string{
 	ir.OpAtomicXorU32:      "atomic_fetch_xor_explicit",
 	ir.OpAtomicExchangeU32: "atomic_exchange_explicit",
 	ir.OpAtomicExchangeI32: "atomic_exchange_explicit",
+}
+
+// mslSubgroup is each single-argument subgroup reduction's Metal spelling.
+//
+// Ballot is absent because simd_ballot returns a simd_vote rather than an
+// integer, and the conversion is family-dependent; specs/020-cooperative-atomics.md
+// already defers shuffles and scans for a related reason, that each is defined
+// in terms of inactive lanes and no two backends agree on the active set.
+var mslSubgroup = map[ir.Opcode]string{
+	ir.OpSubgroupAddF32:    "simd_sum",
+	ir.OpSubgroupMinF32:    "simd_min",
+	ir.OpSubgroupMaxF32:    "simd_max",
+	ir.OpBroadcastFirstF32: "simd_broadcast_first",
+	ir.OpSubgroupAny:       "simd_any",
+	ir.OpSubgroupAll:       "simd_all",
 }
 
 // mslIntrinsic is each bounded scalar operation's Metal spelling.

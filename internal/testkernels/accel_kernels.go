@@ -225,7 +225,10 @@ kernel void Add(
     constant uint *_lens [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[2])))) {
         out[i] = (a[i] + b[i]);
@@ -278,7 +281,10 @@ kernel void Histogram(
     constant uint *_lens [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[0])))) {
         float v = in[i];
@@ -329,6 +335,42 @@ var AtomicOpsKernel = accel.Kernel{
 	},
 	Digest:    "1c10a109c329670be02ff7e3902c57f2",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_cas_u32(device atomic_uint *p, uint expected, uint desired) {
+    uint e = expected;
+    while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+        if (e != expected) { return e; }
+        e = expected;
+    }
+    return expected;
+}
+
+kernel void AtomicOps(
+    device atomic_uint *state [[buffer(0)]],
+    device uint *prev [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    prev[int(0)] = atomic_fetch_add_explicit(&state[uint(0)], uint(7), memory_order_relaxed);
+    prev[int(1)] = atomic_fetch_sub_explicit(&state[uint(1)], uint(3), memory_order_relaxed);
+    prev[int(2)] = atomic_fetch_min_explicit(&state[uint(2)], uint(5), memory_order_relaxed);
+    prev[int(3)] = atomic_fetch_max_explicit(&state[uint(3)], uint(5), memory_order_relaxed);
+    prev[int(4)] = atomic_fetch_and_explicit(&state[uint(4)], uint(15), memory_order_relaxed);
+    prev[int(5)] = atomic_fetch_or_explicit(&state[uint(5)], uint(240), memory_order_relaxed);
+    prev[int(6)] = atomic_fetch_xor_explicit(&state[uint(6)], uint(255), memory_order_relaxed);
+    prev[int(7)] = atomic_exchange_explicit(&state[uint(7)], uint(42), memory_order_relaxed);
+    prev[int(8)] = _accel_cas_u32(&state[uint(8)], uint(1), uint(99));
+    prev[int(9)] = _accel_cas_u32(&state[uint(9)], uint(1), uint(99));
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		atomicOpsFlat(t, accel.KernelSlice[uint32](a, 0), accel.KernelSlice[uint32](a, 1))
 	},
@@ -363,7 +405,10 @@ kernel void CountWorkgroups(
     constant uint *_lens [[buffer(1)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     if ((_lid.x == uint(0))) {
         atomic_fetch_add_explicit(&counts[uint(0)], uint(1), memory_order_relaxed);
     }
@@ -543,8 +588,87 @@ var AttentionDecodeKernel = accel.Kernel{
 		{Name: "v", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "17c3c7d2b180f4ed260f0323f8dad89a",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "17c3c7d2b180f4ed260f0323f8dad89a",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct AttnDims {
+    uint QHeads;
+    uint KVHeads;
+    uint HeadDim;
+    uint KVLen;
+    float Scale;
+    char _tail[12];
+};
+
+kernel void AttentionDecode(
+    const device float *q [[buffer(0)]],
+    const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant AttnDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float scores[128];
+    threadgroup float red[128];
+    uint h = _wid.x;
+    uint lane = _lid.x;
+    uint group = (d.QHeads / d.KVHeads);
+    uint kvHead = (h / group);
+    float s = float(0);
+    if ((lane < d.KVLen)) {
+        float acc = float(0);
+        for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+            float qi = q[((h * d.HeadDim) + i)];
+            float ki = k[((((lane * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
+            acc = (acc + (qi * ki));
+        }
+        s = (acc * d.Scale);
+    }
+    scores[lane] = s;
+    red[lane] = s;
+    if ((lane >= d.KVLen)) {
+        red[lane] = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            red[lane] = max(red[lane], red[(lane + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float m = red[int(0)];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float e = float(0);
+    if ((lane < d.KVLen)) {
+        e = exp((scores[lane] - m));
+    }
+    scores[lane] = e;
+    red[lane] = e;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            red[lane] = (red[lane] + red[(lane + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float total = red[int(0)];
+    if ((lane < d.HeadDim)) {
+        float acc = float(0);
+        for (uint j = uint(0); (j < d.KVLen); j = (j + uint(1))) {
+            acc = (acc + (scores[j] * v[((((j * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+        }
+        out[((h * d.HeadDim) + lane)] = (acc / total);
+    }
+}
+`,
 	Suspensions: 5,
 	SharedSizes: []int{128, 128},
 	NewShared: func() []any {
@@ -623,8 +747,36 @@ var ExchangeKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "8fbafe502892895a36d26b891966beee",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "8fbafe502892895a36d26b891966beee",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void Exchange(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[64];
+    uint lid = _lid.x;
+    uint gid = _gid.x;
+    sh[lid] = in[gid];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint next = (lid + uint(1));
+    if ((next == uint(64))) {
+        next = uint(0);
+    }
+    if ((gid < uint(int(_lens[1])))) {
+        out[gid] = sh[next];
+    }
+}
+`,
 	Suspensions: 1,
 	SharedSizes: []int{64},
 	NewShared: func() []any {
@@ -718,8 +870,38 @@ var ReduceLoopKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "cd47629a5d0b137a4eb63cfe66e87bf2",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "cd47629a5d0b137a4eb63cfe66e87bf2",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void ReduceLoop(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[64];
+    uint lid = _lid.x;
+    uint gid = _gid.x;
+    sh[lid] = in[gid];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(32); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if ((lid == uint(0))) {
+        out[_wid.x] = sh[int(0)];
+    }
+}
+`,
 	Suspensions: 2,
 	SharedSizes: []int{64},
 	NewShared: func() []any {
@@ -852,8 +1034,56 @@ var ReduceUnrolledKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "872f9717e7294bd520cda7ef38cd4b34",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "872f9717e7294bd520cda7ef38cd4b34",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void ReduceUnrolled(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[64];
+    uint lid = _lid.x;
+    uint gid = _gid.x;
+    sh[lid] = in[gid];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid < uint(32))) {
+        sh[lid] = (sh[lid] + sh[(lid + uint(32))]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid < uint(16))) {
+        sh[lid] = (sh[lid] + sh[(lid + uint(16))]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid < uint(8))) {
+        sh[lid] = (sh[lid] + sh[(lid + uint(8))]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid < uint(4))) {
+        sh[lid] = (sh[lid] + sh[(lid + uint(4))]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid < uint(2))) {
+        sh[lid] = (sh[lid] + sh[(lid + uint(2))]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid < uint(1))) {
+        sh[lid] = (sh[lid] + sh[(lid + uint(1))]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if ((lid == uint(0))) {
+        out[_wid.x] = sh[int(0)];
+    }
+}
+`,
 	Suspensions: 7,
 	SharedSizes: []int{64},
 	NewShared: func() []any {
@@ -905,7 +1135,10 @@ kernel void ElemAdd(
     constant uint *_lens [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[2])))) {
         out[i] = (a[i] + b[i]);
@@ -951,7 +1184,10 @@ kernel void ElemMul(
     constant uint *_lens [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[2])))) {
         out[i] = (a[i] * b[i]);
@@ -1001,7 +1237,10 @@ kernel void ElemScale(
     constant ScaleParams &p [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[1])))) {
         out[i] = (in[i] * p.Factor);
@@ -1051,7 +1290,10 @@ kernel void SiLU(
     constant uint *_lens [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[1])))) {
         float x = in[i];
@@ -1099,7 +1341,10 @@ kernel void SwiGLU(
     constant uint *_lens [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[2])))) {
         float x = a[i];
@@ -1161,7 +1406,10 @@ kernel void GatherRows(
     constant RowParams &p [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
         uint r = (i / p.Width);
@@ -1232,7 +1480,10 @@ kernel void ScatterRows(
     constant RowParams &p [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
         uint r = (i / p.Width);
@@ -1308,7 +1559,10 @@ kernel void RoPE(
     constant RoPEParams &p [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     uint pairs = (p.RotaryDim / uint(2));
     if ((i < (p.Rows * pairs))) {
@@ -1461,8 +1715,72 @@ var MatMulTiledKernel = accel.Kernel{
 		{Name: "b", DType: accel.KernelF16, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "7d5374776e289634a322b661335b61b9",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "7d5374776e289634a322b661335b61b9",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void MatMulTiled(
+    const device half *a [[buffer(0)]],
+    const device half *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant GEMMDims &d [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup half tileA[128];
+    threadgroup half tileB[256];
+    uint lx = _lid.x;
+    uint ly = _lid.y;
+    uint tid = ((ly * uint(16)) + lx);
+    uint row = ((_wid.y * uint(8)) + ly);
+    uint col = ((_wid.x * uint(16)) + lx);
+    float acc = float(0);
+    half zero = half(float(0));
+    for (uint k0 = uint(0); (k0 < d.K); k0 = (k0 + uint(16))) {
+        if (((row < d.M) && ((k0 + lx) < d.K))) {
+            tileA[tid] = a[(((row * d.K) + k0) + lx)];
+        } else {
+            tileA[tid] = zero;
+        }
+        uint kk = (tid / uint(16));
+        uint nn = (tid % uint(16));
+        if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[tid] = zero;
+        }
+        uint kk2 = (kk + uint(8));
+        if ((((k0 + kk2) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[(tid + uint(128))] = b[((((k0 + kk2) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[(tid + uint(128))] = zero;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
+            float av = float(tileA[((ly * uint(16)) + k)]);
+            float bv = float(tileB[((k * uint(16)) + lx)]);
+            acc = (acc + (av * bv));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (((row < d.M) && (col < d.N))) {
+        out[((row * d.N) + col)] = acc;
+    }
+}
+`,
 	Suspensions: 2,
 	SharedSizes: []int{128, 256},
 	NewShared: func() []any {
@@ -1575,8 +1893,53 @@ var MatVecKernel = accel.Kernel{
 		{Name: "b", DType: accel.KernelF16, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "40616d839a4fe81c847268e1029f0603",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "40616d839a4fe81c847268e1029f0603",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void MatVec(
+    const device half *a [[buffer(0)]],
+    const device half *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant GEMMDims &d [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[128];
+    uint col = _wid.x;
+    uint lid = _lid.x;
+    float acc = float(0);
+    if ((col < d.N)) {
+        for (uint k = lid; (k < d.K); k = (k + uint(128))) {
+            acc = (acc + (float(a[k]) * float(b[((k * d.N) + col)])));
+        }
+    }
+    sh[lid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (((lid == uint(0)) && (col < d.N))) {
+        out[col] = sh[int(0)];
+    }
+}
+`,
 	Suspensions: 2,
 	SharedSizes: []int{128},
 	NewShared: func() []any {
@@ -1722,8 +2085,73 @@ var LinearTiledKernel = accel.Kernel{
 		{Name: "bias", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "099087b7306af0d4bbc72ae7007e3ce7",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "099087b7306af0d4bbc72ae7007e3ce7",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void LinearTiled(
+    const device half *a [[buffer(0)]],
+    const device half *b [[buffer(1)]],
+    const device float *bias [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant GEMMDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup half tileA[128];
+    threadgroup half tileB[256];
+    uint lx = _lid.x;
+    uint ly = _lid.y;
+    uint tid = ((ly * uint(16)) + lx);
+    uint row = ((_wid.y * uint(8)) + ly);
+    uint col = ((_wid.x * uint(16)) + lx);
+    float acc = float(0);
+    half zero = half(float(0));
+    for (uint k0 = uint(0); (k0 < d.K); k0 = (k0 + uint(16))) {
+        if (((row < d.M) && ((k0 + lx) < d.K))) {
+            tileA[tid] = a[(((row * d.K) + k0) + lx)];
+        } else {
+            tileA[tid] = zero;
+        }
+        uint kk = (tid / uint(16));
+        uint nn = (tid % uint(16));
+        if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[tid] = zero;
+        }
+        uint kk2 = (kk + uint(8));
+        if ((((k0 + kk2) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[(tid + uint(128))] = b[((((k0 + kk2) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[(tid + uint(128))] = zero;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
+            float av = float(tileA[((ly * uint(16)) + k)]);
+            float bv = float(tileB[((k * uint(16)) + lx)]);
+            acc = (acc + (av * bv));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (((row < d.M) && (col < d.N))) {
+        out[((row * d.N) + col)] = (acc + bias[col]);
+    }
+}
+`,
 	Suspensions: 2,
 	SharedSizes: []int{128, 256},
 	NewShared: func() []any {
@@ -1846,8 +2274,55 @@ var RMSNormKernel = accel.Kernel{
 		{Name: "w", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "c7cd9d71d805420213e0a9705338effb",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "c7cd9d71d805420213e0a9705338effb",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowDims {
+    uint Rows;
+    uint Width;
+    float Eps;
+    char _tail[4];
+};
+
+kernel void RMSNorm(
+    const device float *x [[buffer(0)]],
+    const device float *w [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowDims &d [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[128];
+    uint row = _wid.x;
+    uint lid = _lid.x;
+    uint base = (row * d.Width);
+    float acc = float(0);
+    for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
+        float v = x[(base + i)];
+        acc = (acc + (v * v));
+    }
+    sh[lid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float mean = (sh[int(0)] / float(d.Width));
+    float scale = rsqrt((mean + d.Eps));
+    for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
+        out[(base + i)] = ((x[(base + i)] * scale) * w[i]);
+    }
+}
+`,
 	Suspensions: 2,
 	SharedSizes: []int{128},
 	NewShared: func() []any {
@@ -2019,8 +2494,67 @@ var SoftmaxKernel = accel.Kernel{
 		{Name: "x", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "e518f4545b053c2b559e4a27bfa8c48e",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "e518f4545b053c2b559e4a27bfa8c48e",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowDims {
+    uint Rows;
+    uint Width;
+    float Eps;
+    char _tail[4];
+};
+
+kernel void Softmax(
+    const device float *x [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant RowDims &d [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[128];
+    uint row = _wid.x;
+    uint lid = _lid.x;
+    uint base = (row * d.Width);
+    float m = x[(base + (lid % d.Width))];
+    for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
+        float v = x[(base + i)];
+        m = max(m, v);
+    }
+    sh[lid] = m;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = max(sh[lid], sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float rowMax = sh[int(0)];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float acc = float(0);
+    for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
+        acc = (acc + exp((x[(base + i)] - rowMax)));
+    }
+    sh[lid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float total = sh[int(0)];
+    for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
+        out[(base + i)] = (exp((x[(base + i)] - rowMax)) / total);
+    }
+}
+`,
 	Suspensions: 5,
 	SharedSizes: []int{128},
 	NewShared: func() []any {
@@ -2098,7 +2632,10 @@ kernel void SegmentSum(
     constant uint *_lens [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     uint n = uint(int(_lens[1]));
     if ((i >= n)) {
@@ -2169,7 +2706,10 @@ kernel void CountAbove(
     constant uint *_lens [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i >= uint(int(_lens[1])))) {
         return;
@@ -2238,7 +2778,10 @@ kernel void Normalize(
     constant uint *_lens [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i >= uint(int(_lens[1])))) {
         return;
@@ -2339,8 +2882,42 @@ var ReduceSumKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "9c1853e2164cfc8aec407d954cee51a5",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "9c1853e2164cfc8aec407d954cee51a5",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void ReduceSum(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[128];
+    uint lid = _lid.x;
+    uint n = uint(int(_lens[0]));
+    float acc = float(0);
+    for (uint i = lid; (i < n); i = (i + uint(128))) {
+        acc = (acc + in[i]);
+    }
+    sh[lid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if ((lid == uint(0))) {
+        out[int(0)] = sh[int(0)];
+    }
+}
+`,
 	Suspensions: 2,
 	SharedSizes: []int{128},
 	NewShared: func() []any {
@@ -2390,7 +2967,10 @@ kernel void Scale(
     constant uint *_lens [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < uint(int(_lens[1])))) {
         out[i] = (in[i] * float(2));
@@ -2432,6 +3012,40 @@ var TransformKernel = accel.Kernel{
 	},
 	Digest:    "2aa00445fb65b63d0082756f22afbf1e",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct Params {
+    float Scale;
+    char _pad1[12];
+    float Origin[3];
+    uint Steps;
+    float Inverse[4][4];
+};
+
+kernel void Transform(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant Params &p [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if (((i >= p.Steps) || (i >= uint(int(_lens[1]))))) {
+        return;
+    }
+    float acc = ((in[i] * p.Scale) + p.Origin[int(0)]);
+    for (uint c = uint(0); (c < uint(4)); c = (c + uint(1))) {
+        acc = (acc + (p.Inverse[c][int(0)] * p.Origin[int(1)]));
+    }
+    out[i] = (acc + p.Origin[int(2)]);
+}
+`,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "Params", Size: 96, Encode: func(dst []byte, v any) error {
 			return accel.EncodeKernelUniform(dst, v, ParamsCodec{}.Encode)
@@ -2513,8 +3127,37 @@ var SubgroupReduceKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "13a1a366d8c302729183a8dd065ee5dd",
-	Generator:   accel.KernelABIVersion,
+	Digest:    "13a1a366d8c302729183a8dd065ee5dd",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void SubgroupReduce(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint gid = _gid.x;
+    float v = float(0);
+    if ((gid < uint(int(_lens[0])))) {
+        v = in[gid];
+    }
+    float total = simd_sum(v);
+    bool elected = simd_is_first();
+    if (elected) {
+        uint sid = _sgid;
+        if ((sid < uint(int(_lens[1])))) {
+            out[sid] = total;
+        }
+    }
+}
+`,
 	Caps:        17,
 	Suspensions: 2,
 	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
@@ -2577,7 +3220,10 @@ kernel void SubgroupReduceFallback(
     constant uint *_lens [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
-    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint lid = _lid.x;
     uint gid = _gid.x;
     uint w = width[int(0)];

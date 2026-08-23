@@ -700,6 +700,10 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	e.printf("\t},\n")
 	e.printf("\tDigest: %q,\n", k.Digest)
 	e.printf("\tGenerator: accel.KernelABIVersion,\n")
+	// The Metal artifact is the *authored* structure, not this resumable
+	// lowering: specs/022-msl-target.md section 2 says why. A target with real
+	// barriers has no use for a program counter.
+	e.mslArtifact(k)
 	if k.Caps != 0 {
 		e.printf("\tCaps: %d,\n", k.Caps)
 	}

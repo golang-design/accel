@@ -199,39 +199,44 @@ func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
 	}
 }
 
-// A kernel outside the MSL subset is refused by name, and never falls back to
+// A kernel with no MSL artifact is refused by name, and never falls back to
 // the Go lowering.
 //
-// The fallback is the failure worth guarding. Running the CPU lowering on a
-// device the caller selected specifically would be correct, fast enough not to
-// notice, and would mean the GPU was never exercised -- so it would pass every
-// test that compares results, which is every test that would otherwise catch it.
+// The record is built here rather than taken from the corpus, because every
+// corpus kernel now lowers to MSL: a test that named one would have stopped
+// testing anything the moment the subset widened to include it, silently. What
+// it guards is the fallback, which would be correct, fast enough not to notice,
+// and would mean the GPU was never exercised -- so it would pass every test
+// that compares results.
 func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
-	if testkernels.ReduceSumKernel.MSL != "" {
-		t.Skip("ReduceSum is now inside the MSL subset; this test needs one outside it")
-	}
 	d := openMetal(t)
-	const n = 256
+	const n = 64
 	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
 
+	unlowered := accel.Kernel{
+		Name:          "Unlowered",
+		WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1},
+		Digest:        "test:unlowered",
+		Generator:     accel.KernelABIVersion,
+		Bindings: []accel.KernelBinding{
+			{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+		},
+		Flat: func(t accel.Thread, a accel.KernelArgs) {
+			accel.KernelSlice[float32](a, 0)[0] = 1
+		},
+	}
+
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.ReduceSumKernel, Label: "reduce",
+		Kernel: &unlowered, Label: "unlowered",
 	})
 	if err != nil {
-		if !strings.Contains(err.Error(), "ReduceSum") {
-			t.Errorf("the refusal should name the kernel: %v", err)
-		}
-		return
+		t.Fatalf("pipeline creation does not compile MSL, so it should succeed: %v", err)
 	}
 	defer p.Close()
 
-	in := newBuffer(t, d, "in", n, storage)
-	out := newBuffer(t, d, "out", 1, storage)
+	out := newBuffer(t, d, "out", n, storage)
 	r := d.NewRecorder()
-	r.Dispatch(p, []accel.Binding{
-		{Index: 0, Buffer: whole(t, in)},
-		{Index: 1, Buffer: whole(t, out)},
-	}, accel.WorkgroupCount{X: 1})
+	r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: whole(t, out)}}, accel.WorkgroupCount{X: 1})
 
 	g, buildErr := r.Build()
 	if buildErr == nil {
@@ -242,7 +247,7 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 		t.Fatal("a kernel with no MSL artifact ran on Metal, which means something fell " +
 			"back to the Go lowering: the GPU was never exercised")
 	}
-	if !strings.Contains(buildErr.Error(), "ReduceSum") {
+	if !strings.Contains(buildErr.Error(), "Unlowered") {
 		t.Errorf("the refusal should name the kernel that cannot be lowered: %v", buildErr)
 	}
 	if !strings.Contains(buildErr.Error(), "MSL") {
