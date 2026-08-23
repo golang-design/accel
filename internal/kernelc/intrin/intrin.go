@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 1
+const ABIVersion = 2
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -119,7 +119,34 @@ type Intrinsic struct {
 
 	// Params is how many arguments the call takes, not counting the receiver.
 	Params int
+
+	// Cap is the capability this intrinsic requires, or zero.
+	//
+	// Inferred from the body through this table rather than declared by the
+	// kernel's author: a declaration can be forgotten, and the failure is
+	// silent -- a kernel using a feature the device lacks produces wrong
+	// results rather than an error, because nothing checked. See
+	// specs/020-cooperative-atomics.md section 3.
+	Cap Capability
 }
+
+// Capability mirrors accel.Capability. It is declared here rather than imported
+// because this package sits below the root, and the two are kept in step by a
+// parity test.
+type Capability uint32
+
+const (
+	CapSubgroupBasic Capability = 1 << iota
+	CapSubgroupVote
+	CapSubgroupBallot
+	CapSubgroupShuffle
+	CapSubgroupArithmetic
+	CapF16Arithmetic
+	CapBF16Arithmetic
+	CapAtomicFloatAddStorage
+	CapAtomicFloatAddShared
+	CapI8DotProduct
+)
 
 // key is the resolved identity. Recv is empty for a free function.
 type key struct{ pkg, recv, name string }
@@ -204,6 +231,38 @@ var table = map[key]*Intrinsic{
 		Authored: "accel.ToBFloat16", Op: ir.OpF32ToBF16, Result: ir.BF16, Params: 1, Class: ClassExact,
 	},
 
+	// Atomics. Free functions on the root package taking a buffer and an index,
+	// because GLSL cannot form a pointer into a buffer. Each returns the
+	// previous value, and each is exact: they move integers, or in AddF32's
+	// case do one f32 addition whose rounding every target agrees on. What is
+	// not deterministic about a float atomic is the *order* several of them run
+	// in, which is a property of a reduction rather than of the operation.
+	{accelPkg, "", "AddU32"}: {Authored: "accel.AddU32", Op: ir.OpAtomicAddU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "AddI32"}: {Authored: "accel.AddI32", Op: ir.OpAtomicAddI32, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "SubU32"}: {Authored: "accel.SubU32", Op: ir.OpAtomicSubU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "SubI32"}: {Authored: "accel.SubI32", Op: ir.OpAtomicSubI32, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MinU32"}: {Authored: "accel.MinU32", Op: ir.OpAtomicMinU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MinI32"}: {Authored: "accel.MinI32", Op: ir.OpAtomicMinI32, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MaxU32"}: {Authored: "accel.MaxU32", Op: ir.OpAtomicMaxU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MaxI32"}: {Authored: "accel.MaxI32", Op: ir.OpAtomicMaxI32, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "AndU32"}: {Authored: "accel.AndU32", Op: ir.OpAtomicAndU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "OrU32"}:  {Authored: "accel.OrU32", Op: ir.OpAtomicOrU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "XorU32"}: {Authored: "accel.XorU32", Op: ir.OpAtomicXorU32, Result: ir.U32, Params: 3, Class: ClassExact},
+
+	{accelPkg, "", "ExchangeU32"}: {Authored: "accel.ExchangeU32", Op: ir.OpAtomicExchangeU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "ExchangeI32"}: {Authored: "accel.ExchangeI32", Op: ir.OpAtomicExchangeI32, Result: ir.I32, Params: 3, Class: ClassExact},
+
+	{accelPkg, "", "CompareExchangeU32"}: {Authored: "accel.CompareExchangeU32", Op: ir.OpAtomicCompareExchangeU32, Result: ir.U32, Params: 4, Class: ClassExact},
+	{accelPkg, "", "CompareExchangeI32"}: {Authored: "accel.CompareExchangeI32", Op: ir.OpAtomicCompareExchangeI32, Result: ir.I32, Params: 4, Class: ClassExact},
+
+	// A capability rather than a baseline: several targets lack it, so a kernel
+	// using it is refused on a device that does rather than lowered to
+	// something else.
+	{accelPkg, "", "AddF32"}: {
+		Authored: "accel.AddF32", Op: ir.OpAtomicAddF32, Result: ir.F32, Params: 3,
+		Class: ClassExact, Cap: CapAtomicFloatAddStorage,
+	},
+
 	// Recognized and not available. Being in the table is what makes the
 	// rejection say "barriers arrive at M4" at the right line, rather than
 	// leaving a kernel author with an unknown-call error about a method that
@@ -275,8 +334,8 @@ func Digest() string {
 	fmt.Fprintf(&b, "intrin/%d\n", ABIVersion)
 	for _, k := range keys {
 		in := table[k]
-		fmt.Fprintf(&b, "%s\t%s\t%v\t%v\t%v\t%d\t%v\n",
-			in.Authored, k, in.Op, in.Stage, in.Result, in.Params, in.Class)
+		fmt.Fprintf(&b, "%s\t%s\t%v\t%v\t%v\t%d\t%v\t%d\n",
+			in.Authored, k, in.Op, in.Stage, in.Result, in.Params, in.Class, uint32(in.Cap))
 	}
 	return b.String()
 }

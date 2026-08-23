@@ -79,16 +79,16 @@ func (d *Device) newComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 
 // requirementsOf reads what a compiled kernel needs out of its record.
 //
-// Caps is zero, and that is a fact about the v0 subset rather than something
-// unimplemented: the capabilities in [Capability] are subgroups, atomics,
-// native narrow arithmetic, and integer dot product, and a flat kernel can
-// imply none of them. Narrow types are storage with explicit conversions
-// (specs/013-kernel-subset.md), and the rest are cooperative and arrive at M4
-// with the analysis that infers them. When they do, this reads a field the
-// record carries instead of a constant, and [Device.Missing] does not change.
+// Every field comes from the record, including the capabilities: they are
+// inferred by the compiler from what the body reaches, never declared by the
+// kernel's author. A declaration can be forgotten, and the failure is silent --
+// a kernel using a feature the device lacks would produce wrong results rather
+// than an error, because nothing checked. See
+// specs/020-cooperative-atomics.md section 3.
 func requirementsOf(k *Kernel) Requirements {
 	s := k.WorkgroupSize
 	return Requirements{
+		Caps:                 Capability(k.Caps),
 		WorkgroupSize:        [3]uint32{s.X, s.Y, s.Z},
 		WorkgroupInvocations: s.X * s.Y * s.Z,
 	}

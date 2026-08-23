@@ -242,6 +242,11 @@ type Kernel struct {
 	// barrier covers.
 	NewShared func() []any
 
+	// Caps is every capability this kernel's body implies, as a bit set matching
+	// accel.Capability. Inferred by the compiler from what the body reaches,
+	// never declared by its author.
+	Caps uint32
+
 	// SharedSizes is each declared shared array's element count, in signature
 	// order. The tracker needs it to size its shadow bits, and only generation
 	// knows it.

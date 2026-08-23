@@ -75,6 +75,55 @@ func KernelShared[T any](a KernelArgs, i int) *T { return kernel.SharedSlice[T](
 // kernel computes, so a read before a write is loud rather than plausible.
 func KernelPoison[T any](s []T) { kernel.Poison(s) }
 
+// Atomic operations, as a kernel author writes them.
+//
+// Free functions taking a buffer and an index rather than a pointer into one,
+// because GLSL cannot form such a pointer: see specs/002-compute-model.md
+// section 4.1. Each returns the previous value, which is what every target's
+// instruction returns and what a caller needs for the operations whose old
+// value is not recoverable from the new one.
+//
+// A shared array is passed as tile[:], the one place the subset admits a slice
+// expression on a shared parameter.
+//
+// They are functions rather than variables bound to the internal ones, because
+// the kernel compiler resolves an intrinsic by the object go/types produced: a
+// variable is not a func, and the table would not find it.
+func AddU32(b []uint32, i uint32, v uint32) uint32 { return kernel.AddU32(b, i, v) }
+func AddI32(b []int32, i uint32, v int32) int32    { return kernel.AddI32(b, i, v) }
+func SubU32(b []uint32, i uint32, v uint32) uint32 { return kernel.SubU32(b, i, v) }
+func SubI32(b []int32, i uint32, v int32) int32    { return kernel.SubI32(b, i, v) }
+func MinU32(b []uint32, i uint32, v uint32) uint32 { return kernel.MinU32(b, i, v) }
+func MinI32(b []int32, i uint32, v int32) int32    { return kernel.MinI32(b, i, v) }
+func MaxU32(b []uint32, i uint32, v uint32) uint32 { return kernel.MaxU32(b, i, v) }
+func MaxI32(b []int32, i uint32, v int32) int32    { return kernel.MaxI32(b, i, v) }
+func AndU32(b []uint32, i uint32, v uint32) uint32 { return kernel.AndU32(b, i, v) }
+func OrU32(b []uint32, i uint32, v uint32) uint32  { return kernel.OrU32(b, i, v) }
+func XorU32(b []uint32, i uint32, v uint32) uint32 { return kernel.XorU32(b, i, v) }
+
+// ExchangeU32 and ExchangeI32 store unconditionally.
+func ExchangeU32(b []uint32, i uint32, v uint32) uint32 { return kernel.ExchangeU32(b, i, v) }
+func ExchangeI32(b []int32, i uint32, v int32) int32    { return kernel.ExchangeI32(b, i, v) }
+
+// CompareExchangeU32 and CompareExchangeI32 are **strong**: they fail only when
+// the observed value differs from cmp, never spuriously. Every target's
+// compare-exchange is strong, so promising weak would invent a hazard for
+// callers to loop around. Success is `returned == cmp`.
+func CompareExchangeU32(b []uint32, i, cmp, v uint32) uint32 {
+	return kernel.CompareExchangeU32(b, i, cmp, v)
+}
+
+func CompareExchangeI32(b []int32, i uint32, cmp, v int32) int32 {
+	return kernel.CompareExchangeI32(b, i, cmp, v)
+}
+
+// AddF32 is a capability rather than a baseline, and it makes a reduction
+// non-deterministic: the hardware picks the accumulation order and f32 addition
+// is not associative, so a test asserting an exact total for a float reduction
+// is wrong even where the same test is right for integers. See
+// [CapAtomicFloatAddStorage].
+func AddF32(b []float32, i uint32, v float32) float32 { return kernel.AddF32(b, i, v) }
+
 // KernelABIVersion is the contract between a generated kernel and this runtime.
 // A generated file records it, and a mismatch refuses to run rather than
 // running differently.

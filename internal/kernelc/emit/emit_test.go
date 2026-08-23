@@ -6,11 +6,13 @@ package emit_test
 
 import (
 	"flag"
+	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -333,12 +335,15 @@ var (
 	importerVal  types.Importer
 )
 
-// importerFor serves the one import a generated kernel file has.
+// importerFor serves the imports a generated kernel file can have: accel,
+// kmath for the bounded scalar math, and math for the bit patterns f32
+// constants are spelled as.
 func importerFor(t testing.TB) types.Importer {
 	t.Helper()
 	importerOnce.Do(func() {
 		cfg := &packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedDeps | packages.NeedImports}
-		pkgs, err := packages.Load(cfg, "golang.design/x/accel", "golang.design/x/accel/kmath")
+		pkgs, err := packages.Load(cfg,
+			"golang.design/x/accel", "golang.design/x/accel/kmath", "math")
 		if err != nil {
 			t.Fatalf("loading accel: %v", err)
 		}
@@ -389,5 +394,88 @@ func TestABarrierInsideAConditionalIsRefused(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should say %q, got:\n%v", want, err)
 		}
+	}
+}
+
+// A fractional float constant is emitted as the value it is, not as the
+// fraction go/constant prints.
+//
+// go/constant renders an exact rational as "3/4". Wrapped in float32(...) that
+// is integer division, so the constant became zero, every comparison against it
+// was true, and the kernel computed something else while compiling and running
+// cleanly. It survived until a corpus kernel used a fractional threshold, which
+// is why this test asserts on the emitted text rather than on a result: a
+// result test only catches it for the constants a corpus happens to use.
+func TestFractionalConstantsAreNotEmittedAsFractions(t *testing.T) {
+	cases := []struct {
+		name string
+		val  float64
+	}{
+		{"three quarters", 0.75},
+		{"one half", 0.5},
+		{"a third, which is not representable", 1.0 / 3},
+		{"a negative fraction", -0.125},
+		{"a value between two f32s", 1.0000001},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			k := &ir.Func{
+				Name: "K", Kernel: true, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
+				Body: ir.NewBlock(0, ir.NewAssign(0,
+					ir.NewIndex(0, &ir.Type{Kind: ir.F32},
+						ir.NewParam(0, &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, 1, "out", nil),
+						ir.NewConst(0, &ir.Type{Kind: ir.U32}, constant.MakeInt64(0)), 0),
+					ir.NewConst(0, &ir.Type{Kind: ir.F32}, constant.MakeFloat64(c.val)))),
+				Params: []*ir.Param{
+					ir.NewParam(0, &ir.Type{Kind: ir.ID3Kind}, 0, "t", nil),
+					ir.NewParam(0, &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, 1, "out", nil),
+				},
+				Bindings: []*ir.Binding{{Name: "out", Index: 1,
+					Type: &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, Write: true}},
+			}
+			out, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+			if err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			src := string(out)
+
+			// The generated file compiles, which "3/4" also does — so the real
+			// assertion is that no constant is spelled as a division.
+			if strings.Contains(src, "float32(3/4)") || strings.Contains(src, "/4)") {
+				t.Errorf("a constant was emitted as a fraction:\n%s", src)
+			}
+			// And the emitted bits are the value's, exactly.
+			want := fmt.Sprintf("0x%08X", math.Float32bits(float32(c.val)))
+			if !strings.Contains(src, want) {
+				t.Errorf("the emitted constant should carry the bits %s of %v:\n%s",
+					want, c.val, src)
+			}
+		})
+	}
+}
+
+// A small whole number is still spelled as one, because a bit pattern where a
+// literal would do makes the generated file harder to read for no gain.
+func TestWholeNumberConstantsStayReadable(t *testing.T) {
+	k := &ir.Func{
+		Name: "K", Kernel: true, Workgroup: [3]uint32{1, 1, 1}, Thread: 0,
+		Body: ir.NewBlock(0, ir.NewAssign(0,
+			ir.NewIndex(0, &ir.Type{Kind: ir.F32},
+				ir.NewParam(0, &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, 1, "out", nil),
+				ir.NewConst(0, &ir.Type{Kind: ir.U32}, constant.MakeInt64(0)), 0),
+			ir.NewConst(0, &ir.Type{Kind: ir.F32}, constant.MakeFloat64(2)))),
+		Params: []*ir.Param{
+			ir.NewParam(0, &ir.Type{Kind: ir.ID3Kind}, 0, "t", nil),
+			ir.NewParam(0, &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, 1, "out", nil),
+		},
+		Bindings: []*ir.Binding{{Name: "out", Index: 1,
+			Type: &ir.Type{Kind: ir.Slice, Elem: &ir.Type{Kind: ir.F32}}, Write: true}},
+	}
+	out, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if !strings.Contains(string(out), "float32(2)") {
+		t.Errorf("a whole number should stay a literal:\n%s", out)
 	}
 }

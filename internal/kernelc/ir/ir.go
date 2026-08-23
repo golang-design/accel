@@ -77,6 +77,15 @@ var kindNames = [...]string{
 	I8: "i8", U8: "u8", F16: "f16", BF16: "bf16", ID3Kind: "ID3", Struct: "struct", Array: "array", Slice: "slice",
 }
 
+// IsAtomic reports whether an opcode is an atomic read-modify-write.
+//
+// It exists so that access inference does not have to enumerate the set: an
+// atomic added to the table and forgotten here would be a binding that looks
+// untouched, which the graph builder turns into a missing barrier.
+func (o Opcode) IsAtomic() bool {
+	return o >= OpAtomicAddU32 && o <= OpAtomicAddF32
+}
+
 func (k Kind) String() string {
 	if k < 0 || int(k) >= len(kindNames) {
 		return fmt.Sprintf("Kind(%d)", int(k))
@@ -366,6 +375,30 @@ const (
 	OpF32ToF16
 	OpF32ToBF16
 
+	// Atomics. Free functions taking a buffer and an index, because GLSL cannot
+	// form a pointer into a buffer (specs/002-compute-model.md section 4.1).
+	// Each returns the previous value.
+	OpAtomicAddU32
+	OpAtomicAddI32
+	OpAtomicSubU32
+	OpAtomicSubI32
+	OpAtomicMinU32
+	OpAtomicMinI32
+	OpAtomicMaxU32
+	OpAtomicMaxI32
+	OpAtomicAndU32
+	OpAtomicOrU32
+	OpAtomicXorU32
+	OpAtomicExchangeU32
+	OpAtomicExchangeI32
+	OpAtomicCompareExchangeU32
+	OpAtomicCompareExchangeI32
+
+	// OpAtomicAddF32 is a capability rather than a baseline, and it makes a
+	// reduction non-deterministic because the hardware picks the accumulation
+	// order.
+	OpAtomicAddF32
+
 	// Cooperative. Recognized so that a kernel using one is rejected by name
 	// with a position, rather than failing as an unknown call. See
 	// specs/012-kernel-pipeline.md.
@@ -373,28 +406,44 @@ const (
 )
 
 var opcodeNames = [...]string{
-	OpInvalid:     "invalid",
-	OpGlobalID:    "GlobalID",
-	OpLocalID:     "LocalID",
-	OpGroupID:     "GroupID",
-	OpGlobalIndex: "GlobalIndex",
-	OpLocalIndex:  "LocalIndex",
-	OpGroupIndex:  "GroupIndex",
-	OpSqrt:        "Sqrt",
-	OpRSqrt:       "RSqrt",
-	OpExp:         "Exp",
-	OpLog:         "Log",
-	OpSin:         "Sin",
-	OpCos:         "Cos",
-	OpTanh:        "Tanh",
-	OpAbs:         "Abs",
-	OpMin:         "Min",
-	OpMax:         "Max",
-	OpF16ToF32:    "Float16.F32",
-	OpBF16ToF32:   "BFloat16.F32",
-	OpF32ToF16:    "ToFloat16",
-	OpF32ToBF16:   "ToBFloat16",
-	OpBarrier:     "Barrier",
+	OpInvalid:                  "invalid",
+	OpGlobalID:                 "GlobalID",
+	OpLocalID:                  "LocalID",
+	OpGroupID:                  "GroupID",
+	OpGlobalIndex:              "GlobalIndex",
+	OpLocalIndex:               "LocalIndex",
+	OpGroupIndex:               "GroupIndex",
+	OpSqrt:                     "Sqrt",
+	OpRSqrt:                    "RSqrt",
+	OpExp:                      "Exp",
+	OpLog:                      "Log",
+	OpSin:                      "Sin",
+	OpCos:                      "Cos",
+	OpTanh:                     "Tanh",
+	OpAbs:                      "Abs",
+	OpMin:                      "Min",
+	OpMax:                      "Max",
+	OpF16ToF32:                 "Float16.F32",
+	OpBF16ToF32:                "BFloat16.F32",
+	OpF32ToF16:                 "ToFloat16",
+	OpF32ToBF16:                "ToBFloat16",
+	OpBarrier:                  "Barrier",
+	OpAtomicAddU32:             "AtomicAddU32",
+	OpAtomicAddI32:             "AtomicAddI32",
+	OpAtomicSubU32:             "AtomicSubU32",
+	OpAtomicSubI32:             "AtomicSubI32",
+	OpAtomicMinU32:             "AtomicMinU32",
+	OpAtomicMinI32:             "AtomicMinI32",
+	OpAtomicMaxU32:             "AtomicMaxU32",
+	OpAtomicMaxI32:             "AtomicMaxI32",
+	OpAtomicAndU32:             "AtomicAndU32",
+	OpAtomicOrU32:              "AtomicOrU32",
+	OpAtomicXorU32:             "AtomicXorU32",
+	OpAtomicExchangeU32:        "AtomicExchangeU32",
+	OpAtomicExchangeI32:        "AtomicExchangeI32",
+	OpAtomicCompareExchangeU32: "AtomicCompareExchangeU32",
+	OpAtomicCompareExchangeI32: "AtomicCompareExchangeI32",
+	OpAtomicAddF32:             "AtomicAddF32",
 }
 
 func (o Opcode) String() string {
@@ -504,6 +553,12 @@ type Func struct {
 	// flat one. It is derived from the body, never declared: a declaration can
 	// be forgotten and the failure would be a kernel lowered the wrong way.
 	Cooperative bool
+
+	// Caps is every capability the body implies, inferred from the intrinsics it
+	// reaches. Never declared: a declaration can be forgotten, and the failure
+	// is silent -- a kernel using a feature the device lacks produces wrong
+	// results rather than an error, because nothing checked.
+	Caps uint32
 
 	// Intrinsics is every intrinsic the body reaches, in first-use order, by its
 	// authored spelling. The digest records these rather than resolved package

@@ -5,6 +5,7 @@ package testkernels
 import (
 	"golang.design/x/accel"
 	"golang.design/x/accel/kmath"
+	"math"
 )
 
 // ParamsCodec is the generated std140 codec for Params.
@@ -89,10 +90,79 @@ var AddKernel = accel.Kernel{
 		{Name: "b", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "38bab352b11121654f413afaf670a778",
+	Digest:    "bc1d9d7941a91f3c93ce22c72010fd16",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		addFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
+	},
+}
+
+// histogramFlat is the generated flat lowering of Histogram.
+//
+// It is what the CPU backend runs. The authored Histogram is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func histogramFlat(t accel.Thread, in []float32, counts []uint32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(in))) {
+		var v float32 = in[i]
+		var bucket uint32 = uint32(0)
+		if v >= math.Float32frombits(0x3F400000 /* 0.75 */) {
+			bucket = uint32(3)
+		} else if v >= math.Float32frombits(0x3F000000 /* 0.5 */) {
+			bucket = uint32(2)
+		} else if v >= math.Float32frombits(0x3E800000 /* 0.25 */) {
+			bucket = uint32(1)
+		}
+		accel.AddU32(counts, bucket, uint32(1))
+	}
+}
+
+// HistogramKernel is the compiled form of Histogram.
+var HistogramKernel = accel.Kernel{
+	Name:          "Histogram",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "counts", DType: accel.KernelU32, Access: accel.KernelRead | accel.KernelWrite},
+	},
+	Digest:    "d851599607e44d9bfe1fbce5a4f9c74a",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		histogramFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1))
+	},
+}
+
+// atomicOpsFlat is the generated flat lowering of AtomicOps.
+//
+// It is what the CPU backend runs. The authored AtomicOps is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func atomicOpsFlat(t accel.Thread, state []uint32, prev []uint32) {
+	prev[int32(0)] = accel.AddU32(state, uint32(0), uint32(7))
+	prev[int32(1)] = accel.SubU32(state, uint32(1), uint32(3))
+	prev[int32(2)] = accel.MinU32(state, uint32(2), uint32(5))
+	prev[int32(3)] = accel.MaxU32(state, uint32(3), uint32(5))
+	prev[int32(4)] = accel.AndU32(state, uint32(4), uint32(15))
+	prev[int32(5)] = accel.OrU32(state, uint32(5), uint32(240))
+	prev[int32(6)] = accel.XorU32(state, uint32(6), uint32(255))
+	prev[int32(7)] = accel.ExchangeU32(state, uint32(7), uint32(42))
+	prev[int32(8)] = accel.CompareExchangeU32(state, uint32(8), uint32(1), uint32(99))
+	prev[int32(9)] = accel.CompareExchangeU32(state, uint32(9), uint32(1), uint32(99))
+}
+
+// AtomicOpsKernel is the compiled form of AtomicOps.
+var AtomicOpsKernel = accel.Kernel{
+	Name:          "AtomicOps",
+	WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "state", DType: accel.KernelU32, Access: accel.KernelRead | accel.KernelWrite},
+		{Name: "prev", DType: accel.KernelU32, Access: accel.KernelWrite},
+	},
+	Digest:    "54f1fe4319a5baa8cbcdbe7c14fc8b7a",
+	Generator: accel.KernelABIVersion,
+	Flat: func(t accel.Thread, a accel.KernelArgs) {
+		atomicOpsFlat(t, accel.KernelSlice[uint32](a, 0), accel.KernelSlice[uint32](a, 1))
 	},
 }
 
@@ -150,7 +220,7 @@ var ExchangeKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "c1346cd0bf93b2f9dcefa59e47f8f4fd",
+	Digest:      "eb2514c5a5bb7f335948966dddbaa9e5",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 1,
 	SharedSizes: []int{64},
@@ -245,7 +315,7 @@ var ReduceLoopKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "907a42f18d35da320df46565345842ec",
+	Digest:      "af814c005e3a7ae9bbb9ad573ca1d846",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 2,
 	SharedSizes: []int{64},
@@ -379,7 +449,7 @@ var ReduceUnrolledKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:      "77b71e4f8838cb0c4cef05b6ccc26329",
+	Digest:      "16c00cc62fd03e24db06f34e44eb4081",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 7,
 	SharedSizes: []int{64},
@@ -423,7 +493,7 @@ var SegmentSumKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "477e2a9a314673b1a980b020f3dc68ec",
+	Digest:    "461c19bbc5141409f8372a8208b156c0",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		segmentSumFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
@@ -472,7 +542,7 @@ var CountAboveKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelI32, Access: accel.KernelWrite},
 	},
-	Digest:    "5ad2dbd0fd90561622cedabdd265bd18",
+	Digest:    "b2b295f68946e90c2fa1fb028e273a03",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		countAboveFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[int32](a, 1))
@@ -504,7 +574,7 @@ var NormalizeKernel = accel.Kernel{
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 		{Name: "scratch", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "f8dc2fa112e32b880d444e8b40c5dc32",
+	Digest:    "e96ab10d6baf7dbbc825025ff0d89631",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		normalizeFlat(t, accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
@@ -531,7 +601,7 @@ var ScaleKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "90a4e63995b835b3310099c4e49d6b56",
+	Digest:    "1490559ec83d431fd65f2f5fd0ddc78f",
 	Generator: accel.KernelABIVersion,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		scaleFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
@@ -566,7 +636,7 @@ var TransformKernel = accel.Kernel{
 		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
 	},
-	Digest:    "684924c0e723f6b164d600454328dbee",
+	Digest:    "ba9a981fc0e361bfd969c0ebac23b615",
 	Generator: accel.KernelABIVersion,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "Params", Size: 96},

@@ -547,6 +547,9 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	e.printf("\t},\n")
 	e.printf("\tDigest: %q,\n", k.Digest)
 	e.printf("\tGenerator: accel.KernelABIVersion,\n")
+	if k.Caps != 0 {
+		e.printf("\tCaps: %d,\n", k.Caps)
+	}
 	e.printf("\tSuspensions: %d,\n", countSuspensions(segs))
 	if len(k.Shared) > 0 {
 		e.printf("\tSharedSizes: []int{")

@@ -286,6 +286,23 @@ func assignable(v ir.Value) bool {
 //
 // A binding's length is not an element access. len(out) tells a kernel how far
 // it may go and reads nothing.
+// atomicBinding reports the binding an atomic operates on.
+//
+// The first argument, by the shape of every atomic in the table: a buffer and
+// an index, because GLSL cannot form a pointer into a buffer. A shared array
+// arrives here as a slice of the shared parameter and has no binding index,
+// which is right -- shared memory is not a binding and carries no access mode.
+func atomicBinding(v *ir.IntrinsicCall) (int, bool) {
+	if !v.Op.IsAtomic() || len(v.Args) == 0 {
+		return 0, false
+	}
+	p, ok := v.Args[0].(*ir.Param)
+	if !ok || p.Type() == nil || p.Type().Kind != ir.Slice {
+		return 0, false
+	}
+	return p.Index, true
+}
+
 func inferAccess(k *ir.Func) {
 	mark := func(binding int, read, write bool) {
 		for _, b := range k.Bindings {
@@ -322,6 +339,17 @@ func inferAccess(k *ir.Func) {
 				walkValue(a)
 			}
 		case *ir.IntrinsicCall:
+			// An atomic reads *and* writes the buffer it names, and its first
+			// argument is that buffer rather than an index expression -- so a
+			// walk that only understands indexing sees no access at all and the
+			// binding looks untouched.
+			//
+			// That is not a cosmetic gap: access is what the graph builder
+			// infers dependency edges from, so an unrecorded write is a missing
+			// barrier, which is a race. See specs/003-command-graph.md.
+			if b, ok := atomicBinding(v); ok {
+				mark(b, true, true)
+			}
 			walkValue(v.Recv)
 			for _, a := range v.Args {
 				walkValue(a)
@@ -755,6 +783,11 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 	in, ok := intrin.Lookup(fn)
 	if !ok {
 		return c.helperCall(e, fn)
+	}
+	// A capability the body implies. Accumulated here rather than declared,
+	// because this is where the compiler learns what the kernel actually uses.
+	if c.current != nil {
+		c.current.Caps |= uint32(in.Cap)
 	}
 	if in.Stage == intrin.Cooperative {
 		// A cooperative intrinsic makes the whole kernel cooperative, which
