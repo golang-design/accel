@@ -1045,7 +1045,12 @@ Independently scoped later work includes:
   cache;
 - textures/formats and graphics;
 - Vulkan plus the SPIR-V emitter, then remaining backends;
-- sampling primitives and policy integration; and
+- ~~sampling primitives and policy integration~~ — **[028](028-sampling.md),
+  the primitives complete 2026-08-23**: argmax and categorical sampling, with
+  the random draw supplied as an input rather than generated on the device, so a
+  token is reproducible and the two backends can agree on one. Top-k and top-p
+  are the follow-on, because a selection is a different kernel shape from a
+  reduction. Policy integration stays open; and
 - paged KV, multi-sequence scheduling, and additional transient sets.
 
 Vulkan is the first backend priority because it gives the CPU oracle a second
