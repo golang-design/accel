@@ -164,6 +164,22 @@ type node struct {
 	// which operator wanted a value nobody bound.
 	reads []string
 
+	// grid computes the workgroup count from the result. Nil means one
+	// invocation per output element, which is what an elementwise kernel wants
+	// and what most of the corpus is.
+	grid grid
+
+	// bcast marks an operator whose operands are broadcast to the result's
+	// shape and packed if they are not already it. True for the elementwise
+	// family and false for everything else, whose operands have shapes of their
+	// own: a gather's table is not the shape of its result.
+	bcast bool
+
+	// inPlace marks a kernel that rewrites the buffer it reads. Its operand is
+	// copied into the result's storage first, because a tensor is an immutable
+	// value and the kernel is not.
+	inPlace bool
+
 	// reason and rejected explain the selection, for Plan.Selections.
 	reason   string
 	rejected []string

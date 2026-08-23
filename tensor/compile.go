@@ -163,8 +163,6 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	outputOf map[*Tensor]string, i int) error {
 
-	count := n.out.shape.Elements()
-
 	pipe, err := p.rt.pipeline(n.kernel, fmt.Sprintf("%s.%s", p.label, n.op))
 	if err != nil {
 		return fmt.Errorf("accel/tensor: %s: %w", n.op, err)
@@ -173,23 +171,53 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		Op: n.op, Kernel: n.kernel.Name, Reason: n.reason, Rejected: n.rejected,
 	})
 
+	var inPlaceResult *accel.Binding
+	var inPlaceScratch accel.BufferView
+	inPlaceCount := 0
+
 	binds := make([]accel.Binding, 0, len(n.inputs)+2)
 	if n.uniform != nil {
 		// A placeholder, rewritten before every submission. Recording the zero
-		// and never rewriting it would be a plan that runs and computes with a
+		// and never rewriting it would be a plan that ran and computed with a
 		// factor of nothing, which is why Submit rewrites unconditionally
 		// rather than only when a value changed.
 		binds = append(binds, accel.Binding{Index: 0, Uniform: n.uniform(nil)})
 	}
+
+	// The result: a transient unless the caller asked for it by name, in which
+	// case it is written straight into their buffer and no copy exists.
+	//
+	// Resolved before the operands because an in-place kernel reads and writes
+	// the same binding, so its operand *is* the result.
+	outIndex := len(n.inputs)
+	var result accel.Binding
+	if name, wanted := outputOf[n.out]; wanted {
+		result = accel.Binding{Slot: p.slots[name]}
+	} else {
+		v := r.Transient(accel.BufferDescriptor{
+			DType: n.out.dtype, Count: n.out.shape.Elements(),
+			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+			Label: fmt.Sprintf("%s.%s.%d", p.label, n.op, i),
+		})
+		views[i] = v
+		result = accel.Binding{Buffer: v}
+	}
+
 	for j, in := range n.inputs {
 		bind, err := p.operand(in, views)
 		if err != nil {
 			return fmt.Errorf("accel/tensor: %s operand %d: %w", n.op, j, err)
 		}
-		// An operand that is not already the result's shape and layout is
+		if !in.contiguousLayout() && !n.bcast {
+			return fmt.Errorf("accel/tensor: %s operand %d is a strided view, and the "+
+				"kernel indexes contiguously; the operators that pack an operand for you "+
+				"are the elementwise ones, because specs/007-tensor-layer.md keeps a copy "+
+				"of a matrix something a caller asks for", n.op, j)
+		}
+		// An elementwise operand that is not already the result's shape is
 		// packed into a transient first. Reported in Selections rather than
 		// done quietly: a copy nobody can see is a cost nobody can explain.
-		if !in.shape.Equal(n.out.shape) || !in.contiguousLayout() {
+		if n.bcast && (!in.shape.Equal(n.out.shape) || !in.contiguousLayout()) {
 			bind, err = p.materialize(r, n.op, in, n.out.shape, bind,
 				fmt.Sprintf("%s.%s.%d.broadcast", p.label, n.op, i))
 			if err != nil {
@@ -200,25 +228,76 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		binds = append(binds, bind)
 	}
 
-	// The result is a transient unless the caller asked for it by name, in
-	// which case it is written straight into their buffer and no copy exists.
-	outIndex := len(n.inputs)
-	if name, wanted := outputOf[n.out]; wanted {
-		binds = append(binds, accel.Binding{Index: outIndex, Slot: p.slots[name]})
-	} else {
-		v := r.Transient(accel.BufferDescriptor{
+	if n.inPlace {
+		// The kernel rewrites what it reads and a tensor is an immutable value,
+		// so the work happens in a transient: the operand is copied in, the
+		// kernel rewrites it, and the result is copied out if the caller named
+		// it. A transient always, rather than the result buffer directly,
+		// because the operand and the result may both be caller buffers and
+		// the recorder moves bytes between a slot and a view rather than
+		// between two slots.
+		if len(binds) != outIndex+1 || outIndex != 1 {
+			return fmt.Errorf("accel/tensor: %s is in place and takes %d operands; an "+
+				"in-place kernel has exactly one", n.op, outIndex)
+		}
+		count := n.out.shape.Elements()
+		scratch := r.Transient(accel.BufferDescriptor{
 			DType: n.out.dtype, Count: count,
 			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
-			Label: fmt.Sprintf("%s.%s.%d", p.label, n.op, i),
+			Label: fmt.Sprintf("%s.%s.%d.inplace", p.label, n.op, i),
 		})
-		views[i] = v
-		binds = append(binds, accel.Binding{Index: outIndex, Buffer: v})
+		src := binds[len(binds)-1]
+		if err := p.copyInto(r, accel.Binding{Buffer: scratch}, src, count); err != nil {
+			return fmt.Errorf("accel/tensor: %s: %w", n.op, err)
+		}
+		p.selections = append(p.selections, KernelSelection{
+			Op: n.op, Kernel: "copy",
+			Reason: "copying the operand into scratch, because the kernel rewrites what it " +
+				"reads and a tensor is a value",
+		})
+		binds = binds[:len(binds)-1]
+		binds = append(binds, accel.Binding{Index: 0, Buffer: scratch})
+		inPlaceResult = &result
+		inPlaceScratch = scratch
+		inPlaceCount = count
+	} else {
+		result.Index = outIndex
+		binds = append(binds, result)
 	}
 
-	wg := int(n.kernel.WorkgroupSize.X)
-	id := r.Dispatch(pipe, binds, accel.WorkgroupCount{X: (count + wg - 1) / wg})
+	g := n.grid
+	if g == nil {
+		g = perElement(int(n.kernel.WorkgroupSize.X))
+	}
+	id := r.Dispatch(pipe, binds, g(n.out))
 	if n.uniform != nil {
 		p.uniformNodes = append(p.uniformNodes, uniformNode{node: id, build: n.uniform})
+	}
+
+	if inPlaceResult != nil {
+		// The scratch buffer holds the answer. If the caller named this value
+		// it has to reach their buffer; if not, the scratch *is* the value and
+		// the consumers read it.
+		if inPlaceResult.Buffer.Buffer == nil && inPlaceResult.Slot != 0 {
+			r.CopyToSlot(inPlaceResult.Slot, 0, inPlaceCount, inPlaceScratch)
+		}
+		views[i] = inPlaceScratch
+	}
+	return nil
+}
+
+// copyInto records a copy from one binding into another.
+func (p *Plan) copyInto(r *accel.Recorder, dst, src accel.Binding, count int) error {
+	switch {
+	case dst.Buffer.Buffer != nil && src.Buffer.Buffer != nil:
+		r.CopyBuffer(dst.Buffer, src.Buffer)
+	case dst.Buffer.Buffer != nil:
+		r.CopyFromSlot(dst.Buffer, src.Slot, 0, count)
+	case src.Buffer.Buffer != nil:
+		r.CopyToSlot(dst.Slot, 0, count, src.Buffer)
+	default:
+		return fmt.Errorf("a copy between two bound resources is not lowered; make the " +
+			"source an intermediate")
 	}
 	return nil
 }

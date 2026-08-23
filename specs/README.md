@@ -96,8 +96,8 @@ numbered in.
 | Spec | Status | Covers |
 | --- | --- | --- |
 | [007-tensor-layer.md](007-tensor-layer.md) | Drafted | Caller-owned plans and state, concrete ports, unquantized f16/f32 operators, minimal prefill and decode |
-| [024-tensor-bringup.md](024-tensor-bringup.md) | In progress | M7 child: the builder, shape and dtype inference, lowering to a recorder, plans and bindings, and the elementwise operators on both backends |
-| [025-tensor-operators.md](025-tensor-operators.md) | In progress | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
+| [024-tensor-bringup.md](024-tensor-bringup.md) | Implemented | M7 child: the builder, shape and dtype inference, lowering to a recorder, plans and bindings, and the elementwise operators on both backends |
+| [025-tensor-operators.md](025-tensor-operators.md) | Implemented | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 
 ## Process

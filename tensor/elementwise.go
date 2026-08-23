@@ -46,7 +46,7 @@ func binary(b *Builder, op string, k *accel.Kernel, x, y *Tensor, skip int) *Ten
 			"the right, and only a size-one axis expands", x.shape, y.shape)
 	}
 	return b.record(node{
-		op: op, inputs: []*Tensor{x, y}, kernel: k,
+		op: op, inputs: []*Tensor{x, y}, kernel: k, bcast: true,
 		reason: "the contiguous elementwise variant, which is the only one registered for " +
 			"this operator in v0",
 	}, x.dtype, shape)
@@ -87,7 +87,7 @@ func Scale(b *Builder, x *Tensor, scalarName string) *Tensor {
 		return b.fail(1, "Scale", "%q is declared %v and Scale needs f32", scalarName, kind)
 	}
 	return b.record(node{
-		op: "Scale", inputs: []*Tensor{x}, kernel: &testkernels.ElemScaleKernel,
+		op: "Scale", inputs: []*Tensor{x}, kernel: &testkernels.ElemScaleKernel, bcast: true,
 		reads: []string{scalarName},
 		uniform: func(vals map[string]ScalarValue) any {
 			return testkernels.ScaleParams{Factor: vals[scalarName].F32}
@@ -110,7 +110,7 @@ func SiLU(b *Builder, x *Tensor) *Tensor {
 		return b.fail(1, "SiLU", "%v is not an elementwise dtype", x.dtype)
 	}
 	return b.record(node{
-		op: "SiLU", inputs: []*Tensor{x}, kernel: &testkernels.SiLUKernel,
+		op: "SiLU", inputs: []*Tensor{x}, kernel: &testkernels.SiLUKernel, bcast: true,
 		reason: "the contiguous elementwise variant; exp is bounded by " +
 			"specs/008-numerics.md section 6",
 	}, x.dtype, x.shape)
@@ -140,6 +140,7 @@ func SwiGLU(b *Builder, gate, value *Tensor) *Tensor {
 	}
 	return b.record(node{
 		op: "SwiGLU", inputs: []*Tensor{gate, value}, kernel: &testkernels.SwiGLUKernel,
+		bcast:    true,
 		reason:   "the authored fused kernel, which specs/010-kernel-corpus.md registers",
 		rejected: []string{"SiLU followed by Mul: correct, and two dispatches over the same bytes"},
 	}, gate.dtype, gate.shape)

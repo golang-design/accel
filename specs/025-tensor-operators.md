@@ -1,6 +1,6 @@
 ---
 title: "The v0 tensor operator set: views, indexing, normalization, and matrix multiplication"
-status: in progress
+status: implemented
 layer: tensor
 depends_on:
   - 007-tensor-layer.md
@@ -95,9 +95,38 @@ Recorded rather than glossed, because each is a real gap a caller meets:
    copy into a transient followed by an in-place dispatch on it. The copy is
    reported.
 
-## 5. Done
+## 5. Outcome — 2026-08-23
+
+Every operator builds, infers, lowers, and runs on both backends, and a
+feed-forward block — normalize, project, activate — compiles and agrees between
+them within [008](008-numerics.md) §6's ceiling for the primitives it reaches.
+
+**The grid belongs beside the kernel.** An elementwise kernel wants one
+invocation per element, a row reduction wants one workgroup per row (because the
+invocations in it share partial sums through workgroup memory, and a row split
+across two workgroups could not), a tiled GEMM wants tiles of the output, and
+RoPE wants one invocation per rotated *pair*. That mapping is the only thing the
+operator file knows which the contract does not, which is why it sits next to
+the kernel rather than in a table elsewhere.
+
+**Broadcasting is elementwise-only, and finding that out was the correction.**
+The first lowering packed *any* operand whose shape differed from the result's,
+which is right for `Add` and catastrophic for `Rows`: a gather's table is
+`[vocab, width]` against a result of `[rows, width]`, and materializing it would
+have repeated the wrong rows. Operands have shapes of their own; only the
+elementwise family's are the result's.
+
+**An in-place kernel goes through scratch, not through the result.** `RoPE`
+rewrites its buffer, so the operand is copied in and the answer copied out. The
+first version copied straight into the result, which fails when the operand and
+the result are both caller buffers — the recorder moves bytes between a slot and
+a view, and not between two slots. The copies are reported for the same reason a
+materialization is.
+
+## 6. Done
 
 - every operator above builds, infers, lowers, and runs on both backends;
 - the refusals are checked by a table, including every view rule; and
-- a transformer feed-forward block — normalize, project, activate, project —
-  compiles and runs, which is the smallest thing that shows the set composes.
+- a transformer feed-forward block — normalize, project, activate — compiles,
+  runs, and agrees between the backends, which is the smallest thing that shows
+  the set composes.

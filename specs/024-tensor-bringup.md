@@ -1,6 +1,6 @@
 ---
 title: "Tensor bring-up: the builder, inference, compilation, and one operator on both backends"
-status: in progress
+status: implemented
 layer: tensor
 depends_on:
   - 003-command-graph.md

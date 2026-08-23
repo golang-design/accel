@@ -103,6 +103,98 @@ func TestATensorPlanAgreesOnCPUAndMetal(t *testing.T) {
 	}
 }
 
+// A feed-forward block agrees between the backends, which is the operator set
+// checked rather than one operator.
+//
+// The ceiling is 022's rule applied: RMSNorm reaches rsqrt and SiLU reaches exp,
+// both bounded by specs/008-numerics.md section 6, doubled for two
+// implementations. The GEMM reaches neither and would have to agree exactly on
+// its own -- which the corpus differential already asserts, so what this adds is
+// that composing them does not lose it.
+func TestAFeedForwardBlockAgreesOnCPUAndMetal(t *testing.T) {
+	const rows, width, hidden = 4, 128, 64
+
+	xs := make([]float32, rows*width)
+	gs := make([]float32, width)
+	ws := make([]float32, width*hidden)
+	for i := range xs {
+		xs[i] = float32(math.Sin(float64(i))) * 2
+	}
+	for i := range gs {
+		gs[i] = 1 + float32(i%5)/8
+	}
+	for i := range ws {
+		ws[i] = float32(i%7)/4 - 0.75
+	}
+
+	run := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		rt, err := tensor.NewRuntime(d)
+		if err != nil {
+			t.Fatalf("runtime: %v", err)
+		}
+		b := rt.NewBuilder("ffn")
+		x := tensor.Input(b, tensor.ValueDesc{
+			Name: "x", DType: accel.F32, Shape: tensor.Shape{rows, width},
+		})
+		gain := tensor.Weight(b, tensor.ValueDesc{
+			Name: "gain", DType: accel.F32, Shape: tensor.Shape{width},
+		})
+		xf16 := tensor.Input(b, tensor.ValueDesc{
+			Name: "xf16", DType: accel.F16, Shape: tensor.Shape{rows, width},
+		})
+		w1 := tensor.Weight(b, tensor.ValueDesc{
+			Name: "w1", DType: accel.F16, Shape: tensor.Shape{width, hidden},
+		})
+		// Normalize, project, activate: three kernels of three different
+		// shapes -- a row reduction, a tiled GEMM, and an elementwise pass.
+		tensor.Output(b, "normed", tensor.RMSNorm(b, x, gain, 1e-5))
+		tensor.Output(b, "h", tensor.SiLU(b, tensor.MatMul(b, xf16, w1)))
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "ffn"})
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		normed := f32Buffer(t, d, "normed", make([]float32, rows*width))
+		h := f32Buffer(t, d, "h", make([]float32, rows*hidden))
+		f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+			"x": f32Buffer(t, d, "x", xs), "xf16": f16Buffer(t, d, "xf16", xs),
+			"gain": f32Buffer(t, d, "gain", gs), "w1": f16Buffer(t, d, "w1", ws),
+			"normed": normed, "h": h,
+		}})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		out := make([]float32, rows*width+rows*hidden)
+		if err := d.Queue().ReadBuffer(normed.Buffer, 0, out[:rows*width]); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if err := d.Queue().ReadBuffer(h.Buffer, 0, out[rows*width:]); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if err := plan.Close(); err != nil {
+			t.Fatalf("plan close: %v", err)
+		}
+		if err := rt.Close(); err != nil {
+			t.Fatalf("runtime close: %v", err)
+		}
+		return out
+	}
+
+	cpuDev, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("open CPU: %v", err)
+	}
+	defer cpuDev.Close()
+	cpu := run(t, cpuDev)
+	gpu := run(t, openMetalRuntimeDevice(t))
+
+	if r := numeq.WithinULP(gpu, cpu, 16); !r.Equal {
+		t.Fatalf("a feed-forward block disagrees between backends: %v\n  the ceiling is "+
+			"RMSNorm's rsqrt and SiLU's exp, doubled for two implementations", r)
+	}
+}
+
 func openMetalRuntimeDevice(t *testing.T) *accel.Device {
 	t.Helper()
 	e := accel.Enumerate()
