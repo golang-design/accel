@@ -1035,7 +1035,12 @@ is not tidying, it is the only check those sentences ever get.
 
 Independently scoped later work includes:
 
-- a quantization representation/numerics spec followed by quantized Rows/GEMM;
+- ~~a quantization representation/numerics spec followed by quantized
+  Rows/GEMM~~ — **[027](027-quantization.md), complete 2026-08-23**: symmetric
+  int8 with a per-block scale, a derived error bound rather than a measured one,
+  quantized GEMM and Rows agreeing on both backends, and a tensor-layer operator
+  that mixes with the unquantized one in a single plan. Sub-byte formats,
+  a quantized KV cache and activation quantization are the follow-ons;
 - production prefill bucketing and, only then, an optional stable-identity plan
   cache;
 - textures/formats and graphics;
@@ -1045,6 +1050,17 @@ Independently scoped later work includes:
 
 Vulkan is the first backend priority because it gives the CPU oracle a second
 vendor/API opinion and pays the cost of the real SPIR-V IR.
+
+**Vulkan is blocked in this environment, measured rather than assumed.** There
+is no Vulkan loader, no MoltenVK, and no SPIR-V validator on the development
+machine. Unlike M6 — whose premise that no Metal device existed turned out to be
+false and cost several paragraphs of workaround before a four-line spike
+disproved it — this one was checked first. It matters more here than it would
+elsewhere, because [004](004-kernel-authoring.md) makes SPIR-V a *binary* target
+with no source level: without a device, a validator, or a driver compiler, an
+emitter would be code nobody ran, which is the failure mode M6's outcome names.
+
+So M8 started with quantization, which this environment can prove end to end.
 
 ## An unverified commit range
 

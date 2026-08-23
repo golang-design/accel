@@ -1,6 +1,6 @@
 ---
 title: "Quantized weights: the int8 representation, its error bound, and the kernels"
-status: drafted
+status: implemented
 layer: tensor
 depends_on:
   - 001-device-resources.md
@@ -136,6 +136,44 @@ spec does not silently transpose for them.
 - both kernels agree between the CPU backend and Metal; and
 - the tensor layer exposes them, and a plan mixing quantized and unquantized
   matrices compiles and runs.
+
+## 5.1 Outcome — 2026-08-23
+
+All five criteria are met. `quant.Int8` produces the two planes, `QuantMatMul`
+and `QuantRows` read them, both compile on the device and agree with the CPU
+backend, and a plan mixing a quantized and an unquantized projection compiles
+and runs with `Selections` naming both kernels.
+
+**The measured cost.** On a dot product over weights without a dominant
+outlier, §3's bound is **0.6% of the computation's magnitude** — which is what
+1/254 per term predicts, and the check that the bound is not vacuous.
+
+**Three edge cases turned out to be real rather than defensive.** A block of all
+zeros gives a zero scale and dividing by it would make every quant a NaN; a
+scale can underflow f16 when every weight in a block is tiny; and `round(w/s)`
+reaches 127 at a block's peak, so rounding can push a weight one ulp below it to
+128, which an int8 wraps to −128 — turning the largest weight in the block into
+the most negative one. Each has a test that feeds exactly that input.
+
+**The block size is declared twice and a test is what keeps it once.** A kernel
+compiles from a closed subset with no imports beyond `accel` and `kmath`, so it
+cannot import the quantizer. Confirmed by setting the two apart: the kernel then
+reads the wrong scale for every weight past the first block, which is a matrix
+wrong everywhere and plausible nowhere anyone would notice quickly.
+
+**Two things this needed underneath, neither anticipated.** `i8` and `u8` were
+declared in the IR as "storage and conversion types, for quantized weights" and
+had no MSL spelling, so a kernel reading a quantized plane generated a Go
+lowering and silently no MSL — found by probing rather than by reading. And the
+corpus differential harness mapped every unknown kernel dtype to f32, so a
+quantized plane was uploaded as floats; its completeness guard demanded both new
+kernels the moment they were generated, which is what surfaced it.
+
+**A design correction.** A nil quant or scale plane was reaching the poison test,
+which returns a poisoned tensor and records nothing — so a caller passing one
+plane got *silence*. Poison propagation exists to suppress the echoes of an
+error; a missing argument is not an echo, it is the error. It is checked first
+now.
 
 ## 6. Not in this spec
 
