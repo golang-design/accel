@@ -45,7 +45,7 @@ flowchart LR
 **The entry points.** [021](021-metal-bringup.md) §1 tables executed selectors
 because a wrong name crashes inside `objc_msgSend`. Vulkan's equivalent is the
 resolved-symbol list, and the predecessor ran it:
-`~/dev/poly.red/polyred/gpu/backend_vk.go` resolves 32 entry points and drives
+`polyred/gpu/backend_vk.go` resolves 32 entry points and drives
 instance → device → memory → descriptors → pipeline → dispatch on lavapipe,
 green in CI. This child takes that list and adds the six it never needed:
 `vkCmdCopyBuffer`, `vkCmdPipelineBarrier`, `vkCreateFence`, `vkWaitForFences`,

@@ -1278,7 +1278,7 @@ nothing that has to be undone.
 
 **Everything after `accel: textures, formats, and the row-pitch guarantee` has
 passed local gates only.** GitHub Actions stopped running mid-session — every
-job failed to start with a billing message, not a test failure — so those
+job failed to start rather than failing a test — so those
 commits have not been through the matrix.
 
 That matters more here than it would elsewhere, because CI has caught three
