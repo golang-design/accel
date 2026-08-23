@@ -1,9 +1,12 @@
 # Contributing
 
-Thanks for looking. This project is early: two of eight milestones are built and
-the decisions that are hardest to change later are being made right now, which
-makes this an unusually good time to get involved. An argument against one of
-those decisions is worth more than a patch.
+Thanks for looking. Compute works end to end on the CPU and Metal backends:
+memory, command graphs, cooperative kernels, a portable tiled GEMM, the tensor
+layer, quantized weights, sampling and a paged KV cache. Graphics is being built
+now. Vulkan, D3D12, OpenGL and WebGPU are specified and unscheduled.
+
+The API will still change, so an argument against one of the decisions is worth
+as much as a patch — and patches are welcome.
 
 ## What is most useful right now
 
@@ -20,9 +23,9 @@ that is directly valuable. Those entries cost hours each to discover.
 **Prior art.** If another project solved one of the open questions well, saying
 so saves us finding out the hard way.
 
-Code contributions are welcome too, but until the API surface settles they carry
-a real risk of being invalidated by a design change. Ask in an issue first so
-neither of us wastes the effort.
+**Code.** The public API is still changing, so for anything larger than a fix,
+open an issue with the shape you have in mind before you write it. You will get
+an answer about whether a design change is about to move the ground under it.
 
 ## Ground rules
 
@@ -115,10 +118,13 @@ reference on both backends. Above that,
 tensors into a plan and runs a transformer decode step whose output matches the
 same tokens prefilled in one pass.
 
-What is not built is post-v0 by design: graphics, quantization, and the Vulkan,
-D3D12, OpenGL and WebGPU backends. `Sampler` is the one thing that still returns
-`ErrNotImplemented`, because it has nothing to sample until a render pass
-exists.
+What is not built: graphics is designed and being written — the stage types are
+in the public API and the CPU rasterizer is under way, but there is no render
+pipeline, pass or surface — and the Vulkan, D3D12, OpenGL and WebGPU backends
+are specified and unscheduled. Subgroup shuffles and scans are specified and
+unbuilt. `Sampler` is the one declaration that exists only for its shape, and it
+**panics** with `ErrNotImplemented` rather than returning it, because it has
+nothing to sample until a render pass exists.
 [`specs/009-sequencing.md`](specs/009-sequencing.md) is the order the rest
 arrives in.
 
@@ -144,8 +150,8 @@ go run ./internal/conformance/cover/covercheck -profile=cover.out
 | `internal/driver/` | The backend contract, and the plan a built graph lowers to | Anyone adding a backend |
 | `internal/cpu/` | The pure-Go backend and oracle | Anyone adding a backend |
 | `internal/metal/` | The Metal backend: adapters, memory, and plan execution | Anyone adding a backend |
-| `internal/mtl/` | The Objective-C shim the Metal backend sits on, cgo-free through purego | Nobody, ideally |
-| `internal/alloc/` | Suballocation inside a pool | Nobody, ideally |
+| `internal/mtl/` | The Objective-C shim the Metal backend sits on, cgo-free through purego | Anyone touching the Metal shim |
+| `internal/alloc/` | Suballocation inside a pool | Anyone changing suballocation; it is fuzzed and self-contained, which makes it a good first read |
 | `internal/kernelc/` | The kernel compiler: loader, subset checker, IR, emitters | Anyone changing the kernel language |
 | `internal/kernel/` | The vocabulary a kernel is written in, declared below accel | Anyone changing the kernel language |
 | `internal/conformance/` | Test machinery: profiles, comparisons, coverage | People writing tests |
