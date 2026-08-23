@@ -134,6 +134,17 @@ var portableFloor = driver.Limits{
 // 001 section 3.1 already resolves the CPU backend's alignment column that way.
 // Reporting a looser alignment in developer mode would let code allocate at an
 // offset no GPU accepts and discover it on a different machine.
+
+// maxDeveloperBytes is the developer profile's buffer and pool ceiling.
+//
+// Two gibibytes less one byte, and the "less one byte" is the point: Limits
+// measures bytes in an int, which is 32 bits on 386 and arm, where a literal
+// 1<<31 does not fit and this package does not compile at all. It was written
+// that way, and nothing caught it, because the test matrix runs three 64-bit
+// runners while the README told readers they could build for any GOOS. The
+// cross-GOOS job in CI is what found it and is what keeps it found.
+const maxDeveloperBytes = 1<<31 - 1
+
 var developerLimits = driver.Limits{
 	MinStorageBufferOffsetAlignment: portableFloor.MinStorageBufferOffsetAlignment,
 	MinUniformBufferOffsetAlignment: portableFloor.MinUniformBufferOffsetAlignment,
@@ -141,8 +152,8 @@ var developerLimits = driver.Limits{
 	MinBufferCopyRowPitchAlignment:  portableFloor.MinBufferCopyRowPitchAlignment,
 	MinTexturePlacementAlignment:    portableFloor.MinTexturePlacementAlignment,
 
-	MaxBufferBytes: 1 << 31,
-	MaxPoolBytes:   1 << 31,
+	MaxBufferBytes: maxDeveloperBytes,
+	MaxPoolBytes:   maxDeveloperBytes,
 	MaxPools:       1 << 20,
 
 	MaxTextureExtent2D:    16384,
@@ -156,7 +167,7 @@ var developerLimits = driver.Limits{
 	MaxWorkgroupCount:       [3]int{1 << 20, 1 << 20, 1 << 20},
 	MaxSharedMemoryBytes:    1 << 20,
 
-	MaxStorageBufferBindingBytes: 1 << 31,
+	MaxStorageBufferBindingBytes: maxDeveloperBytes,
 	MaxBindingsPerKind:           64,
 
 	MinSubgroupSize: defaultSubgroupSize,

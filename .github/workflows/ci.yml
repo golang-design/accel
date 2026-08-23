@@ -154,6 +154,42 @@ jobs:
         fi
         echo "no cgo found"
 
+  cross:
+    name: cross-compile every GOOS
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # The README tells a reader they can cross-compile to any GOOS with
+    # CGO_ENABLED=0. Nothing checked it: the test matrix runs three runner
+    # operating systems, which proves those three build natively and says
+    # nothing about the rest. A claim in a user-facing document with no gate
+    # behind it is a claim that goes stale silently, so this is the gate.
+    # ios is absent on purpose: linking a main package there needs external
+    # (cgo) linking whatever the library does, so cmd/accel-kernel cannot be
+    # built for it. That is a Go toolchain constraint, not an accel one.
+    - name: Build for every GOOS
+      env:
+        CGO_ENABLED: '0'
+      run: |
+        set -e
+        for pair in \
+          linux/amd64 linux/arm64 linux/386 linux/arm \
+          darwin/amd64 darwin/arm64 \
+          windows/amd64 windows/arm64 windows/386 \
+          freebsd/amd64 openbsd/amd64 netbsd/amd64 \
+          js/wasm wasip1/wasm android/arm64
+        do
+          GOOS=${pair%/*} GOARCH=${pair#*/}
+          echo "--- $GOOS/$GOARCH"
+          GOOS=$GOOS GOARCH=$GOARCH go build ./... 
+        done
+
   gofmt:
     name: gofmt
     runs-on: ubuntu-latest
