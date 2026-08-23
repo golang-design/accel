@@ -527,7 +527,7 @@ intersection of its declared targets is [006](006-backends.md)'s contract and is
 not built; a mimicked profile already refuses a kernel it cannot run, which is
 the half that gates correctness.
 
-### M5. The portable tiled GEMM on the CPU
+### M5. The portable tiled GEMM on the CPU — complete 2026-08-23
 
 Build: 010's `matmul` tiled variant and the guarded-tail machinery it needs.
 
@@ -546,6 +546,39 @@ Done:
 
 This is the first point at which the portable compute model is proven, and it is
 000's second v0 proof obligation.
+
+#### M5 outcome
+
+All three criteria are met. The tiled f16-storage, f32-accumulate GEMM matches an
+independently written higher-precision reference at eight shapes, including
+3x5x7 and 17x19x23 where no dimension is a multiple of any tile dimension, under
+a per-output budget computed from that element's own K and its own sum of
+magnitudes. Both barriers are load-bearing and **fail differently** — the first
+through definition tracking, the second through conflicting-access reporting —
+which is the half of the criterion that shows the diagnostics distinguish what
+went wrong rather than merely that something did. And a public graph runs upload
+to GEMM to readback in strict mode.
+
+**What this milestone needed from the ones before it.** The mid-loop state split
+from [018](018-cooperative-lowering.md), because both barriers sit inside the K
+loop; the diagnostics from [019](019-cooperative-diagnostics.md), because the
+barrier criterion is stated in terms of them; and the derived bound from
+[020](020-cooperative-atomics.md)'s reduction work, because a per-output
+dot-product budget is the same machinery. That the GEMM needed no new compiler
+work is the evidence that M4's split was drawn in the right place.
+
+**One limit found and recorded.** A cooperative kernel whose barriers sit inside
+a loop cannot be run invocation-by-invocation as a reference, because the
+whole-function emulation is exact only while the loop runs once. That is
+[018](018-cooperative-lowering.md) §3's stated limit reached in practice, and it
+is why the general criterion is flat-versus-cooperative agreement rather than
+authored-versus-generated. The authored GEMM is checked at a bounded K where the
+emulation holds, with the tails on M and N still exercised.
+
+**Three stale gates removed**, each of which had been correct when written: the
+plan validator and pipeline creation both required a flat entry point, and the
+generated-source type check read a fixed list of corpus files that went stale
+silently whenever the corpus grew.
 
 ### M6. Metal
 

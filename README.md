@@ -169,15 +169,15 @@ bindings are the better choice.
 | Cooperative kernels: barriers, shared memory, the resumable lowering | **Built** on the CPU backend |
 | Cooperative diagnostics: undefined reads, arrival, conflicting access | **Built** on the CPU backend |
 | Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
-| Portable tiled GEMM | Specified, next |
-| Metal backend | Specified, not started |
+| Portable tiled GEMM | **Built** on the CPU backend |
+| Metal backend | Specified, next |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |
 
 Built means it has tests that fail without it, greater than 90% statement
 coverage on its package, and an end-to-end case through the public API. Those
-rows came from [M1 through M4](specs/009-sequencing.md).
+rows came from [M1 through M5](specs/009-sequencing.md).
 
 A graph infers its own dependency edges from what each node declares it touches,
 comparing byte ranges rather than whole resources, so two nodes writing disjoint
