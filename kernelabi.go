@@ -34,6 +34,11 @@ type (
 	// KernelUniform is one by-value parameter a kernel declares.
 	KernelUniform = kernel.Uniform
 
+	// KernelSharedTracker records what a workgroup did to its shared memory, so
+	// a read of something nothing wrote is reported rather than plausible. It
+	// is nil in strict mode, where every call on it is a no-op.
+	KernelSharedTracker = kernel.SharedTracker
+
 	// KernelFrame is one invocation's saved state between suspension points in
 	// a cooperative kernel. The scheduler owns it and the generated lowering
 	// decides what it holds.

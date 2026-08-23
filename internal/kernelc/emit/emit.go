@@ -127,6 +127,24 @@ type emitter struct {
 	// survives the return. Nil while emitting the flat lowering, which needs no
 	// frame because it never suspends. See coop.go.
 	frameLocals map[*ir.Local]bool
+
+	// sharedIndex maps a shared parameter's name to its position in the
+	// kernel's shared list, which is how the tracker keys its shadow bits.
+	sharedIndex map[string]int
+}
+
+// sharedArray reports whether a value names workgroup-shared storage, and
+// which declared array it is.
+//
+// Which one matters because the tracker keys its shadow bits per array: two
+// arrays each have an element zero and conflating them would report a defined
+// read as undefined.
+func (e *emitter) sharedArray(v ir.Value) (int, bool) {
+	p, ok := v.(*ir.Param)
+	if !ok || p.Type() == nil || p.Type().Kind != ir.Array {
+		return 0, false
+	}
+	return e.sharedIndex[p.Name], true
 }
 
 // local is a local's spelling: its own name, or the frame field standing in for
@@ -380,6 +398,30 @@ func (e *emitter) stmt(s ir.Stmt, depth int) {
 		e.printf("\n")
 
 	case *ir.Assign:
+		// A store into shared memory is announced to the tracker before it
+		// happens, so a later read knows the element is defined. Nothing outside
+		// the kernel can see a shared access -- it is an ordinary slice index in
+		// generated Go -- which is why the lowering carries the instrumentation
+		// rather than the runtime watching for it.
+		if idx, ok := s.LHS.(*ir.IndexExpr); ok {
+			if array, isShared := e.sharedArray(idx.X); isShared {
+				e.printf("%str.Write(%d, int(", indent(depth), array)
+				e.value(idx.Index)
+				e.printf("))\n")
+				// The destination's own index is not a read, so it is emitted
+				// uninstrumented. Without this every store would also report a
+				// read of the element it is about to define, which is a
+				// diagnostic that fires on every correct kernel.
+				e.printf("%s", indent(depth))
+				e.value(idx.X)
+				e.printf("[")
+				e.value(idx.Index)
+				e.printf("] = ")
+				e.rounded(s.RHS)
+				e.printf("\n")
+				break
+			}
+		}
 		e.printf("%s", indent(depth))
 		e.value(s.LHS)
 		e.printf(" = ")
@@ -547,6 +589,16 @@ func (e *emitter) value(v ir.Value) {
 		e.printf(".%s", v.Name)
 
 	case *ir.IndexExpr:
+		// A load from shared memory is announced through a helper that returns
+		// the index, so the call sits inside the expression rather than needing
+		// a statement: a read can appear anywhere a value can.
+		if array, isShared := e.sharedArray(v.X); isShared {
+			e.value(v.X)
+			e.printf("[tr.ReadAt(%d, int(", array)
+			e.value(v.Index)
+			e.printf("))]")
+			break
+		}
 		e.value(v.X)
 		e.printf("[")
 		e.value(v.Index)

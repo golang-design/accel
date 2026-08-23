@@ -242,6 +242,11 @@ type Kernel struct {
 	// barrier covers.
 	NewShared func() []any
 
+	// SharedSizes is each declared shared array's element count, in signature
+	// order. The tracker needs it to size its shadow bits, and only generation
+	// knows it.
+	SharedSizes []int
+
 	// Suspensions is how many barriers the body reaches, which is what the
 	// scheduler uses to size an epoch bound. Zero for a flat kernel.
 	Suspensions int
@@ -308,6 +313,16 @@ type Frame struct {
 
 	// Done reports that this invocation has run to completion.
 	Done bool
+
+	// Shared is the workgroup's shared-memory tracker, or nil in strict mode
+	// where the instrumentation costs nothing because every call is a no-op the
+	// compiler removes.
+	Shared *SharedTracker
+
+	// Pass is a hand-written kernel's program counter, for the tests that drive
+	// the scheduler without going through the generator. A generated lowering
+	// keeps its own counter inside State.
+	Pass int
 }
 
 // Bind checks a whole argument set against the declared bindings, once.

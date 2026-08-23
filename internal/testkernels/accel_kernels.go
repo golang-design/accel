@@ -113,11 +113,12 @@ type exchangeFrame struct {
 // It reports whether the invocation suspended. False means it finished, and
 // the scheduler stops calling it. The switch is flat because every barrier
 // sits in uniform control flow, so the suspension points are a sequence.
-func exchangeCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, f *exchangeFrame) bool {
+func exchangeCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, f *exchangeFrame, tr *accel.KernelSharedTracker) bool {
 	switch f.pc {
 	case 0:
 		f.lid0 = t.LocalID().X
 		f.gid1 = t.GlobalID().X
+		tr.Write(0, int(f.lid0))
 		sh[f.lid0] = in[f.gid1]
 		f.pc = 1
 		return true
@@ -127,7 +128,7 @@ func exchangeCoop(t accel.Thread, in []float32, out []float32, sh *[64]float32, 
 			f.next2 = uint32(0)
 		}
 		if f.gid1 < uint32(int32(len(out))) {
-			out[f.gid1] = sh[f.next2]
+			out[f.gid1] = sh[tr.ReadAt(0, int(f.next2))]
 		}
 	}
 	return false
@@ -144,6 +145,7 @@ var ExchangeKernel = accel.Kernel{
 	Digest:      "c1346cd0bf93b2f9dcefa59e47f8f4fd",
 	Generator:   accel.KernelABIVersion,
 	Suspensions: 1,
+	SharedSizes: []int{64},
 	NewShared: func() []any {
 		var s0 [64]float32
 		accel.KernelPoison(s0[:])
@@ -155,7 +157,7 @@ var ExchangeKernel = accel.Kernel{
 			f = &exchangeFrame{}
 			slot.State = f
 		}
-		return exchangeCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f)
+		return exchangeCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[64]float32](a, 0), f, slot.Shared)
 	},
 }
 

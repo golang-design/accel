@@ -178,6 +178,12 @@ func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt) {
 	frame := frameName(k.Name)
 	lower := coopName(k.Name)
 
+	e.sharedIndex = map[string]int{}
+	for i, sh := range k.Shared {
+		e.sharedIndex[sh.Name] = i
+	}
+	defer func() { e.sharedIndex = nil }()
+
 	e.printf("// %s is one invocation's saved state between suspension points.\n", frame)
 	e.printf("//\n")
 	e.printf("// Every local lives here rather than only those live across a barrier: that\n")
@@ -203,7 +209,7 @@ func (e *emitter) coopLowering(k *ir.Func, segs [][]ir.Stmt) {
 		}
 		e.printf("%s %s", p.Name, e.paramType(p.Type()))
 	}
-	e.printf(", f *%s) bool {\n", frame)
+	e.printf(", f *%s, tr *accel.KernelSharedTracker) bool {\n", frame)
 	e.printf("\tswitch f.pc {\n")
 	for i, seg := range segs {
 		e.printf("\tcase %d:\n", i)
@@ -324,6 +330,14 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	e.printf("\tGenerator: accel.KernelABIVersion,\n")
 	e.printf("\tSuspensions: %d,\n", len(segs)-1)
 	if len(k.Shared) > 0 {
+		e.printf("\tSharedSizes: []int{")
+		for i, sh := range k.Shared {
+			if i > 0 {
+				e.printf(", ")
+			}
+			e.printf("%d", sh.Type.Len)
+		}
+		e.printf("},\n")
 		e.printf("\tNewShared: func() []any {\n")
 		for i, sh := range k.Shared {
 			e.printf("\t\tvar s%d %s\n", i, e.goType(sh.Type))
@@ -379,7 +393,7 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 			uniformSlot++
 		}
 	}
-	e.printf(", f)\n")
+	e.printf(", f, slot.Shared)\n")
 	e.printf("\t},\n")
 	e.printf("}\n\n")
 }

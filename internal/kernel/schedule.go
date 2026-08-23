@@ -29,6 +29,20 @@ import "fmt"
 // between workgroups: a kernel that waited on another workgroup would be
 // relying on something no target promises.
 func DispatchCooperative(k *Kernel, count ID3, args Args) error {
+	return DispatchCooperativeWith(k, count, args, Options{Diagnostics: true})
+}
+
+// Options is how a dispatch is run.
+type Options struct {
+	// Diagnostics turns the instrumentation on. It is the CPU backend's
+	// developer mode: the checks are what make this backend an oracle rather
+	// than an executor, so they are on by default and off only when a caller
+	// asks for the speed. See specs/006-backends.md section 5.
+	Diagnostics bool
+}
+
+// DispatchCooperativeWith runs a cooperative kernel with explicit options.
+func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) error {
 	if k == nil {
 		return fmt.Errorf("accel: dispatch: no kernel")
 	}
@@ -47,6 +61,15 @@ func DispatchCooperative(k *Kernel, count ID3, args Args) error {
 	invocations := int(size.X) * int(size.Y) * int(size.Z)
 	frames := make([]Frame, invocations)
 	threads := make([]Thread, invocations)
+
+	// One tracker for the whole workgroup, shared by every invocation, because
+	// what it checks is what the invocations did to each other. Nil in strict
+	// mode, where every call the generated code makes on it is a no-op the
+	// compiler removes.
+	var tracker *SharedTracker
+	if opts.Diagnostics && len(k.SharedSizes) > 0 {
+		tracker = NewSharedTracker(k.Name, ID3{}, k.SharedSizes)
+	}
 
 	for gz := range max(count.Z, 1) {
 		for gy := range max(count.Y, 1) {
@@ -73,8 +96,19 @@ func DispatchCooperative(k *Kernel, count ID3, args Args) error {
 					args.Shared = k.NewShared()
 				}
 				fill(threads, group, size, count)
-				if err := runWorkgroup(k, args, threads, frames); err != nil {
+				tracker.Reset(group)
+				for i := range frames {
+					frames[i].Shared = tracker
+				}
+				if err := runWorkgroup(k, args, threads, frames, tracker); err != nil {
 					return err
+				}
+				// Reported per workgroup rather than accumulated, because the
+				// first offending workgroup is the one a reader wants and a
+				// dispatch of a thousand would otherwise report a thousand
+				// copies of one mistake.
+				if ds := tracker.Diagnostics(); len(ds) > 0 {
+					return ds
 				}
 			}
 		}
@@ -108,7 +142,7 @@ func fill(threads []Thread, group, size, count ID3) {
 
 // runWorkgroup advances every invocation epoch by epoch until all have
 // finished.
-func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame) error {
+func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker) error {
 	// The bound is the number of suspension points plus one epoch to finish in.
 	// A kernel cannot suspend more often than it has barriers, so exceeding it
 	// means the generated lowering's program counter is not advancing -- a
@@ -121,6 +155,7 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame) error 
 			if frames[i].Done {
 				continue
 			}
+			tracker.Begin(threads[i].LocalID())
 			if k.Cooperative(threads[i], args, &frames[i]) {
 				active++
 				continue
@@ -130,6 +165,9 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame) error 
 		if active == 0 {
 			return nil
 		}
+		// The epoch ends here, which is what a barrier means and what bounds
+		// the window conflicting accesses are compared in.
+		tracker.Epoch()
 	}
 	return fmt.Errorf("accel: kernel %q did not finish within %d epochs for %d suspension "+
 		"points, so its generated program counter is not advancing", k.Name, bound, k.Suspensions)
