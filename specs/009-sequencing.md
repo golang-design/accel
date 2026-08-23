@@ -945,6 +945,30 @@ that *owns* the resource does not automatically hold at a layer that binds on
 its behalf — and that a silently lost result is the worst failure mode
 available, so the fix is a refusal rather than a queue.
 
+#### A coverage gate that only CI could fail, 2026-08-23
+
+The corpus package passed the coverage gate locally and failed it on CI at
+89.1%, and the difference was the platform rather than the measurement. Four
+newly authored kernels — the two quantized ones and the two samplers — had no
+test running the *authored* function: every test dispatched the generated
+lowering. On darwin the Metal tests pushed the package over the line anyway; on
+Linux, where those tests do not build, they did not.
+
+The fix is [004](004-kernel-authoring.md)'s fifth testing level, which already
+existed for the other kernels and had simply not been extended: run the authored
+form and check it agrees with the generated one. It is platform-independent, so
+it fixes Linux rather than papering over it, and it is the check that matters
+anyway — the generated lowering is what runs, so an authored function nobody
+executes is whatever the IR made of it.
+
+**What this is an instance of.** CI caught something local gates could not, for
+the fourth time in this repository's history, and each has been a
+platform-shaped hole rather than a bug: Windows line endings twice, a coarse
+clock once, and now a package whose coverage depended on which tests the
+platform built. The generalization is that a per-platform gate has a per-platform
+answer, and the only machine that can check all three is the one that runs all
+three.
+
 #### Correction to M7, appended 2026-08-23
 
 Per the maintenance rule at the foot of this file.

@@ -299,6 +299,122 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("QuantMatMul", func(t *testing.T) {
+		const m, k, n = 2, 32, 4
+		a := make([]accel.Float16, m*k)
+		bq := make([]int8, k*n)
+		bs := make([]accel.Float16, (k*n+31)/32)
+		for i := range a {
+			a[i] = accel.ToFloat16(float32(i%7) - 3)
+		}
+		for i := range bq {
+			bq[i] = int8(i%61) - 30
+		}
+		for i := range bs {
+			bs[i] = accel.ToFloat16(0.25 + float32(i)/16)
+		}
+		dims := testkernels.GEMMDims{M: m, N: n, K: k}
+
+		authored := make([]float32, m*n)
+		for i := range authored {
+			testkernels.QuantMatMul(flatThread(i, m*n), dims, a, bq, bs, authored)
+		}
+		generated := make([]float32, m*n)
+		if err := kernel.Dispatch(&testkernels.QuantMatMulKernel, accel.ID3{X: 1},
+			accel.KernelArgs{
+				Slices: []any{a, bq, bs, generated}, Uniforms: []any{dims},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("QuantRows", func(t *testing.T) {
+		const vocab, width, rows = 4, 32, 2
+		tq := make([]int8, vocab*width)
+		ts := make([]accel.Float16, vocab*width/32)
+		for i := range tq {
+			tq[i] = int8(i%101) - 50
+		}
+		for i := range ts {
+			ts[i] = accel.ToFloat16(0.5 + float32(i)/8)
+		}
+		ids := []uint32{2, 0}
+		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: vocab}
+
+		authored := make([]float32, rows*width)
+		for i := range authored {
+			testkernels.QuantRows(flatThread(i, rows*width), p, tq, ts, ids, authored)
+		}
+		generated := make([]float32, rows*width)
+		if err := kernel.Dispatch(&testkernels.QuantRowsKernel, accel.ID3{X: 1},
+			accel.KernelArgs{
+				Slices: []any{tq, ts, ids, generated}, Uniforms: []any{p},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("SampleCategorical", func(t *testing.T) {
+		probs := []float32{0.1, 0.2, 0.3, 0.4}
+		d := testkernels.SampleDims{Vocab: uint32(len(probs)), Draw: 0.35}
+
+		authored := make([]uint32, 1)
+		testkernels.SampleCategorical(flatThread(0, 1), d, probs, authored)
+		generated := make([]uint32, 1)
+		if err := kernel.Dispatch(&testkernels.SampleCategoricalKernel, accel.ID3{X: 1},
+			accel.KernelArgs{Slices: []any{probs, generated}, Uniforms: []any{d}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		if authored[0] != generated[0] {
+			t.Fatalf("authored %d, generated %d", authored[0], generated[0])
+		}
+	})
+
+	t.Run("SampleArgmax", func(t *testing.T) {
+		logits := make([]float32, 300)
+		for i := range logits {
+			logits[i] = float32(math.Sin(float64(i) * 0.21))
+		}
+		// A plateau, so the authored and generated forms have to agree about
+		// the tie rule and not merely about the maximum.
+		logits[19] = 5
+		logits[240] = 5
+		d := testkernels.SampleDims{Vocab: uint32(len(logits))}
+
+		authored := make([]uint32, 1)
+		var best [128]float32
+		var at [128]uint32
+		size := kernel.ID3{X: 128, Y: 1, Z: 1}
+		kernel.RunAuthored(size, kernel.ID3{}, kernel.ID3{X: 1, Y: 1, Z: 1}, 128,
+			func(th kernel.Thread) {
+				testkernels.SampleArgmax(th, d, logits, authored, &best, &at)
+			})
+
+		generated := make([]uint32, 1)
+		if err := kernel.DispatchCooperative(&testkernels.SampleArgmaxKernel,
+			accel.ID3{X: 1},
+			accel.KernelArgs{Slices: []any{logits, generated}, Uniforms: []any{d}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		if authored[0] != generated[0] {
+			t.Fatalf("authored %d, generated %d", authored[0], generated[0])
+		}
+		if authored[0] != 19 {
+			t.Fatalf("both agree on %d, and the lowest of the two equal maxima is 19",
+				authored[0])
+		}
+	})
+
 	t.Run("AttentionPrefill", func(t *testing.T) {
 		const qHeads, kvHeads, headDim, qSeq = 2, 1, 8, 4
 		dims := testkernels.PrefillDims{
