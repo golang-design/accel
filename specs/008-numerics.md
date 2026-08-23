@@ -279,6 +279,59 @@ harness refuses the comparison. The test must narrow its input domain or add a
 new proved operator rule. This is intentionally stricter than a global relative
 tolerance.
 
+### 8.1 Perspective-correct interpolation
+
+[035](035-cpu-rasterizer.md)'s bounded side needs a budget for an interpolated
+varying, and it is derived here rather than measured, from the same composition
+rule as everything else above. For $K$ vertices with attribute values $a_i$,
+clip $w_i > 0$, and screen-space barycentrics $\lambda_i \ge 0$ summing to 1:
+
+$$
+a \;=\; \frac{N}{D},
+\qquad
+N = \sum_{i=1}^{K} \lambda_i \frac{a_i}{w_i},
+\qquad
+D = \sum_{i=1}^{K} \frac{\lambda_i}{w_i}
+$$
+
+Counting roundings on the longest path to each: a numerator term takes a divide
+and a multiply, and the sum takes $K-1$ additions, so $N$ carries $\gamma(K+1)$;
+a denominator term takes one divide, so $D$ carries $\gamma(K)$; and the final
+divide adds one more rounding, $u$.
+
+Because every $\lambda_i \ge 0$ and every $w_i > 0$, all terms are positive and
+no cancellation is possible, so $\sum_i |\lambda_i a_i / w_i| \le
+\max_i|a_i| \cdot D$ and the interpolated value is a convex combination with
+$|a| \le \max_i |a_i|$. Propagating the two relative errors through the quotient
+and clearing $D$ gives an absolute bound that depends on nothing but the vertex
+values:
+
+$$
+|\Delta a| \;\le\; \big(\gamma(K+1) + \gamma(K) + u\big) \cdot \max_i |a_i|
+$$
+
+For a triangle in f32 that is $\gamma(4) + \gamma(3) + u \approx 8u \approx
+4.8 \times 10^{-7}$ of the largest vertex value. **Depth is not interpolated this
+way** — 035 §3 interpolates window depth linearly, so it takes §7's ordinary
+$\gamma(K-1)$ sum budget over $\sum_i |\lambda_i z_i|$ instead, and using the
+perspective bound for it would be a bound for an operation nobody performed.
+
+**Two implementations disagreeing about $\lambda$ is a different term**, and it
+is not covered above. The bound holds for a fixed $\lambda$; a CPU and a GPU that
+compute barycentrics from edge functions differently evaluate the same attribute
+at slightly different points, which adds
+
+$$
+|\Delta a|_{\lambda} \;\le\; \Big(\max_i a_i - \min_i a_i\Big) \cdot \delta_\lambda
+$$
+
+a Lipschitz term over the attribute's own variation across the primitive. It is
+zero for a constant attribute, largest for one that varies fully, and it is why a
+same-backend comparison against a closed form and a cross-backend comparison are
+two different budgets rather than one with a bigger number. $\delta_\lambda$
+arrives with the cross-backend corpus; at edges it is not a value question at all
+but the coverage question 035 §2 states as its honest limit.
+
 ## 9. Comparison API
 
 The harness makes class, backend profile, and reference domain explicit. The
