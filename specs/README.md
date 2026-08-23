@@ -122,7 +122,7 @@ numbered in.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
-| [036-documentation.md](036-documentation.md) | Drafted | Who each document is for, what builder-voice looks like, the ten-tutorial deck, and the public-surface review that gates it |
+| [036-documentation.md](036-documentation.md) | In progress | Who each document is for, what builder-voice looks like, the ten-tutorial deck, and the public-surface freeze record that gates it |
 | [009-sequencing.md](009-sequencing.md) | In progress | What gets built in what order, what done means per milestone, the work no spec owns, and the risks with what retires each |
 | [011-conformance-harness.md](011-conformance-harness.md) | In progress | Profiles, comparisons, oracles, fuzzing, E2E scenarios, diagnostics, and greater-than-90% coverage gates |
 

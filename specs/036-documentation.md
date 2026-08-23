@@ -1,6 +1,6 @@
 ---
 title: "Documentation: who each document is for, and the tutorial deck"
-status: drafted
+status: in progress
 layer: project
 depends_on:
   - 000-decisions.md
@@ -151,7 +151,123 @@ graphics before documenting compute would leave the library undocumented through
 [035](035-cpu-rasterizer.md)'s remaining steps, the stage-ABI compiler work, and
 Metal — which is the problem this spec exists to fix, not a solution to it.
 
-## 5. Done
+## 5. The freeze record — 2026-08-24
+
+§4's output. Five reviewers read the surface by area; every one returned
+*freeze-with-fixes*. A symbol is in exactly one tier:
+
+| Tier | Meaning | A tutorial may | Changing it later costs |
+| --- | --- | --- | --- |
+| **Frozen** | name, shape and behaviour are the contract | teach it plainly | an argument, a deprecation, a release note |
+| **Provisional** | correct today, a *named* future change moves it | teach it saying it may move | nothing — that is what provisional buys |
+| **Fix before** | wrong now, cheaper to change today than to support | not teach it yet | rewriting every tutorial that used it |
+
+The freeze covers the compute half: `accel`, `tensor`, `quant`, `kmath`.
+Graphics is not in it — there is no render API in code, and §5.3 removes the
+stage types until there is.
+
+### 5.1 Frozen
+
+Devices and selection (`OpenCPU`, `OpenDevice`, `OpenBest`, `Policy`, `Backend`,
+`Enumerate`, `DeviceInfo`, `Limits`, `Capabilities`, `CPUMode`); pools, buffers
+and views (`NewPool`, `NewPoolWith`, `Pool`, `Buffer`, `BufferView`,
+`PoolStats`, `MemoryKind`, `BufferUsage`, `DType`); graphs (`NewRecorder`,
+`Recorder`, `Graph`, `Slot`, `Queue`, `Fence`, `TransientPool`, the error
+types); and `tensor`, `quant`, `kmath` in full apart from §5.6's exclusions.
+
+### 5.2 Provisional, with the reason each one moves
+
+| Surface | Moves when |
+| --- | --- |
+| `Device.Queues`, `Device.QueueFor`, `QueueKind` | a backend reports more than one queue |
+| Texture creation and readback | the memory-kind story settles beyond `TextureDescriptor.Kind` |
+| `NodeRenderPass` and the node kinds after it | render passes land |
+| `Binding`'s uniform and texture fields | uniforms get their own dispatch argument |
+
+"Provisional" is not a hedge. Each names the event, so a caller can decide
+whether it affects them.
+
+### 5.3 Fix before the freeze — **needs a decision**
+
+Every one is breaking, and each costs a `go generate` or a `gofmt -r` today
+against a deprecation cycle and a tutorial rewrite later. The two that matter
+most:
+
+1. **Move the generated-code ABI out of the root package.** About thirty
+   symbols exist only so generated code compiles: `KernelArgs`, `KernelFrame`,
+   `KernelMask`, `KernelDType` and the rest. They outnumber the names a tutorial
+   teaches, in the same pkg.go.dev index. Moving them to
+   `golang.design/x/accel/kernelabi` — and making `Kernel` an opaque handle the
+   emitter constructs rather than a literal it fills — is one `go generate` for
+   every caller, and `accel-kernel -check` already fails CI on a stale file.
+   Freezing instead commits the library to `Kernel.MSL`, a Metal source string
+   on a backend-neutral type, and to twelve mutable fields on a package-level
+   var, forever.
+2. **Split `Binding`.** `Binding.Index` means the pipeline's binding layout,
+   except when `Uniform` is set, when it means the kernel's by-value list — and
+   neither matches the authored parameter position a reader is looking at.
+
+The rest are naming and constructor consistency, listed in the review output.
+
+### 5.4 The sentence this replaces
+
+The README's "the API will change" becomes, once §5.3 lands:
+
+> The compute API is frozen: devices, pools, buffers, views, kernels,
+> pipelines, graphs, queues, fences, and the `tensor`, `quant` and `kmath`
+> packages. Four surfaces are provisional and §5.2 names what moves each.
+> Graphics is not part of this.
+
+### 5.5 What no tutorial may teach yet
+
+Surfaces that work, or half-work, and that the library should not commit to.
+The sharp ones: `Device.Queues`/`QueueFor` (one hardcoded queue, and
+`QueueFor(QueueTransfer)` silently returns it); `UniformBuffer` (no dispatch
+path consumes one); `Binding.Texture` and `Binding.Sampler` (fail at dispatch);
+the stage types and the `//accel:vertex`/`//accel:fragment` directives (nothing
+runs them and the directives are silently ignored); the `Kernel` record's
+fields; and the tensor view family — `Permute`, `Transpose`, `Slice`,
+`Broadcast` — whose results reach nothing but elementwise operators while
+`Contiguous` does not exist (§4.1's sibling, recorded in
+[025](025-tensor-operators.md)).
+
+### 5.6 What each tutorial waits on
+
+The per-tutorial form of §4's gate. **This is the todo list**, and no tutorial
+is written before its row is clear.
+
+| # | Tutorial | Must land first |
+| --- | --- | --- |
+| 1 | Hello, GPU | §5.3 item 2; a workgroup-count helper or an explicit ceiling-division paragraph |
+| 2 | Writing a kernel | the three directives and the kernel-package rule documented; `kmath` named in the diagnostic |
+| 3 | Memory | pool-constructor and usage/format naming; ~~the transient-`Buffer` guard~~ **done 2026-08-24** |
+| 4 | Graphs | copy-node naming; `Bind` naming; `Recorder` and `Transient` doc fixes |
+| 5 | Cooperation | subgroup naming; `Requirements.SharedBytes` populated — see [016](016-graph-execution.md)'s correction |
+| 6 | Uniforms and scalars | §5.3 item 2; `UniformBuffer` resolved either way |
+| 7 | Tensors | `Contiguous`; a port-buffer helper; the f16/f32 split stated |
+| 8 | A decode step | `PlanCache` ownership documented; `Attention`'s position cap stated |
+| 9 | Quantized weights | `quant` naming and `Error`'s argument; f16 host uploads |
+| 10 | Backends and portability | `ErrNoAdapter`/`ErrPolicy`; ~~`Capabilities.Set`~~ **done 2026-08-24**; `CPUMode` docs |
+
+Two rows were discharged while the review was being written, which is the
+argument for the ordering in miniature: both were found by asking what a
+tutorial would have to work around, and one of them was a crash.
+
+### 5.7 What the review found that was not a naming question
+
+Recorded because §4 predicted "anything a tutorial would have to apologise for"
+and got two process crashes instead:
+
+- closing a graph transient's `Buffer` panicked on a nil pool, in a package
+  whose own doc promises "the worst outcome is a rejection";
+- `Device.NewTexture` and `Queue.ReadTexture` could never be used together,
+  because the convenience constructor hard-coded device-local memory.
+
+Both are fixed. The generalizable part: a surface reviewed *as a surface*
+surfaces defects that per-declaration review does not, because the defect is in
+the join between two declarations that are each individually reasonable.
+
+## 6. Done
 
 - every reader-facing document names its audience in section 1's table and reads
   as if written for it, with no spec number or milestone identifier used as the
@@ -166,7 +282,7 @@ Metal — which is the problem this spec exists to fix, not a solution to it.
   having run something; and
 - every tutorial example is an `Example` function that `go test` runs.
 
-## 6. Open questions
+## 7. Open questions
 
 - **Whether `docs/architecture.md` belongs in `docs/` at all.** Its stated
   audience is "someone who wants to understand or contribute", which is
