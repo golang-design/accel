@@ -58,9 +58,13 @@
 // kernel requires is read from its body, never declared, and a device that does
 // not meet it refuses at [Device.NewComputePipeline] rather than at dispatch.
 //
-// Not implemented, and reporting [ErrNotImplemented]: textures, indirect
-// dispatch ([Recorder.DispatchIndirect]), [Queue.SubmitAfter], and
-// [Fence.Stats]. Subgroup shuffles and scans are specified and unbuilt.
+// Indirect dispatch works, with the device-supplied workgroup count clamped
+// against a build-time maximum in every mode — correctness does not depend on a
+// debug flag. [Recorder.CollectRunStats] makes the graph report what the count
+// turned out to be, through [Fence.Stats], at the cost of a readback.
+//
+// Not implemented, and reporting [ErrNotImplemented]: textures. Subgroup
+// shuffles and scans are specified and unbuilt, and no GPU backend exists yet.
 // specs/009-sequencing.md is the order they arrive in.
 //
 // # The model

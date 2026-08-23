@@ -687,6 +687,26 @@ func allBefore(a, b []NodeID, reach []bitset) bool {
 `T` and writing `U` in one dispatch, which is every fused elementwise kernel,
 keeps `T` and `U` apart.
 
+**Implementation note, added after M5.** Indirect dispatch, the run-time
+counters, and `SubmitAfter` are built. Three things about them are worth
+recording where the decisions are.
+
+The clamp is **unconditional**, as the `maxCount` note above requires, and
+testing that needed a kernel whose output says how many workgroups ran: most
+kernels hide their dispatch size behind a bounds check, so a thousand workgroups
+over a buffer sized for two writes nothing extra and a clamp that did not happen
+looks exactly like one that did.
+
+The counters travel on the **fence**, not on the graph. A caller holding a fence
+is the one who knows which submission produced them, and a graph submitted twice
+would otherwise report the second's. They are written before the fence signals,
+because `Done` becoming true is the promise that everything the fence carries is
+complete.
+
+`SubmitAfter` waits **on the queue's stream** rather than before enqueuing, so
+submission order still follows call order. Waiting first would let a later
+`Submit` overtake it, which is the guarantee this spec makes about one queue.
+
 **Implementation note, added after M3.** The first implementation of this
 relation accepted any *per-pair* ordering rather than the uniform direction the
 rule above states, and the whole-plan oracle of

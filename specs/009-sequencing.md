@@ -580,7 +580,47 @@ plan validator and pipeline creation both required a flat entry point, and the
 generated-source type check read a fixed list of corpus files that went stale
 silently whenever the corpus grew.
 
+#### After M5: 003's remaining sections
+
+Indirect dispatch, the run-time counters, and `SubmitAfter` were M3's remainder
+— [016](016-graph-execution.md) recorded that V9 was written and the payload was
+not — and they are built, on 2026-08-23. They are listed here rather than
+reopening M3, because a milestone recorded complete stays complete and its
+remainder is tracked forward.
+
+**What still stands between 003 and `implemented`:** the render-pass payloads and
+their validation rows, which belong to [005](005-graphics.md) and are post-v0.
+
 ### M6. Metal
+
+**This milestone needs hardware, and cannot be completed without it.** Every
+milestone before it was provable in process — differential oracles, reinstated
+bugs, bit-for-bit comparisons — because the CPU backend is the thing under test
+and the thing running the test. M6 is the first where the subject is a device.
+
+What is verifiable without one, and what is not, decided before any code so that
+nothing is recorded complete on the strength of code nobody ran:
+
+| Verifiable without a Metal device | Needs a device |
+| --- | --- |
+| The MSL emitter's output: a golden, and a parse of the generated text | That the MSL compiles |
+| Retain-set and close-ordering logic, against a fake | That objects are released on the thread allowed to release them |
+| The capability and limit mapping, table-driven | That the device reports what the table expects |
+| The probe *harness* | Every probe's answer |
+
+**The risk row below decides the order**, and it is worth reading before cutting
+children: *MSL cannot meet exact/contraction or primitive ceilings | M6 probes
+before other Metal numeric tests | Change lowering/domain or reject primitive;
+never widen from observation.* The probes come first and a failure is answered
+by changing the lowering rather than loosening a bound — so a session without a
+device can build the emitter and the harness, and must leave the milestone *in
+progress* until someone runs the probes on a Mac.
+
+A session that has one should start by running the numeric probes of
+[008](008-numerics.md) against Metal and recording the profile, because
+everything numeric downstream is derived from it.
+
+
 
 Build:
 
