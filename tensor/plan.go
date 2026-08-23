@@ -67,6 +67,14 @@ func (p *Plan) Memory() accel.GraphMemory { return p.graph.Memory() }
 // the second's output buffer, and both fences reported success. A silently lost
 // result is the worst failure available here, so this refuses instead.
 func (p *Plan) Submit(q *accel.Queue, bindings Bindings) *accel.Fence {
+	// Held across the bind and the submit together, because that pair is
+	// exactly what must not interleave: two callers binding and then submitting
+	// would each pass the in-flight check and the second would rebind the
+	// first's resources, which is the bug this check exists for arriving by a
+	// different route.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if f := p.inFlight; f != nil && !f.Done() {
 		return accel.FailedFence(fmt.Errorf("accel/tensor: Submit %q while a submission is "+
 			"in flight; a plan binds when you submit and runs when the queue reaches it, so "+
@@ -82,6 +90,8 @@ func (p *Plan) Submit(q *accel.Queue, bindings Bindings) *accel.Fence {
 }
 
 // bind validates and applies the whole binding set.
+//
+// The caller holds p.mu.
 func (p *Plan) bind(bindings Bindings) error {
 	if p.closed {
 		return errors.New("accel/tensor: Submit: the plan is closed")
@@ -182,6 +192,8 @@ func sorted(errs []error) []error {
 
 // Close releases the plan's graph and transient memory.
 func (p *Plan) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.closed {
 		return nil
 	}

@@ -7,6 +7,7 @@ package tensor
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"golang.design/x/accel"
 )
@@ -54,6 +55,18 @@ type Plan struct {
 	// uniformNodes is every dispatch that reads a scalar, so a submission can
 	// rewrite its by-value parameter before the graph runs.
 	uniformNodes []uniformNode
+
+	// mu guards the submission state below.
+	//
+	// A Plan is caller-owned and outlives its builder, so two goroutines
+	// sharing one is a reasonable thing for a caller to do -- and the
+	// alternative to a mutex is documenting that they must not, which nobody
+	// reads until after the race. accel.Graph guards its equivalent the same
+	// way, and driver.Device documents itself safe for concurrent use.
+	//
+	// A Builder is different and stays single-goroutine: it is a recording
+	// session with a natural owner.
+	mu sync.Mutex
 
 	// inFlight is the fence of the most recent submission. "In flight" is
 	// derived from it rather than tracked beside it, which is the same choice
@@ -112,15 +125,22 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	// An output that something else also reads is read-write, not write-only.
 	// A model that names an intermediate as an output and keeps using it is
 	// ordinary, and the alternative is refusing it or writing it twice.
-	readAgain := map[*Tensor]bool{}
+	//
+	// Keyed by the *producing node* rather than by the tensor, because a view
+	// of a value is a different Tensor over the same storage: reshaping an
+	// output and feeding the result to something else reads that output, and a
+	// pointer comparison would miss it.
+	readAgain := map[int]bool{}
 	for i := range b.nodes {
 		for _, in := range b.nodes[i].inputs {
-			readAgain[in] = true
+			if in.node >= 0 {
+				readAgain[in.node] = true
+			}
 		}
 	}
 	consumed := map[string]bool{}
 	for _, o := range b.outputs {
-		if readAgain[o.t] {
+		if o.t.node >= 0 && readAgain[o.t.node] {
 			consumed[o.name] = true
 		}
 	}

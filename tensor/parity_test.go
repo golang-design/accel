@@ -6,16 +6,22 @@ package tensor_test
 
 import (
 	"math"
+	"strings"
+	"sync"
 	"testing"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/tensor"
 )
 
-// Prefilling N tokens equals decoding them one at a time.
+// The M7 end-to-end scenario: caller-allocated weights, KV cache, input and
+// output; an explicit prefill plan and an explicit decode plan; a prefill, then
+// repeated decode, then a logits readback -- and the two paths agree.
 //
-// specs/009-sequencing.md's M7 parity criterion, at the plan level rather than
-// the kernel's. It is the criterion that matters most in a model runtime: if
+// specs/009-sequencing.md words that criterion as one scenario, and it is one
+// test for a reason: stitching it across two tests that each do most of it
+// leaves the join untested, and the join is where a prefill's cache meets a
+// decode's reader. It is the criterion that matters most in a model runtime: if
 // the two paths disagreed, the same prompt would produce different text
 // depending on whether it had been prompted or generated, and the difference
 // would appear only in the output of a model nobody could bisect.
@@ -35,6 +41,7 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		kvHeads  = 2
 		headDim  = 8
 		width    = qHeads * headDim
+		vocab    = 12
 		capacity = 8
 		n        = 5 // tokens to prefill, then to decode one at a time
 	)
@@ -57,11 +64,19 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		}
 	}
 
+	// The output projection, a caller-allocated weight in f16 because that is
+	// what the GEMM reads.
+	wout := make([]float32, width*vocab)
+	for i := range wout {
+		wout[i] = float32(math.Cos(float64(i)*0.13)) * 0.4
+	}
+
 	rt := newRuntime(t)
 	d := rt.Device()
 
 	kBuf := f32Buffer(t, d, "k", make([]float32, capacity*kvHeads*headDim))
 	vBuf := f32Buffer(t, d, "v", make([]float32, capacity*kvHeads*headDim))
+	woutBuf := f16Buffer(t, d, "wout", wout)
 
 	// The prefill plan: n query tokens at once, over a cache holding n.
 	prefill := func() []float32 {
@@ -78,9 +93,17 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		vc := tensor.Persistent(b, tensor.StateDesc{
 			Name: "v", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
-		tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+		w := tensor.Weight(b, tensor.ValueDesc{
+			Name: "wout", DType: accel.F16, Shape: tensor.Shape{width, vocab},
+		})
+		attn := tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
 			CurrentLengthName: "len", ScaleName: "scale", BaseName: "base",
-		}))
+		})
+		tensor.Output(b, "out", attn)
+		// Logits for every prefilled position: the prompt's last token is what
+		// a runtime samples from, and the rest are what a parity check reads.
+		flat := tensor.Reshape(b, attn, tensor.Shape{n, width})
+		tensor.Output(b, "logits", tensor.MatMul(b, tensor.Cast(b, flat, accel.F16), w))
 		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "prefill"})
 		if err != nil {
 			t.Fatalf("compile prefill: %v", err)
@@ -109,9 +132,11 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		}
 
 		out := f32Buffer(t, d, "out", make([]float32, n*width))
+		logits := f32Buffer(t, d, "plogits", make([]float32, n*vocab))
 		f := plan.Submit(d.Queue(), tensor.Bindings{
 			Buffers: map[string]accel.BufferView{
-				"q": f32Buffer(t, d, "q", flatQ), "k": kBuf, "v": vBuf, "out": out,
+				"q": f32Buffer(t, d, "q", flatQ), "k": kBuf, "v": vBuf,
+				"wout": woutBuf, "out": out, "logits": logits,
 			},
 			Scalars: map[string]tensor.ScalarValue{
 				"len": tensor.U32(n), "base": tensor.U32(0), "scale": tensor.F32(scale),
@@ -120,8 +145,11 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		if err := f.Wait(); err != nil {
 			t.Fatalf("prefill: %v", err)
 		}
-		got := make([]float32, n*width)
-		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		got := make([]float32, n*width+n*vocab)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got[:n*width]); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if err := d.Queue().ReadBuffer(logits.Buffer, 0, got[n*width:]); err != nil {
 			t.Fatalf("readback: %v", err)
 		}
 		return got
@@ -141,9 +169,15 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		vc := tensor.Persistent(b, tensor.StateDesc{
 			Name: "v", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
-		tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+		w := tensor.Weight(b, tensor.ValueDesc{
+			Name: "wout", DType: accel.F16, Shape: tensor.Shape{width, vocab},
+		})
+		attn := tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
 			CurrentLengthName: "len", ScaleName: "scale",
-		}))
+		})
+		tensor.Output(b, "out", attn)
+		flat := tensor.Reshape(b, attn, tensor.Shape{1, width})
+		tensor.Output(b, "logits", tensor.MatMul(b, tensor.Cast(b, flat, accel.F16), w))
 		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "decode"})
 		if err != nil {
 			t.Fatalf("compile decode: %v", err)
@@ -154,11 +188,13 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		}
 
 		out := f32Buffer(t, d, "dout", make([]float32, width))
-		all := make([]float32, n*width)
+		logits := f32Buffer(t, d, "dlogits", make([]float32, vocab))
+		all := make([]float32, n*width+n*vocab)
 		for s := range n {
 			f := plan.Submit(d.Queue(), tensor.Bindings{
 				Buffers: map[string]accel.BufferView{
-					"q": f32Buffer(t, d, "dq", qs[s]), "k": kBuf, "v": vBuf, "out": out,
+					"q": f32Buffer(t, d, "dq", qs[s]), "k": kBuf, "v": vBuf,
+					"wout": woutBuf, "out": out, "logits": logits,
 				},
 				Scalars: map[string]tensor.ScalarValue{
 					// The cache holds every token, and the length is what makes
@@ -175,6 +211,11 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 				t.Fatalf("readback: %v", err)
 			}
 			copy(all[s*width:], step)
+			stepLogits := make([]float32, vocab)
+			if err := d.Queue().ReadBuffer(logits.Buffer, 0, stepLogits); err != nil {
+				t.Fatalf("readback: %v", err)
+			}
+			copy(all[n*width+s*vocab:], stepLogits)
 		}
 		return all
 	}
@@ -183,12 +224,22 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 	p := prefill()
 	dec := decode()
 
-	for i := range p {
+	// The hidden states first, then the logits. Both, because agreeing on the
+	// hidden state and disagreeing on the projection would still be a model
+	// that produces different text.
+	for i := range n * width {
 		if diff := math.Abs(float64(p[i] - dec[i])); diff > 1e-5*(1+math.Abs(float64(dec[i]))) {
 			t.Fatalf("token %d element %d: prefill gives %v and decode gives %v; the two "+
 				"paths must compute the same function, or a model produces different text "+
 				"depending on whether it was prompted or generated",
 				i/width, i%width, p[i], dec[i])
+		}
+	}
+	for i := n * width; i < len(p); i++ {
+		j := i - n*width
+		if diff := math.Abs(float64(p[i] - dec[i])); diff > 1e-4*(1+math.Abs(float64(dec[i]))) {
+			t.Fatalf("token %d logit %d: prefill gives %v and decode gives %v",
+				j/vocab, j%vocab, p[i], dec[i])
 		}
 	}
 
@@ -202,5 +253,52 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 	}
 	if nonzero < len(p)/2 {
 		t.Fatalf("only %d of %d prefill outputs are non-zero", nonzero, len(p))
+	}
+}
+
+// Two goroutines sharing a plan do not race, and one of them is refused.
+//
+// A Plan is caller-owned and outlives its builder, so sharing one is a
+// reasonable thing to do -- and the alternative to guarding it was documenting
+// that it must not be, which nobody reads until after the race. Under -race
+// this is the test that would have caught the unsynchronized read-modify-write
+// of the in-flight fence.
+func TestConcurrentSubmissionsDoNotRace(t *testing.T) {
+	const n = 1 << 14
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("c")
+	tensor.Output(b, "y", tensor.SiLU(b, tensor.Input(b, value("x", n))))
+	plan, err := b.Compile(rt, tensor.CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	bufs := map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x", make([]float32, n)),
+		"y": f32Buffer(t, d, "y", make([]float32, n)),
+	}
+
+	// Exactly one of the two may be in flight, so at most one is refused per
+	// round and neither may corrupt the other. What this asserts is the absence
+	// of a race and the presence of a clean answer either way.
+	for range 20 {
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = plan.Submit(d.Queue(), tensor.Bindings{Buffers: bufs}).Wait()
+			}()
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil && !strings.Contains(err.Error(), "in flight") {
+				t.Fatalf("submission %d failed for a reason other than the in-flight "+
+					"rule: %v", i, err)
+			}
+		}
 	}
 }

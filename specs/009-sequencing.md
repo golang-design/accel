@@ -945,6 +945,56 @@ that *owns* the resource does not automatically hold at a layer that binds on
 its behalf — and that a silently lost result is the worst failure mode
 available, so the fix is a refusal rather than a queue.
 
+#### Correction to M7, appended 2026-08-23
+
+Per the maintenance rule at the foot of this file.
+
+**Criterion 1 was marked met and is not.** It reads "every 007 v0 operator
+contract has unit and plan-level coverage", and the same outcome section's
+"Carried forward" paragraph names `Contiguous` and `Softmax`'s mask and causal
+option as absent. Both are 007 v0 operator contracts. An earlier draft of that
+table said "partly" and listed exactly these; marking it met while the caveat
+stayed two paragraphs below is the definition of done being rewritten to match
+what happened. **Criterion 1 is partly met**: every operator the corpus has a
+kernel for is built and covered, and two are not built because no kernel is
+registered for them.
+
+**Criterion 5 was met across two tests rather than by one.** It reads "caller
+allocation of weights/KV/input/output → compile explicit prefill and decode
+plans → prefill → repeated decode → logits readback", and what existed was a
+parity test with two plans, a prefill and repeated decode but no weights and no
+logits, beside a model test with weights and logits but one plan and no prefill.
+Stitching a scenario across two tests leaves the join untested, and the join is
+where a prefill's cache meets a decode's reader. The parity test now carries the
+projection weight and reads logits from both paths, so **one test is the
+criterion**.
+
+**This is the third instance of one pattern in this session**, and that is the
+part worth recording: *a criterion checked off against a test that nearly tests
+it.* The other two were M6's item 2, marked met against a probe that measured
+contraction and rounding and not division or transcendentals; and
+[023](023-metal-graph.md)'s item 3, "survives repeated early closes", checked off
+against a test whose comment said it closed early and whose next line waited
+first.
+
+What the three have in common is not carelessness about the tests — each was a
+real test that passed for real reasons. It is that a criterion naming several
+things was read as naming one, and the test that existed covered the one. The
+check that would have caught all three is mechanical: **read the criterion's
+clauses as a list and point at the assertion for each.**
+
+**Also corrected.** `tensor.Plan` had no concurrency contract and its submission
+state was an unsynchronized read-modify-write. A `Plan` is caller-owned and
+outlives its builder, so two goroutines sharing one is a reasonable thing to do,
+and the alternative to guarding it was documenting that it must not be — which
+nobody reads until after the race. It is guarded, and the lock spans the bind
+and the submit together, because that pair is what must not interleave.
+
+And the read-write detection for an output that something else consumes was
+keyed by tensor pointer, so a *view* of an output — a reshape feeding a
+projection, which is exactly what a logits head is — did not count as a read.
+It is keyed by the producing node now.
+
 ### M8 and later
 
 Independently scoped later work includes:
