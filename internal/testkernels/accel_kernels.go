@@ -268,6 +268,34 @@ var HistogramKernel = accel.Kernel{
 	},
 	Digest:    "42b57e65e7c73a120a31d7b730210649",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void Histogram(
+    const device float *in [[buffer(0)]],
+    device atomic_uint *counts [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[0])))) {
+        float v = in[i];
+        uint bucket = uint(0);
+        if ((v >= as_type<float>(0x3F400000u) /* 0.75 */)) {
+            bucket = uint(3);
+        } else
+        if ((v >= as_type<float>(0x3F000000u) /* 0.5 */)) {
+            bucket = uint(2);
+        } else
+        if ((v >= as_type<float>(0x3E800000u) /* 0.25 */)) {
+            bucket = uint(1);
+        }
+        atomic_fetch_add_explicit(&counts[bucket], uint(1), memory_order_relaxed);
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		histogramFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[uint32](a, 1))
 	},
@@ -326,6 +354,21 @@ var CountWorkgroupsKernel = accel.Kernel{
 	},
 	Digest:    "35bc8f6fc0a4a37cb11101cfd89794a8",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void CountWorkgroups(
+    device atomic_uint *counts [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    if ((_lid.x == uint(0))) {
+        atomic_fetch_add_explicit(&counts[uint(0)], uint(1), memory_order_relaxed);
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		countWorkgroupsFlat(t, accel.KernelSlice[uint32](a, 0))
 	},
@@ -998,6 +1041,24 @@ var SiLUKernel = accel.Kernel{
 	},
 	Digest:    "260f5b481c75af9c97c7b340e26e6801",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void SiLU(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        float x = in[i];
+        out[i] = (x / (float(1) + exp(-x)));
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		siLUFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
 	},
@@ -1027,6 +1088,25 @@ var SwiGLUKernel = accel.Kernel{
 	},
 	Digest:    "902706f2e1040486de21a358cda4fc8c",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void SwiGLU(
+    const device float *a [[buffer(0)]],
+    const device float *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[2])))) {
+        float x = a[i];
+        out[i] = ((x / (float(1) + exp(-x))) * b[i]);
+    }
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		swiGLUFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
 	},
@@ -1209,6 +1289,46 @@ var RoPEKernel = accel.Kernel{
 	},
 	Digest:    "fee80830a38fdfe6fe8a54127cac61a5",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RoPEParams {
+    uint Rows;
+    uint Width;
+    uint RotaryDim;
+    float Base;
+    uint Offset;
+    char _tail[12];
+};
+
+kernel void RoPE(
+    device float *inout [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    constant RoPEParams &p [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    uint pairs = (p.RotaryDim / uint(2));
+    if ((i < (p.Rows * pairs))) {
+        uint r = (i / pairs);
+        uint k = (i % pairs);
+        float pos = float((r + p.Offset));
+        float exponent = ((float(-2) * float(k)) / float(p.RotaryDim));
+        float freq = exp((exponent * log(p.Base)));
+        float theta = (pos * freq);
+        float c = cos(theta);
+        float s = sin(theta);
+        uint lo = ((r * p.Width) + (uint(2) * k));
+        uint hi = (lo + uint(1));
+        float x = inout[lo];
+        float y = inout[hi];
+        inout[lo] = ((x * c) - (y * s));
+        inout[hi] = ((x * s) + (y * c));
+    }
+}
+`,
 	Uniforms: []accel.KernelUniform{
 		{Name: "p", Type: "RoPEParams", Size: 32, Encode: func(dst []byte, v any) error {
 			return accel.EncodeKernelUniform(dst, v, RoPEParamsCodec{}.Encode)
@@ -1950,6 +2070,46 @@ var SegmentSumKernel = accel.Kernel{
 	},
 	Digest:    "ece1409f99ec9848ed0055c27ca6268b",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint clampIndex(uint i, uint n) {
+    if ((n == uint(0))) {
+        return uint(0);
+    }
+    if ((i >= n)) {
+        return (n - uint(1));
+    }
+    return i;
+}
+
+static float accumulate(const device float *in, uint from, uint to) {
+    float total = float(0);
+    for (uint i = from; (i < to); i = (i + uint(1))) {
+        total = (total + in[i]);
+    }
+    return total;
+}
+
+kernel void SegmentSum(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    uint n = uint(int(_lens[1]));
+    if ((i >= n)) {
+        return;
+    }
+    uint width = uint(4);
+    uint from = clampIndex((i * width), uint(int(_lens[0])));
+    uint to = clampIndex((from + width), uint(int(_lens[0])));
+    out[i] = accumulate(in, from, to);
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		segmentSumFlat(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1))
 	},
@@ -2067,6 +2227,28 @@ var NormalizeKernel = accel.Kernel{
 	},
 	Digest:    "7715f789607cc97e8f8efa2a27fa9302",
 	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void Normalize(
+    const device half *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    device float *scratch [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]]) {
+    uint i = _gid.x;
+    if ((i >= uint(int(_lens[1])))) {
+        return;
+    }
+    float x = float(in[i]);
+    float magnitude = sqrt((fabs(x) + float(1)));
+    scratch[i] = magnitude;
+    out[i] = (x * rsqrt((magnitude * magnitude)));
+}
+`,
 	Flat: func(t accel.Thread, a accel.KernelArgs) {
 		normalizeFlat(t, accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2))
 	},

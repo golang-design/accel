@@ -73,6 +73,7 @@ func MSL(k *ir.Func) (string, error) {
 	for i, b := range k.Bindings {
 		m.binding[b.Name] = i
 	}
+	m.atomic = atomicBindings(k)
 	m.emit()
 	if m.err != nil {
 		return "", m.err
@@ -84,7 +85,17 @@ type msl struct {
 	buf     bytes.Buffer
 	fn      *ir.Func
 	binding map[string]int
-	err     error
+
+	// atomic is every binding the body touches with an atomic, by name.
+	//
+	// It changes the parameter's *type*, not only the operation: MSL requires
+	// device atomic_uint * rather than device uint *, and a plain read of one
+	// has to go through atomic_load_explicit. That is why this is computed
+	// before the signature is printed rather than discovered while printing the
+	// body.
+	atomic map[string]bool
+
+	err error
 }
 
 func (m *msl) fail(format string, args ...any) {
@@ -123,10 +134,6 @@ func (m *msl) emit() {
 		m.refuse("workgroup-shared memory", k.Pos())
 		return
 	}
-	if len(k.Helpers) > 0 {
-		m.refuse("a helper function call", k.Pos())
-		return
-	}
 
 	m.printf("#include <metal_stdlib>\n")
 	m.printf("using namespace metal;\n")
@@ -135,15 +142,20 @@ func (m *msl) emit() {
 	for _, u := range k.Uniforms {
 		m.uniformStruct(u)
 	}
+	// Helpers before their callers, which C requires and Go does not. The IR
+	// already orders them, so this is a print rather than a sort.
+	for _, h := range k.Helpers {
+		m.helper(h)
+	}
 
 	m.printf("kernel void %s(", k.Name)
 	nb := len(k.Bindings)
 	for i, b := range k.Bindings {
 		qual := "device"
-		if !b.Write {
+		if !b.Write && !m.atomic[b.Name] {
 			qual = "const device"
 		}
-		m.printf("\n    %s %s *%s [[buffer(%d)]],", qual, m.dtype(b.Type.Elem), b.Name, i)
+		m.printf("\n    %s %s *%s [[buffer(%d)]],", qual, m.bindingType(b), b.Name, i)
 	}
 	m.printf("\n    constant uint *_lens [[buffer(%d)]],", MSLLengthsIndex(nb))
 	for i, u := range k.Uniforms {
@@ -157,6 +169,139 @@ func (m *msl) emit() {
 	m.printf("\n    uint3 _wid [[threadgroup_position_in_grid]]) {\n")
 	m.block(k.Body, 1)
 	m.printf("}\n")
+}
+
+// helper emits one free function.
+//
+// static, because MSL compiles one kernel per library here and a helper with
+// external linkage would collide if two kernels in a package declared the same
+// one. The Go lowering has the same rule for a different reason, which
+// specs/004-kernel-authoring.md records: "emitted ahead of its callers, static
+// in MSL, plain in GLSL."
+func (m *msl) helper(h *ir.Func) {
+	if h.Thread >= 0 {
+		// A helper taking a Thread would need the id parameters threaded
+		// through every call site. It is legal in the authored subset and no
+		// corpus kernel does it, so it is refused by name rather than
+		// half-supported.
+		m.refuse("a helper taking a Thread", h.Pos())
+		return
+	}
+	ret := "void"
+	if h.Result != nil {
+		ret = m.dtype(h.Result)
+	}
+	m.printf("static %s %s(", ret, h.Name)
+	for i, p := range h.Params {
+		if i > 0 {
+			m.printf(", ")
+		}
+		t := p.Type()
+		if t != nil && t.Kind == ir.Slice {
+			// A slice parameter is a device pointer, and its length does not
+			// travel with it. specs/004-kernel-authoring.md's helper storage
+			// rules are what keep this sound; a helper calling len on one is
+			// refused below, where the binding index it would need does not
+			// exist.
+			//
+			// The const qualifier is not decoration: a read-only *binding* is
+			// emitted as `const device T *`, and C will not pass one to a
+			// parameter that drops the qualifier. So a helper that never writes
+			// through a parameter must say so, and one that does must not.
+			qual := "const device"
+			if writesThrough(h.Body, p) {
+				qual = "device"
+			}
+			m.printf("%s %s *%s", qual, m.dtype(t.Elem), p.Name)
+			continue
+		}
+		m.printf("%s %s", m.dtype(t), p.Name)
+	}
+	m.printf(") {\n")
+	m.block(h.Body, 1)
+	m.printf("}\n\n")
+}
+
+// writesThrough reports whether a body assigns through a pointer parameter.
+//
+// It answers the question C asks at every call site and Go never asks: whether
+// this parameter needs to be mutable. The IR infers read and write for a
+// kernel's *bindings* and not for a helper's parameters, because no other
+// target needed the distinction -- the Go lowering passes a slice either way
+// and GLSL forbids the parameter entirely.
+//
+// Conservative in the safe direction: anything it cannot see through is treated
+// as a write, since emitting const on a parameter that is written is a compile
+// error at the assignment, which is a worse place to find out.
+func writesThrough(body ir.Stmt, p *ir.Param) bool {
+	found := false
+	var walkValue func(ir.Value)
+	var walk func(ir.Stmt)
+
+	isParam := func(v ir.Value) bool {
+		q, ok := v.(*ir.Param)
+		return ok && q == p
+	}
+	walkValue = func(v ir.Value) {
+		switch v := v.(type) {
+		case *ir.Call:
+			// A helper handing the pointer to another helper may write through
+			// it there. Following the callee would be the precise answer and
+			// this is the safe one, which is the right trade for a case no
+			// corpus kernel exercises.
+			for _, a := range v.Args {
+				if isParam(a) {
+					found = true
+				}
+			}
+		case *ir.IntrinsicCall:
+			for _, a := range v.Args {
+				if isParam(a) {
+					found = true
+				}
+			}
+			if v.Recv != nil && isParam(v.Recv) {
+				found = true
+			}
+		}
+	}
+	walk = func(s ir.Stmt) {
+		switch s := s.(type) {
+		case *ir.Block:
+			for _, x := range s.List {
+				walk(x)
+			}
+		case *ir.Declare:
+			walkValue(s.Init)
+		case *ir.Assign:
+			if idx, ok := s.LHS.(*ir.IndexExpr); ok && isParam(idx.X) {
+				found = true
+			}
+			walkValue(s.RHS)
+		case *ir.ExprStmt:
+			walkValue(s.X)
+		case *ir.If:
+			walkValue(s.Cond)
+			walk(s.Then)
+			if s.Else != nil {
+				walk(s.Else)
+			}
+		case *ir.For:
+			if s.Init != nil {
+				walk(s.Init)
+			}
+			if s.Post != nil {
+				walk(s.Post)
+			}
+			walk(s.Body)
+		case *ir.Return:
+			if s.Value != nil {
+				walkValue(s.Value)
+			}
+		}
+	}
+	walk(body)
+	return found
 }
 
 // uniformStruct emits a std140 block with its padding spelled out.
@@ -204,6 +349,104 @@ func (m *msl) scalar(goSpelling string) string {
 	return "void"
 }
 
+// bindingType is a binding's element type as the signature declares it.
+//
+// A binding touched atomically is atomic_uint or atomic_int rather than uint or
+// int. Metal makes that a property of the pointer rather than of the call, so a
+// kernel cannot pass a plain pointer to an atomic operation, and this is the
+// only place the two facts meet.
+func (m *msl) bindingType(b *ir.Binding) string {
+	if !m.atomic[b.Name] {
+		return m.dtype(b.Type.Elem)
+	}
+	switch b.Type.Elem.Kind {
+	case ir.U32:
+		return "atomic_uint"
+	case ir.I32:
+		return "atomic_int"
+	case ir.F32:
+		// atomic<float> exists from Metal 3 and only for add. Refused by name
+		// until the capability table can answer for it, rather than emitted and
+		// found at run time on a device that lacks it.
+		m.refuse("an f32 atomic (atomic<float> is a Metal version capability)", m.fn.Pos())
+		return "void"
+	}
+	m.fail("binding %s is touched atomically and is %v, which has no atomic type in MSL",
+		b.Name, b.Type.Elem.Kind)
+	return "void"
+}
+
+// atomicBindings finds every binding an atomic operates on.
+//
+// The same walk specs/012-kernel-pipeline.md's access inference makes, repeated
+// here because it answers a different question: that pass records that the
+// binding is read and written, and this one records that its *type* changes.
+func atomicBindings(k *ir.Func) map[string]bool {
+	out := map[string]bool{}
+	var walkValue func(ir.Value)
+	var walk func(ir.Stmt)
+	walkValue = func(v ir.Value) {
+		switch v := v.(type) {
+		case *ir.IntrinsicCall:
+			if v.Op.IsAtomic() && len(v.Args) > 0 {
+				if p, ok := v.Args[0].(*ir.Param); ok {
+					out[p.Name] = true
+				}
+			}
+			for _, a := range v.Args {
+				walkValue(a)
+			}
+		case *ir.Binary:
+			walkValue(v.X)
+			walkValue(v.Y)
+		case *ir.Unary:
+			walkValue(v.X)
+		case *ir.Convert:
+			walkValue(v.X)
+		case *ir.IndexExpr:
+			walkValue(v.Index)
+		case *ir.Call:
+			for _, a := range v.Args {
+				walkValue(a)
+			}
+		}
+	}
+	walk = func(s ir.Stmt) {
+		switch s := s.(type) {
+		case *ir.Block:
+			for _, x := range s.List {
+				walk(x)
+			}
+		case *ir.Declare:
+			walkValue(s.Init)
+		case *ir.Assign:
+			walkValue(s.RHS)
+		case *ir.ExprStmt:
+			walkValue(s.X)
+		case *ir.If:
+			walkValue(s.Cond)
+			walk(s.Then)
+			if s.Else != nil {
+				walk(s.Else)
+			}
+		case *ir.For:
+			if s.Init != nil {
+				walk(s.Init)
+			}
+			if s.Post != nil {
+				walk(s.Post)
+			}
+			walk(s.Body)
+		case *ir.Return:
+			if s.Value != nil {
+				walkValue(s.Value)
+			}
+		}
+	}
+	walk(k.Body)
+	return out
+}
+
 func (m *msl) dtype(t *ir.Type) string {
 	if t == nil {
 		m.fail("a binding with no element type")
@@ -246,6 +489,16 @@ func (m *msl) stmt(s ir.Stmt, depth int) {
 		m.printf(";\n")
 
 	case *ir.Assign:
+		if idx, ok := s.LHS.(*ir.IndexExpr); ok {
+			if p, isParam := idx.X.(*ir.Param); isParam && m.atomic[p.Name] {
+				m.printf("%satomic_store_explicit(&%s[", mslIndent(depth), p.Name)
+				m.value(idx.Index)
+				m.printf("], ")
+				m.value(s.RHS)
+				m.printf(", memory_order_relaxed);\n")
+				return
+			}
+		}
 		m.printf("%s", mslIndent(depth))
 		m.value(s.LHS)
 		m.printf(" = ")
@@ -286,11 +539,13 @@ func (m *msl) stmt(s ir.Stmt, depth int) {
 		m.printf("%scontinue;\n", mslIndent(depth))
 
 	case *ir.Return:
-		if s.Value != nil {
-			m.fail("a kernel returns nothing, and %s returns a value", m.fn.Name)
+		if s.Value == nil {
+			m.printf("%sreturn;\n", mslIndent(depth))
 			return
 		}
-		m.printf("%sreturn;\n", mslIndent(depth))
+		m.printf("%sreturn ", mslIndent(depth))
+		m.value(s.Value)
+		m.printf(";\n")
 
 	default:
 		m.fail("no MSL lowering for statement %T", s)
@@ -357,6 +612,15 @@ func (m *msl) value(v ir.Value) {
 		m.printf(".%s", v.Name)
 
 	case *ir.IndexExpr:
+		// A plain read of a binding whose type is atomic has to go through
+		// atomic_load_explicit: MSL will not let an atomic_uint decay to a
+		// uint, which is the whole reason the qualifier is on the pointer.
+		if p, ok := v.X.(*ir.Param); ok && m.atomic[p.Name] {
+			m.printf("atomic_load_explicit(&%s[", p.Name)
+			m.value(v.Index)
+			m.printf("], memory_order_relaxed)")
+			break
+		}
 		m.value(v.X)
 		m.printf("[")
 		m.value(v.Index)
@@ -401,7 +665,14 @@ func (m *msl) value(v ir.Value) {
 		m.intrinsic(v)
 
 	case *ir.Call:
-		m.refuse("a helper function call", v.Pos())
+		m.printf("%s(", v.Callee.Name)
+		for i, a := range v.Args {
+			if i > 0 {
+				m.printf(", ")
+			}
+			m.value(a)
+		}
+		m.printf(")")
 
 	default:
 		m.fail("no MSL lowering for value %T", v)
@@ -475,11 +746,132 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 	switch v.Op {
 	case ir.OpGlobalID:
 		m.printf("_gid")
+		return
 	case ir.OpLocalID:
 		m.printf("_lid")
+		return
 	case ir.OpGroupID:
 		m.printf("_wid")
-	default:
-		m.refuse(v.Op.String(), v.Pos())
+		return
+
+	// The narrow-float conversions. MSL has half natively, so these are casts
+	// rather than the bit-packing sequence a target without the format needs --
+	// which is why specs/012-kernel-pipeline.md makes them intrinsics instead of
+	// IR conversions in the first place.
+	case ir.OpF16ToF32:
+		m.printf("float(")
+		m.value(v.Recv)
+		m.printf(")")
+		return
+	case ir.OpF32ToF16:
+		if len(v.Args) != 1 {
+			m.fail("ToFloat16 takes one argument at %v", v.Pos())
+			return
+		}
+		m.printf("half(")
+		m.value(v.Args[0])
+		m.printf(")")
+		return
+	case ir.OpBF16ToF32, ir.OpF32ToBF16:
+		// bfloat exists in Metal 3.1 on some families and not others, so it is
+		// a capability rather than a spelling. Refused by name until the
+		// capability table can answer for it.
+		m.refuse(v.Op.String()+" (bfloat is a Metal family capability, not a type)", v.Pos())
+		return
 	}
+
+	if v.Op.IsAtomic() {
+		m.atomicCall(v)
+		return
+	}
+
+	if fn, ok := mslIntrinsic[v.Op]; ok {
+		m.printf("%s(", fn)
+		for i, a := range v.Args {
+			if i > 0 {
+				m.printf(", ")
+			}
+			m.value(a)
+		}
+		m.printf(")")
+		return
+	}
+	m.refuse(v.Op.String(), v.Pos())
+}
+
+// atomicCall emits one read-modify-write.
+//
+// Every atomic here is relaxed, which is what specs/002-compute-model.md
+// section 4 specifies: an atomic in this model guarantees atomicity of the
+// operation and orders nothing else. Ordering between dispatches is the graph's
+// barrier, and ordering within a workgroup is Thread.Barrier. Emitting a
+// stronger order would make Metal pay for a guarantee the model does not offer
+// and the CPU oracle does not provide.
+func (m *msl) atomicCall(v *ir.IntrinsicCall) {
+	fn, ok := mslAtomic[v.Op]
+	if !ok {
+		m.refuse(v.Op.String(), v.Pos())
+		return
+	}
+	if len(v.Args) < 2 {
+		m.fail("atomic %v takes a buffer and an index at %v", v.Op, v.Pos())
+		return
+	}
+	m.printf("%s(&", fn)
+	m.value(v.Args[0])
+	m.printf("[")
+	m.value(v.Args[1])
+	m.printf("]")
+	for _, a := range v.Args[2:] {
+		m.printf(", ")
+		m.value(a)
+	}
+	m.printf(", memory_order_relaxed)")
+}
+
+// mslAtomic is each atomic's Metal spelling.
+//
+// Sub is add of the negation on the unsigned side in some languages and a
+// distinct function here, so each is named rather than derived. Compare-exchange
+// takes an expected *pointer* in MSL and a value in this model, which is why it
+// is absent: the shapes differ and a wrong translation would silently never
+// swap.
+var mslAtomic = map[ir.Opcode]string{
+	ir.OpAtomicAddU32:      "atomic_fetch_add_explicit",
+	ir.OpAtomicAddI32:      "atomic_fetch_add_explicit",
+	ir.OpAtomicSubU32:      "atomic_fetch_sub_explicit",
+	ir.OpAtomicSubI32:      "atomic_fetch_sub_explicit",
+	ir.OpAtomicMinU32:      "atomic_fetch_min_explicit",
+	ir.OpAtomicMinI32:      "atomic_fetch_min_explicit",
+	ir.OpAtomicMaxU32:      "atomic_fetch_max_explicit",
+	ir.OpAtomicMaxI32:      "atomic_fetch_max_explicit",
+	ir.OpAtomicAndU32:      "atomic_fetch_and_explicit",
+	ir.OpAtomicOrU32:       "atomic_fetch_or_explicit",
+	ir.OpAtomicXorU32:      "atomic_fetch_xor_explicit",
+	ir.OpAtomicExchangeU32: "atomic_exchange_explicit",
+	ir.OpAtomicExchangeI32: "atomic_exchange_explicit",
+}
+
+// mslIntrinsic is each bounded scalar operation's Metal spelling.
+//
+// These are metal_stdlib's own functions rather than a reimplementation,
+// which is the same choice the Go lowering makes by calling accel/kmath: the
+// point of specs/008-numerics.md section 6 is that each has a normative domain
+// and error ceiling, and the probes are what check a backend meets it. An
+// operation whose bound this device misses is answered by changing the lowering
+// or narrowing the domain, never by widening the bound.
+//
+// abs is fabs because MSL's abs is the integer one, and the C rule that picks
+// between them silently returns an int for a float argument.
+var mslIntrinsic = map[ir.Opcode]string{
+	ir.OpSqrt:  "sqrt",
+	ir.OpRSqrt: "rsqrt",
+	ir.OpExp:   "exp",
+	ir.OpLog:   "log",
+	ir.OpSin:   "sin",
+	ir.OpCos:   "cos",
+	ir.OpTanh:  "tanh",
+	ir.OpAbs:   "fabs",
+	ir.OpMin:   "min",
+	ir.OpMax:   "max",
 }
