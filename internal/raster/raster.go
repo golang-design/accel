@@ -68,6 +68,11 @@ type Fragment struct {
 	// it must copy it.
 	Varyings []float32
 
+	// Front is whether this fragment came from a front-facing primitive, under
+	// the pipeline's declared winding. specs/032-stage-abi.md exposes it as
+	// Fragment.FrontFacing, and the per-face stencil state selects on it.
+	Front bool
+
 	// Bary are the screen-space barycentric weights, reported because
 	// specs/035-cpu-rasterizer.md's diagnostic order asks for coverage evidence
 	// before arithmetic, and because a test that checks the interpolation
@@ -294,6 +299,7 @@ func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fr
 				X: x, Y: y,
 				Depth:    depth,
 				InvW:     den,
+				Front:    front,
 				Varyings: vary,
 				Bary:     [3]float32{l0, l1, l2},
 			})
