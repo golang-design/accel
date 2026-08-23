@@ -107,11 +107,6 @@ type FormatInfo struct {
 	HostCopyable bool
 }
 
-// FormatInfo reports what this device can do with a format. An unsupported format
-// reports a zero FormatInfo and no error: absence is a capability answer, not a
-// failure.
-func (d *Device) FormatInfo(f Format) FormatInfo { panic(ErrNotImplemented) }
-
 // CopyStats reports what a transfer does.
 //
 // It is a plan-time fact rather than a measurement: a backend knows its own pitch
@@ -125,12 +120,3 @@ type CopyStats struct {
 	Repacked bool // an intermediate padded-pitch buffer is used
 	RowPitch int  // the pitch the backend uses on the device side
 }
-
-// AlignedRowPitch returns the row pitch a texture-to-buffer copy of the given
-// format and width will use on this device, in bytes.
-//
-// Callers do not need this for correctness. Readback through [Queue.ReadTexture]
-// returns tightly packed rows in caller order regardless, and accel pays for the
-// repack. It exists so a caller sizing its own staging buffer can size it right
-// the first time.
-func (d *Device) AlignedRowPitch(f Format, width int) int { panic(ErrNotImplemented) }

@@ -382,7 +382,11 @@ func (p *Pool) Kind() MemoryKind { return p.desc.Kind }
 // bug into a silent success.
 func (p *Pool) Close() error {
 	p.mu.Lock()
-	if n := len(p.live); n > 0 {
+	// Textures are children exactly as buffers are: each has a handle a caller
+	// holds, and closing one out from under them turns a leak into a
+	// use-after-free. Counting only buffers was the version that let a pool
+	// close while a texture was live.
+	if n := len(p.live) + len(p.liveTextures); n > 0 {
 		p.mu.Unlock()
 		return &LifetimeError{Op: "Close", Resource: p.desc.Label, Reason: reasonChildren, Children: n}
 	}
@@ -402,7 +406,7 @@ func (p *Pool) Close() error {
 func (p *Pool) liveChildren() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.live)
+	return len(p.live) + len(p.liveTextures)
 }
 
 // liveChildren counts the buffers the implicit pool has handed out.

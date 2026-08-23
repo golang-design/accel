@@ -528,7 +528,7 @@ type Queue struct {
 // ReadTexture flushes this queue's pending writes, waits for prior work, and
 // returns the base mip and sole array layer as tightly packed top-origin rows.
 func (q *Queue) ReadTexture(src *Texture, into []byte) error {
-	panic(ErrNotImplemented)
+	return q.readTexture(src, into)
 }
 
 // Submit submits a graph and returns immediately with a [Fence]. Nothing in this

@@ -100,14 +100,15 @@ type Pool struct {
 	alloc alloc.Allocator
 	state resourceState
 
-	mu   sync.Mutex
-	live []*Buffer
+	mu           sync.Mutex
+	live         []*Buffer
+	liveTextures []*Texture
 }
 
 // AllocTexture suballocates a texture from a pool created with Textures set.
 // Buffer pools reject it, and texture pools reject [Pool.Alloc].
 func (p *Pool) AllocTexture(desc TextureDescriptor) (*Texture, error) {
-	panic(ErrNotImplemented)
+	return p.allocTexture(desc)
 }
 
 // PoolStats reports a pool's occupancy.
