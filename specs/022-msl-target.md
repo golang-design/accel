@@ -30,6 +30,39 @@ supported domain. **A bound is never widened to match what the device happened
 to report**, because a bound derived from an observation is a bound that says
 nothing.
 
+### The recorded profile — 2026-08-23
+
+Measured on an Apple M2, through kernels carrying the same
+`#pragma METAL fp contract(off)` the emitter emits, because the question is what
+*this project's generated code* does and not what Metal does in the abstract:
+
+| Condition (008 §3) | Metal | CPU oracle |
+| --- | --- | --- |
+| round to nearest even | yes | yes |
+| contraction off | yes | yes |
+| subnormals preserved | **no** | yes |
+| inf/NaN produced | yes | yes |
+
+`ExactAvailable` is true on both, and it asks only about rounding and
+contraction — the normal-result condition belongs to a comparison rather than to
+the machine. So **a bit-for-bit differential against the CPU oracle is
+justified, over the domain where no result is subnormal.**
+
+The one divergence is recorded rather than worked around. Apple GPUs flush a
+subnormal *result* to zero while preserving a stored one, so `x + 0.0f` at
+2⁻¹⁴⁹ returns zero and `(2⁻⁷⁰)²` returns zero. That narrows Metal's exact
+domain; it does not widen any bound, which is what
+[009](009-sequencing.md)'s risk row forbids. See
+[`conventions.md`](../docs/conventions.md).
+
+**The probe harness had to change to measure this at all.** `probe.Ops` gained
+`MulAdd`, because contraction is a decision a compiler makes *within* one
+expression: composing `Mul` then `Add` through two separate kernels cannot fuse
+however the device is configured, so the old shape would have reported
+contraction off on a backend that contracts everything it compiles. A confident
+wrong answer is worse than no probe, which is the argument
+[008](008-numerics.md) already makes about probing with Go constants.
+
 One expectation to carry in, and one already answered:
 
 - Apple silicon's SIMD width is 32, so the CPU sweep at 1, 4, 32 and 64 does not

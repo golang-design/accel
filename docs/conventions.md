@@ -160,6 +160,34 @@ the context, and replays a recorded command list on it. This is invisible to the
 caller, and is why the recording model costs GL
 nothing: it was going to record anyway.
 
+### Apple GPUs flush a subnormal result to zero
+
+**Divergence.** A subnormal *stored* in a buffer survives a round trip, and a
+subnormal the compiler folds survives, but arithmetic that **produces** one
+returns zero. Measured on an M2, with the runtime operand in a buffer so nothing
+is folded:
+
+| Expression | Result |
+| --- | --- |
+| store `2⁻¹⁴⁹`, read it back | `0x00000001`, preserved |
+| `ldexp(1.0f, -149)` as a constant | preserved, folded on the host |
+| `x + 0.0f` where x is `2⁻¹⁴⁹` | **0** |
+| `2⁻¹⁴⁸ * 0.5f` | **0** |
+| `(2⁻⁷⁰)²` | **0** |
+
+The CPU backend preserves them, so this is a real difference between the oracle
+and the device, not a property of f32.
+
+**Guarantee.** None, and that is the point:
+[`008`](../specs/008-numerics.md) makes exactness a property of *(class, domain,
+profile)*, and the normal-result condition belongs to a comparison rather than
+to the machine. So `probe.Profile.SubnormalsPreserved` is **false** for Metal,
+`ExactAvailable` stays true because it asks only about rounding and contraction,
+and a comparison whose values reach the subnormal range is one Metal cannot be
+held to. The probe pins the measurement in both directions: a device that began
+preserving them would widen the domain and the test says so, which is the one
+direction [`009`](../specs/009-sequencing.md)'s risk row permits.
+
 ### Metal fuses a multiply-add unless a pragma says otherwise
 
 **Divergence.** Metal compiles with `-ffp-contract=fast` by default, so `a*b+c`

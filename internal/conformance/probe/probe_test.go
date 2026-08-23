@@ -197,14 +197,16 @@ func TestTheProbeDetectsDifferentArithmetic(t *testing.T) {
 	}, {
 		name: "a fused multiply-add",
 		ops: func(o probe.Ops) probe.Ops {
-			// Contraction: the multiply keeps full precision and the following
-			// subtraction rounds once, which is what fusing does.
-			var pending float64
-			o.Mul = func(a, b float32) float32 {
-				pending = float64(a) * float64(b)
-				return float32(pending)
+			// Fusing is a property of how the backend evaluates one expression:
+			// the product keeps full precision and the sum rounds once. An
+			// earlier version of this synthetic backend faked it by having Mul
+			// stash a float64 for the next Sub to pick up, which worked only
+			// because both calls happened here. That is exactly the composition
+			// a GPU backend cannot make -- each call is its own kernel -- so
+			// probe.Ops asks for the whole expression and this supplies it.
+			o.MulAdd = func(a, b, c float32) float32 {
+				return float32(float64(a)*float64(b) + float64(c))
 			}
-			o.Sub = func(a, b float32) float32 { return float32(pending - float64(b)) }
 			return o
 		},
 		check: func(p probe.Profile) bool { return !p.ContractionOff },

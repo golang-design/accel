@@ -98,6 +98,26 @@ func (p Profile) String() string {
 type Ops struct {
 	Add, Sub, Mul, Div func(a, b float32) float32
 	Ldexp              func(m float32, e int) float32
+
+	// MulAdd evaluates a*b+c the way this backend's lowering emits it, as one
+	// unit rather than as a multiply whose result is handed back and fed to an
+	// add.
+	//
+	// # Why this cannot be composed from Mul and Add
+	//
+	// Contraction is a decision a compiler makes *within* one expression. On the
+	// CPU each of these is a Go function call and the composition happens in
+	// this package, so Mul followed by Add can never fuse -- which is fine,
+	// because that is also what the generated lowering does. On a GPU each call
+	// is a separate kernel and a separate compilation, so the composition
+	// cannot fuse there either, however the device is configured. A probe built
+	// that way reports contraction off on a backend that contracts every kernel
+	// it compiles, which is a confident wrong answer of exactly the kind
+	// specs/008-numerics.md exists to prevent.
+	//
+	// So the probe asks the backend to evaluate the whole expression. What comes
+	// back says whether the code this backend *generates* fuses.
+	MulAdd func(a, b, c float32) float32
 }
 
 // GoOps is this machine's own arithmetic, reached through functions the
@@ -108,7 +128,7 @@ type Ops struct {
 // constants measures the constant folder and reports the same answer on
 // hardware that rounds differently.
 func GoOps() Ops {
-	return Ops{Add: add32, Sub: sub32, Mul: mul32, Div: div32, Ldexp: ldexp32}
+	return Ops{Add: add32, Sub: sub32, Mul: mul32, Div: div32, Ldexp: ldexp32, MulAdd: muladd32}
 }
 
 // CPU measures this machine's Go arithmetic, which is what the CPU backend's
@@ -197,6 +217,18 @@ func mul32(a, b float32) float32 { return a * b }
 //go:noinline
 func ldexp32(m float32, e int) float32 { return float32(math.Ldexp(float64(m), e)) }
 
+// muladd32 is a*b+c as the generated CPU lowering writes it.
+//
+// The intermediate conversion is not decoration. Go permits x*y+z to be fused
+// into one FMA, and on arm64 it is -- so this without the conversion would
+// measure the Go compiler's licence rather than the lowering's behaviour. The
+// generated code names the rounding for exactly this reason
+// (specs/008-numerics.md's rounding points), and this mirrors it, so the probe
+// answers a question about the code that actually runs.
+//
+//go:noinline
+func muladd32(a, b, c float32) float32 { return float32(a*b) + c }
+
 // contractionOff checks that a multiply followed by an add was not fused into
 // one correctly rounded operation.
 //
@@ -221,9 +253,8 @@ func contractionOff(ops Ops) bool {
 	// cases measures nothing and says so confidently, which is worse than not
 	// probing.
 	x := ops.Add(one, ops.Ldexp(1, -12))
-	unfused := ops.Sub(ops.Mul(x, x), one)
 	fused := float32(float64(x)*float64(x) - 1)
-	return unfused != fused
+	return ops.MulAdd(x, x, -1) != fused
 }
 
 // subnormalsPreserved checks that a subnormal survives rather than being
