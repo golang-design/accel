@@ -73,6 +73,7 @@ numbered in.
 | --- | --- | --- |
 | [001-device-resources.md](001-device-resources.md) | Implemented | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
 | [002-compute-model.md](002-compute-model.md) | In progress | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
+| [031-shared-transients.md](031-shared-transients.md) | Implemented | M8: one transient pool shared by several graphs, and the in-flight rule that makes it safe |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
 | [005-graphics.md](005-graphics.md) | Drafted parent | Post-v0 graphics constraints and the four child specs required before implementation |

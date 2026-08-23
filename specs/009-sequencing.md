@@ -1088,14 +1088,19 @@ Independently scoped later work includes:
   with nothing padded to a common length — so a batch costs what its longest
   member costs. What remains is the *scheduler* deciding who runs together and
   when to admit a request, which is policy over this mechanism rather than more
-  of it, and additional transient sets.
+  of it; and
+- ~~additional transient sets~~ — **[031](031-shared-transients.md), complete
+  2026-08-23**: a caller-owned pool several graphs plan into, sized to the
+  largest rather than to the sum, which is [007](007-tensor-layer.md)'s
+  gigabyte of bucket transients turned back into 200 MiB. The in-flight rule a
+  graph has for itself widens to the set sharing a pool.
 
 Vulkan is the first backend priority because it gives the CPU oracle a second
 vendor/API opinion and pays the cost of the real SPIR-V IR.
 
 #### M8 status — 2026-08-23
 
-**Four of the six items are complete**, and the two that are not are blocked by
+**Five of the seven items are complete**, and the two that are not are blocked by
 different things — one by this project's own design gate and one by the machine.
 Written out rather than left to a reader to infer from the strikethroughs above.
 
@@ -1105,6 +1110,7 @@ Written out rather than left to a reader to infer from the strikethroughs above.
 | sampling primitives | **[028](028-sampling.md)**, including top-k and top-p; policy integration remains |
 | prefill bucketing and the plan cache | **[029](029-plan-cache.md)** |
 | paged KV and multi-sequence | **[030](030-paged-kv.md)**, mechanism complete; the *scheduler* is policy over it |
+| additional transient sets | **[031](031-shared-transients.md)** |
 | textures/formats and graphics | textures, formats and row pitch shipped at M1; **graphics is gated** |
 | Vulkan and the SPIR-V emitter | **blocked here**, measured |
 
@@ -1125,7 +1131,7 @@ makes SPIR-V a *binary* target with no source level, so without a device, a
 validator, or a driver compiler an emitter would be code nobody ran — the
 failure mode [M6's outcome](#m6-outcome--complete-2026-08-23) names.
 
-**What the four completed items have in common** is worth recording, because it
+**What the completed items have in common** is worth recording, because it
 is the same shape four times: each turned out to rest on a decision that the
 obvious implementation gets wrong, and each was confirmed by reinstating that
 mistake rather than by watching a test pass.
@@ -1136,6 +1142,7 @@ mistake rather than by watching a test pass.
 | sampling | ties go to the lowest index | a non-strict comparison sends them to the highest, and both backends disagree |
 | top-k | select by extraction, not by a threshold | a threshold keeps four entries where two were asked |
 | paged KV | `pages[j/B]·B + j mod B` | dropping the multiply fails all five cases — and *ignoring* the table does not compile |
+| shared transients | claim the pool inside the function that *executes* a graph | claiming it in `Queue.Submit` leaves `Queue.SubmitAfter` unguarded, and both entry points then run while another graph holds the pool |
 
 The last of those is the one to remember: **the kernel compiler refused a
 mutation before a test could see it**, because a binding that is never read is
