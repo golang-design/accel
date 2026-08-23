@@ -170,7 +170,8 @@ bindings are the better choice.
 | Cooperative diagnostics: undefined reads, arrival, conflicting access | **Built** on the CPU backend |
 | Atomics, emulated subgroups, capability inference | **Built**; subgroup shuffles and scans are specified and unbuilt |
 | Portable tiled GEMM | **Built** on the CPU backend |
-| Metal backend | Specified, next |
+| Kernel corpus: the unquantized v0 kernels | **Built** on the CPU backend; the selection registry is not |
+| Metal backend | Specified, next; needs a Mac to verify |
 | Tensor layer | Specified, not started |
 | Vulkan, D3D12, OpenGL, WebGPU backends | Specified, not scheduled for v0 |
 | Graphics | Parent design drafted, child APIs and implementation post-v0 |

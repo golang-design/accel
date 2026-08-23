@@ -1,6 +1,6 @@
 ---
 title: "Kernel corpus: unquantized v0 inventory, variants, and selection"
-status: drafted
+status: in progress
 layer: tensor
 depends_on:
   - 002-compute-model.md
@@ -129,6 +129,57 @@ concrete dtype/layout/shape and its primitive `Requirements` fit the device.
 Minimal prefill may use the composed MatMul → Softmax → MatMul path. Tests can
 remove the fused record from a runtime registry to exercise selection absence on
 any CPU.
+
+## 3.1 What is built — 2026-08-23
+
+Every kernel in both tables above exists on the CPU backend, in
+`internal/testkernels`, each checked against an independently written
+higher-precision reference and each authored form checked against its generated
+lowering.
+
+| Family | Built | Not yet |
+| --- | --- | --- |
+| Flat: `add`, `mul`, `scale`, `silu`, `swiglu`, `rows`, `scatter_rows`, `rope` | all | `contiguous_copy`'s dtype variants, and the layout classes below |
+| Cooperative: `reduce_sum`, `rmsnorm`, `softmax`, `matmul` tiled, `linear`, `matvec`, `attention_decode` | all | `softmax`'s causal-mask variant, `matmul`'s naive reference |
+
+**What is not built is the *registry*, not the kernels.** §4's deterministic
+selection, the variant records, the layout classes, and the stable IDs are a
+tensor-layer concern that belongs with [007](007-tensor-layer.md)'s `Runtime`,
+and none of it exists. What exists is the arithmetic each ID names, which is the
+half M7 needs proved before selection can be trusted to pick between them.
+
+### The rules that turned out to matter
+
+Each of these produces a *plausible* result when wrong — right shape, right
+magnitude, wrong meaning — so each has a test confirmed by reinstating the bug
+rather than by passing.
+
+| Kernel | The rule | What breaks without it |
+| --- | --- | --- |
+| `softmax` | subtract the row maximum | exp overflows f32 above ~88, every term is Inf, the quotient is NaN |
+| `rmsnorm` | ε under the square root | a row of zeros divides by zero |
+| `silu` | negate the exponent | the algebraically identical form overflows at the same 88 |
+| `attention_decode` | inactive lanes contribute −∞ to the maximum | zero wins over negative scores and shifts every exponent |
+| `attention_decode` | query heads group contiguously onto KV heads | every head still attends to *something* |
+| `rows` | check the id | reads another token's vector |
+| `scatter_rows` | drop an out-of-range write | clamping corrupts a real row |
+| `rope` | honour the position offset | every token rotates as though it were the first |
+
+### Running an authored cooperative kernel
+
+[004](004-kernel-authoring.md)'s fifth level compares a generated lowering
+against its authored function, and a cooperative kernel's authored form cannot
+be run one invocation at a time. The obvious workaround — every invocation
+through the whole function once per barrier — is **unsound**: it holds only
+while every pre-barrier statement is idempotent, and a tree reduction is not,
+since it overwrites the array it reduces. Three tests written that way passed by
+luck and a fourth produced NaN, which is how it was found.
+
+`kernel.RunAuthored` gives each invocation a goroutine behind a cyclic barrier,
+which is what a workgroup is. That is deliberately *not* how the backend runs a
+kernel — the scheduler's one-at-a-time advance is deterministic and this is not
+— and the two arriving at the same answer by different means is what makes the
+comparison worth making.
 
 ## 4. Deterministic selection
 

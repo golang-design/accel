@@ -93,7 +93,7 @@ numbered in.
 | Spec | Status | Covers |
 | --- | --- | --- |
 | [007-tensor-layer.md](007-tensor-layer.md) | Drafted | Caller-owned plans and state, concrete ports, unquantized f16/f32 operators, minimal prefill and decode |
-| [010-kernel-corpus.md](010-kernel-corpus.md) | Drafted | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
+| [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 
 ## Process
 

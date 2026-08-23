@@ -591,6 +591,17 @@ complete, and its remainder is tracked forward.
 `implemented` — every section of it. What remains in that API is the sampler,
 which has nothing to sample with until a render pass exists.
 
+**[010](010-kernel-corpus.md)'s kernel list is built on the CPU**, which is one
+of M7's three prerequisites. Every flat and cooperative kernel in that spec's
+tables exists, each against an independent higher-precision reference. What is
+not built is the *registry* — §4's deterministic selection, the variant records
+and the stable IDs — which belongs with [007](007-tensor-layer.md)'s `Runtime`.
+
+That leaves M7 blocked on two things rather than one: the tensor layer, and the
+Metal backend its done criteria name in every clause ("on CPU and Metal", "on
+both backends"). The kernels are the half that could be proved here, and they
+are.
+
 #### 003's remaining sections
 
 Indirect dispatch, the run-time counters, and `SubmitAfter` were M3's remainder
