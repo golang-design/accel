@@ -311,6 +311,26 @@ see the depth test. That case is a distinct branch and not folded into the fail
 case, which is the mistake a naive implementation makes and which shadow-volume
 techniques count on.
 
+**Primitive assembly lives in this package**, not in a backend. The walk from a
+draw's counts to triangles — index fetch, topology, the instance loop, and the
+two offsets — is where strip winding and index arithmetic live, and a backend
+that assembled its own would be a second implementation of both.
+[`000-decisions.md`](000-decisions.md) decision 3 makes this the thing a backend
+is checked against rather than a peer of it, so geometry logic belongs on this
+side of the line.
+
+Strip winding alternates: the second triangle of a strip swaps its first two
+vertices, so every triangle presents the same facing as the first. Without it,
+every other triangle is back-facing, and with culling on the mesh comes out
+striped — which reads as a geometry bug rather than a winding one, so a coverage
+test with culling *off* cannot see it. The test therefore culls, and a second
+test asserts the triple order directly, because "the quad filled" is consistent
+with more than one correct-looking assembly.
+
+Lines and points are refused by name, per §10. Approximating a rule this
+document leaves open would put an unstated rule in the oracle every backend is
+checked against, which is worse than a topology that does not draw.
+
 One implementation choice worth recording because it is not obvious. Edge
 functions are evaluated in `float64` even though everything around them is f32.
 The fill rule's decision is about a sample landing *exactly* on an edge, which is
