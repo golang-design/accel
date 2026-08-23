@@ -1,6 +1,6 @@
 ---
 title: "Atomics, emulated subgroups, and capability inference"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 018-cooperative-lowering.md
@@ -121,7 +121,78 @@ becomes a wrong answer on hardware nobody in this project owns.
   [000](000-decisions.md) decision 6 and is checked against a profile rather
   than against hardware.
 
-## 6. What it does not build
+## 6. Outcome — 2026-08-23
+
+§1 is built except the CPU mode wiring noted below, and §5's cases pass.
+
+| Piece | State |
+| --- | --- |
+| Atomics, the integer set and `AddF32` | built |
+| Emulated subgroups: ids, reductions, `Elect`, `Any`, `All`, `BroadcastFirst`, `Ballot` | built, in uniform control flow |
+| Capability inference over the IR | built |
+| `//accel:requires` as an assertion | built |
+| Capability gating at pipeline creation | built |
+| `reduce_sum` against [008](008-numerics.md)'s budget | built |
+| arm64 and amd64 numeric probes | built |
+| Subgroup shuffles, scans, and `Broadcast` from a chosen lane | **not built** — see §6.3 |
+
+### 6.1 Three bugs, each a wrong answer that compiled
+
+- **Access inference did not see an atomic touch its buffer.** An atomic's first
+  argument is the buffer rather than an index expression, so a walk that only
+  understood indexing reported the binding untouched. That is what the graph
+  builder infers dependency edges from, so an unrecorded write is a missing
+  barrier and therefore a race.
+- **f32 constants were emitted as fractions.** `go/constant`'s `ExactString`
+  renders an exact rational as `3/4`, which inside `float32(...)` is integer
+  division, which is zero — so every comparison against `0.75` was true. It
+  survived until a corpus kernel used a fractional threshold. Constants are now
+  spelled as their bit pattern with the decimal in a comment, and the regression
+  test asserts on the *emitted text*, because a result test only catches it for
+  the constants a corpus happens to use.
+- **The subgroup suspension was on the wrong side of the split.** The state that
+  read the combined result suspended, rather than the one that contributed, so
+  each lane read a value nothing had written. Visible immediately in the
+  generated code, which is an argument for reading it.
+
+### 6.2 Two semantics needed the right witness to be testable
+
+Both are rules [002](002-compute-model.md) states that a plausible test does not
+exercise.
+
+- **A reduction over one active lane returns that lane's value, not `v + 0`.**
+  For every finite `v`, `0 + v` is exactly `v`, so an accumulator seeded with
+  zero passes any test using ordinary values. The witness is **negative zero**:
+  `0 + (-0)` is `+0`, and a sign that flips changes the sign of a later
+  division.
+- **A read of undefined shared memory is reported for every stored pattern.**
+  Covered in [019](019-cooperative-diagnostics.md), and the same shape: a
+  sentinel is a value a kernel could compute.
+
+### 6.3 What is deferred, and why
+
+**Subgroup shuffles, scans, and broadcast-from-a-chosen-lane.** Each is defined
+in terms of *inactive* lanes — reading one is undefined, scans skip them rather
+than treating them as identity — and emulating that faithfully means modelling
+an active set no two backends agree on. [002](002-compute-model.md) §5.1 says
+whether lanes reconverge after divergence is implementation-defined, so the
+portable subset is narrower than the operation list suggests. The operations
+built here are the ones whose result is portable in uniform control flow, which
+is where [002](002-compute-model.md) §5.1 says any of them are.
+
+**Subgroup operations in divergent control flow.** Same reason, and it is the
+boundary that makes the above tractable: the emulation is exactly the barrier
+machinery because every lane arrives.
+
+**The `CPUStrict` and `CPUMimic` modes are not yet wired to capability
+inference.** `Device.Missing` checks the profile a mode reports, so a mimicked
+device already refuses a kernel it cannot run — that path is tested. What is
+missing is strict mode *narrowing* the reported capability set to the
+intersection of its declared targets, which is [006](006-backends.md)'s
+strict-mode contract rather than this child's, and is recorded in
+[009](009-sequencing.md) as an M4 remainder rather than left implicit.
+
+## 7. What it does not build
 
 - **No cross-workgroup coordination.** Forward progress between workgroups is
   not guaranteed ([002](002-compute-model.md) §2.7) and nothing here changes

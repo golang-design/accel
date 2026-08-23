@@ -86,7 +86,7 @@ numbered in.
 | [017-graph-aliasing.md](017-graph-aliasing.md) | Implemented | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
 | [018-cooperative-lowering.md](018-cooperative-lowering.md) | Implemented | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
 | [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | Implemented | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
-| [020-cooperative-atomics.md](020-cooperative-atomics.md) | Drafted | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
+| [020-cooperative-atomics.md](020-cooperative-atomics.md) | In progress | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
 
 ## Layer 2: the tensor
 

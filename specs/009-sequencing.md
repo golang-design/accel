@@ -466,7 +466,7 @@ they are found deterministically.
 | --- | --- |
 | [018](018-cooperative-lowering.md) | The uniformity analysis, shared memory and `Thread.Barrier` as authored constructs, the state split, the workgroup scheduler, and selection between the flat and cooperative lowerings — **complete 2026-08-23**, including barriers inside loops; a barrier inside a conditional is refused, since a branch has no back edge to resume on |
 | [019](019-cooperative-diagnostics.md) | Shared-memory definition tracking, deterministic barrier-arrival checking, and deterministic conflicting-access reporting — **complete 2026-08-23** |
-| [020](020-cooperative-atomics.md) | Atomics, emulated subgroups and their sweeps, capability inference and the CPU modes, the numeric probes, and `reduce_sum` |
+| [020](020-cooperative-atomics.md) | Atomics, emulated subgroups and their sweeps, capability inference and the CPU modes, the numeric probes, and `reduce_sum` — **built 2026-08-23**, except subgroup shuffles and scans, and strict mode narrowing the capability set |
 
 The risk table's response to this risk is "split M4 again", so the split is
 taken before implementation rather than after an estimate slips, as it was for
@@ -486,6 +486,46 @@ the shape works, since 017's whole-plan oracle found three real bugs within
 minutes of first running — including one in a relation this repository had
 written down correctly and implemented wrongly. Both lowerings are generated
 from one IR, so a disagreement is the transform's and nothing else's.
+
+#### M4 outcome
+
+Four of the six done criteria are met. The numeric probes establish the exact
+domain before anything relies on it, and they are shown *detecting* seven kinds
+of divergent arithmetic rather than only reporting this machine's — a detector
+nobody has seen detect anything is a detector nobody should believe.
+`reduce_sum` matches its higher-precision reference at eleven lengths that are
+not multiples of the workgroup size, under a budget derived from the operation's
+addition depth rather than tuned. A read of shared memory nothing wrote is
+reported for every stored bit pattern, which a sentinel implementation fails on
+the first one. And non-uniform arrival, two invocations at different barriers,
+and an unordered conflicting access are each reported deterministically with
+position, workgroup, and invocation.
+
+**The flat-versus-cooperative agreement is met for kernels eligible for both**,
+which is every flat corpus kernel driven through the cooperative scheduler.
+
+**Two criteria are partly met, and the gap is stated rather than rounded up.**
+The subgroup sweep runs at 1, 4, 32 and 64 against a fallback that uses no
+subgroup operation, which is the criterion — but only over the operations
+[020](020-cooperative-atomics.md) §6.3 builds. Shuffles, scans, and
+broadcast-from-a-chosen-lane are deferred, because each is defined in terms of
+inactive lanes and emulating that means modelling an active set no two backends
+agree on.
+
+**What this milestone's oracles found.** Three bugs in
+[018](018-cooperative-lowering.md), three in [020](020-cooperative-atomics.md),
+and every one of them a wrong answer that compiled and ran. The pattern that
+found them is the same one M3 established: build the checker before the thing it
+checks, and confirm it by reinstating the bug rather than by watching it pass.
+Twice the first version of a test passed against the bug it was written for —
+the bring-up kernel whose publisher happened to run first, and the id comparison
+that recorded only the global id — which is the argument for that confirmation
+step being routine rather than occasional.
+
+**Carried forward.** Strict mode narrowing its reported capability set to the
+intersection of its declared targets is [006](006-backends.md)'s contract and is
+not built; a mimicked profile already refuses a kernel it cannot run, which is
+the half that gates correctness.
 
 ### M5. The portable tiled GEMM on the CPU
 
