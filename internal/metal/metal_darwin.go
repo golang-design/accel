@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"golang.design/x/accel/internal/driver"
@@ -90,6 +91,10 @@ type device struct {
 	closed bool
 	blocks int
 
+	// lost is non-nil once a submission reported the device gone, and stays
+	// non-nil. See [device.Lost].
+	lost error
+
 	// pipelines caches one compiled pipeline per kernel record. Compiling MSL
 	// is a call into the device compiler and takes milliseconds, so a graph
 	// resubmitted a thousand times must not pay it a thousand times. The key is
@@ -151,15 +156,65 @@ func (d *device) Alloc(kind driver.MemoryKind, bytes int, label string) (driver.
 	return &block{dev: d, buf: buf, label: label}, nil
 }
 
-// Lost reports device loss.
+// Lost reports device loss, stickily.
 //
-// Always nil at this milestone. Metal reports loss through a command buffer's
-// error rather than through a device-level flag, and specs/023-metal-graph.md
-// owns turning that into the sticky, terminal answer
-// specs/001-device-resources.md section 7.4 requires. Answering nil is a real
-// answer for a device that has not lost anything; what is missing is the path
-// that would notice.
-func (d *device) Lost() error { return nil }
+// Metal has no device-level flag for this: loss surfaces as an error on a
+// command buffer, which is a property of one submission. So the answer is
+// *derived* from what submissions have reported, and once derived it never
+// clears -- specs/001-device-resources.md section 7.4 makes loss terminal,
+// because a driver reset that produced one failure and then appeared to recover
+// would leave a caller running on resources whose contents are undefined.
+//
+// Not every command buffer error is loss. A kernel that ran off the end of a
+// buffer faults one submission and leaves the device usable, and reporting that
+// as loss would turn a bug into an unrecoverable device. [isDeviceLoss] draws
+// the line, and draws it narrowly.
+func (d *device) Lost() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lost
+}
+
+// noteSubmissionError records what one submission reported.
+//
+// Called with the error from a completed command buffer, including nil.
+func (d *device) noteSubmissionError(err error) {
+	if err == nil || !isDeviceLoss(err) {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lost == nil {
+		d.lost = fmt.Errorf("%w: %v", driver.ErrDeviceLost, err)
+	}
+}
+
+// isDeviceLoss reports whether a command buffer error means the device is gone
+// rather than the work being wrong.
+//
+// Matched on the status Metal reports rather than on message text where
+// possible, and on text where not: MTLCommandBufferError distinguishes
+// NotPermitted, OutOfMemory, InvalidResource and Timeout from the two that mean
+// the device itself went away.
+//
+// Narrow on purpose. A false positive here is worse than a false negative,
+// because it turns a recoverable kernel bug into a device a caller must throw
+// away, and specs/001-device-resources.md section 7.4 makes that unrecoverable
+// by design.
+func isDeviceLoss(err error) bool {
+	msg := err.Error()
+	for _, s := range []string{
+		"Caused GPU Hang", // MTLCommandBufferErrorTimeout's usual text
+		"IOAF code",       // the family of errors a reset produces
+		"Device Removed",  // an eGPU unplugged
+		"device was lost", //
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
 
 func (d *device) Close() error {
 	d.mu.Lock()
@@ -311,8 +366,11 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			AtomicFloatAddStorage: false,
 			AtomicFloatAddShared:  false,
 
-			// Absent until specs/023-metal-graph.md encodes it.
-			IndirectDispatch: false,
+			// Present: specs/023-metal-graph.md encodes it, and the count is
+			// clamped on the device before the dispatch reads it, so the
+			// unconditional clamp specs/003-command-graph.md requires costs no
+			// readback.
+			IndirectDispatch: true,
 
 			InfNaNProduced: true,
 

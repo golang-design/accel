@@ -60,9 +60,12 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 			e.staging = append(e.staging, stage)
 			e.stageAt = append(e.stageAt, stagedWrite{node: i, buf: stage})
 		case driver.OpDispatch:
-			if n.Dispatch.Indirect != nil {
-				return nil, fmt.Errorf("accel: node %d is an indirect dispatch, which the "+
-					"Metal backend does not lower until specs/023-metal-graph.md", n.ID)
+			if ind := n.Dispatch.Indirect; ind != nil {
+				s, err := d.newIndirectSlot(i, ind.Max)
+				if err != nil {
+					return nil, fmt.Errorf("accel: node %d indirect clamp: %w", n.ID, err)
+				}
+				e.indirect = append(e.indirect, s)
 			}
 			if err := checkUniforms(n.Dispatch); err != nil {
 				return nil, fmt.Errorf("accel: node %d: %w", n.ID, err)
@@ -131,6 +134,14 @@ type executable struct {
 	// submissions. Guarded by mu with everything else: it is written during
 	// encoding, which happens under the same lock that records the fence.
 	uniformBufs [][]byte
+
+	// indirect is one slot per indirect node, in plan order.
+	indirect []*indirectSlot
+
+	// stats is the last completed submission's indirect counters, rebuilt on
+	// each read rather than cached: the buffers are the truth and a cache would
+	// be a second one.
+	stats []driver.IndirectStat
 
 	mu     sync.Mutex
 	bound  []driver.SlotBinding
@@ -221,6 +232,13 @@ func (e *executable) Submit() (driver.Fence, error) {
 		return nil, fmt.Errorf("accel: submit while a submission is in flight")
 	}
 
+	// A lost device is reported here rather than through a fence that never
+	// signals. specs/001-device-resources.md section 7.4: every subsequent call
+	// returns the loss, so nothing waits forever.
+	if err := e.dev.Lost(); err != nil {
+		return nil, fmt.Errorf("accel: submit %q: %w", e.plan.Label, err)
+	}
+
 	cb := e.dev.queue.Begin()
 	enc := &pass{cb: cb}
 	if err := e.encode(enc); err != nil {
@@ -230,7 +248,7 @@ func (e *executable) Submit() (driver.Fence, error) {
 	}
 	enc.end()
 	cb.Commit()
-	f := &fence{cb: cb}
+	f := &fence{cb: cb, dev: e.dev}
 	e.cur = f
 	return f, nil
 }
@@ -297,7 +315,10 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 	// A zero in any dimension is a grid with no invocations. Metal rejects it
 	// rather than treating it as a no-op, so the node is skipped here, which is
 	// what the CPU backend does and therefore what the oracle expects.
-	if d.Count.X == 0 || d.Count.Y == 0 || d.Count.Z == 0 {
+	//
+	// An indirect node is exempt: its Count is the *maximum* rather than the
+	// actual, and the actual is not known on this side of the submission.
+	if d.Indirect == nil && (d.Count.X == 0 || d.Count.Y == 0 || d.Count.Z == 0) {
 		return nil
 	}
 	pipe, err := e.dev.pipelineFor(k)
@@ -307,6 +328,32 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 	if len(d.Bindings) != len(k.Bindings) {
 		return fmt.Errorf("accel: node %d supplies %d bindings for a kernel declaring %d",
 			n.ID, len(d.Bindings), len(k.Bindings))
+	}
+
+	// The clamp runs first and in its own pass, so the indirect buffer the
+	// dispatch reads was written by work Metal has ordered before it.
+	var slot *indirectSlot
+	if d.Indirect != nil {
+		for _, s := range e.indirect {
+			if e.plan.Nodes[s.node].ID == n.ID {
+				slot = s
+				break
+			}
+		}
+		if slot == nil {
+			return fmt.Errorf("accel: node %d is indirect and has no clamp slot", n.ID)
+		}
+		// The count's size is not checked here. Plan.Validate already rejects
+		// an indirect count that cannot hold three uint32s, and Compile runs it
+		// first, so a check repeated here would be unreachable -- a second
+		// statement of a rule that can then drift from the first.
+		count, err := e.operand(d.Indirect.Count)
+		if err != nil {
+			return fmt.Errorf("accel: node %d indirect count: %w", n.ID, err)
+		}
+		if err := e.encodeClamp(p, slot, count); err != nil {
+			return err
+		}
 	}
 
 	enc := p.compute()
@@ -344,13 +391,18 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 			enc.SetBytes(bufs[i], emit.MSLUniformIndex(len(d.Bindings), i))
 		}
 	}
+	threads := mtl.Size{
+		Width:  uint64(k.WorkgroupSize.X),
+		Height: uint64(k.WorkgroupSize.Y),
+		Depth:  uint64(k.WorkgroupSize.Z),
+	}
+	if slot != nil {
+		enc.DispatchIndirect(slot.clamped, 0, threads)
+		return nil
+	}
 	enc.Dispatch(
 		mtl.Size{Width: uint64(d.Count.X), Height: uint64(d.Count.Y), Depth: uint64(d.Count.Z)},
-		mtl.Size{
-			Width:  uint64(k.WorkgroupSize.X),
-			Height: uint64(k.WorkgroupSize.Y),
-			Depth:  uint64(k.WorkgroupSize.Z),
-		})
+		threads)
 	return nil
 }
 
@@ -406,6 +458,14 @@ func elemBytes(d kernel.DType) int {
 		return 1
 	}
 	return 4
+}
+
+// unsafeU32 views bytes as u32, for reading a statistics buffer back.
+func unsafeU32(b []byte) []uint32 {
+	if len(b) < 4 {
+		return nil
+	}
+	return unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), len(b)/4)
 }
 
 func u32Bytes(v []uint32) []byte {
@@ -478,16 +538,57 @@ func (e *executable) Close() error {
 		s.Close()
 	}
 	e.staging = nil
+	for _, s := range e.indirect {
+		s.close()
+	}
+	e.indirect = nil
 	return nil
+}
+
+// IndirectStats reports the last completed submission's counts, in node order.
+//
+// Read from the device buffers rather than from anything recorded during
+// encoding, because the counts are the device's: the host never saw them. A
+// caller who has not waited on the fence gets whatever the buffers hold, which
+// is why this is documented on driver.StatsReporter as being about the last
+// *completed* submission.
+func (e *executable) IndirectStats() []driver.IndirectStat {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.plan.CollectStats || len(e.indirect) == 0 {
+		return nil
+	}
+	e.stats = e.stats[:0]
+	for _, s := range e.indirect {
+		raw := s.stats.Bytes()
+		if len(raw) < 16 {
+			continue
+		}
+		v := unsafeU32(raw)
+		e.stats = append(e.stats, driver.IndirectStat{
+			Node:    e.plan.Nodes[s.node].ID,
+			Actual:  kernel.ID3{X: v[0], Y: v[1], Z: v[2]},
+			Max:     s.max,
+			Clamped: v[3] != 0,
+		})
+	}
+	return e.stats
 }
 
 // fence reports one submission's completion.
 type fence struct {
 	mu     sync.Mutex
 	cb     *mtl.CommandBuffer
+	dev    *device
 	closed bool
 }
 
+// Wait blocks until the submission completes, and reports device loss.
+//
+// The device learns about loss here, because a command buffer's error is the
+// only place Metal reports it and this is where that error is read. A caller
+// who never waits never finds out, which is the same as everywhere else: an
+// unobserved failure is indistinguishable from no failure.
 func (f *fence) Wait() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -495,7 +596,12 @@ func (f *fence) Wait() error {
 		return nil
 	}
 	f.cb.Wait()
-	return f.cb.Err()
+	err := f.cb.Err()
+	f.dev.noteSubmissionError(err)
+	if lost := f.dev.Lost(); lost != nil {
+		return lost
+	}
+	return err
 }
 
 func (f *fence) Done() bool {

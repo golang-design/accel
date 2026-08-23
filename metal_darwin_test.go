@@ -343,3 +343,233 @@ func roundTrip[T comparable](t *testing.T, d *accel.Device, b *accel.Buffer, at 
 		}
 	}
 }
+
+// An indirect dispatch runs the device's count on Metal, clamped in every mode,
+// and reports what the count turned out to be.
+//
+// The clamp is the part worth testing hardest. specs/003-command-graph.md makes
+// it unconditional -- "correctness cannot depend on a flag, and no backend may
+// submit an out-of-range indirect count" -- and the obvious implementation, a
+// readback and a host-side clamp, would put a synchronisation point in the
+// middle of a graph and make an indirect dispatch cost more than the direct one
+// it replaces. So the clamp is a one-thread kernel and the real dispatch reads
+// what it wrote.
+//
+// That arrangement has one way to be silently wrong: if the clamp and the
+// dispatch shared an encoder, the dispatch would read memory nothing ordered
+// against it, which is undefined rather than merely fast, and would usually
+// produce the right answer anyway. The over-limit case below is what notices,
+// because it is the one where the clamped and unclamped counts differ.
+func TestIndirectDispatchOnMetal(t *testing.T) {
+	d := openMetal(t)
+	const n = 256
+	const wg = 64 // AddKernel's workgroup
+
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "add",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	max := accel.WorkgroupCount{X: 3, Y: 1, Z: 1}
+	for _, tc := range []struct {
+		name    string
+		supply  uint32
+		want    int // workgroups that should have run
+		clamped bool
+	}{
+		{"under the maximum", 2, 2, false},
+		{"exactly the maximum", 3, 3, false},
+		{"over the maximum", 9, 3, true},
+		{"zero", 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := newBuffer(t, d, "in", n, storage)
+			out := newBuffer(t, d, "out", n, storage)
+			count, err := d.NewBuffer(accel.BufferDescriptor{
+				DType: accel.U32, Count: 3, Label: "count",
+				Usage: accel.UsageIndirect | accel.UsageCopyDst | accel.UsageStorage,
+			})
+			if err != nil {
+				t.Fatalf("count buffer: %v", err)
+			}
+			defer count.Close()
+			countView, err := count.View(0, 3)
+			if err != nil {
+				t.Fatalf("view: %v", err)
+			}
+
+			r := d.NewRecorder()
+			r.CollectRunStats(true)
+			r.CopyToBuffer(countView, []uint32{tc.supply, 1, 1})
+			// Ones in, so every element the dispatch touched is 2 and every one
+			// it did not is 0. Counting them is how many workgroups ran, which
+			// is the only externally visible consequence of the clamp.
+			ones := make([]float32, n)
+			for i := range ones {
+				ones[i] = 1
+			}
+			r.CopyToBuffer(whole(t, in), ones)
+			r.CopyToBuffer(whole(t, out), make([]float32, n))
+			r.DispatchIndirect(p, []accel.Binding{
+				{Index: 0, Buffer: whole(t, in)},
+				{Index: 1, Buffer: whole(t, in)},
+				{Index: 2, Buffer: whole(t, out)},
+			}, countView, max)
+
+			g, err := r.Build()
+			if err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			defer g.Close()
+			f := d.Queue().Submit(g)
+			if err := f.Wait(); err != nil {
+				t.Fatalf("submit: %v", err)
+			}
+
+			got := readback(t, d, out)
+			touched := 0
+			for _, v := range got {
+				if v != 0 {
+					touched++
+				}
+			}
+			if want := tc.want * wg; touched != want {
+				t.Errorf("%d elements were written, want %d (%d workgroups of %d): the "+
+					"device count was supplied as %d against a maximum of %d",
+					touched, want, tc.want, wg, tc.supply, max.X)
+			}
+
+			stats, err := f.Stats()
+			if err != nil {
+				t.Fatalf("the graph asked for run stats: %v", err)
+			}
+			if len(stats.Indirect) != 1 {
+				t.Fatalf("the graph asked for run stats and reported %d indirect nodes",
+					len(stats.Indirect))
+			}
+			s := stats.Indirect[0]
+			if s.Actual[0] != tc.supply {
+				t.Errorf("the reported actual count is %d, want the %d the device wrote: "+
+					"this is read from the device, so a wrong value means the clamp kernel "+
+					"recorded the count after clamping it", s.Actual[0], tc.supply)
+			}
+			if s.Clamped != tc.clamped {
+				t.Errorf("Clamped is %v, want %v", s.Clamped, tc.clamped)
+			}
+		})
+	}
+}
+
+// The eight-node worked graph of specs/003-command-graph.md runs on Metal and
+// produces what its dependency chain says it should.
+//
+// This is the multi-node re-encoding path, which nothing else here exercises:
+// every other Metal test submits one or two nodes, and a backend that
+// re-encoded the first node correctly and lost the rest would pass all of them.
+// The graph has a genuine diamond, six aliased transients, and barriers the
+// planner placed rather than the test.
+//
+// The expected value is written out as the chain rather than as a constant,
+// because a reader who cannot check it cannot tell a correct result from one a
+// mis-ordered graph produced -- and mis-ordering is precisely what a re-encoding
+// bug looks like.
+func TestTheWorkedGraphRunsOnMetal(t *testing.T) {
+	const n = 64
+	d := openMetal(t)
+	w := worked(t, d)
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+
+	bind := func(s accel.Slot, label string, fill float32) *accel.Buffer {
+		b := newBuffer(t, d, label, n, storage)
+		vals := make([]float32, n)
+		for i := range vals {
+			vals[i] = fill
+		}
+		if err := d.Queue().WriteBuffer(b, 0, vals); err != nil {
+			t.Fatalf("write %s: %v", label, err)
+		}
+		if err := w.g.Bind(accel.Binding{Slot: s, Buffer: whole(t, b)}); err != nil {
+			t.Fatalf("bind %s: %v", label, err)
+		}
+		return b
+	}
+	bind(w.prms, "params", 0)
+	bind(w.x, "x", 1)
+	bind(w.kv, "kv", 3)
+	y := bind(w.y, "y", 0)
+
+	//	t0 = x + params  = 1
+	//	t1 = t0 + wQ     = 1
+	//	t2 = t0 + wK     = 1
+	//	t3 = t1 + params = 1
+	//	t4 = t3 + t2     = 2   the diamond's arms rejoin
+	//	t5 = t4 + kv     = 5
+	//	y  = t5 + x      = 6
+	for range 2 { // twice, because a re-encoded graph must replay
+		if err := d.Queue().Submit(w.g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		for i, v := range readback(t, d, y) {
+			if v != 6 {
+				t.Fatalf("element %d is %v, want 6: the dependency chain did not run in "+
+					"the order the planner computed", i, v)
+			}
+		}
+	}
+}
+
+// Closing a graph while its submission is still in flight is safe, repeatedly.
+//
+// docs/conventions.md records why this is the sharp edge of the backend: a
+// Metal completion handler runs after the enclosing autorelease pool has
+// drained, so releasing an autoreleased object from one is a use-after-free
+// that crashes inside objc_msgSend with a stack pointing nowhere. This backend
+// avoids the trap by having no completion handler at all -- the fence polls
+// status and blocks on waitUntilCompleted -- and this test is what would notice
+// if that ever changed.
+//
+// Repeated, and under the race detector in CI, because a lifetime bug that
+// happens once in twenty submissions is a lifetime bug.
+func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
+	d := openMetal(t)
+	const n = 1024
+	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "add",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	for range 20 {
+		a := newBuffer(t, d, "a", n, storage)
+		out := newBuffer(t, d, "out", n, storage)
+		r := d.NewRecorder()
+		r.CopyToBuffer(whole(t, a), make([]float32, n))
+		r.Dispatch(p, []accel.Binding{
+			{Index: 0, Buffer: whole(t, a)},
+			{Index: 1, Buffer: whole(t, a)},
+			{Index: 2, Buffer: whole(t, out)},
+		}, accel.WorkgroupCount{X: n / 64})
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+
+		f := d.Queue().Submit(g)
+		// Close without waiting. The graph must not release anything the
+		// in-flight command buffer still refers to.
+		if err := f.Wait(); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+		if err := g.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	}
+}

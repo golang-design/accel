@@ -668,7 +668,7 @@ and 011.
 | --- | --- |
 | [021](021-metal-bringup.md) | The Objective-C shim and its ownership rule, enumeration and the capability/limit mapping, storage modes, a straight-line MSL emitter, and one corpus kernel dispatched on the GPU and compared against the CPU backend — **built 2026-08-23**; its one deviation, a dispatch carrying uniforms, was retired the same day in 022 |
 | [022](022-msl-target.md) | The rest of the MSL target — threadgroup memory, barriers, atomics, subgroups, helpers and intrinsics — opening with 008's numeric probes and the recorded Metal profile, then corpus-wide agreement against the CPU oracle. **built 2026-08-23**: the Metal numeric profile is recorded, all 29 corpus kernels lower and compile on the device, and every one agrees with the CPU oracle — 22 bit for bit. Ballot, f32 atomics and array uniform members are refused by name |
-| [023](023-metal-graph.md) | Multi-node graph lowering by re-encoding, indirect dispatch, completion-handler lifetime under repeated early close, and the M6 E2E |
+| [023](023-metal-graph.md) | Multi-node graph lowering by re-encoding, indirect dispatch, completion-handler lifetime under repeated early close, and the M6 E2E — **built 2026-08-23** except the encoder-barrier measurement and indirect command buffers, both of which 006 §4.3 keeps behind a measurement |
 
 **The cut is vertical rather than by layer**, which is the same argument
 [012](012-kernel-pipeline.md) made and the reason it is worth repeating. A
@@ -705,9 +705,14 @@ than left for a later session to re-derive:
 | 5 | Four shapes against a straight triple loop, three with tails on every axis |
 | 6 | A recorded graph runs upload → dispatch → readback through the public API on an adapter opened by id |
 
-**M6 is not complete**, because [023](023-metal-graph.md) is unbuilt: multi-node
-re-encoding is written but unmeasured, indirect dispatch is refused by name, and
-`Lost()` answers nil always rather than reporting Metal's terminal loss.
+**M6's six done criteria are met, and two things it did not promise remain.**
+[023](023-metal-graph.md) built multi-node re-encoding, indirect dispatch with
+its clamp on the device, and sticky device loss. What is outstanding is the
+measurement of whether a memory barrier inside one encoder would serve where an
+encoder boundary is used today, and `MTLIndirectCommandBuffer` — and
+[006](006-backends.md) §4.3 already puts both behind a measurement rather than a
+schedule, off by default, shipping only with a number against re-encode. Neither
+is a milestone criterion.
 
 The numeric probes run before the GEMM. If Metal misses a normative ceiling, the
 lowering or supported domain changes; tests are not widened. Completion-handler

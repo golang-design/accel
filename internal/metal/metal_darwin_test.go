@@ -653,3 +653,102 @@ func mustAlloc(t *testing.T, d driver.Device, n int) driver.Block {
 	t.Cleanup(b.Free)
 	return b
 }
+
+// An indirect count too small to hold three workgroup counts is refused at
+// compile, before anything is encoded.
+//
+// Plan.Validate is what refuses it, which is the right place: a backend that
+// read three counts from an eight-byte range would read four bytes of whatever
+// follows, and on a GPU an out-of-range threadgroup count is undefined rather
+// than an error. This asserts the refusal reaches a caller through this
+// backend, since a backend that skipped Validate would encode it happily.
+func TestIndirectCountMustHoldThreeCounts(t *testing.T) {
+	d := open(t)
+	c := d.(driver.GraphCompiler)
+
+	b, err := d.Alloc(driver.MemoryShared, 256, "b")
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	defer b.Free()
+	full, err := driver.BlockOperand(b, 0, 256)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	// Eight bytes: two counts where three are needed. The layer above should
+	// never build this, and a backend that read three from it would read four
+	// bytes of whatever follows.
+	short, err := driver.BlockOperand(b, 0, 8)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+
+	_, err = c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpDispatch, ID: 0, Dispatch: &driver.Dispatch{
+			Kernel: &testkernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
+			Bindings: []driver.Operand{full, full, full},
+			Indirect: &driver.Indirect{Count: short, Max: kernel.ID3{X: 1, Y: 1, Z: 1}},
+		},
+	}}})
+	if err == nil {
+		t.Fatal("an indirect count of eight bytes was accepted, and three workgroup " +
+			"counts need twelve")
+	}
+	if !strings.Contains(err.Error(), "indirect count") {
+		t.Errorf("the refusal should name what is wrong: %v", err)
+	}
+}
+
+// Statistics are reported only when the plan asked, because reading them costs
+// a transfer.
+//
+// The clamp itself is unconditional either way -- specs/003-command-graph.md
+// makes correctness independent of any flag -- so what a caller gives up by not
+// asking is being told, not being protected.
+func TestIndirectStatsAreOptional(t *testing.T) {
+	d := open(t)
+	c := d.(driver.GraphCompiler)
+	b, err := d.Alloc(driver.MemoryShared, 256, "b")
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	defer b.Free()
+	full, err := driver.BlockOperand(b, 0, 256)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	count, err := driver.BlockOperand(b, 0, 12)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	node := driver.PlanNode{
+		Op: driver.OpDispatch, ID: 0, Dispatch: &driver.Dispatch{
+			Kernel: &testkernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
+			Bindings: []driver.Operand{full, full, full},
+			Indirect: &driver.Indirect{Count: count, Max: kernel.ID3{X: 1, Y: 1, Z: 1}},
+		},
+	}
+
+	for _, collect := range []bool{false, true} {
+		e, err := c.Compile(&driver.Plan{CollectStats: collect,
+			Nodes: []driver.PlanNode{node}})
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		f, err := e.Submit()
+		if err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		if err := f.Wait(); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+		got := e.(driver.StatsReporter).IndirectStats()
+		if collect && len(got) != 1 {
+			t.Errorf("stats were requested and %d nodes were reported", len(got))
+		}
+		if !collect && got != nil {
+			t.Errorf("stats were not requested and %d nodes were reported", len(got))
+		}
+		e.Close()
+	}
+}

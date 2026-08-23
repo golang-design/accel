@@ -44,12 +44,14 @@ var (
 	selSetBuffer             = objc.RegisterName("setBuffer:offset:atIndex:")
 	selSetBytes              = objc.RegisterName("setBytes:length:atIndex:")
 	selDispatchThreadgroups  = objc.RegisterName("dispatchThreadgroups:threadsPerThreadgroup:")
-	selEndEncoding           = objc.RegisterName("endEncoding")
-	selCommit                = objc.RegisterName("commit")
-	selWaitUntilCompleted    = objc.RegisterName("waitUntilCompleted")
-	selStatus                = objc.RegisterName("status")
-	selError                 = objc.RegisterName("error")
-	selCopyFromBuffer        = objc.RegisterName("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:")
+	selDispatchIndirect      = objc.RegisterName(
+		"dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:")
+	selEndEncoding        = objc.RegisterName("endEncoding")
+	selCommit             = objc.RegisterName("commit")
+	selWaitUntilCompleted = objc.RegisterName("waitUntilCompleted")
+	selStatus             = objc.RegisterName("status")
+	selError              = objc.RegisterName("error")
+	selCopyFromBuffer     = objc.RegisterName("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:")
 )
 
 // NewQueue makes a command queue, +1 from a new* selector.
@@ -124,6 +126,18 @@ func (e *ComputeEncoder) SetBytes(data []byte, index int) {
 // it checks the ids the kernel saw rather than that the call returned.
 func (e *ComputeEncoder) Dispatch(groups, threadsPerGroup Size) {
 	withPool(func() { e.id.Send(selDispatchThreadgroups, groups, threadsPerGroup) })
+}
+
+// DispatchIndirect launches a grid whose count the device wrote.
+//
+// The buffer holds three uint32 threadgroup counts. Metal reads them on the
+// GPU, so nothing here knows what the grid will be -- which is the point, and
+// why specs/003-command-graph.md requires the count to have been clamped before
+// this is reached rather than after.
+func (e *ComputeEncoder) DispatchIndirect(count *Buffer, offset int, threadsPerGroup Size) {
+	withPool(func() {
+		e.id.Send(selDispatchIndirect, count.id, uintptr(offset), threadsPerGroup)
+	})
 }
 
 // End closes the pass and releases the encoder.
