@@ -68,8 +68,29 @@ by name: the cache is scored one position per lane, so a capacity above the
 workgroup needs a looping variant [010](010-kernel-corpus.md) does not register;
 and the query is one token, because a longer one is the prefill plan's.
 
-## 4. Where v0 is narrower than 007
+## 4. The two-layer stack, and the operator it is missing
 
+A stack of two layers — embedding lookup, then normalize, attend over a
+per-layer cache, add the residual, twice — composes and matches an f64 reference
+written from the model's definition rather than from the kernels, over four
+tokens, on both backends. Every value in it is produced by the previous
+operator.
+
+**It stops short of logits, and the gap is an operator rather than a test.** The
+registered GEMM reads f16 and every other operator here is f32, so a projection
+cannot consume a normalization's output without a dtype-conversion operator, and
+[010](010-kernel-corpus.md) registers no conversion kernel.
+
+That is worth recording precisely because the first version of the test hid it:
+it supplied the f16 operands from the host and discarded the f32 results, which
+computed every piece of a two-layer model and composed none of them. It passed.
+A test that runs the parts of a thing is not a test that the thing works, and
+the tell was two assignments to the blank identifier in the middle of the graph.
+
+## 5. Where v0 is narrower than 007
+
+0. **There is no dtype-conversion operator**, so an f32 result cannot feed the
+   f16 GEMM. This is what stops the stack above from producing logits.
 1. **`LayerState` builds the view and cannot be bound.** A slot binds a whole
    resource rather than a range of one, so a per-layer cache needs one state per
    layer until the device layer can bind a sub-range. The view arithmetic is
@@ -82,7 +103,7 @@ and the query is one token, because a longer one is the prefill plan's.
    f32**, and `MatMul` is f16. That is what [010](010-kernel-corpus.md)
    registers.
 
-## 5. Done
+## 6. Done
 
 - a decode plan appends this token's key and value and attends over the cache,
   submitted once per token with the same buffers and nothing rebuilt;
@@ -91,7 +112,9 @@ and the query is one token, because a longer one is the prefill plan's.
 - a stale version is refused through every path that reads one, at the caller's
   line; and
 - the whole step agrees between the CPU backend and Metal within
-  [008](008-numerics.md) §6's ceiling for the softmax inside attention.
+  [008](008-numerics.md) §6's ceiling for the softmax inside attention; and
+- a two-layer attention stack composes and matches an independently written f64
+  reference over four tokens, on both backends.
 
 ## Testing
 
