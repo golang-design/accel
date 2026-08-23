@@ -105,7 +105,7 @@ func TestTheSameGraphAgreesOnCPUAndMetal(t *testing.T) {
 			{Index: 0, Buffer: whole(t, ba)},
 			{Index: 1, Buffer: whole(t, bb)},
 			{Index: 2, Buffer: whole(t, out)},
-		}, accel.WorkgroupCount{X: (n + 63) / 64})
+		}, nil, accel.WorkgroupCount{X: (n + 63) / 64})
 
 		g, err := r.Build()
 		if err != nil {
@@ -172,10 +172,9 @@ func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
 		r := d.NewRecorder()
 		r.CopyToBuffer(whole(t, bin), in)
 		r.Dispatch(p, []accel.Binding{
-			{Index: 0, Uniform: params},
 			{Index: 0, Buffer: whole(t, bin)},
 			{Index: 1, Buffer: whole(t, out)},
-		}, accel.WorkgroupCount{X: (n + 63) / 64})
+		}, []accel.UniformValue{{Index: 0, Value: params}}, accel.WorkgroupCount{X: (n + 63) / 64})
 
 		g, err := r.Build()
 		if err != nil {
@@ -239,7 +238,7 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 
 	out := newBuffer(t, d, "out", n, storage)
 	r := d.NewRecorder()
-	r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: whole(t, out)}}, accel.WorkgroupCount{X: 1})
+	r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: whole(t, out)}}, nil, accel.WorkgroupCount{X: 1})
 
 	g, buildErr := r.Build()
 	if buildErr == nil {
@@ -421,7 +420,7 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, out)},
-			}, countView, max)
+			}, nil, countView, max)
 
 			g, err := r.Build()
 			if err != nil {
@@ -495,7 +494,7 @@ func TestTheWorkedGraphRunsOnMetal(t *testing.T) {
 		if err := d.Queue().WriteBuffer(b, 0, vals); err != nil {
 			t.Fatalf("write %s: %v", label, err)
 		}
-		if err := w.g.Bind(accel.Binding{Slot: s, Buffer: whole(t, b)}); err != nil {
+		if err := w.g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)}); err != nil {
 			t.Fatalf("bind %s: %v", label, err)
 		}
 		return b
@@ -576,7 +575,7 @@ func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 				{Index: 0, Buffer: whole(t, a)},
 				{Index: 1, Buffer: whole(t, out)},
 				{Index: 2, Buffer: whole(t, out)},
-			}, accel.WorkgroupCount{X: n / 64})
+			}, nil, accel.WorkgroupCount{X: n / 64})
 		}
 		g, err := r.Build()
 		if err != nil {
@@ -642,8 +641,8 @@ func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 // construction for a caller, who can only know by holding the fence. A test
 // spinning on it is reaching a state, not depending on one.
 func inFlight(g *accel.Graph) bool {
-	// Rebinding an empty batch: the call reaches the in-flight check and
+	// Binding an empty batch: the call reaches the in-flight check and
 	// changes nothing, so it reports the state without disturbing it.
-	err := g.Rebind(nil)
+	err := g.Bind()
 	return err != nil && strings.Contains(err.Error(), "in flight")
 }

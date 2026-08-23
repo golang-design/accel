@@ -37,7 +37,7 @@
 //	defer pipe.Close()
 //
 //	err = dev.Queue().Run(func(r *accel.Recorder) {
-//		r.Dispatch(pipe, bindings, accel.WorkgroupCount{X: 4})
+//		r.Dispatch(pipe, bindings, nil, accel.WorkgroupCount{X: 4})
 //	})
 //
 // The README has the whole program, buffers included.
@@ -86,7 +86,7 @@
 // [Recorder.Build], not on every submission.
 //
 //	rec := dev.NewRecorder()
-//	rec.Dispatch(pipeline, bindings, WorkgroupCount{X: n})
+//	rec.Dispatch(pipeline, bindings, nil, WorkgroupCount{X: n})
 //	g, err := rec.Build()   // validate, plan memory, compute barriers, lower
 //	...
 //	f := dev.Queue().Submit(g)

@@ -586,9 +586,10 @@ func runCase(t *testing.T, d *accel.Device, c diffCase) [][]float32 {
 
 	r := d.NewRecorder()
 	bufs := make([]*accel.Buffer, len(c.counts))
-	binds := make([]accel.Binding, 0, len(c.counts)+len(c.uniforms))
+	binds := make([]accel.Binding, 0, len(c.counts))
+	uniforms := make([]accel.UniformValue, 0, len(c.uniforms))
 	for i, u := range c.uniforms {
-		binds = append(binds, accel.Binding{Index: i, Uniform: u})
+		uniforms = append(uniforms, accel.UniformValue{Index: i, Value: u})
 	}
 	for i, n := range c.counts {
 		dt := dtypeOf(c.kernel.Bindings[i].DType)
@@ -610,7 +611,7 @@ func runCase(t *testing.T, d *accel.Device, c diffCase) [][]float32 {
 		binds = append(binds, accel.Binding{Index: i, Buffer: v})
 	}
 
-	r.Dispatch(p, binds, c.groups)
+	r.Dispatch(p, binds, uniforms, c.groups)
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -874,11 +875,10 @@ func runGEMM(t *testing.T, d *accel.Device, m, n, k int, a, b []accel.Float16) [
 	r.CopyToBuffer(bv, bits(b))
 	r.CopyToBuffer(outView, make([]float32, m*n))
 	r.Dispatch(p, []accel.Binding{
-		{Index: 0, Uniform: testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}},
 		{Index: 0, Buffer: av},
 		{Index: 1, Buffer: bv},
 		{Index: 2, Buffer: outView},
-	}, accel.WorkgroupCount{
+	}, []accel.UniformValue{{Index: 0, Value: testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}}}, accel.WorkgroupCount{
 		X: (n + testkernels.TileN - 1) / testkernels.TileN,
 		Y: (m + testkernels.TileM - 1) / testkernels.TileM,
 	})

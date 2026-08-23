@@ -18,15 +18,11 @@ import (
 // to satisfy. The other is the pipeline's binding layout, checked where a node
 // uses one; specs/015-graph-recording.md section 4 records why collapsing the
 // two would drop whichever declaration the survivor did not consult.
-func (g *Graph) checkBinding(b Binding) (driver.SlotBinding, error) {
+func (g *Graph) checkBinding(b SlotBinding) (driver.SlotBinding, error) {
 	d, ok := g.descriptor(b.Slot)
 	if !ok {
 		return driver.SlotBinding{}, fmt.Errorf("accel: Bind: slot %d is not one of this graph's %d",
 			int(b.Slot), len(g.slots))
-	}
-	if b.Texture != nil {
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: textures and samplers arrive "+
-			"with specs/001-device-resources.md section 4", d.Name)
 	}
 	v := b.Buffer
 	if v.Buffer == nil {
@@ -98,7 +94,7 @@ func (g *Graph) descriptor(s Slot) (SlotDescriptor, bool) {
 }
 
 // bindAll validates a whole batch, then applies it or none of it.
-func (g *Graph) bindAll(bs []Binding) error {
+func (g *Graph) bindAll(bs []SlotBinding) error {
 	if err := g.state.checkOpen("Bind"); err != nil {
 		return err
 	}
@@ -157,7 +153,7 @@ func (g *Graph) bindAll(bs []Binding) error {
 //
 // An overlap is accepted only when both sides' graph-wide access unions are
 // read-only. g.mu is held.
-func (g *Graph) checkOverlaps(updates []Binding) error {
+func (g *Graph) checkOverlaps(updates []SlotBinding) error {
 	// The prospective binding set: what is already bound, with this batch
 	// applied. Checking the batch against the old state would let a batch that
 	// swaps two slots pass while leaving them overlapping.

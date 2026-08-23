@@ -13,7 +13,7 @@ So build it once and keep it.
 r := dev.NewRecorder()
 r.Dispatch(pipe, []accel.Binding{
 	{Index: 0, Buffer: state}, {Index: 1, Buffer: delta}, {Index: 2, Buffer: next},
-}, accel.WorkgroupCount{X: n / 64})
+}, nil, accel.WorkgroupCount{X: n / 64})
 r.CopyBuffer(state, next) // next becomes the state for the following step
 
 g, err := r.Build() // validates, plans memory, computes barriers

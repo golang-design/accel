@@ -48,7 +48,7 @@ func TestTheDiamondDoesNotAliasUnorderedTransients(t *testing.T) {
 	dispatch := func(a, b, out accel.BufferView) {
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: out},
-		}, count)
+		}, nil, count)
 	}
 
 	dispatch(whole(t, in), whole(t, in), t0) // n0 writes t0
@@ -128,7 +128,7 @@ func TestOrderedTransientsAlias(t *testing.T) {
 	dispatch := func(x, y, z accel.BufferView) {
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: x}, {Index: 1, Buffer: y}, {Index: 2, Buffer: z},
-		}, count)
+		}, nil, count)
 	}
 	dispatch(whole(t, in), whole(t, in), a)
 	dispatch(a, whole(t, in), b)
@@ -194,7 +194,7 @@ func TestTransientsSharingAUserDoNotAlias(t *testing.T) {
 	dispatch := func(x, y, z accel.BufferView) {
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: x}, {Index: 1, Buffer: y}, {Index: 2, Buffer: z},
-		}, count)
+		}, nil, count)
 	}
 	dispatch(whole(t, in), whole(t, in), a) // n0 writes a
 	dispatch(a, whole(t, in), b)            // n1 reads a and writes b
@@ -263,13 +263,13 @@ func TestThePeakNeverExceedsThePool(t *testing.T) {
 			})
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: prev}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
-			}, count)
+			}, nil, count)
 			prev = v
 		}
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: prev}, {Index: 1, Buffer: whole(t, in)},
 			{Index: 2, Buffer: whole(t, out)},
-		}, count)
+		}, nil, count)
 
 		g, err := r.Build()
 		if err != nil {
@@ -315,12 +315,12 @@ func TestMemoryFieldsSeparateUnderAliasing(t *testing.T) {
 	for _, v := range views {
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: prev}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
-		}, count)
+		}, nil, count)
 		prev = v
 	}
 	r.Dispatch(p, []accel.Binding{
 		{Index: 0, Buffer: prev}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: whole(t, out)},
-	}, count)
+	}, nil, count)
 
 	g, err := r.Build()
 	if err != nil {
@@ -445,7 +445,7 @@ func TestReadingAnUnwrittenTransientIsRefused(t *testing.T) {
 			// when it started, which is nothing.
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: v}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 		},
 	}}
 
@@ -506,7 +506,7 @@ func TestInPlaceWorkOnAWrittenTransientIsFine(t *testing.T) {
 	r.CopyBuffer(v, whole(t, in))  // t = 1
 	r.Dispatch(p, []accel.Binding{ // t = t + in = 2
 		{Index: 0, Buffer: v}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
-	}, accel.WorkgroupCount{X: 1})
+	}, nil, accel.WorkgroupCount{X: 1})
 	r.CopyBuffer(whole(t, out), v)
 
 	g, err := r.Build()
@@ -578,7 +578,7 @@ func TestATransientLivingBetweenTwoUsersDoesNotAlias(t *testing.T) {
 	r.Dispatch(p, []accel.Binding{                // n4: out = long + in, ordered after n3
 		{Index: 0, Buffer: long}, {Index: 1, Buffer: whole(t, in)},
 		{Index: 2, Buffer: whole(t, out)},
-	}, accel.WorkgroupCount{X: 1})
+	}, nil, accel.WorkgroupCount{X: 1})
 
 	g, err := r.Build()
 	if err != nil {

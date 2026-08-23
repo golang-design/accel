@@ -94,7 +94,7 @@ func TestAGraphOfCopiesRunsAndReplays(t *testing.T) {
 		buf   *accel.Buffer
 		want  []float32
 	}{{"a", a, []float32{1, 2, 3, 4}}, {"b", b, []float32{5, 6, 7, 8}}} {
-		if err := g.Bind(accel.Binding{Slot: in, Buffer: whole(t, c.buf)}); err != nil {
+		if err := g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, c.buf)}); err != nil {
 			t.Fatalf("bind %s: %v", c.label, err)
 		}
 		if err := q.Submit(g).Wait(); err != nil {
@@ -399,7 +399,7 @@ func TestRebindDuringASubmissionIsRefused(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	defer g.Close()
-	if err := g.Bind(accel.Binding{Slot: in, Buffer: whole(t, src)}); err != nil {
+	if err := g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, src)}); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 
@@ -409,7 +409,7 @@ func TestRebindDuringASubmissionIsRefused(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 50 {
-			err := g.Bind(accel.Binding{Slot: in, Buffer: whole(t, src)})
+			err := g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, src)})
 			if err != nil && !errors.Is(err, accel.ErrGraphInFlight) {
 				wrong.Add(1)
 			}
@@ -572,12 +572,12 @@ func TestRebindDoesNotScaleWithGraphSize(t *testing.T) {
 		}
 		defer g.Close()
 
-		bind := []accel.Binding{{Slot: in, Buffer: whole(t, src)}}
-		if err := g.Rebind(bind); err != nil {
+		bind := []accel.SlotBinding{{Slot: in, Buffer: whole(t, src)}}
+		if err := g.Bind(bind...); err != nil {
 			t.Fatalf("rebind: %v", err)
 		}
 		return testing.AllocsPerRun(200, func() {
-			if err := g.Rebind(bind); err != nil {
+			if err := g.Bind(bind...); err != nil {
 				t.Fatalf("rebind: %v", err)
 			}
 		})
@@ -687,7 +687,7 @@ func TestCopyToBufferSlot(t *testing.T) {
 	}
 	defer g.Close()
 
-	if err := g.Bind(accel.Binding{Slot: out, Buffer: whole(t, dst)}); err != nil {
+	if err := g.Bind(accel.SlotBinding{Slot: out, Buffer: whole(t, dst)}); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	if err := d.Queue().Submit(g).Wait(); err != nil {

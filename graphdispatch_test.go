@@ -71,7 +71,7 @@ func TestGraphUploadDispatchReadback(t *testing.T) {
 		{Index: 0, Slot: a},
 		{Index: 1, Buffer: uploaded},
 		{Index: 2, Buffer: whole(t, out)},
-	}, accel.WorkgroupCount{X: n / 64})
+	}, nil, accel.WorkgroupCount{X: n / 64})
 
 	g, err := r.Build()
 	if err != nil {
@@ -94,7 +94,7 @@ func TestGraphUploadDispatchReadback(t *testing.T) {
 		in    *accel.Buffer
 		want  float32
 	}{{"first", first, 11}, {"second", second, 12}} {
-		if err := g.Bind(accel.Binding{Slot: a, Buffer: whole(t, c.in)}); err != nil {
+		if err := g.Bind(accel.SlotBinding{Slot: a, Buffer: whole(t, c.in)}); err != nil {
 			t.Fatalf("bind %s: %v", c.label, err)
 		}
 		if err := q.Submit(g).Wait(); err != nil {
@@ -137,12 +137,12 @@ func TestADispatchChainThroughATransient(t *testing.T) {
 		{Index: 0, Buffer: whole(t, in)},
 		{Index: 1, Buffer: whole(t, in)},
 		{Index: 2, Buffer: mid},
-	}, count) // mid = 2
+	}, nil, count) // mid = 2
 	r.Dispatch(p, []accel.Binding{
 		{Index: 0, Buffer: mid},
 		{Index: 1, Buffer: whole(t, in)},
 		{Index: 2, Buffer: whole(t, out)},
-	}, count) // out = 3
+	}, nil, count) // out = 3
 
 	g, err := r.Build()
 	if err != nil {
@@ -176,7 +176,7 @@ func TestIndependentDispatchesAreNotSeparated(t *testing.T) {
 			{Index: 0, Buffer: whole(t, in)},
 			{Index: 1, Buffer: whole(t, in)},
 			{Index: 2, Buffer: whole(t, out)},
-		}, accel.WorkgroupCount{X: 1})
+		}, nil, accel.WorkgroupCount{X: 1})
 	}
 	g, err := r.Build()
 	if err != nil {
@@ -212,7 +212,7 @@ func TestDispatchValidationRows(t *testing.T) {
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			return err
 		},
@@ -224,7 +224,7 @@ func TestDispatchValidationRows(t *testing.T) {
 			p := addPipeline(t, d)
 			in := newBuffer(t, d, "in", 64, storage)
 			r := d.NewRecorder()
-			r.Dispatch(p, []accel.Binding{{Index: 7, Buffer: whole(t, in)}}, accel.WorkgroupCount{X: 1})
+			r.Dispatch(p, []accel.Binding{{Index: 7, Buffer: whole(t, in)}}, nil, accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			return err
 		},
@@ -239,7 +239,7 @@ func TestDispatchValidationRows(t *testing.T) {
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 0, Buffer: whole(t, in)},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			return err
 		},
@@ -255,7 +255,7 @@ func TestDispatchValidationRows(t *testing.T) {
 				{Index: 0, Buffer: mustViewAs(t, in, accel.U32)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, in)},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			return err
 		},
@@ -272,7 +272,7 @@ func TestDispatchValidationRows(t *testing.T) {
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, plain)},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			return err
 		},
@@ -288,7 +288,7 @@ func TestDispatchValidationRows(t *testing.T) {
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, in)},
-			}, accel.WorkgroupCount{})
+			}, nil, accel.WorkgroupCount{})
 			_, err := r.Build()
 			return err
 		},
@@ -304,7 +304,7 @@ func TestDispatchValidationRows(t *testing.T) {
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, in)},
-			}, accel.WorkgroupCount{X: 1 << 30})
+			}, nil, accel.WorkgroupCount{X: 1 << 30})
 			_, err := r.Build()
 			return err
 		},
@@ -316,7 +316,7 @@ func TestDispatchValidationRows(t *testing.T) {
 			p := addPipeline(t, openDevice(t))
 			in := newBuffer(t, d, "in", 64, storage)
 			r := d.NewRecorder()
-			r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: whole(t, in)}}, accel.WorkgroupCount{X: 1})
+			r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: whole(t, in)}}, nil, accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			return err
 		},
@@ -570,11 +570,10 @@ func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
 
 	r := d.NewRecorder()
 	r.Dispatch(p, []accel.Binding{
-		{Index: 0, Uniform: testkernels.GEMMDims{M: m, N: n, K: k}},
 		{Index: 0, Buffer: whole(t, aBuf)},
 		{Index: 1, Buffer: whole(t, bBuf)},
 		{Index: 2, Buffer: whole(t, outBuf)},
-	}, accel.WorkgroupCount{
+	}, []accel.UniformValue{{Index: 0, Value: testkernels.GEMMDims{M: m, N: n, K: k}}}, accel.WorkgroupCount{
 		X: (n + testkernels.TileN - 1) / testkernels.TileN,
 		Y: (m + testkernels.TileM - 1) / testkernels.TileM,
 	})
@@ -654,17 +653,15 @@ func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
 	p := testkernels.RowParams{Rows: count, Width: width, Capacity: capacity}
 	r := d.NewRecorder()
 	r.Dispatch(scatter, []accel.Binding{
-		{Index: 0, Uniform: p},
 		{Index: 0, Buffer: whole(t, rows)},
 		{Index: 1, Buffer: ids},
 		{Index: 2, Buffer: whole(t, state)}, // written
-	}, accel.WorkgroupCount{X: 1})
+	}, []accel.UniformValue{{Index: 0, Value: p}}, accel.WorkgroupCount{X: 1})
 	r.Dispatch(gather, []accel.Binding{
-		{Index: 0, Uniform: p},
 		{Index: 0, Buffer: whole(t, state)}, // read
 		{Index: 1, Buffer: ids},
 		{Index: 2, Buffer: whole(t, out)},
-	}, accel.WorkgroupCount{X: 1})
+	}, []accel.UniformValue{{Index: 0, Value: p}}, accel.WorkgroupCount{X: 1})
 
 	g, err := r.Build()
 	if err != nil {
@@ -744,10 +741,9 @@ func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
 
 	r := d.NewRecorder()
 	node := r.Dispatch(p, []accel.Binding{
-		{Index: 0, Uniform: testkernels.ScaleParams{Factor: 2}},
 		{Index: 0, Buffer: whole(t, in)},
 		{Index: 1, Buffer: whole(t, out)},
-	}, accel.WorkgroupCount{X: 1})
+	}, []accel.UniformValue{{Index: 0, Value: testkernels.ScaleParams{Factor: 2}}}, accel.WorkgroupCount{X: 1})
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)

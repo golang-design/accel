@@ -82,7 +82,7 @@ err = dev.Queue().Run(func(r *accel.Recorder) {
 	r.Dispatch(pipe, []accel.Binding{
 		{Index: 0, Buffer: inView},
 		{Index: 1, Buffer: outView},
-	}, accel.WorkgroupCount{X: groups})
+	}, nil, accel.WorkgroupCount{X: groups})
 })
 if err != nil {
 	log.Fatal(err)
@@ -99,7 +99,8 @@ fmt.Println(got[:4]) // [0 2 4 6]
 
 **`Binding.Index` is a position in the kernel's binding list, not its parameter
 list.** `Scale` takes `(t, in, out)`; `t` is not a binding, so `in` is index 0
-and `out` is index 1.
+and `out` is index 1. The `nil` is where by-value parameters go — none here, and
+[tutorial 6](06-uniforms.md) is about those.
 
 **You dispatch workgroups, not elements.** `workgroup=64` in the kernel and
 `WorkgroupCount{X: groups}` at the call site multiply together to give the

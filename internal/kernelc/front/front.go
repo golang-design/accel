@@ -36,6 +36,9 @@ import (
 	"go/printer"
 	"go/token"
 	"go/types"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +106,11 @@ const LoadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledG
 // present, which a deployed binary does not have. That is the whole reason
 // compilation is a generator rather than something that happens at startup.
 func Load(dir string, patterns ...string) ([]*packages.Package, error) {
-	cfg := &packages.Config{Mode: LoadMode, Dir: dir}
+	overlay, err := blankGenerated(dir)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &packages.Config{Mode: LoadMode, Dir: dir, Overlay: overlay}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("accel: loading %v: %w", patterns, err)
@@ -893,4 +900,77 @@ func elementKind(t types.Type) (ir.Kind, error) {
 	}
 	return ir.Invalid, fmt.Errorf("its element type %s is not one of float32, int32, uint32, "+
 		"int8, uint8, accel.Float16, or accel.BFloat16", b)
+}
+
+// generatedFile is the name accel-kernel writes. It is duplicated from the
+// parent package rather than imported, because that package imports this one.
+const generatedFile = "accel_kernels.go"
+
+// blankGenerated hides the previous generated output from the type checker.
+//
+// The generator type-checks the package it compiles, and its own output is part
+// of that package. So a generated file that no longer compiles — after an ABI
+// change, or a rename in this module — makes the package fail to load, which
+// makes the generator refuse, which is the one command that would have fixed
+// it. The only way out was to delete the file by hand, which nothing told a
+// caller to do.
+//
+// Replacing it with its own package clause removes it from the type check
+// without removing it from disk. Nothing needs it: it holds only declarations
+// this run is about to rewrite, and a kernel body cannot refer to them — the
+// authored source is the input and the generated form is the output.
+//
+// The package clause is copied from the file rather than inferred, because the
+// directory name and the package name are allowed to differ.
+func blankGenerated(dir string) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != dir && (name == "testdata" || strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != generatedFile {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		clause := packageClause(src)
+		if clause == "" {
+			// No package clause to preserve: leave it alone and let the load
+			// report whatever is wrong with it, which is more useful than a
+			// generator that silently ignores a file it cannot read.
+			return nil
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		out[abs] = []byte(clause + "\n")
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("accel: scanning %s for previous output: %w", dir, err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// packageClause returns the "package x" line of a Go source file, or "".
+func packageClause(src []byte) string {
+	for line := range strings.SplitSeq(string(src), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "package ") {
+			return t
+		}
+	}
+	return ""
 }

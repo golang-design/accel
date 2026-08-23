@@ -77,7 +77,7 @@ func worked(t *testing.T, d *accel.Device) workedGraph {
 	count := accel.WorkgroupCount{X: 1}
 	dispatch := func(a, b, out accel.Binding) {
 		a.Index, b.Index, out.Index = 0, 1, 2
-		r.Dispatch(p, []accel.Binding{a, b, out}, count)
+		r.Dispatch(p, []accel.Binding{a, b, out}, nil, count)
 	}
 
 	// n0: the host write to params.
@@ -200,7 +200,7 @@ func TestWorkedGraphSubRangeVariant(t *testing.T) {
 			{Index: 0, Buffer: whole(t, in)},
 			{Index: 1, Buffer: whole(t, in)},
 			{Index: 2, Buffer: out},
-		}, accel.WorkgroupCount{X: 1})
+		}, nil, accel.WorkgroupCount{X: 1})
 	}
 	g, err := r.Build()
 	if err != nil {
@@ -234,7 +234,7 @@ func TestWorkedGraphRuns(t *testing.T) {
 		if err := d.Queue().WriteBuffer(b, 0, vals); err != nil {
 			t.Fatalf("write %s: %v", label, err)
 		}
-		if err := w.g.Bind(accel.Binding{Slot: s, Buffer: whole(t, b)}); err != nil {
+		if err := w.g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)}); err != nil {
 			t.Fatalf("bind %s: %v", label, err)
 		}
 		return b
@@ -314,7 +314,7 @@ func TestWorkedGraphMemoryNumbers(t *testing.T) {
 	dis := func(a, b, out accel.BufferView) {
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: out},
-		}, accel.WorkgroupCount{X: 1})
+		}, nil, accel.WorkgroupCount{X: 1})
 	}
 	r.CopyToBuffer(params, make([]float32, elems)) // n0, the parameter upload
 	dis(x, params, t0)                             // n1: t0 = norm(x)
@@ -412,7 +412,7 @@ func TestAliasingAddsNoBarrier(t *testing.T) {
 			v := r.Transient(accel.BufferDescriptor{DType: accel.F32, Count: n, Usage: storage})
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: prev}, {Index: 1, Buffer: whole(t, in)}, {Index: 2, Buffer: v},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 			prev = v
 		}
 		r.CopyBuffer(whole(t, out), prev)

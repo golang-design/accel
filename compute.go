@@ -377,6 +377,12 @@ type BindingSlot struct {
 // where a resource is used; a graph's slot is where it comes from.
 type Binding struct {
 	// Index is the entry in the pipeline's binding layout this binds to.
+	//
+	// The pipeline's layout, and nothing else. It used to name the kernel's
+	// by-value list instead whenever Uniform was set, so one dispatch could
+	// carry two entries both spelled Index: 0 meaning different things — and
+	// neither matched the authored parameter position a reader was looking at.
+	// By-value parameters are [UniformValue] now, and have their own argument.
 	Index int
 
 	Buffer  BufferView
@@ -386,12 +392,15 @@ type Binding struct {
 	// zero value is not a slot, so a Binding that set none of the three is
 	// rejected rather than silently referring to the first one.
 	Slot Slot
+}
 
-	// Uniform is a by-value parameter, and Index then names the kernel's
-	// by-value list rather than its binding layout.
-	//
-	// A separate field because a caller supplies a uniform as a value and a
-	// binding as a slice: conflating them would let a mismatched argument set be
-	// reinterpreted rather than refused. See specs/014-kernel-uniforms.md.
-	Uniform any
+// UniformValue is one by-value parameter of a dispatch.
+//
+// Index names the kernel's by-value list — its own space, separate from
+// [Binding.Index]'s. A kernel's signature interleaves the two, so neither index
+// is the parameter position; the generated record carries both lists and the
+// error names the kernel when they disagree.
+type UniformValue struct {
+	Index int
+	Value any
 }

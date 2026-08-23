@@ -111,7 +111,7 @@ func main() {
 		r.Dispatch(pipe, []accel.Binding{
 			{Index: 0, Buffer: inView},
 			{Index: 1, Buffer: outView},
-		}, accel.WorkgroupCount{X: n / 64})
+		}, nil, accel.WorkgroupCount{X: n / 64})
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -158,7 +158,7 @@ So you **record** work into a `Graph` and keep it:
 
 ```go
 rec := dev.NewRecorder()
-rec.Dispatch(pipeline, bindings, accel.WorkgroupCount{X: 1024})
+rec.Dispatch(pipeline, bindings, nil, accel.WorkgroupCount{X: 1024})
 g, err := rec.Build() // validates, plans memory, computes barriers
 
 for range steps {

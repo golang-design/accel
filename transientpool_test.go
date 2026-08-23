@@ -48,12 +48,12 @@ func buildInto(t *testing.T, d *accel.Device, pool *accel.TransientPool, n int) 
 		{Index: 0, Buffer: whole(t, in)},
 		{Index: 1, Buffer: whole(t, in)},
 		{Index: 2, Buffer: mid},
-	}, accel.WorkgroupCount{X: (n + 63) / 64})
+	}, nil, accel.WorkgroupCount{X: (n + 63) / 64})
 	r.Dispatch(p, []accel.Binding{
 		{Index: 0, Buffer: mid},
 		{Index: 1, Buffer: mid},
 		{Index: 2, Buffer: whole(t, out)},
-	}, accel.WorkgroupCount{X: (n + 63) / 64})
+	}, nil, accel.WorkgroupCount{X: (n + 63) / 64})
 
 	g, err := r.Build()
 	if err != nil {

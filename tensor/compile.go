@@ -224,12 +224,13 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	inPlaceCount := 0
 
 	binds := make([]accel.Binding, 0, len(n.inputs)+2)
+	var uniforms []accel.UniformValue
 	if n.uniform != nil {
 		// A placeholder, rewritten before every submission. Recording the zero
 		// and never rewriting it would be a plan that ran and computed with a
 		// factor of nothing, which is why Submit rewrites unconditionally
 		// rather than only when a value changed.
-		binds = append(binds, accel.Binding{Index: 0, Uniform: n.uniform(nil)})
+		uniforms = append(uniforms, accel.UniformValue{Index: 0, Value: n.uniform(nil)})
 	}
 
 	// The result: a transient unless the caller asked for it by name, in which
@@ -292,7 +293,10 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		// because the operand and the result may both be caller buffers and
 		// the recorder moves bytes between a slot and a view rather than
 		// between two slots.
-		if len(binds) != outIndex+1 || outIndex != 1 {
+		// binds holds the operands only. It used to hold the by-value parameter
+		// too, so this counted one extra; uniforms have their own argument
+		// since specs/036-documentation.md's freeze record split Binding.
+		if len(binds) != outIndex || outIndex != 1 {
 			return fmt.Errorf("accel/tensor: %s is in place and takes %d operands; an "+
 				"in-place kernel has exactly one", n.op, outIndex)
 		}
@@ -325,7 +329,7 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	if g == nil {
 		g = perElement(int(n.kernel.WorkgroupSize.X))
 	}
-	id := r.Dispatch(pipe, binds, g(n.out))
+	id := r.Dispatch(pipe, binds, uniforms, g(n.out))
 	if n.uniform != nil {
 		p.uniformNodes = append(p.uniformNodes, uniformNode{node: id, build: n.uniform})
 	}

@@ -31,8 +31,8 @@ type Recorder struct {
 }
 
 // Dispatch records a compute dispatch.
-func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, count WorkgroupCount) NodeID {
-	return r.dispatchImpl(p, b, count)
+func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, u []UniformValue, count WorkgroupCount) NodeID {
+	return r.dispatchImpl(p, b, u, count)
 }
 
 // DispatchIndirect records a dispatch whose workgroup count is read from a buffer
@@ -44,8 +44,8 @@ func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, count WorkgroupCoun
 // checked against the device's workgroup count limit. The device supplies the
 // actual count and it is clamped to max: on device in strict mode, and as a
 // documented caller obligation otherwise.
-func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, count BufferView, max WorkgroupCount) NodeID {
-	return r.indirectImpl(p, b, count, max)
+func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, u []UniformValue, count BufferView, max WorkgroupCount) NodeID {
+	return r.indirectImpl(p, b, u, count, max)
 }
 
 // CopyToBuffer records a host-to-device transfer, copying src at record time.
@@ -344,7 +344,7 @@ type Graph struct {
 	spans      []span // scratch, reused per rebind; guarded by mu
 
 	mu       sync.Mutex
-	bound    []Binding // by one-based slot; index 0 unused
+	bound    []SlotBinding // by one-based slot; index 0 unused
 	inFlight bool
 }
 
@@ -361,8 +361,20 @@ type Graph struct {
 //
 // Binding while a submission is in flight reports ErrGraphInFlight, for the same
 // reason submitting twice does.
-func (g *Graph) Bind(b Binding) error     { return g.bindAll([]Binding{b}) }
-func (g *Graph) Rebind(b []Binding) error { return g.bindAll(b) }
+func (g *Graph) Bind(b ...SlotBinding) error { return g.bindAll(b) }
+
+// SlotBinding supplies one graph slot with the resource it names.
+//
+// Its own type, because the bind path and the dispatch path check different
+// things: a slot's descriptor is what a bound resource has to satisfy, and a
+// pipeline's binding layout is what a dispatch has to fill. [Binding] used to
+// serve both, which meant Bind required Slot *and* Buffer and never read Index
+// — the exact opposite of the one-of-three rule Binding's own documentation
+// states. See specs/036-documentation.md's freeze record.
+type SlotBinding struct {
+	Slot   Slot
+	Buffer BufferView
+}
 
 // GraphSlot pairs a discoverable graph slot ID with its descriptor.
 type GraphSlot struct {

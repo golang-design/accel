@@ -109,7 +109,7 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 		return nil, err
 	}
 	g.state.init("graph")
-	g.bound = make([]Binding, len(g.slots)+1)
+	g.bound = make([]SlotBinding, len(g.slots)+1)
 	// Computed once. The ranges a graph names through resources it already holds
 	// cannot change, and rebuilding them per rebind would put a scan of every
 	// node on the path specs/003-command-graph.md promises stays cheap.

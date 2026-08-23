@@ -74,7 +74,7 @@ func (c oracleCase) record(r *accel.Recorder) {
 			if n > 0 {
 				r.Dispatch(c.p, []accel.Binding{
 					{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: out},
-				}, accel.WorkgroupCount{X: 1})
+				}, nil, accel.WorkgroupCount{X: 1})
 			}
 		}
 	}
@@ -234,7 +234,7 @@ func TestTheTwoPlansAreActuallyDifferent(t *testing.T) {
 		dis := func(a, b, o accel.BufferView) {
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: o},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 		}
 		// Two independent dispatches: no hazard between them.
 		x, y := mk(), mk()
@@ -313,7 +313,7 @@ func TestTheOracleAgreesOnADiamond(t *testing.T) {
 		dis := func(a, b, o accel.BufferView) {
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: o},
-			}, accel.WorkgroupCount{X: 1})
+			}, nil, accel.WorkgroupCount{X: 1})
 		}
 		dis(whole(t, in), whole(t, in), t0) // fan out from here
 		dis(t0, whole(t, in), t1)           // arm one

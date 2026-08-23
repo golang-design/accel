@@ -48,7 +48,7 @@ func indirectGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stat
 		{Index: 0, Buffer: whole(t, in)},
 		{Index: 1, Buffer: whole(t, in)},
 		{Index: 2, Buffer: whole(t, out)},
-	}, countView, max)
+	}, nil, countView, max)
 
 	g, err := r.Build()
 	if err != nil {
@@ -127,7 +127,7 @@ func countGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stats b
 	if err != nil {
 		t.Fatalf("view: %v", err)
 	}
-	r.DispatchIndirect(p, []accel.Binding{{Index: 0, Buffer: whole(t, counts)}}, cv, max)
+	r.DispatchIndirect(p, []accel.Binding{{Index: 0, Buffer: whole(t, counts)}}, nil, cv, max)
 
 	g, err := r.Build()
 	if err != nil {
@@ -304,7 +304,7 @@ func TestIndirectValidationRows(t *testing.T) {
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, in)},
-			}, cv, c.max)
+			}, nil, cv, c.max)
 			_, err = r.Build()
 			if err == nil {
 				t.Fatal("expected a rejection")
@@ -362,7 +362,7 @@ func TestTheIndirectCountBufferIsChecked(t *testing.T) {
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
 				{Index: 2, Buffer: whole(t, in)},
-			}, c.make(t), accel.WorkgroupCount{X: 1})
+			}, nil, c.make(t), accel.WorkgroupCount{X: 1})
 			_, err := r.Build()
 			if err == nil {
 				t.Fatal("expected a rejection")

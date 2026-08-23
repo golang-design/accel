@@ -21,22 +21,27 @@ dispatch, and nothing can write it.
 
 ```go
 r := dev.NewRecorder()
-node := r.Dispatch(pipe, []accel.Binding{
-	{Index: 0, Uniform: kernels.Adjust{Amount: 0.25}},
-	{Index: 0, Buffer: inView},
-	{Index: 1, Buffer: outView},
-}, accel.WorkgroupCount{X: n / 64})
+node := r.Dispatch(pipe,
+	[]accel.Binding{
+		{Index: 0, Buffer: inView},
+		{Index: 1, Buffer: outView},
+	},
+	[]accel.UniformValue{
+		{Index: 0, Value: kernels.Adjust{Amount: 0.25}},
+	},
+	accel.WorkgroupCount{X: n / 64})
 g, _ := r.Build()
 ```
 
-Two entries both say `Index: 0` and mean different things. `Uniform` names a
-position in the kernel's **by-value** list; `Buffer` names one in its **binding**
-list. They are separate spaces.
+Two arguments, two index spaces. `Binding.Index` names the pipeline's binding
+layout; `UniformValue.Index` names the kernel's by-value list. Both start at
+zero, and neither is the position in the authored parameter list — `Brighten`
+takes `(t, p, in, out)`, so `p` is parameter 1 and uniform 0, while `in` and
+`out` are parameters 2 and 3 and bindings 0 and 1.
 
-> This is a rough edge. `Binding.Index` meaning two things depending on which
-> other field is set is on the list to change — see
-> [`specs/036`](../../specs/036-documentation.md) §5.3. The `Uniform` field
-> itself is staying.
+They are separate arguments so they cannot be confused. They used to share one
+slice, where an entry meant one thing or the other depending on which field you
+set.
 
 ## You never write a padding offset
 

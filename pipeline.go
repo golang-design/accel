@@ -124,7 +124,7 @@ func (d *Device) countPipelines(delta int) {
 // access mode was inferred from the kernel body by the compiler, and letting a
 // caller restate it would let them under-declare, which is how a missing
 // dependency becomes a race.
-func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, count WorkgroupCount) NodeID {
+func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, us []UniformValue, count WorkgroupCount) NodeID {
 	if p == nil {
 		r.fail("Dispatch: no pipeline")
 		return r.node(NodeDispatch, "Dispatch", nil, nil)
@@ -145,7 +145,7 @@ func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, count Workgrou
 		return r.node(NodeDispatch, p.label, nil, nil)
 	}
 
-	accesses, uniforms, ok := r.bindingAccesses(p, bs)
+	accesses, uniforms, ok := r.bindingAccesses(p, bs, us)
 	if !ok {
 		return r.node(NodeDispatch, p.label, nil, nil)
 	}
@@ -181,7 +181,7 @@ func (r *Recorder) normalizeCount(label string, count WorkgroupCount) (kernel.ID
 
 // bindingAccesses turns a caller's bindings into declarations, one per entry of
 // the kernel's layout and in that order.
-func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, []any, bool) {
+func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding, us []UniformValue) ([]access, []any, bool) {
 	layout := p.kernel.Bindings
 	out := make([]access, len(layout))
 	filled := make([]bool, len(layout))
@@ -192,17 +192,19 @@ func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, 
 	// a caller supplies one as a value and the other as a slice, and a record
 	// that conflated them would reinterpret a mismatched argument set rather
 	// than refusing it. See specs/014-kernel-uniforms.md.
-	for _, b := range bs {
-		if b.Uniform == nil {
-			continue
-		}
-		if b.Index < 0 || b.Index >= len(uniforms) {
+	for _, u := range us {
+		if u.Index < 0 || u.Index >= len(uniforms) {
 			r.fail("Dispatch %q: uniform index %d is outside the kernel's %d by-value "+
-				"parameters", p.label, b.Index, len(uniforms))
+				"parameters", p.label, u.Index, len(uniforms))
 			ok = false
 			continue
 		}
-		uniforms[b.Index] = b.Uniform
+		if u.Value == nil {
+			r.fail("Dispatch %q: by-value parameter %d has a nil value", p.label, u.Index)
+			ok = false
+			continue
+		}
+		uniforms[u.Index] = u.Value
 	}
 	for i, u := range p.kernel.Uniforms {
 		if uniforms[i] == nil {
@@ -213,9 +215,6 @@ func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding) ([]access, 
 	}
 
 	for _, b := range bs {
-		if b.Uniform != nil {
-			continue
-		}
 		// V1's index half: an entry outside the layout names nothing.
 		if b.Index < 0 || b.Index >= len(layout) {
 			r.fail("Dispatch %q: binding index %d is outside the kernel's %d entries",
@@ -335,8 +334,8 @@ func publicDType(d kernel.DType) DType {
 // node that writes it must be ordered before this one by the fetch rather than
 // by the kernel. Getting that wrong would be a hazard the barrier plan does not
 // see.
-func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, countBuf BufferView,
-	max WorkgroupCount) NodeID {
+func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, us []UniformValue,
+	countBuf BufferView, max WorkgroupCount) NodeID {
 
 	if p == nil {
 		r.fail("DispatchIndirect: no pipeline")
@@ -384,7 +383,7 @@ func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, countBuf Buffe
 		return r.node(NodeDispatchIndirect, p.label, nil, nil)
 	}
 
-	accesses, uniforms, ok := r.bindingAccesses(p, bs)
+	accesses, uniforms, ok := r.bindingAccesses(p, bs, us)
 	if !ok {
 		return r.node(NodeDispatchIndirect, p.label, nil, nil)
 	}

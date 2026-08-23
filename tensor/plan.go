@@ -153,13 +153,13 @@ func (p *Plan) bind(bindings Bindings) error {
 	}
 
 	// Applied only now that everything checked out.
-	batch := make([]accel.Binding, 0, len(p.ports))
+	batch := make([]accel.SlotBinding, 0, len(p.ports))
 	for _, d := range p.ports {
-		batch = append(batch, accel.Binding{
+		batch = append(batch, accel.SlotBinding{
 			Slot: p.slots[d.Name], Buffer: bindings.Buffers[d.Name],
 		})
 	}
-	if err := p.graph.Rebind(batch); err != nil {
+	if err := p.graph.Bind(batch...); err != nil {
 		return err
 	}
 

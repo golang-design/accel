@@ -31,7 +31,7 @@ func TestValidationRows(t *testing.T) {
 				DType: accel.F32, Access: accel.AccessRead, MinCount: 4,
 			})
 			b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
-			return g.Bind(accel.Binding{Slot: s, Buffer: whole(t, b)})
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)})
 		},
 	}, {
 		row:  "V3",
@@ -40,7 +40,7 @@ func TestValidationRows(t *testing.T) {
 		run: func(t *testing.T, d *accel.Device) error {
 			g, s := graphWithSlot(t, d, readSlot(4))
 			b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
-			return g.Bind(accel.Binding{Slot: s, Buffer: mustViewAs(t, b, accel.U32)})
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: mustViewAs(t, b, accel.U32)})
 		},
 	}, {
 		row:  "V5",
@@ -53,7 +53,7 @@ func TestValidationRows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("view: %v", err)
 			}
-			return g.Bind(accel.Binding{Slot: s, Buffer: v})
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: v})
 		},
 	}, {
 		row:  "V6",
@@ -62,7 +62,7 @@ func TestValidationRows(t *testing.T) {
 		run: func(t *testing.T, d *accel.Device) error {
 			g, s := graphWithSlot(t, d, readSlot(4))
 			b := newBuffer(t, d, "b", 4, accel.UsageCopySrc)
-			return g.Bind(accel.Binding{Slot: s, Buffer: whole(t, b)})
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)})
 		},
 	}, {
 		row:  "V18",
@@ -120,7 +120,7 @@ func TestValidationRows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("buffer: %v", err)
 			}
-			if err := g.Bind(accel.Binding{Slot: s, Buffer: whole(t, b)}); err != nil {
+			if err := g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)}); err != nil {
 				t.Fatalf("bind: %v", err)
 			}
 			if err := b.Close(); err != nil {
@@ -197,10 +197,10 @@ func TestValidationRows(t *testing.T) {
 
 			b := newBuffer(t, d, "shared", 4,
 				accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
-			return g.Rebind([]accel.Binding{
+			return g.Bind([]accel.SlotBinding{
 				{Slot: in, Buffer: whole(t, b)},
 				{Slot: out, Buffer: whole(t, b)},
-			})
+			}...)
 		},
 	}, {
 		row:  "V24",
@@ -218,7 +218,7 @@ func TestValidationRows(t *testing.T) {
 				t.Fatalf("build: %v", err)
 			}
 			t.Cleanup(func() { _ = g.Close() })
-			return g.Bind(accel.Binding{Slot: in, Buffer: whole(t, b)})
+			return g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, b)})
 		},
 	}}
 
@@ -263,10 +263,10 @@ func TestOverlappingReadOnlySlotsAreAccepted(t *testing.T) {
 	defer g.Close()
 
 	src := newBuffer(t, d, "src", 4, accel.UsageStorage|accel.UsageCopySrc)
-	if err := g.Rebind([]accel.Binding{
+	if err := g.Bind([]accel.SlotBinding{
 		{Slot: a, Buffer: whole(t, src)},
 		{Slot: b, Buffer: whole(t, src)},
-	}); err != nil {
+	}...); err != nil {
 		t.Fatalf("two read-only slots over one buffer should be accepted: %v", err)
 	}
 }
@@ -304,10 +304,10 @@ func TestDisjointRangesOfOneBufferAreAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("view: %v", err)
 	}
-	if err := g.Rebind([]accel.Binding{
+	if err := g.Bind([]accel.SlotBinding{
 		{Slot: in, Buffer: lo},
 		{Slot: out, Buffer: hi},
-	}); err != nil {
+	}...); err != nil {
 		t.Fatalf("disjoint halves of one buffer should be accepted: %v", err)
 	}
 }
@@ -320,13 +320,13 @@ func TestARejectedRebindChangesNothing(t *testing.T) {
 	good := newBuffer(t, d, "good", 4, accel.UsageStorage|accel.UsageCopySrc)
 	small := newBuffer(t, d, "small", 2, accel.UsageStorage|accel.UsageCopySrc)
 
-	if err := g.Bind(accel.Binding{Slot: s, Buffer: whole(t, good)}); err != nil {
+	if err := g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, good)}); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
 	if err := d.Queue().WriteBuffer(good, 0, []float32{1, 2, 3, 4}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := g.Rebind([]accel.Binding{{Slot: s, Buffer: whole(t, small)}}); err == nil {
+	if err := g.Bind([]accel.SlotBinding{{Slot: s, Buffer: whole(t, small)}}...); err == nil {
 		t.Fatal("binding a too-small view should fail")
 	}
 	// The good binding survives, so the graph still runs.
@@ -342,13 +342,16 @@ func TestBindRejectsMalformedBindings(t *testing.T) {
 
 	for _, c := range []struct {
 		name string
-		bind accel.Binding
+		bind accel.SlotBinding
 		says string
 	}{
-		{"slot zero", accel.Binding{Buffer: whole(t, b)}, "slot 0 is not one of"},
-		{"unknown slot", accel.Binding{Slot: s + 7, Buffer: whole(t, b)}, "is not one of"},
-		{"no resource", accel.Binding{Slot: s}, "no resource bound"},
-		{"a texture", accel.Binding{Slot: s, Texture: &accel.Texture{}}, "textures and samplers"},
+		{"slot zero", accel.SlotBinding{Buffer: whole(t, b)}, "slot 0 is not one of"},
+		{"unknown slot", accel.SlotBinding{Slot: s + 7, Buffer: whole(t, b)}, "is not one of"},
+		{"no resource", accel.SlotBinding{Slot: s}, "no resource bound"},
+		// A texture through a slot used to be a runtime rejection here. It is a
+		// compile error now: SlotBinding has no Texture field, because the bind
+		// path and the dispatch path stopped sharing a type. A refusal the
+		// compiler makes beats one a test has to find.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := g.Bind(c.bind)
@@ -428,7 +431,7 @@ func TestDeviceLossIsTerminal(t *testing.T) {
 	if _, err := d.NewRecorder().Build(); !errors.Is(err, accel.ErrDeviceLost) {
 		t.Fatalf("Build after loss should report it, got %v", err)
 	}
-	if err := g.Bind(accel.Binding{}); !errors.Is(err, accel.ErrDeviceLost) {
+	if err := g.Bind(accel.SlotBinding{}); !errors.Is(err, accel.ErrDeviceLost) {
 		t.Fatalf("Bind after loss should report it, got %v", err)
 	}
 }
@@ -486,7 +489,7 @@ func TestATransientCannotReachASlot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = g.Close() })
 
-	err = g.Rebind([]accel.Binding{{Slot: in, Buffer: mid}})
+	err = g.Bind([]accel.SlotBinding{{Slot: in, Buffer: mid}}...)
 	if err == nil {
 		t.Fatal("a graph transient was bound through a slot; if this is now legal, V24 " +
 			"needs the transient term specs/017-graph-aliasing.md §5 records as unreachable")

@@ -269,10 +269,10 @@ func BenchmarkGraphRebind(b *testing.B) {
 	}
 	defer g.Close()
 
-	bind := []accel.Binding{{Slot: in, Buffer: benchView(b, src)}}
+	bind := []accel.SlotBinding{{Slot: in, Buffer: benchView(b, src)}}
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := g.Rebind(bind); err != nil {
+		if err := g.Bind(bind...); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -376,7 +376,7 @@ func BenchmarkDispatchThroughAGraph(b *testing.B) {
 		{Index: 0, Buffer: benchView(b, in)},
 		{Index: 1, Buffer: benchView(b, in)},
 		{Index: 2, Buffer: benchView(b, out)},
-	}, accel.WorkgroupCount{X: n / 64})
+	}, nil, accel.WorkgroupCount{X: n / 64})
 	g, err := r.Build()
 	if err != nil {
 		b.Fatalf("build: %v", err)
