@@ -87,6 +87,7 @@ numbered in.
 | [018-cooperative-lowering.md](018-cooperative-lowering.md) | Implemented | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
 | [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | Implemented | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
 | [020-cooperative-atomics.md](020-cooperative-atomics.md) | In progress | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
+| [021-metal-bringup.md](021-metal-bringup.md) | Drafted | M6 child: the Objective-C shim and its ownership rule, enumeration, storage modes, a straight-line MSL emitter, and one kernel on the GPU |
 
 ## Layer 2: the tensor
 
@@ -115,8 +116,8 @@ the order things can actually be demonstrated in is different.
 - **Status** is one of drafted, in progress, implemented, or superseded. *In
   progress* means some of the spec has shipped, and the spec says which parts.
   A spec does not reach *implemented* while any section it owns is unbuilt, so
-  001 stays in progress with textures and device loss outstanding even though
-  everything M1 promised is done.
+  002 stays in progress with strict-mode capability narrowing outstanding even
+  though everything M4 promised of it is done.
 - Every implementation-bearing spec states its **testing strategy**. Genuine
   unresolved decisions stay under **open questions**; resolved questions are
   removed rather than kept as stale history.

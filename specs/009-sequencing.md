@@ -662,6 +662,27 @@ Build:
 Implements: 006 §§2.2 and 4.3, the MSL subset of 004, and Metal profiles in 008
 and 011.
 
+#### M6 is split, and the cut is vertical
+
+| Child | Scope |
+| --- | --- |
+| [021](021-metal-bringup.md) | The Objective-C shim and its ownership rule, enumeration and the capability/limit mapping, storage modes, a straight-line MSL emitter, and one corpus kernel dispatched on the GPU and compared against the CPU backend |
+| [022](022-msl-target.md) | The rest of the MSL target — threadgroup memory, barriers, atomics, subgroups, helpers and intrinsics — opening with 008's numeric probes and the recorded Metal profile, then corpus-wide agreement against the CPU oracle |
+| [023](023-metal-graph.md) | Multi-node graph lowering by re-encoding, indirect dispatch, completion-handler lifetime under repeated early close, and the M6 E2E |
+
+**The cut is vertical rather than by layer**, which is the same argument
+[012](012-kernel-pipeline.md) made and the reason it is worth repeating. A
+horizontal split — the whole emitter, then the whole runtime — defers every
+piece of device evidence to the second child, and the first child would be
+checked by reading it. A vertical first child instead makes the device an
+oracle on day one: after 021, a Metal disagreement with the CPU backend is a
+test failure rather than an observation, and 022 and 023 are both built against
+that.
+
+The probes land in 022 rather than 021 because they need what 021 builds. The
+risk row's ordering constraint is satisfied inside 022: probes first, then
+anything numeric derived from them.
+
 Done, in order:
 
 1. load/probe and complete device profile;
