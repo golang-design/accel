@@ -30,6 +30,30 @@ func (AttnDimsCodec) Encode(dst []byte, value AttnDims) error {
 	return w.Err()
 }
 
+// BatchedDimsCodec is the generated std140 codec for BatchedDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type BatchedDimsCodec struct{}
+
+// BatchedDimsBlockSize is the encoded size of a BatchedDims block, in bytes.
+const BatchedDimsBlockSize = 32
+
+// EncodedSize reports the std140 block size.
+func (BatchedDimsCodec) EncodedSize() int { return BatchedDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (BatchedDimsCodec) Encode(dst []byte, value BatchedDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Batch)
+	w.U32(4, value.QHeads)
+	w.U32(8, value.KVHeads)
+	w.U32(12, value.HeadDim)
+	w.U32(16, value.Block)
+	w.U32(20, value.MaxPages)
+	w.F32(24, value.Scale)
+	return w.Err()
+}
+
 // ScaleParamsCodec is the generated std140 codec for ScaleParams.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -776,6 +800,316 @@ kernel void AttentionDecode(
 			slot.State = f
 		}
 		return attentionDecodeCoop(t, accel.KernelUniformValue[AttnDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelSlice[float32](a, 3), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]float32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// attentionDecodeBatchedFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type attentionDecodeBatchedFrame struct {
+	pc        int
+	group0    uint32
+	lane1     uint32
+	seq2      uint32
+	h3        uint32
+	kvHead4   uint32
+	kvLen5    uint32
+	pageBase6 uint32
+	qBase7    uint32
+	s8        float32
+	phys9     uint32
+	acc10     float32
+	i11       uint32
+	qi12      float32
+	ki13      float32
+	m14       float32
+	stride15  uint32
+	a16       float32
+	b17       float32
+	best18    float32
+	e19       float32
+	stride20  uint32
+	total21   float32
+	acc22     float32
+	j23       uint32
+	phys24    uint32
+}
+
+// attentionDecodeBatchedCoop runs one invocation of AttentionDecodeBatched to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []float32, v []float32, pages []uint32, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, f *attentionDecodeBatchedFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.group0 = t.GroupID().X
+			f.lane1 = t.LocalID().X
+			f.seq2 = (f.group0 / d.QHeads)
+			f.h3 = (f.group0 % d.QHeads)
+			f.kvHead4 = (f.h3 / (d.QHeads / d.KVHeads))
+			f.kvLen5 = lengths[f.seq2]
+			f.pageBase6 = (f.seq2 * d.MaxPages)
+			f.qBase7 = (((f.seq2 * d.QHeads) + f.h3) * d.HeadDim)
+			f.s8 = float32(0)
+			if f.lane1 < f.kvLen5 {
+				f.phys9 = ((pages[(f.pageBase6+(f.lane1/d.Block))] * d.Block) + (f.lane1 % d.Block))
+				f.acc10 = float32(0)
+				{
+					f.i11 = uint32(0)
+					for ; f.i11 < d.HeadDim; f.i11 = (f.i11 + uint32(1)) {
+						f.qi12 = q[(f.qBase7 + f.i11)]
+						f.ki13 = k[((((f.phys9 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim)) + f.i11)]
+						f.acc10 = float32(f.acc10 + float32(f.qi12*f.ki13))
+					}
+				}
+				f.s8 = float32(f.acc10 * d.Scale)
+			}
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.s8
+			f.m14 = f.s8
+			if f.lane1 >= f.kvLen5 {
+				f.m14 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			}
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.m14
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "batched.go:86:2"}
+			return true
+		case 2:
+			f.stride15 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lane1 < f.stride15 {
+				f.a16 = red[tr.ReadAt(1, int(f.lane1))]
+				f.b17 = red[tr.ReadAt(1, int((f.lane1+f.stride15)))]
+				if f.b17 > f.a16 {
+					tr.Write(1, int(f.lane1))
+					red[f.lane1] = f.b17
+				}
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: "batched.go:96:3"}
+			return true
+		case 5:
+			f.stride15 = (f.stride15 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride15 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.best18 = red[tr.ReadAt(1, int(int32(0)))]
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = accel.KernelBarrierID{Index: 8, Pos: "batched.go:99:2"}
+			return true
+		case 9:
+			f.e19 = float32(0)
+			if f.lane1 < f.kvLen5 {
+				f.e19 = kmath.Exp(float32(scores[tr.ReadAt(0, int(f.lane1))] - f.best18))
+			}
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.e19
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.e19
+			f.pc = 10
+			continue
+		case 10:
+			f.pc = 11
+			frame.Barrier = accel.KernelBarrierID{Index: 10, Pos: "batched.go:107:2"}
+			return true
+		case 11:
+			f.stride20 = uint32(64)
+			f.pc = 15
+			continue
+		case 12:
+			if f.lane1 < f.stride20 {
+				tr.Write(1, int(f.lane1))
+				red[f.lane1] = float32(red[tr.ReadAt(1, int(f.lane1))] + red[tr.ReadAt(1, int((f.lane1+f.stride20)))])
+			}
+			f.pc = 13
+			continue
+		case 13:
+			f.pc = 14
+			frame.Barrier = accel.KernelBarrierID{Index: 13, Pos: "batched.go:113:3"}
+			return true
+		case 14:
+			f.stride20 = (f.stride20 / uint32(2))
+			f.pc = 15
+			continue
+		case 15:
+			if f.stride20 > uint32(0) {
+				f.pc = 12
+				continue
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.total21 = red[tr.ReadAt(1, int(int32(0)))]
+			if f.lane1 < d.HeadDim {
+				f.acc22 = float32(0)
+				{
+					f.j23 = uint32(0)
+					for ; f.j23 < f.kvLen5; f.j23 = (f.j23 + uint32(1)) {
+						f.phys24 = ((pages[(f.pageBase6+(f.j23/d.Block))] * d.Block) + (f.j23 % d.Block))
+						f.acc22 = float32(f.acc22 + float32(scores[tr.ReadAt(0, int(f.j23))]*v[((((f.phys24*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+					}
+				}
+				out[(f.qBase7 + f.lane1)] = float32(f.acc22 / f.total21)
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// AttentionDecodeBatchedKernel is the compiled form of AttentionDecodeBatched.
+var AttentionDecodeBatchedKernel = accel.Kernel{
+	Name:          "AttentionDecodeBatched",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "q", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "k", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "v", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "pages", DType: accel.KernelU32, Access: accel.KernelRead},
+		{Name: "lengths", DType: accel.KernelU32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "6a2d2f521d3d328661a2dff37e3d5353",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct BatchedDims {
+    uint Batch;
+    uint QHeads;
+    uint KVHeads;
+    uint HeadDim;
+    uint Block;
+    uint MaxPages;
+    float Scale;
+    char _tail[4];
+};
+
+kernel void AttentionDecodeBatched(
+    const device float *q [[buffer(0)]],
+    const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]],
+    const device uint *pages [[buffer(3)]],
+    const device uint *lengths [[buffer(4)]],
+    device float *out [[buffer(5)]],
+    constant uint *_lens [[buffer(6)]],
+    constant BatchedDims &d [[buffer(7)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float scores[128];
+    threadgroup float red[128];
+    uint group = _wid.x;
+    uint lane = _lid.x;
+    uint seq = (group / d.QHeads);
+    uint h = (group % d.QHeads);
+    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint kvLen = lengths[seq];
+    uint pageBase = (seq * d.MaxPages);
+    uint qBase = (((seq * d.QHeads) + h) * d.HeadDim);
+    float s = float(0);
+    if ((lane < kvLen)) {
+        uint phys = ((pages[(pageBase + (lane / d.Block))] * d.Block) + (lane % d.Block));
+        float acc = float(0);
+        for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+            float qi = q[(qBase + i)];
+            float ki = k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
+            acc = (acc + (qi * ki));
+        }
+        s = (acc * d.Scale);
+    }
+    scores[lane] = s;
+    float m = s;
+    if ((lane >= kvLen)) {
+        m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    }
+    red[lane] = m;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            float a = red[lane];
+            float b = red[(lane + stride)];
+            if ((b > a)) {
+                red[lane] = b;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float best = red[int(0)];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float e = float(0);
+    if ((lane < kvLen)) {
+        e = precise::exp((scores[lane] - best));
+    }
+    scores[lane] = e;
+    red[lane] = e;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            red[lane] = (red[lane] + red[(lane + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float total = red[int(0)];
+    if ((lane < d.HeadDim)) {
+        float acc = float(0);
+        for (uint j = uint(0); (j < kvLen); j = (j + uint(1))) {
+            uint phys = ((pages[(pageBase + (j / d.Block))] * d.Block) + (j % d.Block));
+            acc = (acc + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+        }
+        out[(qBase + lane)] = (acc / total);
+    }
+}
+`,
+	Suspensions: 5,
+	SharedSizes: []int{128, 128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		var s1 [128]float32
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "BatchedDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, BatchedDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*attentionDecodeBatchedFrame)
+		if f == nil {
+			f = &attentionDecodeBatchedFrame{}
+			slot.State = f
+		}
+		return attentionDecodeBatchedCoop(t, accel.KernelUniformValue[BatchedDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelSlice[uint32](a, 3), accel.KernelSlice[uint32](a, 4), accel.KernelSlice[float32](a, 5), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]float32](a, 1), f, slot, slot.Shared)
 	},
 }
 
@@ -5114,6 +5448,7 @@ var Kernels = []*accel.Kernel{
 	&AtomicOpsKernel,
 	&CountWorkgroupsKernel,
 	&AttentionDecodeKernel,
+	&AttentionDecodeBatchedKernel,
 	&CastF32ToF16Kernel,
 	&CastF16ToF32Kernel,
 	&ExchangeKernel,

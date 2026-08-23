@@ -1083,9 +1083,12 @@ Independently scoped later work includes:
   tables, and a paged decode step that produces exactly what the contiguous one
   does over the same logical positions, including when the pages are out of
   order. Two sequences share one pool without seeing each other's positions.
-  **Multi-sequence scheduling** and additional transient sets remain: batching
-  several sequences into one submission grows the attention kernel a batch axis
-  and needs a scheduler deciding who runs together, which is its own scope.
+  **Multi-sequence batching landed with it**: `AttentionDecodeBatched` steps
+  several sequences in one dispatch, each reading its own length and page table,
+  with nothing padded to a common length — so a batch costs what its longest
+  member costs. What remains is the *scheduler* deciding who runs together and
+  when to admit a request, which is policy over this mechanism rather than more
+  of it, and additional transient sets.
 
 Vulkan is the first backend priority because it gives the CPU oracle a second
 vendor/API opinion and pays the cost of the real SPIR-V IR.

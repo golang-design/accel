@@ -72,11 +72,25 @@ table shorter than the cache is normal rather than an error.
 
 ## 4. What this does not build
 
-**Not multi-sequence scheduling.** A pool shared between sequences is the
-*enabler*; batching several sequences into one submission is a different change
-— the attention kernel grows a batch axis and the scheduler decides who runs
-together. This spec proves the sharing, with two sequences interleaved over one
-pool in separate submissions, and leaves the batching to its own scope.
+**Multi-sequence batching, added 2026-08-23.** A pool shared between sequences
+was the enabler; `AttentionDecodeBatched` is the thing it enabled. Each
+workgroup handles one (sequence, head) pair and reads that sequence's *own*
+length and page table.
+
+**Nothing is padded to a common length.** A short sequence's lanes past its end
+contribute the identity to each reduction, exactly as they do unbatched, so a
+batch of one long and three short sequences costs what the long one costs rather
+than four times it. The alternative — padding every sequence to the batch's
+longest — is the obvious implementation and was reinstated as a fault: using
+`lengths[0]` for everyone makes the second sequence disagree immediately.
+
+**A decode step is memory-bound**, which is why batching is worth a kernel
+rather than a loop: running four sequences as four submissions reads four caches
+in four dispatches, each with a tail where most of the device is idle.
+
+What remains is the *scheduler* — deciding which sequences run together, when to
+admit one, and what to do when a batch's members finish at different steps. That
+is policy over this mechanism rather than more of it.
 
 **Not eviction.** The pool refuses when it is empty rather than choosing a
 victim, because choosing one is a policy question about which sequence matters,
@@ -121,4 +135,8 @@ that failure is close to undebuggable from a model's output.
   accident;
 - two sequences interleave over one pool without seeing each other's positions;
   and
-- the paged kernel agrees between the CPU backend and Metal.
+- the paged kernel agrees between the CPU backend and Metal;
+- a batch of sequences produces exactly what each sequence produces alone, over
+  different lengths and interleaved pages; and
+- a batch of one is the unbatched kernel, which is what a scheduler hits
+  whenever a single request is in flight.

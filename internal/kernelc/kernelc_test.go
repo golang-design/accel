@@ -46,7 +46,7 @@ func TestCommittedFileIsFresh(t *testing.T) {
 		t.Error("check mode wrote a file")
 	}
 	// Sorted, so adding a kernel to the corpus does not reorder this.
-	want := []string{"Add", "AtomicOps", "AttentionDecode", "AttentionDecodePaged", "AttentionPrefill", "CastF16ToF32", "CastF32ToF16", "CountAbove", "CountWorkgroups", "ElemAdd", "ElemMul", "ElemScale", "Exchange", "GatherRows", "Histogram", "LinearTiled", "MatMulTiled", "MatVec", "Normalize", "QuantMatMul", "QuantRows", "RMSNorm", "ReduceLoop", "ReduceSum", "ReduceUnrolled", "RoPE", "SampleArgmax", "SampleCategorical", "Scale", "ScatterRows", "SegmentSum", "SiLU", "Softmax", "SubgroupReduce", "SubgroupReduceFallback", "SwiGLU", "TopKMask", "TopPMask", "Transform"}
+	want := []string{"Add", "AtomicOps", "AttentionDecode", "AttentionDecodeBatched", "AttentionDecodePaged", "AttentionPrefill", "CastF16ToF32", "CastF32ToF16", "CountAbove", "CountWorkgroups", "ElemAdd", "ElemMul", "ElemScale", "Exchange", "GatherRows", "Histogram", "LinearTiled", "MatMulTiled", "MatVec", "Normalize", "QuantMatMul", "QuantRows", "RMSNorm", "ReduceLoop", "ReduceSum", "ReduceUnrolled", "RoPE", "SampleArgmax", "SampleCategorical", "Scale", "ScatterRows", "SegmentSum", "SiLU", "Softmax", "SubgroupReduce", "SubgroupReduceFallback", "SwiGLU", "TopKMask", "TopPMask", "Transform"}
 	if len(results[0].Kernels) != len(want) {
 		t.Fatalf("kernels = %v, want %v", results[0].Kernels, want)
 	}

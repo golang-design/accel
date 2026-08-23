@@ -395,6 +395,28 @@ func diffCases() []diffCase {
 			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
 		},
 		{
+			// A batch of three sequences of different lengths over interleaved
+			// pages: the two backends must agree about which sequence reads
+			// which blocks and stops where, not merely about the attention.
+			kernel: &testkernels.AttentionDecodeBatchedKernel,
+			counts: []int{3 * 2 * 8, 12 * 4 * 1 * 8, 12 * 4 * 1 * 8, 3 * 3, 3, 3 * 2 * 8},
+			uniforms: []any{testkernels.BatchedDims{
+				Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8, Block: 4, MaxPages: 3,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 6},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 3: // page tables, interleaved across the three sequences
+					return []float32{0, 3, 6, 1, 0, 0, 4, 7, 0}[i]
+				case 4: // lengths, deliberately unequal
+					return []float32{9, 3, 6}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over each sequence's cache, per section 8's propagation",
+		},
+		{
 			// The paged decode, with pages deliberately out of order so the two
 			// backends must agree about the *addressing* and not merely about
 			// the attention. An identity page table would compare equal even
