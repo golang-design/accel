@@ -156,3 +156,160 @@ func TestTheProbeIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// The probe detects arithmetic that differs, which is the thing it exists for
+// and which measuring only this machine can never show.
+//
+// Each case substitutes one operation with a version behaving the way some
+// other target might, and asserts the probe notices. Without these the failure
+// branches are unreachable on any machine this code runs on, and a detector
+// nobody has seen detect anything is a detector nobody should believe.
+func TestTheProbeDetectsDifferentArithmetic(t *testing.T) {
+	cases := []struct {
+		name  string
+		ops   func(probe.Ops) probe.Ops
+		check func(probe.Profile) bool
+		says  string
+	}{{
+		name: "round-half-away-from-zero",
+		ops: func(o probe.Ops) probe.Ops {
+			o.Add = func(a, b float32) float32 { return roundHalfAway(float64(a) + float64(b)) }
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.RoundToNearestEven },
+		says:  "a machine rounding ties away from zero",
+	}, {
+		name: "round-half-toward-zero",
+		ops: func(o probe.Ops) probe.Ops {
+			o.Add = func(a, b float32) float32 { return roundHalfToward(float64(a) + float64(b)) }
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.RoundToNearestEven },
+		says:  "a machine always rounding ties down, which passes the first tie case",
+	}, {
+		name: "subtraction rounding differently",
+		ops: func(o probe.Ops) probe.Ops {
+			o.Sub = func(a, b float32) float32 { return roundHalfAway(float64(a) - float64(b)) }
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.RoundToNearestEven },
+		says:  "a machine whose subtraction rounds differently from its addition",
+	}, {
+		name: "a fused multiply-add",
+		ops: func(o probe.Ops) probe.Ops {
+			// Contraction: the multiply keeps full precision and the following
+			// subtraction rounds once, which is what fusing does.
+			var pending float64
+			o.Mul = func(a, b float32) float32 {
+				pending = float64(a) * float64(b)
+				return float32(pending)
+			}
+			o.Sub = func(a, b float32) float32 { return float32(pending - float64(b)) }
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.ContractionOff },
+		says:  "a machine that fuses a multiply into a following add",
+	}, {
+		name: "flush-to-zero",
+		ops: func(o probe.Ops) probe.Ops {
+			flush := func(v float32) float32 {
+				if v != 0 && math.Abs(float64(v)) < math.SmallestNonzeroFloat32*(1<<23) {
+					return 0
+				}
+				return v
+			}
+			o.Mul = func(a, b float32) float32 { return flush(a * b) }
+			o.Ldexp = func(m float32, e int) float32 {
+				return flush(float32(math.Ldexp(float64(m), e)))
+			}
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.SubnormalsPreserved },
+		says:  "a machine flushing subnormals to zero",
+	}, {
+		name: "saturating overflow",
+		ops: func(o probe.Ops) probe.Ops {
+			o.Mul = func(a, b float32) float32 {
+				v := float64(a) * float64(b)
+				if math.IsInf(v, 0) || math.Abs(v) > math.MaxFloat32 {
+					return float32(math.MaxFloat32) // saturates instead
+				}
+				return float32(v)
+			}
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.InfNaNProduced },
+		says:  "a machine saturating on overflow rather than producing an infinity",
+	}, {
+		name: "no NaN from zero over zero",
+		ops: func(o probe.Ops) probe.Ops {
+			o.Div = func(a, b float32) float32 {
+				if b == 0 {
+					return 0 // undefined, and this target chose zero
+				}
+				return a / b
+			}
+			return o
+		},
+		check: func(p probe.Profile) bool { return !p.InfNaNProduced },
+		says:  "a machine where zero over zero is not a NaN",
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := probe.Measure("test", "synthetic", c.ops(probe.GoOps()))
+			if !c.check(p) {
+				t.Fatalf("the probe did not notice %s: %v", c.says, p)
+			}
+			// And such a machine cannot offer exact comparison, which is the
+			// consequence that matters downstream.
+			if p.ExactAvailable() && (!p.RoundToNearestEven || !p.ContractionOff) {
+				t.Error("exact comparison should not be available")
+			}
+		})
+	}
+}
+
+// roundHalfAway and roundHalfToward round an exact double to f32 with a
+// tie-breaking rule other than nearest-even.
+//
+// Written from the definition rather than by nudging the value, so the tie is
+// resolved deliberately rather than as a side effect of a fudge factor.
+func roundHalfAway(v float64) float32 {
+	lo, hi, tie := neighbours(v)
+	if !tie {
+		return float32(v)
+	}
+	if v < 0 {
+		return lo
+	}
+	return hi
+}
+
+func roundHalfToward(v float64) float32 {
+	lo, hi, tie := neighbours(v)
+	if !tie {
+		return float32(v)
+	}
+	if v < 0 {
+		return hi
+	}
+	return lo
+}
+
+// neighbours reports the f32 values bracketing v, and whether v is exactly
+// between them.
+func neighbours(v float64) (lo, hi float32, tie bool) {
+	near := float32(v)
+	if float64(near) == v {
+		return near, near, false
+	}
+	if float64(near) > v {
+		hi = near
+		lo = math.Float32frombits(math.Float32bits(near) - 1)
+	} else {
+		lo = near
+		hi = math.Float32frombits(math.Float32bits(near) + 1)
+	}
+	return lo, hi, v-float64(lo) == float64(hi)-v
+}

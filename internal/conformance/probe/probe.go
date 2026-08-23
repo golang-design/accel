@@ -88,16 +88,42 @@ func (p Profile) String() string {
 	return b.String()
 }
 
+// Ops is the arithmetic a probe measures.
+//
+// It is a parameter rather than the operators written inline, so a test can
+// supply arithmetic that rounds the other way and check that the probe reports
+// it. Without that, the probe's failure branches are unreachable on any machine
+// this code runs on -- and a detector nobody has seen detect anything is a
+// detector nobody should believe.
+type Ops struct {
+	Add, Sub, Mul, Div func(a, b float32) float32
+	Ldexp              func(m float32, e int) float32
+}
+
+// GoOps is this machine's own arithmetic, reached through functions the
+// compiler cannot fold.
+//
+// The indirection is not ceremony. Go evaluates constant expressions in exact
+// arithmetic and rounds once at the conversion, so a probe written with
+// constants measures the constant folder and reports the same answer on
+// hardware that rounds differently.
+func GoOps() Ops {
+	return Ops{Add: add32, Sub: sub32, Mul: mul32, Div: div32, Ldexp: ldexp32}
+}
+
 // CPU measures this machine's Go arithmetic, which is what the CPU backend's
 // generated lowerings run on.
-func CPU() Profile {
+func CPU() Profile { return Measure(runtime.GOARCH, "cpu", GoOps()) }
+
+// Measure runs the probes against a given arithmetic.
+func Measure(arch, backend string, ops Ops) Profile {
 	return Profile{
-		Arch:                runtime.GOARCH,
-		Backend:             "cpu",
-		RoundToNearestEven:  roundsToNearestEven(),
-		ContractionOff:      contractionOff(),
-		SubnormalsPreserved: subnormalsPreserved(),
-		InfNaNProduced:      infNaNProduced(),
+		Arch:                arch,
+		Backend:             backend,
+		RoundToNearestEven:  roundsToNearestEven(ops),
+		ContractionOff:      contractionOff(ops),
+		SubnormalsPreserved: subnormalsPreserved(ops),
+		InfNaNProduced:      infNaNProduced(ops),
 	}
 }
 
@@ -118,23 +144,23 @@ func CPU() Profile {
 // would report the same answer on hardware that rounds differently. Hence the
 // package-level variables: the compiler cannot fold what it cannot see the
 // value of.
-func roundsToNearestEven() bool {
+func roundsToNearestEven(ops Ops) bool {
 	// f32 spacing at 2^24 is 2, so the odd integers there are exact ties.
-	two24 := ldexp32(1, 24)
+	two24 := ops.Ldexp(1, 24)
 
 	// 2^24 + 1 is halfway between 2^24 and 2^24+2. The first has an even
 	// mantissa, so nearest-even keeps it and half-away would give 2^24+2.
-	if add32(two24, one) != two24 {
+	if ops.Add(two24, one) != two24 {
 		return false
 	}
 	// 2^24 + 3 is halfway between 2^24+2 (odd mantissa) and 2^24+4 (even), so
 	// nearest-even rounds *up* here. A machine that always rounded a tie down
 	// would pass the case above and fail this one.
-	if add32(two24, three) != add32(two24, four) {
+	if ops.Add(two24, three) != ops.Add(two24, four) {
 		return false
 	}
 	// Subtraction lands on the same boundary from the other side.
-	if sub32(add32(two24, two), one) != two24 {
+	if ops.Sub(ops.Add(two24, two), one) != two24 {
 		return false
 	}
 	// Multiplication and division are not probed separately. Constructing a
@@ -178,7 +204,7 @@ func ldexp32(m float32, e int) float32 { return float32(math.Ldexp(float64(m), e
 // the add would otherwise absorb. If they agree, either the machine fused it or
 // this pair no longer distinguishes the two, and the honest answer to both is
 // that contraction cannot be shown to be off.
-func contractionOff() bool {
+func contractionOff(ops Ops) bool {
 	// x = 1 + 2^-12, so x*x is exactly 1 + 2^-11 + 2^-24.
 	//
 	// The choice of exponent is the whole probe. At 1 an f32 ulp is 2^-23, so
@@ -194,35 +220,35 @@ func contractionOff() bool {
 	// that does not contract. A probe whose inputs do not distinguish the two
 	// cases measures nothing and says so confidently, which is worse than not
 	// probing.
-	x := add32(one, ldexp32(1, -12))
-	unfused := sub32(mul32(x, x), one)
+	x := ops.Add(one, ops.Ldexp(1, -12))
+	unfused := ops.Sub(ops.Mul(x, x), one)
 	fused := float32(float64(x)*float64(x) - 1)
 	return unfused != fused
 }
 
 // subnormalsPreserved checks that a subnormal survives rather than being
 // flushed to zero.
-func subnormalsPreserved() bool {
-	smallest := ldexp32(1, -149) // the smallest positive f32
+func subnormalsPreserved(ops Ops) bool {
+	smallest := ops.Ldexp(1, -149) // the smallest positive f32
 	if smallest == 0 {
 		return false
 	}
 	// And that arithmetic *producing* one does not flush it either, which is
 	// the case a flush-to-zero machine differs on: it can represent a subnormal
 	// and still refuse to produce one.
-	return mul32(ldexp32(1, -148), half) == smallest
+	return ops.Mul(ops.Ldexp(1, -148), half) == smallest
 }
 
 var half = float32(0.5)
 
 // infNaNProduced checks that overflow yields an infinity and 0/0 a NaN, rather
 // than being undefined.
-func infNaNProduced() bool {
+func infNaNProduced(ops Ops) bool {
 	big := float32(math.MaxFloat32)
-	if !math.IsInf(float64(mul32(big, two)), 1) {
+	if !math.IsInf(float64(ops.Mul(big, two)), 1) {
 		return false
 	}
-	nan := div32(zero, zero)
+	nan := ops.Div(zero, zero)
 	return nan != nan
 }
 
