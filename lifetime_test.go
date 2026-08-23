@@ -7,6 +7,7 @@ package accel_test
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"golang.design/x/accel"
@@ -256,5 +257,42 @@ func TestDeviceCloseCountsImplicitChildren(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close once the implicit buffer went away: %v", err)
+	}
+}
+
+// Closing the *Buffer behind a graph transient's view is refused, not fatal.
+//
+// Recorder.Transient hands back a BufferView whose Buffer field is exported, so
+// a caller can reach the buffer and call Close on it — and a transient's memory
+// belongs to the builder, so it has no pool to return to. Before this was
+// guarded, free dereferenced the nil pool and killed the process, which is
+// exactly what BufferView.check's own doc says cannot happen: "The worst outcome
+// is a rejection."
+//
+// The public-surface review of specs/036-documentation.md found it by asking
+// what a tutorial would have to apologise for.
+func TestClosingATransientsBufferIsRefusedRatherThanFatal(t *testing.T) {
+	d := openDevice(t)
+	r := d.NewRecorder()
+	v := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: 64,
+		Usage: accel.UsageStorage | accel.UsageCopyDst, Label: "mid",
+	})
+
+	err := v.Buffer.Close()
+	if err == nil {
+		t.Fatal("closing a graph transient's buffer was accepted; its memory belongs to " +
+			"the builder and there is no pool to return it to")
+	}
+	if !errors.Is(err, accel.ErrLifetime) {
+		t.Errorf("want an ErrLifetime, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "graph transient") {
+		t.Errorf("the refusal should say what the resource is: %v", err)
+	}
+
+	// And the transient still works afterwards: a refusal changes nothing.
+	if err := v.Buffer.Close(); err == nil {
+		t.Error("the second refusal succeeded, so the first one had a side effect")
 	}
 }

@@ -194,6 +194,9 @@ func rejects(p Policy, info DeviceInfo) string {
 
 // available maps a device's reported capabilities onto the requirement set a
 // kernel is expressed in.
+//
+// [Capabilities.Set] is the public form; this is kept as the internal spelling
+// the selection path already reads.
 func available(c Capabilities) Capability {
 	var got Capability
 	if c.Subgroups {
@@ -269,6 +272,13 @@ func (d *Device) Info() DeviceInfo { return d.info }
 
 // Limits reports the device's numeric bounds.
 func (d *Device) Limits() Limits { return d.info.Limits }
+
+// Capabilities reports the optional features this device has.
+//
+// The sibling of [Device.Limits], and it exists because its absence was a trap:
+// a reader who learned dev.Limits() reasonably wrote dev.Capabilities() and got
+// a compile error, with dev.Info().Capabilities the undiscoverable answer.
+func (d *Device) Capabilities() Capabilities { return d.info.Capabilities }
 
 // SelectionReport reports how OpenBest selected this device. The bool is false
 // for a device opened explicitly with OpenDevice or OpenCPU.

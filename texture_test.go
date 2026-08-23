@@ -5,6 +5,7 @@
 package accel_test
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -527,5 +528,71 @@ func TestTextureCopyValidationRows(t *testing.T) {
 				t.Errorf("the message should say %q, got:\n%v", c.says, err)
 			}
 		})
+	}
+}
+
+// A texture allocated for readback can actually be read back.
+//
+// Device.NewTexture is the only convenience constructor, and it hard-coded
+// MemoryDevice for the pool it creates, while Queue.ReadTexture needs mappable
+// memory. So the two could never be used together: NewTexture succeeded,
+// ReadTexture refused, and nothing in the descriptor could change the answer.
+// The public-surface review of specs/036-documentation.md found it by asking
+// what a tutorial would have to work around.
+func TestNewTextureCanAskForReadbackMemory(t *testing.T) {
+	d := openDevice(t)
+	const w, h = 4, 4
+
+	// The default is still device-local, and the refusal now names the fix.
+	dev, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm,
+		Size:   accel.Extent{Width: w, Height: h, Depth: 1},
+		Usage:  accel.TextureCopySrc | accel.TextureCopyDst,
+		Label:  "device-local",
+	})
+	if err != nil {
+		t.Fatalf("NewTexture: %v", err)
+	}
+	defer dev.Close()
+	err = d.Queue().ReadTexture(dev, make([]byte, w*h*4))
+	if err == nil {
+		t.Error("a device-local texture was read back")
+	} else if !strings.Contains(err.Error(), "MemoryReadback") {
+		t.Errorf("the refusal does not name the fix: %v", err)
+	}
+
+	// And asking for readback memory makes the round trip work.
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm,
+		Size:   accel.Extent{Width: w, Height: h, Depth: 1},
+		Usage:  accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:   accel.MemoryReadback,
+		Label:  "readable",
+	})
+	if err != nil {
+		t.Fatalf("NewTexture with MemoryReadback: %v", err)
+	}
+	defer tex.Close()
+
+	want := make([]byte, w*h*4)
+	for i := range want {
+		want[i] = byte(i)
+	}
+	src := newBytes(t, d, "src", len(want))
+	defer src.Close()
+	if err := d.Queue().WriteBuffer(src, 0, want); err != nil {
+		t.Fatalf("WriteBuffer: %v", err)
+	}
+	if err := d.Queue().Run(func(r *accel.Recorder) {
+		r.CopyBufferToTexture(tex, whole(t, src))
+	}); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	got := make([]byte, w*h*4)
+	if err := d.Queue().ReadTexture(tex, got); err != nil {
+		t.Fatalf("ReadTexture: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("readback differs from what was written")
 	}
 }

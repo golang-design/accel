@@ -551,3 +551,51 @@ func TestTexturesAreNoLongerAStub(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 }
+
+// A caller can compare what a device offers against what a kernel requires.
+//
+// The two halves of that question were expressed in different types with no
+// public bridge: a device reports Capabilities, a struct of flags plus a
+// SubgroupOpSet; a kernel and Policy.Require use a Capability bitmask. Mapping
+// one to the other meant reimplementing an unexported function, including the
+// part that is easy to miss — every subgroup bit is gated on Subgroups as well
+// as on its own op bit.
+//
+// Found by the public-surface review of specs/036-documentation.md: it is the
+// first question a portability tutorial asks.
+func TestCapabilitiesBridgeToTheRequirementSet(t *testing.T) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	// Capabilities() is the sibling of Limits(), and its absence was the trap.
+	caps := d.Capabilities()
+	if caps != d.Info().Capabilities {
+		t.Error("Device.Capabilities disagrees with Info().Capabilities")
+	}
+
+	set := caps.Set()
+	if caps.Subgroups && set&accel.CapSubgroupBasic == 0 {
+		t.Error("a device reporting subgroups offers no subgroup capability")
+	}
+	if !caps.Subgroups && set&accel.CapSubgroupBasic != 0 {
+		t.Error("a device without subgroups offers a subgroup capability; every subgroup " +
+			"bit is gated on Subgroups as well as on its own op bit")
+	}
+
+	// Has is the whole point: one call, no reimplementation.
+	if !caps.Has(0) {
+		t.Error("the empty requirement is unsatisfied")
+	}
+	if !caps.Has(set) {
+		t.Error("a device does not satisfy its own capability set")
+	}
+
+	// And a capability it lacks is reported as lacking rather than as present.
+	absent := ^set
+	if absent != 0 && caps.Has(absent) {
+		t.Error("a device satisfies capabilities it does not have")
+	}
+}

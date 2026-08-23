@@ -183,10 +183,11 @@ type LifetimeError struct {
 // Lifetime reasons. They are compared as strings by callers who log them, so
 // they are named here rather than spelled at each construction site.
 const (
-	reasonClosed   = "closed"
-	reasonInFlight = "in flight"
-	reasonChildren = "has live children"
-	reasonPending  = "pending transfer"
+	reasonClosed    = "closed"
+	reasonInFlight  = "in flight"
+	reasonChildren  = "has live children"
+	reasonPending   = "pending transfer"
+	reasonTransient = "a graph transient"
 )
 
 func (e *LifetimeError) Error() string {
@@ -199,6 +200,11 @@ func (e *LifetimeError) Error() string {
 		return fmt.Sprintf("accel: %s %q: a queue write to this buffer has not been flushed. "+
 			"The handle is retired and the memory is released when the batch completes; "+
 			"call Queue.Flush().Wait() before %s to avoid this.", e.Op, e.Resource, e.Op)
+	case reasonTransient:
+		return fmt.Sprintf("accel: %s %q: it is a graph transient. Its memory belongs to the "+
+			"builder, which may reuse it between nodes, so only the graph that declared it "+
+			"may release it — closing the graph is what returns it (spec 001 section 7.3).",
+			e.Op, e.Resource)
 	case reasonChildren:
 		return fmt.Sprintf("accel: %s %q: %d live children. Close them first; "+
 			"closing is ordered rather than recursive (spec 001 section 7.2).",

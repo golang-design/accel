@@ -116,6 +116,27 @@ const (
 	SubgroupArithmetic = driver.SubgroupArithmetic
 )
 
+// Set is what a device offers, expressed as the [Capability] set a kernel
+// requires — so the two halves of the same question can be compared.
+//
+// A device reports [Capabilities], a struct of flags plus a [SubgroupOpSet]. A
+// kernel requires a [Capability] bitmask, and so does [Policy].Require. Without
+// this bridge a caller holding a [DeviceInfo] could not answer "does this device
+// satisfy what I am about to require" except by reimplementing the mapping,
+// including the part that is easy to miss: every subgroup bit is gated on
+// Subgroups as well as on its own op bit.
+func (c Capabilities) Set() Capability { return available(c) }
+
+// Has reports whether this device offers every capability in want.
+//
+//	if !dev.Capabilities().Has(accel.CapAtomicFloatAddStorage) {
+//		// pick another kernel, or another device
+//	}
+//
+// Which one is missing is often the interesting half; [Device.Missing] answers
+// that against a whole [Requirements].
+func (c Capabilities) Has(want Capability) bool { return c.Set()&want == want }
+
 // Capability names something a kernel can require and a device may lack. It is a
 // requirement set, not a feature list: the values here are exactly the ones a
 // kernel body can imply, and they are inferred from that body rather than

@@ -90,6 +90,18 @@ type TextureDescriptor struct {
 	// the public API can name subresources.
 	ArrayLayers int
 
+	// Kind is the memory the implicit pool behind [Device.NewTexture] is taken
+	// from. The zero value is [MemoryDevice], which is the right default and the
+	// wrong one for exactly one thing: [Queue.ReadTexture] needs mappable
+	// memory, so a texture you intend to read back on the host must ask for
+	// [MemoryReadback] here.
+	//
+	// The field exists because without it the convenience constructor produced
+	// a texture the only readback method could never read, and nothing said so
+	// until the call failed. It is ignored by [Pool.AllocTexture], where the
+	// pool already fixed the answer.
+	Kind MemoryKind
+
 	Label string
 }
 

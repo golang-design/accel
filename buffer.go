@@ -82,6 +82,19 @@ func (b *Buffer) ViewAs(d DType, offset, count int) (BufferView, error) {
 // hold on it is gone, so the memory comes back later and the caller learns that
 // their teardown ordering was wrong.
 func (b *Buffer) Close() error {
+	// A graph transient's memory belongs to the builder, not to a pool, so
+	// there is nothing here to return and b.pool is nil. Refusing is the same
+	// answer BufferView.check gives for every other way of touching one from
+	// outside its graph; without this, free dereferences the nil pool and the
+	// process dies, which is exactly what that method's doc promises cannot
+	// happen. See specs/001-device-resources.md section 7.3.
+	if b.transient != nil {
+		return &LifetimeError{
+			Op:       "Close",
+			Resource: b.desc.Label,
+			Reason:   reasonTransient,
+		}
+	}
 	if !b.state.beginClose() {
 		return nil
 	}

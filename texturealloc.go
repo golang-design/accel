@@ -180,7 +180,9 @@ func (q *Queue) readTexture(src *Texture, into []byte) error {
 	mem := src.pool.block.Bytes()
 	if mem == nil {
 		return fmt.Errorf("accel: ReadTexture %q: its pool is device-local and cannot be "+
-			"mapped", src.desc.Label)
+			"mapped. Allocate it from readback memory: set Kind to MemoryReadback in the "+
+			"TextureDescriptor you pass to Device.NewTexture, or allocate it out of a pool "+
+			"created with that Kind", src.desc.Label)
 	}
 	pitch := q.dev.AlignedRowPitch(src.desc.Format, src.desc.Size.Width)
 	base := src.alloc.Offset
@@ -225,8 +227,12 @@ func (d *Device) newTexture(desc TextureDescriptor) (*Texture, error) {
 	// images wants an explicit pool and should be nudged toward one rather than
 	// quietly given a worse arena.
 	size := textureBytes(d, desc)
+	kind := desc.Kind
+	if kind == 0 {
+		kind = MemoryDevice
+	}
 	p, err := d.NewPoolWith(PoolDescriptor{
-		Kind: MemoryDevice, Bytes: size + d.info.Limits.MinTexturePlacementAlignment,
+		Kind: kind, Bytes: size + d.info.Limits.MinTexturePlacementAlignment,
 		Textures: true, Label: "implicit texture pool for " + desc.Label,
 	})
 	if err != nil {
