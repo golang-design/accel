@@ -581,6 +581,110 @@ var NormalizeKernel = accel.Kernel{
 	},
 }
 
+// reduceSumFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type reduceSumFrame struct {
+	pc      int
+	lid0    uint32
+	n1      uint32
+	acc2    float32
+	i3      uint32
+	stride4 uint32
+}
+
+// reduceSumCoop runs one invocation of ReduceSum to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func reduceSumCoop(t accel.Thread, in []float32, out []float32, sh *[128]float32, f *reduceSumFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lid0 = t.LocalID().X
+			f.n1 = uint32(int32(len(in)))
+			f.acc2 = float32(0)
+			{
+				f.i3 = f.lid0
+				for ; f.i3 < f.n1; f.i3 = (f.i3 + uint32(128)) {
+					f.acc2 = float32(f.acc2 + in[f.i3])
+				}
+			}
+			tr.Write(0, int(f.lid0))
+			sh[f.lid0] = f.acc2
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "reducesum.go:48:2"}
+			return true
+		case 2:
+			f.stride4 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid0 < f.stride4 {
+				tr.Write(0, int(f.lid0))
+				sh[f.lid0] = float32(sh[tr.ReadAt(0, int(f.lid0))] + sh[tr.ReadAt(0, int((f.lid0+f.stride4)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: "reducesum.go:56:3"}
+			return true
+		case 5:
+			f.stride4 = (f.stride4 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride4 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			if f.lid0 == uint32(0) {
+				out[int32(0)] = sh[tr.ReadAt(0, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// ReduceSumKernel is the compiled form of ReduceSum.
+var ReduceSumKernel = accel.Kernel{
+	Name:          "ReduceSum",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "in", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "1621d408418e7125bd9890c9cfefb774",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 2,
+	SharedSizes: []int{128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*reduceSumFrame)
+		if f == nil {
+			f = &reduceSumFrame{}
+			slot.State = f
+		}
+		return reduceSumCoop(t, accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[128]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
 // scaleFlat is the generated flat lowering of Scale.
 //
 // It is what the CPU backend runs. The authored Scale is never registered as
