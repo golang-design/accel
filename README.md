@@ -16,12 +16,12 @@
 ---
 
 > [!IMPORTANT]
-> **Early, and still substantially a design.** The CPU backend can open a
-> device, move memory, and compile a kernel written in the Go subset into a
-> lowering it then runs. Command graphs, cooperative execution, and every GPU
-> backend are specified and unimplemented, and calling into them reports
-> `ErrNotImplemented`. The API will change. Feedback on the design is still the
-> most useful thing you can give it.
+> **Early, and the API will change.** Compute works end to end on the CPU
+> backend and on Metal: memory, command graphs, cooperative kernels, the tensor
+> layer, quantized weights, sampling and a paged KV cache. Graphics is designed
+> and unbuilt, and Vulkan, D3D12, OpenGL and WebGPU are specified and not
+> scheduled for v0. The [status table](#status) says which is which, row by row.
+> Feedback on the design is still the most useful thing you can give it.
 
 ## What it is
 
@@ -47,8 +47,9 @@ for range steps {
 }
 ```
 
-That is the destination. **What runs today** is the memory half of it, on the
-CPU backend:
+That runs today. Underneath it, memory comes from pools rather than one
+allocation per resource, because a model has thousands of tensors and drivers
+cap how many allocations you may hold:
 
 ```go
 dev, err := accel.OpenCPU(accel.CPUOptions{})
@@ -57,8 +58,6 @@ if err != nil {
 }
 defer dev.Close()
 
-// Memory comes from pools, because a model has thousands of tensors and
-// drivers cap how many allocations you may hold.
 weights, err := dev.NewPool(accel.MemoryDevice, 1<<30)
 defer weights.Close()
 

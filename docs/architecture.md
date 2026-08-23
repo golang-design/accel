@@ -4,13 +4,12 @@ A tour of the design, written for someone who wants to understand or contribute
 to it. If you are looking for the formal decision record instead, that lives in
 [`specs/`](../specs/).
 
-Much of this is not implemented yet. The CPU backend opens a device, reports
-what it can do, moves memory, and compiles a kernel written in the Go subset
-into a lowering it runs. Command graphs, which the next section argues are the
-choice everything else is shaped around, are specified and not built. Everything
-below that describes what is being built and why, so that when you read the code
-it makes sense, and [what is built](#what-is-built-so-far) says which parts you
-can run today.
+The compute half is built, on the CPU backend and on Metal: memory, command
+graphs, cooperative kernels, the tensor layer, and the inference pieces above
+it. The graphics half is designed and unbuilt, and so are the remaining
+backends. Everything below describes what was built and why, so that when you
+read the code it makes sense, and [what is built](#what-is-built-so-far) says
+which parts you can run today, milestone by milestone.
 
 ## The problem
 
