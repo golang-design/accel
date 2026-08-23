@@ -234,7 +234,11 @@ exactly — see section 8.
 ### 3.2 The varyings struct is a layout, so it has a limit
 
 Varyings occupy a hardware-limited interpolation budget, reported as a device
-limit and checked at pipeline creation, per
+limit. It is checked at **generation**, not at pipeline creation, which §9
+requires of every stage error and which this section said otherwise until the
+two were reconciled: the generator knows the struct and the target profile's
+limit, and an error that waits for pipeline creation arrives without the source
+position that makes it actionable. Per
 [`000-decisions.md`](000-decisions.md) decision 6. The count is in
 **four-component slots**, because that is the unit every backend limits:
 
@@ -242,8 +246,8 @@ $$
 \text{slots} \;=\; \sum_{f \in \text{fields}} \left\lceil \frac{\text{components}(f)}{4} \right\rceil
 $$
 
-A struct exceeding the device's limit is a pipeline creation error naming the
-limit and the computed slot count. Packing two `Vec2`s into one slot is a later
+A struct exceeding the limit is a generation error naming the field list, the
+computed slot count and the limit. Packing two `Vec2`s into one slot is a later
 optimization and is deliberately absent: the count above is one a caller can
 compute by reading their own struct, and an optimizing packer would make the
 number depend on the compiler's mood.
@@ -397,9 +401,10 @@ this section rather than gating the rasterizer.
 
 ## 6. What the IR gains
 
-`ir.Func` today carries `Kernel bool`. Three values replace a boolean, because a
+`ir.Func` carried `Kernel bool`. Four values replaced it — **built** — because a
 boolean cannot answer "which stage" and every consumer would end up inferring it
-from the presence of a workgroup extent:
+from the presence of a workgroup extent, which is wrong for a graphics stage
+since it has no extent at all:
 
 ```go
 type Stage uint8
@@ -494,9 +499,10 @@ never at pipeline creation:
 - a slice parameter written by a fragment stage, naming ROA;
 - an attribute parameter whose Go type does not match the declared attribute
   format;
-- a varyings struct exceeding the device's interpolation slot limit, naming the
-  computed count and the limit;
-- a fragment output struct with more fields than the device's attachment limit.
+- a varyings struct exceeding the interpolation slot limit, naming the computed
+  count and the limit;
+- a fragment output struct with more fields than the target profile's attachment
+  limit.
 
 ## 10. Done
 

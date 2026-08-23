@@ -84,7 +84,7 @@ Everything [021](021-metal-bringup.md) §5 refuses by name:
 | atomics | `atomic_fetch_*_explicit` on `device atomic_uint` and friends |
 | subgroups | `simd_sum`, `simd_min`, `simd_max`, `simd_broadcast_first`, `simd_is_first` |
 | helper functions | `static` free functions, emitted before their callers |
-| `kmath` intrinsics | `metal::sqrt`, `rsqrt`, `exp`, `log`, `sin`, `cos`, `tanh`, `abs`, `min`, `max` |
+| `kmath` intrinsics | `precise::sqrt`, `rsqrt`, `precise::exp`, `precise::log`, `precise::sin`, `precise::cos`, `precise::tanh`, `fabs`, `min`, `max` — the `precise::` namespace is not decoration, see §4 |
 | narrow storage | `half` and its conversions |
 
 **The cooperative lowering is not re-emitted.** MSL has real barriers, so a
@@ -154,6 +154,13 @@ to the kernels that do not.
 
 Confirmed by reinstating a fault: changing `exp` to `exp2` in one kernel's
 emitted MSL reports 3,965,045 ULP against a ceiling of 16.
+
+**The `precise::` namespace, not the default one.** `metal::exp` measured 18 ULP
+against 008's ceiling, and `sin`/`cos` 1.9e-3, so the emitter uses
+`precise::exp`, `precise::log`, `precise::sin`, `precise::cos`, `precise::tanh`
+and `precise::sqrt`. That changed the **lowering** and never the bound, which is
+the rule 008 exists to enforce: a ceiling raised until a run passes is a
+tolerance, not a contract. `rsqrt`, `min`, `max` and `fabs` need no qualifier.
 
 **Two things the oracle had to be told.** The CPU emulates subgroups at a width
 a caller chooses and defaults to 4, while this device executes 32, so a

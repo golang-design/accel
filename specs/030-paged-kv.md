@@ -70,7 +70,13 @@ what paging exists to avoid.
 bounds its work by the current length, as the contiguous one does, so a page
 table shorter than the cache is normal rather than an error.
 
-## 4. What this does not build
+## 4. What this builds beyond the original scope, and what it still does not
+
+The batching half was added after this spec was first written, so the heading
+below used to say only "what this does not build" while its first paragraphs
+described what it does. Kept as one section, retitled, rather than split: the
+pool sharing and the batched kernel are one change and reading them apart
+invites implementing one without the other.
 
 **Multi-sequence batching, added 2026-08-23.** A pool shared between sequences
 was the enabler; `AttentionDecodeBatched` is the thing it enabled. Each
