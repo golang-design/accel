@@ -68,10 +68,46 @@ flowchart LR
     A --> TOK
 ```
 
-**Neither top-k nor top-p is here.** Both need a partial sort or a threshold
-search over the vocabulary, which is a different kernel shape — a selection
-rather than a reduction — and putting them in the same spec as the two-line
-primitives would hide that. They are the follow-on.
+### Truncation — added 2026-08-23
+
+`TopKMask` keeps the k largest and `TopPMask` keeps the smallest set of largest
+entries whose mass reaches p. Both drive the rest to **zero weight** rather than
+to a sentinel, so the result feeds `SampleCategorical` directly.
+
+**Repeated extraction, not a sort and not a threshold search.** A full sort of a
+vocabulary is thousands of comparisons to answer a question about its first few
+dozen entries. Extraction asks it directly: each round finds the largest entry
+below the previous round's, which is one workgroup reduction.
+
+A threshold search would be fewer rounds and would be *wrong at ties*. Bisecting
+the value range lands between two entries that differ in their last bit, and the
+count on each side then depends on where the bisection stopped — so a top-k
+would keep however many happened to sit above the threshold, which is k only
+when nothing ties. Ties near the tail of a distribution are the normal case.
+
+**The comparison is lexicographic on (value, index) descending**, so an entry
+ties only with itself. That makes "the k largest" exactly k entries whatever the
+data, and the same k on both backends.
+
+**A stated bound.** Both walk at most `TopMaxRounds` = 128 entries. A top-k above
+it keeps fewer than asked and a top-p that has not reached its mass stops there.
+Stated rather than left implicit, because a truncation that silently kept fewer
+entries than asked would change what a model samples without changing what it
+reports.
+
+### The walk was amended to take unnormalized weights
+
+`SampleCategorical` now compares against *draw × total* rather than against the
+draw. A mask zeroes most of a distribution and leaves the rest summing to less
+than one, and the alternative was a renormalizing pass whose only purpose was to
+satisfy this kernel.
+
+It also subsumes what §4 originally special-cased: `Softmax` divides by a sum
+computed in f32, so its output can land a few ulps below one, and scaling by the
+actual total handles that without a rule about it.
+
+**A zero-weight entry can never be drawn**, because its partial sum does not
+increase and the comparison is strict. That is what makes a mask a mask.
 
 ## 3. Ties, and why they are specified rather than left to the hardware
 
@@ -138,4 +174,10 @@ distinct values would have compared equal whatever either backend did.
 - a distribution summing slightly below one returns the last index rather than
   falling off the end; and
 - both agree between the CPU backend and Metal, over a distribution whose
-  boundaries a differing tie rule would move.
+  boundaries a differing tie rule would move;
+- top-k keeps exactly k entries including when the boundary ties, checked
+  against a sort written from the definition rather than from the extraction;
+- top-p keeps the set that *reaches* p rather than the largest one below it, and
+  is relative to its input's own total so it composes after a top-k; and
+- a truncation asking for more than the bound keeps what it can, which is pinned
+  rather than discovered.

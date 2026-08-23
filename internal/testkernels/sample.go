@@ -91,14 +91,24 @@ func SampleArgmax(t accel.Thread, d SampleDims, logits []float32, out []uint32,
 // One invocation does the walk. A vocabulary is thousands of entries and this
 // runs once per token, next to a model step that is millions of operations.
 //
-// # Two things it must not assume
+// # The weights need not be normalized
 //
-// The draw may be outside [0, 1): it is clamped rather than rejected, because a
-// kernel cannot report an error and an unclamped draw reads past the end.
+// The walk compares against draw times the total rather than against the draw,
+// which makes it correct for any vector of non-negative weights rather than
+// only for a distribution summing to one.
 //
-// The probabilities may sum to slightly below one, because Softmax divides by a
-// sum computed in f32. The walk therefore returns the last index if it reaches
-// the end, rather than falling off it.
+// That is not generality for its own sake. A top-k or top-p mask zeroes most of
+// a distribution and leaves the rest summing to less than one, and the
+// alternative was a renormalizing pass whose only purpose was to satisfy this
+// kernel. It also subsumes the case this originally special-cased: Softmax
+// divides by a sum computed in f32, so its output can land a few ulps below
+// one, and scaling by the actual total handles that without a rule about it.
+//
+// # The draw may be outside [0, 1)
+//
+// Clamped rather than rejected, because a kernel cannot report an error and an
+// unclamped draw reads past the end. A draw of one lands exactly on the total,
+// which no partial sum exceeds, so it is clamped just below.
 //
 //accel:kernel workgroup=1
 func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, out []uint32) {
@@ -110,18 +120,26 @@ func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, out []uint
 	if draw < float32(0) {
 		draw = float32(0)
 	}
-	// Just below one. A draw of exactly one exceeds every partial sum, and the
-	// index that would come back is whatever the loop left behind.
 	if draw > float32(0.99999994) {
 		draw = float32(0.99999994)
 	}
+
+	total := float32(0)
+	for i := uint32(0); i < d.Vocab; i++ {
+		total = total + probs[i]
+	}
+	target := draw * total
 
 	acc := float32(0)
 	chosen := d.Vocab - 1
 	found := false
 	for i := uint32(0); i < d.Vocab; i++ {
 		acc = acc + probs[i]
-		if !found && acc > draw {
+		// Strictly greater, so a draw landing exactly on a cumulative boundary
+		// moves on to the next index rather than stopping short of it. A
+		// zero-weight entry can never be chosen, because its partial sum does
+		// not increase.
+		if !found && acc > target {
 			chosen = i
 			found = true
 		}

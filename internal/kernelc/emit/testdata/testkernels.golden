@@ -211,6 +211,26 @@ func (ParamsCodec) Encode(dst []byte, value Params) error {
 	return w.Err()
 }
 
+// TopDimsCodec is the generated std140 codec for TopDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type TopDimsCodec struct{}
+
+// TopDimsBlockSize is the encoded size of a TopDims block, in bytes.
+const TopDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (TopDimsCodec) EncodedSize() int { return TopDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (TopDimsCodec) Encode(dst []byte, value TopDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Vocab)
+	w.U32(4, value.K)
+	w.F32(8, value.P)
+	return w.Err()
+}
+
 // clampIndexFlat is the generated lowering of the helper clampIndex.
 func clampIndexFlat(i uint32, n uint32) uint32 {
 	if n == uint32(0) {
@@ -3734,6 +3754,14 @@ func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, out []
 	if draw > math.Float32frombits(0x3F7FFFFF /* 0.99999994 */) {
 		draw = math.Float32frombits(0x3F7FFFFF /* 0.99999994 */)
 	}
+	var total float32 = float32(0)
+	{
+		var i uint32 = uint32(0)
+		for ; i < d.Vocab; i = (i + uint32(1)) {
+			total = float32(total + probs[i])
+		}
+	}
+	var target float32 = (draw * total)
 	var acc float32 = float32(0)
 	var chosen uint32 = (d.Vocab - uint32(1))
 	var found bool = false
@@ -3741,7 +3769,7 @@ func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, out []
 		var i uint32 = uint32(0)
 		for ; i < d.Vocab; i = (i + uint32(1)) {
 			acc = float32(acc + probs[i])
-			if !found && (acc > draw) {
+			if !found && (acc > target) {
 				chosen = i
 				found = true
 			}
@@ -3758,7 +3786,7 @@ var SampleCategoricalKernel = accel.Kernel{
 		{Name: "probs", DType: accel.KernelF32, Access: accel.KernelRead},
 		{Name: "out", DType: accel.KernelU32, Access: accel.KernelWrite},
 	},
-	Digest:    "431b1094ed3bf2e09d87a5262e7250d3",
+	Digest:    "1a3c45f18c528bd9b46ed51911168a1f",
 	Generator: accel.KernelABIVersion,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3791,12 +3819,17 @@ kernel void SampleCategorical(
     if ((draw > as_type<float>(0x3F7FFFFFu) /* 0.99999994 */)) {
         draw = as_type<float>(0x3F7FFFFFu) /* 0.99999994 */;
     }
+    float total = float(0);
+    for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
+        total = (total + probs[i]);
+    }
+    float target = (draw * total);
     float acc = float(0);
     uint chosen = (d.Vocab - uint(1));
     bool found = false;
     for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
         acc = (acc + probs[i]);
-        if ((!found && (acc > draw))) {
+        if ((!found && (acc > target))) {
             chosen = i;
             found = true;
         }
@@ -4127,6 +4160,632 @@ kernel void SubgroupReduceFallback(
 	},
 }
 
+// topKMaskFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type topKMaskFrame struct {
+	pc       int
+	lane0    uint32
+	frontV1  float32
+	frontI2  uint32
+	rounds3  uint32
+	r4       uint32
+	v5       float32
+	idx6     uint32
+	i7       uint32
+	w8       float32
+	below9   bool
+	better10 bool
+	stride11 uint32
+	a12      float32
+	b13      float32
+	i14      uint32
+	w15      float32
+	keep16   bool
+}
+
+// topKMaskCoop runs one invocation of TopKMask to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func topKMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, best *[128]float32, at *[128]uint32, f *topKMaskFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lane0 = t.LocalID().X
+			f.frontV1 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
+			f.frontI2 = uint32(0)
+			f.rounds3 = d.K
+			if f.rounds3 > uint32(128) {
+				f.rounds3 = uint32(128)
+			}
+			f.pc = 1
+			continue
+		case 1:
+			f.r4 = uint32(0)
+			f.pc = 12
+			continue
+		case 2:
+			f.v5 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx6 = d.Vocab
+			{
+				f.i7 = f.lane0
+				for ; f.i7 < d.Vocab; f.i7 = (f.i7 + uint32(128)) {
+					f.w8 = weights[f.i7]
+					f.below9 = (f.w8 < f.frontV1)
+					if (f.w8 == f.frontV1) && (f.i7 > f.frontI2) {
+						f.below9 = true
+					}
+					if f.below9 {
+						f.better10 = (f.w8 > f.v5)
+						if (f.w8 == f.v5) && (f.i7 < f.idx6) {
+							f.better10 = true
+						}
+						if f.better10 {
+							f.v5 = f.w8
+							f.idx6 = f.i7
+						}
+					}
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.v5
+			tr.Write(1, int(f.lane0))
+			at[f.lane0] = f.idx6
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: ""}
+			return true
+		case 4:
+			f.stride11 = uint32(64)
+			f.pc = 8
+			continue
+		case 5:
+			if f.lane0 < f.stride11 {
+				f.a12 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b13 = best[tr.ReadAt(0, int((f.lane0+f.stride11)))]
+				if f.b13 > f.a12 {
+					tr.Write(0, int(f.lane0))
+					best[f.lane0] = f.b13
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride11)))]
+				} else if (f.b13 == f.a12) && (at[tr.ReadAt(1, int((f.lane0+f.stride11)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride11)))]
+				}
+			}
+			f.pc = 6
+			continue
+		case 6:
+			f.pc = 7
+			frame.Barrier = accel.KernelBarrierID{Index: 6, Pos: ""}
+			return true
+		case 7:
+			f.stride11 = (f.stride11 / uint32(2))
+			f.pc = 8
+			continue
+		case 8:
+			if f.stride11 > uint32(0) {
+				f.pc = 5
+				continue
+			}
+			f.pc = 9
+			continue
+		case 9:
+			f.frontV1 = best[tr.ReadAt(0, int(int32(0)))]
+			f.frontI2 = at[tr.ReadAt(1, int(int32(0)))]
+			f.pc = 10
+			continue
+		case 10:
+			f.pc = 11
+			frame.Barrier = accel.KernelBarrierID{Index: 10, Pos: ""}
+			return true
+		case 11:
+			f.r4 = (f.r4 + uint32(1))
+			f.pc = 12
+			continue
+		case 12:
+			if f.r4 < f.rounds3 {
+				f.pc = 2
+				continue
+			}
+			f.pc = 13
+			continue
+		case 13:
+			{
+				f.i14 = f.lane0
+				for ; f.i14 < d.Vocab; f.i14 = (f.i14 + uint32(128)) {
+					f.w15 = weights[f.i14]
+					f.keep16 = (f.w15 > f.frontV1)
+					if (f.w15 == f.frontV1) && (f.i14 <= f.frontI2) {
+						f.keep16 = true
+					}
+					if f.keep16 {
+						out[f.i14] = f.w15
+					} else {
+						out[f.i14] = float32(0)
+					}
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// TopKMaskKernel is the compiled form of TopKMask.
+var TopKMaskKernel = accel.Kernel{
+	Name:          "TopKMask",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "weights", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "d56cdbc002e10f2e5fb4ba0e812df14a",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct TopDims {
+    uint Vocab;
+    uint K;
+    float P;
+    char _tail[4];
+};
+
+kernel void TopKMask(
+    const device float *weights [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant TopDims &d [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float best[128];
+    threadgroup uint at[128];
+    uint lane = _lid.x;
+    float frontV = as_type<float>(0x7F7FC99Eu) /* 3.4e+38 */;
+    uint frontI = uint(0);
+    uint rounds = d.K;
+    if ((rounds > uint(128))) {
+        rounds = uint(128);
+    }
+    for (uint r = uint(0); (r < rounds); r = (r + uint(1))) {
+        float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        uint idx = d.Vocab;
+        for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+            float w = weights[i];
+            bool below = (w < frontV);
+            if (((w == frontV) && (i > frontI))) {
+                below = true;
+            }
+            if (below) {
+                bool better = (w > v);
+                if (((w == v) && (i < idx))) {
+                    better = true;
+                }
+                if (better) {
+                    v = w;
+                    idx = i;
+                }
+            }
+        }
+        best[lane] = v;
+        at[lane] = idx;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                float a = best[lane];
+                float b = best[(lane + stride)];
+                if ((b > a)) {
+                    best[lane] = b;
+                    at[lane] = at[(lane + stride)];
+                } else
+                if (((b == a) && (at[(lane + stride)] < at[lane]))) {
+                    at[lane] = at[(lane + stride)];
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        frontV = best[int(0)];
+        frontI = at[int(0)];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        float w = weights[i];
+        bool keep = (w > frontV);
+        if (((w == frontV) && (i <= frontI))) {
+            keep = true;
+        }
+        if (keep) {
+            out[i] = w;
+        } else {
+            out[i] = float(0);
+        }
+    }
+}
+`,
+	Suspensions: 3,
+	SharedSizes: []int{128, 128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		var s1 [128]uint32
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "TopDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, TopDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*topKMaskFrame)
+		if f == nil {
+			f = &topKMaskFrame{}
+			slot.State = f
+		}
+		return topKMaskCoop(t, accel.KernelUniformValue[TopDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]uint32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// topPMaskFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type topPMaskFrame struct {
+	pc       int
+	lane0    uint32
+	sum1     float32
+	i2       uint32
+	stride3  uint32
+	target4  float32
+	frontV5  float32
+	frontI6  uint32
+	kept7    float32
+	r8       uint32
+	v9       float32
+	idx10    uint32
+	i11      uint32
+	w12      float32
+	below13  bool
+	better14 bool
+	stride15 uint32
+	a16      float32
+	b17      float32
+	i18      uint32
+	w19      float32
+	keep20   bool
+}
+
+// topPMaskCoop runs one invocation of TopPMask to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, best *[128]float32, at *[128]uint32, f *topPMaskFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lane0 = t.LocalID().X
+			f.sum1 = float32(0)
+			{
+				f.i2 = f.lane0
+				for ; f.i2 < d.Vocab; f.i2 = (f.i2 + uint32(128)) {
+					f.sum1 = float32(f.sum1 + weights[f.i2])
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.sum1
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.stride3 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lane0 < f.stride3 {
+				tr.Write(0, int(f.lane0))
+				best[f.lane0] = float32(best[tr.ReadAt(0, int(f.lane0))] + best[tr.ReadAt(0, int((f.lane0+f.stride3)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: ""}
+			return true
+		case 5:
+			f.stride3 = (f.stride3 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride3 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.target4 = (best[tr.ReadAt(0, int(int32(0)))] * d.P)
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = accel.KernelBarrierID{Index: 8, Pos: ""}
+			return true
+		case 9:
+			f.frontV5 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
+			f.frontI6 = uint32(0)
+			f.kept7 = float32(0)
+			f.pc = 10
+			continue
+		case 10:
+			f.r8 = uint32(0)
+			f.pc = 21
+			continue
+		case 11:
+			f.v9 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx10 = d.Vocab
+			{
+				f.i11 = f.lane0
+				for ; f.i11 < d.Vocab; f.i11 = (f.i11 + uint32(128)) {
+					f.w12 = weights[f.i11]
+					f.below13 = (f.w12 < f.frontV5)
+					if (f.w12 == f.frontV5) && (f.i11 > f.frontI6) {
+						f.below13 = true
+					}
+					if f.below13 {
+						f.better14 = (f.w12 > f.v9)
+						if (f.w12 == f.v9) && (f.i11 < f.idx10) {
+							f.better14 = true
+						}
+						if f.better14 {
+							f.v9 = f.w12
+							f.idx10 = f.i11
+						}
+					}
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.v9
+			tr.Write(1, int(f.lane0))
+			at[f.lane0] = f.idx10
+			f.pc = 12
+			continue
+		case 12:
+			f.pc = 13
+			frame.Barrier = accel.KernelBarrierID{Index: 12, Pos: ""}
+			return true
+		case 13:
+			f.stride15 = uint32(64)
+			f.pc = 17
+			continue
+		case 14:
+			if f.lane0 < f.stride15 {
+				f.a16 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b17 = best[tr.ReadAt(0, int((f.lane0+f.stride15)))]
+				if f.b17 > f.a16 {
+					tr.Write(0, int(f.lane0))
+					best[f.lane0] = f.b17
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride15)))]
+				} else if (f.b17 == f.a16) && (at[tr.ReadAt(1, int((f.lane0+f.stride15)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride15)))]
+				}
+			}
+			f.pc = 15
+			continue
+		case 15:
+			f.pc = 16
+			frame.Barrier = accel.KernelBarrierID{Index: 15, Pos: ""}
+			return true
+		case 16:
+			f.stride15 = (f.stride15 / uint32(2))
+			f.pc = 17
+			continue
+		case 17:
+			if f.stride15 > uint32(0) {
+				f.pc = 14
+				continue
+			}
+			f.pc = 18
+			continue
+		case 18:
+			if f.kept7 < f.target4 {
+				f.frontV5 = best[tr.ReadAt(0, int(int32(0)))]
+				f.frontI6 = at[tr.ReadAt(1, int(int32(0)))]
+				f.kept7 = float32(f.kept7 + f.frontV5)
+			}
+			f.pc = 19
+			continue
+		case 19:
+			f.pc = 20
+			frame.Barrier = accel.KernelBarrierID{Index: 19, Pos: ""}
+			return true
+		case 20:
+			f.r8 = (f.r8 + uint32(1))
+			f.pc = 21
+			continue
+		case 21:
+			if f.r8 < uint32(128) {
+				f.pc = 11
+				continue
+			}
+			f.pc = 22
+			continue
+		case 22:
+			{
+				f.i18 = f.lane0
+				for ; f.i18 < d.Vocab; f.i18 = (f.i18 + uint32(128)) {
+					f.w19 = weights[f.i18]
+					f.keep20 = (f.w19 > f.frontV5)
+					if (f.w19 == f.frontV5) && (f.i18 <= f.frontI6) {
+						f.keep20 = true
+					}
+					if f.keep20 {
+						out[f.i18] = f.w19
+					} else {
+						out[f.i18] = float32(0)
+					}
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// TopPMaskKernel is the compiled form of TopPMask.
+var TopPMaskKernel = accel.Kernel{
+	Name:          "TopPMask",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "weights", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:    "ecdfbba9c9d44c24ced669696b783a85",
+	Generator: accel.KernelABIVersion,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct TopDims {
+    uint Vocab;
+    uint K;
+    float P;
+    char _tail[4];
+};
+
+kernel void TopPMask(
+    const device float *weights [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant TopDims &d [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float best[128];
+    threadgroup uint at[128];
+    uint lane = _lid.x;
+    float sum = float(0);
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        sum = (sum + weights[i]);
+    }
+    best[lane] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lane < stride)) {
+            best[lane] = (best[lane] + best[(lane + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float target = (best[int(0)] * d.P);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float frontV = as_type<float>(0x7F7FC99Eu) /* 3.4e+38 */;
+    uint frontI = uint(0);
+    float kept = float(0);
+    for (uint r = uint(0); (r < uint(128)); r = (r + uint(1))) {
+        float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        uint idx = d.Vocab;
+        for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+            float w = weights[i];
+            bool below = (w < frontV);
+            if (((w == frontV) && (i > frontI))) {
+                below = true;
+            }
+            if (below) {
+                bool better = (w > v);
+                if (((w == v) && (i < idx))) {
+                    better = true;
+                }
+                if (better) {
+                    v = w;
+                    idx = i;
+                }
+            }
+        }
+        best[lane] = v;
+        at[lane] = idx;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                float a = best[lane];
+                float b = best[(lane + stride)];
+                if ((b > a)) {
+                    best[lane] = b;
+                    at[lane] = at[(lane + stride)];
+                } else
+                if (((b == a) && (at[(lane + stride)] < at[lane]))) {
+                    at[lane] = at[(lane + stride)];
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if ((kept < target)) {
+            frontV = best[int(0)];
+            frontI = at[int(0)];
+            kept = (kept + frontV);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        float w = weights[i];
+        bool keep = (w > frontV);
+        if (((w == frontV) && (i <= frontI))) {
+            keep = true;
+        }
+        if (keep) {
+            out[i] = w;
+        } else {
+            out[i] = float(0);
+        }
+    }
+}
+`,
+	Suspensions: 6,
+	SharedSizes: []int{128, 128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		var s1 [128]uint32
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "TopDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return accel.EncodeKernelUniform(dst, v, TopDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*topPMaskFrame)
+		if f == nil {
+			f = &topPMaskFrame{}
+			slot.State = f
+		}
+		return topPMaskCoop(t, accel.KernelUniformValue[TopDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[128]float32](a, 0), accel.KernelShared[[128]uint32](a, 1), f, slot, slot.Shared)
+	},
+}
+
 // Kernels is every kernel this package generated, in source order.
 //
 // Generated rather than written, so that a pass over the whole corpus cannot
@@ -4168,4 +4827,6 @@ var Kernels = []*accel.Kernel{
 	&TransformKernel,
 	&SubgroupReduceKernel,
 	&SubgroupReduceFallbackKernel,
+	&TopKMaskKernel,
+	&TopPMaskKernel,
 }

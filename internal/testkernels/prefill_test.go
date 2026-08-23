@@ -415,6 +415,61 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("TopKMask", func(t *testing.T) {
+		w := []float32{0.1, 0.5, 0.5, 0.2, 0.4, 0.5}
+		d := testkernels.TopDims{Vocab: uint32(len(w)), K: 3}
+		authored := make([]float32, len(w))
+		var best [128]float32
+		var at [128]uint32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{},
+			kernel.ID3{X: 1, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+				testkernels.TopKMask(th, d, w, authored, &best, &at)
+			})
+		generated := make([]float32, len(w))
+		if err := kernel.DispatchCooperative(&testkernels.TopKMaskKernel, accel.ID3{X: 1},
+			accel.KernelArgs{Slices: []any{w, generated}, Uniforms: []any{d}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+		// Three tied maxima and k of three, so both forms have to agree about
+		// the tie rule rather than only about which values are largest.
+		n := 0
+		for _, v := range generated {
+			if v != 0 {
+				n++
+			}
+		}
+		if n != 3 {
+			t.Fatalf("kept %d entries for a k of 3", n)
+		}
+	})
+
+	t.Run("TopPMask", func(t *testing.T) {
+		w := []float32{0.1, 0.2, 0.3, 0.4}
+		d := testkernels.TopDims{Vocab: uint32(len(w)), P: 0.75}
+		authored := make([]float32, len(w))
+		var best [128]float32
+		var at [128]uint32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{},
+			kernel.ID3{X: 1, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+				testkernels.TopPMask(th, d, w, authored, &best, &at)
+			})
+		generated := make([]float32, len(w))
+		if err := kernel.DispatchCooperative(&testkernels.TopPMaskKernel, accel.ID3{X: 1},
+			accel.KernelArgs{Slices: []any{w, generated}, Uniforms: []any{d}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
 	t.Run("AttentionPrefill", func(t *testing.T) {
 		const qHeads, kvHeads, headDim, qSeq = 2, 1, 8, 4
 		dims := testkernels.PrefillDims{

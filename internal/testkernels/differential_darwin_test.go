@@ -254,6 +254,40 @@ func diffCases() []diffCase {
 			groups:   accel.WorkgroupCount{X: 12},
 		},
 		{
+			// Top-k over a distribution with a deliberate plateau at the
+			// boundary: the two backends must keep the same *set*, and a tie
+			// rule that differed would keep different entries while keeping the
+			// same count.
+			kernel: &testkernels.TopKMaskKernel, counts: []int{256, 256},
+			uniforms: []any{testkernels.TopDims{Vocab: 256, K: 12}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				// Sixteen entries share the boundary value, so twelve of them
+				// are kept and four are not -- which is only well defined with
+				// a tie rule both backends share.
+				if i%16 == 3 {
+					return 7
+				}
+				return float32(i%11) - 5
+			},
+		},
+		{
+			kernel: &testkernels.TopPMaskKernel, counts: []int{256, 256},
+			uniforms: []any{testkernels.TopDims{Vocab: 256, P: 0.6}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				// Non-negative, because a nucleus over signed weights is not a
+				// nucleus: the mass has to accumulate monotonically.
+				return float32(i%13) + 1
+			},
+		},
+		{
 			// Argmax over a vocabulary with a deliberate plateau at the top.
 			// A tie rule that differed between the backends would move the
 			// answer, which is the one thing this kernel must not do -- and a
