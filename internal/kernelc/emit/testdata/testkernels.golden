@@ -28,6 +28,26 @@ func (GEMMDimsCodec) Encode(dst []byte, value GEMMDims) error {
 	return w.Err()
 }
 
+// RowDimsCodec is the generated std140 codec for RowDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type RowDimsCodec struct{}
+
+// RowDimsBlockSize is the encoded size of a RowDims block, in bytes.
+const RowDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (RowDimsCodec) EncodedSize() int { return RowDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (RowDimsCodec) Encode(dst []byte, value RowDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Rows)
+	w.U32(4, value.Width)
+	w.F32(8, value.Eps)
+	return w.Err()
+}
+
 // ParamsCodec is the generated std140 codec for Params.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -656,6 +676,297 @@ var MatMulTiledKernel = accel.Kernel{
 			slot.State = f
 		}
 		return matMulTiledCoop(t, accel.KernelUniformValue[GEMMDims](a, 0), accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[accel.Float16](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelShared[[128]accel.Float16](a, 0), accel.KernelShared[[256]accel.Float16](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// rMSNormFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type rMSNormFrame struct {
+	pc      int
+	row0    uint32
+	lid1    uint32
+	base2   uint32
+	acc3    float32
+	i4      uint32
+	v5      float32
+	stride6 uint32
+	mean7   float32
+	scale8  float32
+	i9      uint32
+}
+
+// rMSNormCoop runs one invocation of RMSNorm to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func rMSNormCoop(t accel.Thread, d RowDims, x []float32, w []float32, out []float32, sh *[128]float32, f *rMSNormFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.row0 = t.GroupID().X
+			f.lid1 = t.LocalID().X
+			f.base2 = (f.row0 * d.Width)
+			f.acc3 = float32(0)
+			{
+				f.i4 = f.lid1
+				for ; f.i4 < d.Width; f.i4 = (f.i4 + uint32(128)) {
+					f.v5 = x[(f.base2 + f.i4)]
+					f.acc3 = float32(f.acc3 + float32(f.v5*f.v5))
+				}
+			}
+			tr.Write(0, int(f.lid1))
+			sh[f.lid1] = f.acc3
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.stride6 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid1 < f.stride6 {
+				tr.Write(0, int(f.lid1))
+				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride6)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: ""}
+			return true
+		case 5:
+			f.stride6 = (f.stride6 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride6 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.mean7 = (sh[tr.ReadAt(0, int(int32(0)))] / float32(d.Width))
+			f.scale8 = kmath.RSqrt(float32(f.mean7 + d.Eps))
+			{
+				f.i9 = f.lid1
+				for ; f.i9 < d.Width; f.i9 = (f.i9 + uint32(128)) {
+					out[(f.base2 + f.i9)] = float32(float32(x[(f.base2+f.i9)]*f.scale8) * w[f.i9])
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// RMSNormKernel is the compiled form of RMSNorm.
+var RMSNormKernel = accel.Kernel{
+	Name:          "RMSNorm",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "x", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "w", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "c7cd9d71d805420213e0a9705338effb",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 2,
+	SharedSizes: []int{128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "RowDims", Size: 16},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*rMSNormFrame)
+		if f == nil {
+			f = &rMSNormFrame{}
+			slot.State = f
+		}
+		return rMSNormCoop(t, accel.KernelUniformValue[RowDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelShared[[128]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// softmaxFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type softmaxFrame struct {
+	pc       int
+	row0     uint32
+	lid1     uint32
+	base2    uint32
+	m3       float32
+	i4       uint32
+	v5       float32
+	stride6  uint32
+	rowMax7  float32
+	acc8     float32
+	i9       uint32
+	stride10 uint32
+	total11  float32
+	i12      uint32
+}
+
+// softmaxCoop runs one invocation of Softmax to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func softmaxCoop(t accel.Thread, d RowDims, x []float32, out []float32, sh *[128]float32, f *softmaxFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.row0 = t.GroupID().X
+			f.lid1 = t.LocalID().X
+			f.base2 = (f.row0 * d.Width)
+			f.m3 = x[(f.base2 + (f.lid1 % d.Width))]
+			{
+				f.i4 = f.lid1
+				for ; f.i4 < d.Width; f.i4 = (f.i4 + uint32(128)) {
+					f.v5 = x[(f.base2 + f.i4)]
+					f.m3 = kmath.Max(f.m3, f.v5)
+				}
+			}
+			tr.Write(0, int(f.lid1))
+			sh[f.lid1] = f.m3
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.stride6 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid1 < f.stride6 {
+				tr.Write(0, int(f.lid1))
+				sh[f.lid1] = kmath.Max(sh[tr.ReadAt(0, int(f.lid1))], sh[tr.ReadAt(0, int((f.lid1+f.stride6)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: ""}
+			return true
+		case 5:
+			f.stride6 = (f.stride6 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride6 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.rowMax7 = sh[tr.ReadAt(0, int(int32(0)))]
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = accel.KernelBarrierID{Index: 8, Pos: ""}
+			return true
+		case 9:
+			f.acc8 = float32(0)
+			{
+				f.i9 = f.lid1
+				for ; f.i9 < d.Width; f.i9 = (f.i9 + uint32(128)) {
+					f.acc8 = float32(f.acc8 + kmath.Exp(float32(x[(f.base2+f.i9)]-f.rowMax7)))
+				}
+			}
+			tr.Write(0, int(f.lid1))
+			sh[f.lid1] = f.acc8
+			f.pc = 10
+			continue
+		case 10:
+			f.pc = 11
+			frame.Barrier = accel.KernelBarrierID{Index: 10, Pos: ""}
+			return true
+		case 11:
+			f.stride10 = uint32(64)
+			f.pc = 15
+			continue
+		case 12:
+			if f.lid1 < f.stride10 {
+				tr.Write(0, int(f.lid1))
+				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride10)))])
+			}
+			f.pc = 13
+			continue
+		case 13:
+			f.pc = 14
+			frame.Barrier = accel.KernelBarrierID{Index: 13, Pos: ""}
+			return true
+		case 14:
+			f.stride10 = (f.stride10 / uint32(2))
+			f.pc = 15
+			continue
+		case 15:
+			if f.stride10 > uint32(0) {
+				f.pc = 12
+				continue
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.total11 = sh[tr.ReadAt(0, int(int32(0)))]
+			{
+				f.i12 = f.lid1
+				for ; f.i12 < d.Width; f.i12 = (f.i12 + uint32(128)) {
+					out[(f.base2 + f.i12)] = float32(kmath.Exp(float32(x[(f.base2+f.i12)]-f.rowMax7)) / f.total11)
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// SoftmaxKernel is the compiled form of Softmax.
+var SoftmaxKernel = accel.Kernel{
+	Name:          "Softmax",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "x", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "e518f4545b053c2b559e4a27bfa8c48e",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 5,
+	SharedSizes: []int{128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "RowDims", Size: 16},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*softmaxFrame)
+		if f == nil {
+			f = &softmaxFrame{}
+			slot.State = f
+		}
+		return softmaxCoop(t, accel.KernelUniformValue[RowDims](a, 0), accel.KernelSlice[float32](a, 0), accel.KernelSlice[float32](a, 1), accel.KernelShared[[128]float32](a, 0), f, slot, slot.Shared)
 	},
 }
 
