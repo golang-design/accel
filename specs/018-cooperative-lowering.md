@@ -104,10 +104,16 @@ child's definition of done rather than a note against it**.
 §2 is built and §4's cases pass, except the state split's reach: **a barrier
 inside a loop is refused by position rather than lowered**, because the state
 machine would have to resume in the middle of that loop carrying its induction
-variable across the epoch. That is a numbering problem this split does not
-solve, it is what a tree reduction is made of, and it is therefore
-[020](020-cooperative-atomics.md)'s to close alongside `reduce_sum`. Recorded
-here as a gap rather than left implicit, because a reader of §2 would otherwise
+variable across the epoch.
+
+That remains this child's work rather than moving to
+[020](020-cooperative-atomics.md), even though `reduce_sum` is what needs it.
+[009](009-sequencing.md)'s rule for this milestone is that a compiler pass is
+not estimated as a line item under a kernel, and handing the mid-loop split to
+the child that owns the reduction is that mistake at a smaller scale. 020
+depends on it and says so.
+
+Recorded here rather than left implicit, because a reader of §2 would otherwise
 believe every legal barrier lowers.
 
 **The flat-versus-cooperative differential runs** over every corpus kernel
@@ -167,7 +173,41 @@ itself detected rather than merely loud.
   has to be runnable, because spec 004's fifth level compares the generated
   lowering against it, and an unexecutable reference is not a reference.
 
-## 6. What it does not build
+## 6. The mid-loop split, and how it will be checked
+
+A barrier inside a uniform loop needs three states rather than two, because the
+loop's back edge becomes a resumption point:
+
+```
+     ┌──────────────────────────────┐
+     ▼                              │
+  ┌─────┐   ┌──────────┐   ┌────────┴─┐
+  │check│──▶│body,      │──▶│body,     │
+  │cond │   │pre-barrier│   │post-     │
+  └──┬──┘   └──────────┘   │barrier,  │
+     │         suspend      │then post │
+     │                      └──────────┘
+     ▼ done
+```
+
+The induction variable lives in the frame already, since every local does, so
+what is new is the numbering: the state after the barrier must fall through to
+the loop's post statement and back to the check rather than to the next
+top-level segment.
+
+**How it will be checked, and why not with a golden.** The oracle is an
+*unrolled* version against a *looped* one: a fixed-stride reduction written with
+its barriers at the top level, which this child lowers today, against the same
+computation with the barrier inside the loop. Same inputs, same IR node set,
+compared bit for bit — so a disagreement is the new state numbering's and
+nothing else's.
+
+That is stronger than a golden of the generated shape, which would tell us the
+shape changed rather than whether it is right. It is also the pattern that found
+three bugs in [017](017-graph-aliasing.md) and two in this child, so it is the
+first thing to build rather than the last.
+
+## 7. What it does not build
 
 - **No atomics and no subgroups.** [020](020-cooperative-atomics.md). A kernel
   using either is rejected by name, as it is today.
@@ -179,7 +219,7 @@ itself detected rather than merely loud.
 - **No non-uniform-arrival detection.** The static analysis rejects what it can
   prove; [019](019-cooperative-diagnostics.md) catches the rest at runtime.
 
-## 7. Open question
+## 8. Open question
 
 - **Whether the flat lowering survives past v0.** §3 makes the case for keeping
   it, and the differential oracle is most of that case. Once the transform has

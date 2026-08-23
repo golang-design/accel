@@ -183,6 +183,7 @@ func TestConcurrentReadsAreNotAConflict(t *testing.T) {
 					sh[0] = 1
 				}
 				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:1:1"}
 				return true
 			}
 			_ = sh[f.Shared.ReadAt(0, 0)]
@@ -213,6 +214,7 @@ func TestABarrierSeparatesConflictingAccesses(t *testing.T) {
 					sh[0] = 1
 				}
 				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:1:1"}
 				return true
 			}
 			// A different invocation reads it, after the barrier.
@@ -464,5 +466,41 @@ func TestABarrierIDDescribesItself(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "element") {
 		t.Error("an arrival mismatch has no element and should not claim one")
+	}
+}
+
+// An invocation that suspends without saying which barrier it stopped at is a
+// defect in the generated lowering, and is reported as one.
+//
+// It is worth its own case because the failure is silent otherwise: the check
+// looks for a barrier id to compare against, and if no suspended invocation
+// carries one there is nothing to compare, so the epoch would pass. That is
+// absence of evidence read as evidence of absence, and the transform forgetting
+// to emit the id is exactly the bug a second suspension site could introduce.
+func TestASuspensionWithNoBarrierIDIsADefect(t *testing.T) {
+	k := &kernel.Kernel{
+		Name: "Silent", WorkgroupSize: kernel.ID3{X: 4, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, SharedSizes: []int{1}, Suspensions: 1,
+		NewShared: func() []any {
+			var sh [1]float32
+			return []any{&sh}
+		},
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if f.Pass == 0 {
+				f.Pass = 1
+				// Suspends without setting f.Barrier.
+				return true
+			}
+			return false
+		},
+	}
+	err := kernel.DispatchCooperative(k, kernel.ID3{X: 1}, kernel.Args{})
+	if err == nil {
+		t.Fatal("an invocation suspended without identifying its barrier and nothing " +
+			"was reported: the check found no id to compare against and read that as " +
+			"nothing being wrong")
+	}
+	if !strings.Contains(err.Error(), "did not identify") {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -10,7 +10,14 @@ depends_on:
 # Atomics, subgroups, and capability inference
 
 The third of [009](009-sequencing.md)'s three M4 children, and the one that
-completes M4's definition of done. It adds the two operation families a
+completes M4's definition of done.
+
+**It depends on [018](018-cooperative-lowering.md)'s mid-loop split.**
+`reduce_sum` is a halving-stride loop with a barrier each round, so it cannot be
+written until the state machine can resume inside a loop. That transform stays
+in 018 rather than moving here, because [009](009-sequencing.md)'s rule for this
+milestone is that a compiler pass is not estimated as a line item under a
+kernel — which is exactly what folding it in here would be, at a smaller scale. It adds the two operation families a
 cooperative kernel needs beyond a barrier, the analysis that reports what a
 kernel requires, and the first kernel from [010](010-kernel-corpus.md).
 
@@ -29,17 +36,27 @@ kernel requires, and the first kernel from [010](010-kernel-corpus.md).
 - **The CPU developer, strict, and mimic modes** wired to that inference, so a
   kernel requiring something the mimicked profile lacks fails at pipeline
   creation rather than at dispatch.
-- **Barriers inside loops.** [018](018-cooperative-lowering.md) refuses one,
-  because the state machine has to resume mid-loop carrying the induction
-  variable across the epoch. `reduce_sum` is exactly that shape — a halving
-  stride with a barrier each round — so the two land together rather than the
-  reduction waiting on a transform nobody scheduled.
 - **`reduce_sum`** from [010](010-kernel-corpus.md), which is the first kernel
   that needs all of the above at once.
 - **The arm64 and amd64 numeric probes** of [008](008-numerics.md), establishing
   the available exact domain.
 
-## 2. Why the probes come before the reduction, not after
+## 2. The order, which has one dependency the list does not show
+
+Transform, then probes, then reduction:
+
+```mermaid
+flowchart LR
+    T["<b>018</b> mid-loop split"] --> P["numeric probes"] --> R["reduce_sum"]
+    A["atomics"] -.-> R
+    S["subgroups"] -.-> R
+```
+
+Atomics and subgroups are independent of that chain and can land in any order,
+but starting with them means meeting the transform as a blocker after the easy
+work is done — which is when an estimate slips.
+
+### Why the probes come before the reduction, not after
 
 [009](009-sequencing.md)'s done criteria put it first for a reason:
 

@@ -132,13 +132,38 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 	if tracker == nil {
 		return nil
 	}
+	// An invocation that suspended without saying where is a defect in the
+	// generated lowering, and it is reported as one rather than skipped.
+	//
+	// Skipping is the tempting reading -- there is no id to compare against --
+	// and it is absence of evidence read as evidence of absence: with no
+	// suspended invocation carrying an id, the whole epoch would pass. A
+	// transform that forgets to emit the id would then disable this check
+	// silently, which is worse than the mismatch it exists to find.
+	var ds Diagnostics
+	for i := range frames {
+		if !frames[i].Done && frames[i].Barrier.Index < 0 {
+			ds = append(ds, Diagnostic{
+				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+				Invocation: threads[i].LocalID(), Element: -1,
+				Detail: "it suspended but did not identify which barrier it stopped at, " +
+					"so its arrival cannot be checked against its peers': the generated " +
+					"lowering is not recording a barrier id",
+			})
+		}
+	}
+	if len(ds) > 0 {
+		ds.sortStable()
+		return ds
+	}
+
 	// The expected barrier is the first active invocation's, in invocation
 	// order, so the report names the same pair every run.
 	expect := BarrierID{Index: -1}
 	var expectBy ID3
 	found := false
 	for i := range frames {
-		if frames[i].Done || frames[i].Barrier.Index < 0 {
+		if frames[i].Done {
 			continue
 		}
 		expect, expectBy, found = frames[i].Barrier, threads[i].LocalID(), true
@@ -148,7 +173,6 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 		return nil
 	}
 
-	var ds Diagnostics
 	for i := range frames {
 		switch {
 		case frames[i].Done:
