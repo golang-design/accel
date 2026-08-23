@@ -679,6 +679,263 @@ var MatMulTiledKernel = accel.Kernel{
 	},
 }
 
+// matVecFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type matVecFrame struct {
+	pc      int
+	col0    uint32
+	lid1    uint32
+	acc2    float32
+	k3      uint32
+	stride4 uint32
+}
+
+// matVecCoop runs one invocation of MatVec to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func matVecCoop(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16, out []float32, sh *[128]float32, f *matVecFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.col0 = t.GroupID().X
+			f.lid1 = t.LocalID().X
+			f.acc2 = float32(0)
+			if f.col0 < d.N {
+				{
+					f.k3 = f.lid1
+					for ; f.k3 < d.K; f.k3 = (f.k3 + uint32(128)) {
+						f.acc2 = float32(f.acc2 + float32(a[f.k3].F32()*b[((f.k3*d.N)+f.col0)].F32()))
+					}
+				}
+			}
+			tr.Write(0, int(f.lid1))
+			sh[f.lid1] = f.acc2
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = accel.KernelBarrierID{Index: 1, Pos: "matvec.go:38:2"}
+			return true
+		case 2:
+			f.stride4 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid1 < f.stride4 {
+				tr.Write(0, int(f.lid1))
+				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride4)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = accel.KernelBarrierID{Index: 4, Pos: "matvec.go:44:3"}
+			return true
+		case 5:
+			f.stride4 = (f.stride4 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride4 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			if (f.lid1 == uint32(0)) && (f.col0 < d.N) {
+				out[f.col0] = sh[tr.ReadAt(0, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// MatVecKernel is the compiled form of MatVec.
+var MatVecKernel = accel.Kernel{
+	Name:          "MatVec",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "40616d839a4fe81c847268e1029f0603",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 2,
+	SharedSizes: []int{128},
+	NewShared: func() []any {
+		var s0 [128]float32
+		accel.KernelPoison(s0[:])
+		return []any{&s0}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "GEMMDims", Size: 16},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*matVecFrame)
+		if f == nil {
+			f = &matVecFrame{}
+			slot.State = f
+		}
+		return matVecCoop(t, accel.KernelUniformValue[GEMMDims](a, 0), accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[accel.Float16](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelShared[[128]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// linearTiledFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type linearTiledFrame struct {
+	pc    int
+	lx0   uint32
+	ly1   uint32
+	tid2  uint32
+	row3  uint32
+	col4  uint32
+	acc5  float32
+	zero6 accel.Float16
+	k07   uint32
+	kk8   uint32
+	nn9   uint32
+	kk210 uint32
+	k11   uint32
+	av12  float32
+	bv13  float32
+}
+
+// linearTiledCoop runs one invocation of LinearTiled to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func linearTiledCoop(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16, bias []float32, out []float32, tileA *[128]accel.Float16, tileB *[256]accel.Float16, f *linearTiledFrame, frame *accel.KernelFrame, tr *accel.KernelSharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lx0 = t.LocalID().X
+			f.ly1 = t.LocalID().Y
+			f.tid2 = ((f.ly1 * uint32(16)) + f.lx0)
+			f.row3 = ((t.GroupID().Y * uint32(8)) + f.ly1)
+			f.col4 = ((t.GroupID().X * uint32(16)) + f.lx0)
+			f.acc5 = float32(0)
+			f.zero6 = accel.ToFloat16(float32(0))
+			f.pc = 1
+			continue
+		case 1:
+			f.k07 = uint32(0)
+			f.pc = 7
+			continue
+		case 2:
+			if (f.row3 < d.M) && ((f.k07 + f.lx0) < d.K) {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = a[(((f.row3 * d.K) + f.k07) + f.lx0)]
+			} else {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = f.zero6
+			}
+			f.kk8 = (f.tid2 / uint32(16))
+			f.nn9 = (f.tid2 % uint32(16))
+			if ((f.k07 + f.kk8) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = b[((((f.k07 + f.kk8) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)]
+			} else {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = f.zero6
+			}
+			f.kk210 = (f.kk8 + uint32(8))
+			if ((f.k07 + f.kk210) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = b[((((f.k07 + f.kk210) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)]
+			} else {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = f.zero6
+			}
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = accel.KernelBarrierID{Index: 3, Pos: "matvec.go:99:3"}
+			return true
+		case 4:
+			{
+				f.k11 = uint32(0)
+				for ; f.k11 < uint32(16); f.k11 = (f.k11 + uint32(1)) {
+					f.av12 = tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k11)))].F32()
+					f.bv13 = tileB[tr.ReadAt(1, int(((f.k11*uint32(16))+f.lx0)))].F32()
+					f.acc5 = float32(f.acc5 + float32(f.av12*f.bv13))
+				}
+			}
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = accel.KernelBarrierID{Index: 5, Pos: "matvec.go:107:3"}
+			return true
+		case 6:
+			f.k07 = (f.k07 + uint32(16))
+			f.pc = 7
+			continue
+		case 7:
+			if f.k07 < d.K {
+				f.pc = 2
+				continue
+			}
+			f.pc = 8
+			continue
+		case 8:
+			if (f.row3 < d.M) && (f.col4 < d.N) {
+				out[((f.row3 * d.N) + f.col4)] = float32(f.acc5 + bias[f.col4])
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// LinearTiledKernel is the compiled form of LinearTiled.
+var LinearTiledKernel = accel.Kernel{
+	Name:          "LinearTiled",
+	WorkgroupSize: accel.ID3{X: 16, Y: 8, Z: 1},
+	Bindings: []accel.KernelBinding{
+		{Name: "a", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "b", DType: accel.KernelF16, Access: accel.KernelRead},
+		{Name: "bias", DType: accel.KernelF32, Access: accel.KernelRead},
+		{Name: "out", DType: accel.KernelF32, Access: accel.KernelWrite},
+	},
+	Digest:      "099087b7306af0d4bbc72ae7007e3ce7",
+	Generator:   accel.KernelABIVersion,
+	Suspensions: 2,
+	SharedSizes: []int{128, 256},
+	NewShared: func() []any {
+		var s0 [128]accel.Float16
+		accel.KernelPoison(s0[:])
+		var s1 [256]accel.Float16
+		accel.KernelPoison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []accel.KernelUniform{
+		{Name: "d", Type: "GEMMDims", Size: 16},
+	},
+	Cooperative: func(t accel.Thread, a accel.KernelArgs, slot *accel.KernelFrame) bool {
+		f, _ := slot.State.(*linearTiledFrame)
+		if f == nil {
+			f = &linearTiledFrame{}
+			slot.State = f
+		}
+		return linearTiledCoop(t, accel.KernelUniformValue[GEMMDims](a, 0), accel.KernelSlice[accel.Float16](a, 0), accel.KernelSlice[accel.Float16](a, 1), accel.KernelSlice[float32](a, 2), accel.KernelSlice[float32](a, 3), accel.KernelShared[[128]accel.Float16](a, 0), accel.KernelShared[[256]accel.Float16](a, 1), f, slot, slot.Shared)
+	},
+}
+
 // rMSNormFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
