@@ -146,9 +146,9 @@ the order things can actually be demonstrated in is different.
 - **Status** is one of drafted, in progress, implemented, or superseded. *In
   progress* means some of the spec has shipped, and the spec says which parts.
   A spec does not reach *implemented* while any section it owns is unbuilt, so
-  002 stays in progress while §5's shuffles and scans, and subgroup operations
-  in divergent control flow, are unbuilt — even though everything M4 promised of
-  it is done.
+  002 stays in progress while §5's remaining reduction operators and dtypes, and
+  subgroup operations in divergent control flow, are unbuilt — even though
+  everything M4 promised of it is done.
 - Every implementation-bearing spec states its **testing strategy**. Genuine
   unresolved decisions stay under **open questions**; resolved questions are
   removed rather than kept as stale history.

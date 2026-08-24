@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 2
+const ABIVersion = 4
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -324,6 +324,52 @@ var table = map[key]*Intrinsic{
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},
 
+	// The lane-addressed reads. Each moves a value between lanes without
+	// arithmetic, so each is exact: what comes back is the bit pattern that
+	// went in, and a test comparing anything but equality would be testing
+	// nothing.
+	//
+	// All five require CapSubgroupShuffle, including the broadcast from a
+	// chosen lane. Vulkan groups that one under its ballot feature; accel's own
+	// capability names what the operation does, which is read the value held by
+	// a lane an operand names, and that is the shuffle bit. The deviation is
+	// recorded in specs/002-compute-model.md section 5.2.
+	{kernelPkg, "Thread", "SubgroupBroadcastF32"}: {
+		Authored: "accel.Thread.SubgroupBroadcastF32", Op: ir.OpBroadcastF32, Params: 2,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
+	},
+	{kernelPkg, "Thread", "SubgroupShuffleF32"}: {
+		Authored: "accel.Thread.SubgroupShuffleF32", Op: ir.OpShuffleF32, Params: 2,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
+	},
+	{kernelPkg, "Thread", "SubgroupShuffleXorF32"}: {
+		Authored: "accel.Thread.SubgroupShuffleXorF32", Op: ir.OpShuffleXorF32, Params: 2,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
+	},
+	{kernelPkg, "Thread", "SubgroupShuffleUpF32"}: {
+		Authored: "accel.Thread.SubgroupShuffleUpF32", Op: ir.OpShuffleUpF32, Params: 2,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
+	},
+	{kernelPkg, "Thread", "SubgroupShuffleDownF32"}: {
+		Authored: "accel.Thread.SubgroupShuffleDownF32", Op: ir.OpShuffleDownF32, Params: 2,
+		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
+	},
+
+	// The scans. Bounded rather than exact, for the reason the reduction is:
+	// the result is a sum of f32 values and f32 addition is not associative, so
+	// two backends that accumulate in different orders differ in the last bit.
+	// specs/002-compute-model.md section 5.2 fixes the *order* -- ascending
+	// active lane -- which is what makes a comparison against a fallback
+	// meaningful at all.
+	{kernelPkg, "Thread", "SubgroupInclusiveAddF32"}: {
+		Authored: "accel.Thread.SubgroupInclusiveAddF32", Op: ir.OpSubgroupInclusiveAddF32,
+		Params: 1, Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupExclusiveAddF32"}: {
+		Authored: "accel.Thread.SubgroupExclusiveAddF32", Op: ir.OpSubgroupExclusiveAddF32,
+		Params: 1, Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
+	},
+
 	// Recognized and not available. Being in the table is what makes the
 	// rejection say "barriers arrive at M4" at the right line, rather than
 	// leaving a kernel author with an unknown-call error about a method that
@@ -424,6 +470,21 @@ func Names() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// HasOp reports whether some intrinsic lowers to this opcode.
+//
+// It exists for the gate that walks the subgroup opcodes and checks each is
+// reachable from a kernel: an opcode in the IR that no table entry names is one
+// the compiler can emit and an author cannot call, which is the shape of a
+// half-landed operation.
+func HasOp(op ir.Opcode) bool {
+	for _, in := range table {
+		if in.Op == op {
+			return true
+		}
+	}
+	return false
 }
 
 // Digest is a stable summary of the table's contents.

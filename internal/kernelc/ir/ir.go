@@ -89,14 +89,21 @@ var kindNames = [...]string{
 // combine nothing, so making them suspend would cost an epoch for an answer
 // already in hand.
 func (o Opcode) IsSubgroupRendezvous() bool {
-	return o >= OpSubgroupAddF32 && o <= OpBallot
+	return o >= OpSubgroupAddF32 && o <= opLastSubgroup
 }
 
 // IsSubgroup reports whether an opcode is any subgroup operation, rendezvous or
 // accessor. It is what capability inference and the uniformity requirement key
 // on.
 func (o Opcode) IsSubgroup() bool {
-	return o >= OpSubgroupSize && o <= OpBallot
+	return o >= OpSubgroupSize && o <= opLastSubgroup
+}
+
+// IsSubgroupLaneRead reports whether an opcode reads a value from a lane the
+// second operand names, which is the family whose result is undefined when
+// that lane is inactive.
+func (o Opcode) IsSubgroupLaneRead() bool {
+	return o >= OpBroadcastF32 && o <= OpShuffleDownF32
 }
 
 func (o Opcode) IsAtomic() bool {
@@ -473,6 +480,24 @@ const (
 	OpSubgroupAll
 	OpBallot
 
+	// The lane-addressed reads. Each takes a value and a second operand naming
+	// which lane to read, and each is undefined when that lane is not active --
+	// see specs/002-compute-model.md section 5.2 rule 3, which is why the CPU
+	// oracle carries a definition bit beside the value rather than a number.
+	OpBroadcastF32
+	OpShuffleF32
+	OpShuffleXorF32
+	OpShuffleUpF32
+	OpShuffleDownF32
+
+	// The scans. A scan is a reduction over a *prefix* of the active lanes, so
+	// it skips an inactive lane rather than adding an identity element in its
+	// place -- specs/002-compute-model.md section 5.2 rule 4, where an
+	// exclusive add-scan over active lanes {0, 2, 3} gives lane 3 the sum of
+	// lanes 0 and 2.
+	OpSubgroupInclusiveAddF32
+	OpSubgroupExclusiveAddF32
+
 	// The graphics stage built-ins of specs/032-stage-abi.md. They sit after the
 	// subgroup range on purpose: IsSubgroup is a bounds check over that range,
 	// and inserting into it would silently make a vertex index a subgroup
@@ -487,6 +512,15 @@ const (
 	// specs/012-kernel-pipeline.md.
 	OpBarrier
 )
+
+// opLastSubgroup ends the subgroup range the predicates above bound.
+//
+// A name rather than the last opcode spelled in three places: the range check
+// and the enumeration drift apart otherwise, and a subgroup operation outside
+// the range is one that infers no capability and is lowered as an ordinary
+// call. It sits in its own const block because assigning inside the iota block
+// above would silence the iota for everything after it.
+const opLastSubgroup = OpSubgroupExclusiveAddF32
 
 var opcodeNames = [...]string{
 	OpInvalid:                  "invalid",
@@ -542,6 +576,13 @@ var opcodeNames = [...]string{
 	OpSubgroupAny:              "SubgroupAny",
 	OpSubgroupAll:              "SubgroupAll",
 	OpBallot:                   "Ballot",
+	OpBroadcastF32:             "BroadcastF32",
+	OpShuffleF32:               "ShuffleF32",
+	OpShuffleXorF32:            "ShuffleXorF32",
+	OpShuffleUpF32:             "ShuffleUpF32",
+	OpShuffleDownF32:           "ShuffleDownF32",
+	OpSubgroupInclusiveAddF32:  "SubgroupInclusiveAddF32",
+	OpSubgroupExclusiveAddF32:  "SubgroupExclusiveAddF32",
 }
 
 func (o Opcode) String() string {

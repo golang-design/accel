@@ -125,9 +125,8 @@ same tokens prefilled in one pass.
 What is not built: graphics is designed and being written — the stage types are
 in the public API and the CPU rasterizer is under way, but there is no render
 pipeline, pass or surface — and the Vulkan, D3D12, OpenGL and WebGPU backends
-are specified and unscheduled. Subgroup shuffles and scans are specified and
-unbuilt. `Sampler` is the one declaration that exists only for its shape, and it
-**panics** with `ErrNotImplemented` rather than returning it, because it has
+are specified and unscheduled. `Sampler` is the one declaration that exists only
+for its shape, and it **panics** with `ErrNotImplemented` rather than returning it, because it has
 nothing to sample until a render pass exists.
 [`specs/009-sequencing.md`](specs/009-sequencing.md) is the order the rest
 arrives in.

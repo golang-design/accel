@@ -50,7 +50,37 @@ const (
 	SubAny
 	SubAll
 	SubBallot
+
+	// The lane-addressed reads. Each carries the value in SubF32 and the lane
+	// operand in SubLane, and each returns an undefined result when the lane it
+	// names is not active. See specs/002-compute-model.md section 5.2 rule 3.
+	SubBroadcastF32
+	SubShuffleF32
+	SubShuffleXorF32
+	SubShuffleUpF32
+	SubShuffleDownF32
+
+	// The scans, which combine a prefix of the active lanes rather than all of
+	// them.
+	SubInclusiveAddF32
+	SubExclusiveAddF32
 )
+
+// isLaneRead reports the operations that read the value held by a lane their
+// second operand names.
+//
+// A switch rather than a comparison against the first of them. The set is a
+// contiguous run today and the constants after it are the scans, so a range
+// check reads correctly and routes a scan into the shuffle machinery the moment
+// one is added -- which is what happened, and what this shape stops happening
+// again.
+func (o SubgroupOp) isLaneRead() bool {
+	switch o {
+	case SubBroadcastF32, SubShuffleF32, SubShuffleXorF32, SubShuffleUpF32, SubShuffleDownF32:
+		return true
+	}
+	return false
+}
 
 func (o SubgroupOp) String() string {
 	switch o {
@@ -70,6 +100,20 @@ func (o SubgroupOp) String() string {
 		return "All"
 	case SubBallot:
 		return "Ballot"
+	case SubBroadcastF32:
+		return "BroadcastF32"
+	case SubShuffleF32:
+		return "ShuffleF32"
+	case SubShuffleXorF32:
+		return "ShuffleXorF32"
+	case SubShuffleUpF32:
+		return "ShuffleUpF32"
+	case SubShuffleDownF32:
+		return "ShuffleDownF32"
+	case SubInclusiveAddF32:
+		return "SubgroupInclusiveAddF32"
+	case SubExclusiveAddF32:
+		return "SubgroupExclusiveAddF32"
 	}
 	return "barrier"
 }
@@ -211,6 +255,72 @@ func (t Thread) SubgroupElect() bool { return true }
 // Any and All reduce a predicate over the active lanes.
 func (t Thread) SubgroupAny(pred bool) bool { return pred }
 func (t Thread) SubgroupAll(pred bool) bool { return pred }
+
+// SubgroupBroadcastF32 gives every active lane the value held by lane `lane`.
+//
+// `lane` must be dynamically uniform: every active lane must ask for the same
+// one. The CPU oracle reports a disagreement rather than picking a winner,
+// because on hardware the winner is the device's choice and a kernel whose
+// output depends on it is wrong somewhere else.
+//
+// Reading an inactive lane is undefined. See [Thread.SubgroupShuffleF32].
+func (t Thread) SubgroupBroadcastF32(v float32, lane uint32) float32 { return v }
+
+// SubgroupShuffleF32 gives lane i the value held by the lane its own `lane`
+// argument names, which need not be the same for every lane.
+//
+// # Reading a lane that is not active
+//
+// The result is **undefined**: not zero, and not a fault
+// (specs/002-compute-model.md section 5.2 rule 3). Under the CPU oracle it
+// arrives as the poison pattern, and a read of a lane that exists in this
+// subgroup and is not participating is reported by name so a plausible number
+// cannot propagate.
+//
+// A lane index outside the subgroup entirely -- past its width, or below zero
+// after a shuffle up -- is undefined and *not* reported. That is deliberate and
+// is the one place this deviates from a literal reading of rule 3: the
+// idiomatic shuffle-up scan has every low lane read out of range and discard
+// the answer, so reporting it would refuse the kernel the operation exists for.
+// What the oracle can still tell you is that a lane which *is* there declined
+// to take part, which is the case the rule is written about.
+func (t Thread) SubgroupShuffleF32(v float32, lane uint32) float32 { return v }
+
+// SubgroupShuffleXorF32 gives lane i the value held by lane i^mask, which is
+// the butterfly a tree reduction is written with.
+func (t Thread) SubgroupShuffleXorF32(v float32, mask uint32) float32 { return v }
+
+// SubgroupShuffleUpF32 gives lane i the value held by lane i-delta, and
+// SubgroupShuffleDownF32 the value held by lane i+delta. A partner outside the
+// subgroup is undefined, which for these two is every lane at one end.
+func (t Thread) SubgroupShuffleUpF32(v float32, delta uint32) float32   { return v }
+func (t Thread) SubgroupShuffleDownF32(v float32, delta uint32) float32 { return v }
+
+// SubgroupInclusiveAddF32 gives lane i the sum of the active lanes up to and
+// including itself, and SubgroupExclusiveAddF32 the sum of the active lanes
+// below it.
+//
+// # Inactive lanes are skipped, not counted as zero
+//
+// The two differ, and specs/002-compute-model.md section 5.2 rule 4 is the
+// difference: over active lanes {0, 2, 3} the exclusive scan gives lane 3 the
+// sum of lanes 0 and 2, rather than a sum of lanes 0, 1 and 2 in which lane 1
+// contributed a zero it does not hold.
+//
+// # The order is ascending lane, and it is part of the contract
+//
+// f32 addition is not associative, so a scan's result depends on the order it
+// accumulates in. Ascending active lane is what this oracle does and what a
+// fallback has to do to be comparable; a backend that scans in a tree order
+// differs in the last bit, which is what specs/008-numerics.md section 7's
+// budget is for.
+//
+// The lowest active lane's exclusive result is the identity, +0. That is the
+// one row where an identity is the right answer, and it does not contradict the
+// reduction's rule that a single active lane reads back its own value: the
+// exclusive scan of the lowest lane sums nothing at all.
+func (t Thread) SubgroupInclusiveAddF32(v float32) float32 { return v }
+func (t Thread) SubgroupExclusiveAddF32(v float32) float32 { return 0 }
 
 // Ballot reports each lane's predicate as a bit. An inactive lane's bit is
 // zero, so Ballot(true).Count() is the *active* count.

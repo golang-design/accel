@@ -523,11 +523,29 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 	// back. They are separate states so the suspension sits between them, which
 	// is what gives the scheduler its chance to combine.
 	if seg.subContribute {
-		e.printf("%sframe.Sub = %s\n", pad, subOpName(seg.sub))
+		name, ok := subOpName(seg.sub)
+		if !ok {
+			e.fail("subgroup operation %v has no runtime name, so the lowering would "+
+				"suspend without saying what to combine", seg.sub)
+			return
+		}
+		e.printf("%sframe.Sub = %s\n", pad, name)
 		switch subCarrier(seg.sub) {
 		case carrierF32:
 			e.printf("%sframe.SubF32 = ", pad)
 			e.rounded(seg.subCall.Args[0])
+			e.printf("\n")
+		case carrierF32Lane:
+			if len(seg.subCall.Args) != 2 {
+				e.fail("%v takes a value and a lane, and got %d arguments",
+					seg.sub, len(seg.subCall.Args))
+				return
+			}
+			e.printf("%sframe.SubF32 = ", pad)
+			e.rounded(seg.subCall.Args[0])
+			e.printf("\n")
+			e.printf("%sframe.SubLane = ", pad)
+			e.value(seg.subCall.Args[1])
 			e.printf("\n")
 		case carrierBool:
 			if len(seg.subCall.Args) == 1 {
@@ -535,11 +553,15 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 				e.value(seg.subCall.Args[0])
 				e.printf("\n")
 			}
+		default:
+			e.fail("subgroup operation %v carries no value between a lane and the "+
+				"scheduler, so its result would be whatever the frame last held", seg.sub)
+			return
 		}
 	}
 	if seg.subResult {
 		switch subCarrier(seg.sub) {
-		case carrierF32:
+		case carrierF32, carrierF32Lane:
 			e.printf("%s%s = frame.SubF32\n", pad, e.local(seg.subLocal))
 		case carrierBool:
 			e.printf("%s%s = frame.SubBool\n", pad, e.local(seg.subLocal))
@@ -560,40 +582,71 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 type carrier int
 
 const (
+	// carrierNone is an opcode this table does not know, and it is reported
+	// rather than lowered: an unmapped rendezvous suspends, combines nothing,
+	// and resumes reading whatever the frame last held, which is a wrong answer
+	// that compiles.
 	carrierNone carrier = iota
 	carrierF32
 	carrierBool
+
+	// carrierF32Lane is a lane-addressed read: a value, and the lane operand
+	// naming which lane to take it from.
+	carrierF32Lane
 )
 
 func subCarrier(op ir.Opcode) carrier {
 	switch op {
-	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32, ir.OpBroadcastFirstF32:
+	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32, ir.OpBroadcastFirstF32,
+		ir.OpSubgroupInclusiveAddF32, ir.OpSubgroupExclusiveAddF32:
 		return carrierF32
 	case ir.OpElect, ir.OpSubgroupAny, ir.OpSubgroupAll:
 		return carrierBool
 	}
+	if op.IsSubgroupLaneRead() {
+		return carrierF32Lane
+	}
 	return carrierNone
 }
 
-// subOpName is the runtime constant naming one subgroup rendezvous.
-func subOpName(op ir.Opcode) string {
+// subOpName is the runtime constant naming one subgroup rendezvous, and whether
+// there is one.
+//
+// Whether, because the zero answer used to be kernelabi.SubNone, which is an
+// ordinary barrier: an opcode added to the IR and forgotten here lowered to a
+// suspension that combined nothing and read back the lane's own contribution.
+func subOpName(op ir.Opcode) (string, bool) {
 	switch op {
 	case ir.OpSubgroupAddF32:
-		return "kernelabi.SubAddF32"
+		return "kernelabi.SubAddF32", true
 	case ir.OpSubgroupMinF32:
-		return "kernelabi.SubMinF32"
+		return "kernelabi.SubMinF32", true
 	case ir.OpSubgroupMaxF32:
-		return "kernelabi.SubMaxF32"
+		return "kernelabi.SubMaxF32", true
 	case ir.OpBroadcastFirstF32:
-		return "kernelabi.SubBroadcastFirstF32"
+		return "kernelabi.SubBroadcastFirstF32", true
 	case ir.OpElect:
-		return "kernelabi.SubElect"
+		return "kernelabi.SubElect", true
 	case ir.OpSubgroupAny:
-		return "kernelabi.SubAny"
+		return "kernelabi.SubAny", true
 	case ir.OpSubgroupAll:
-		return "kernelabi.SubAll"
+		return "kernelabi.SubAll", true
+	case ir.OpBroadcastF32:
+		return "kernelabi.SubBroadcastF32", true
+	case ir.OpShuffleF32:
+		return "kernelabi.SubShuffleF32", true
+	case ir.OpShuffleXorF32:
+		return "kernelabi.SubShuffleXorF32", true
+	case ir.OpShuffleUpF32:
+		return "kernelabi.SubShuffleUpF32", true
+	case ir.OpShuffleDownF32:
+		return "kernelabi.SubShuffleDownF32", true
+	case ir.OpSubgroupInclusiveAddF32:
+		return "kernelabi.SubInclusiveAddF32", true
+	case ir.OpSubgroupExclusiveAddF32:
+		return "kernelabi.SubExclusiveAddF32", true
 	}
-	return "kernelabi.SubNone"
+	return "", false
 }
 
 // jump enters another state, or finishes.

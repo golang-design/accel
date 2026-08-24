@@ -116,6 +116,13 @@ const (
 	SubAny               = kernel.SubAny
 	SubAll               = kernel.SubAll
 	SubBallot            = kernel.SubBallot
+	SubBroadcastF32      = kernel.SubBroadcastF32
+	SubShuffleF32        = kernel.SubShuffleF32
+	SubShuffleXorF32     = kernel.SubShuffleXorF32
+	SubShuffleUpF32      = kernel.SubShuffleUpF32
+	SubShuffleDownF32    = kernel.SubShuffleDownF32
+	SubInclusiveAddF32   = kernel.SubInclusiveAddF32
+	SubExclusiveAddF32   = kernel.SubExclusiveAddF32
 )
 
 // Version is the contract between a generated kernel and this runtime. A

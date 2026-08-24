@@ -48,6 +48,12 @@ const (
 	// DiagConflict is two invocations touching one location with nothing
 	// ordering them and at least one writing.
 	DiagConflict
+
+	// DiagUndefinedLane is a broadcast or shuffle reading a lane of its own
+	// subgroup that is not taking part in the operation, whose result
+	// specs/002-compute-model.md section 5.2 rule 3 leaves undefined. It also
+	// covers a broadcast whose lane operand is not dynamically uniform.
+	DiagUndefinedLane
 )
 
 func (k DiagKind) String() string {
@@ -58,6 +64,8 @@ func (k DiagKind) String() string {
 		return "barrier arrival mismatch"
 	case DiagConflict:
 		return "conflicting access"
+	case DiagUndefinedLane:
+		return "read of an inactive subgroup lane"
 	}
 	return "unknown"
 }
