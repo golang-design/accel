@@ -102,6 +102,9 @@ func Generate(p Package) ([]byte, error) {
 		compute = append(compute, k)
 		e.kernel(k)
 	}
+	for _, fn := range e.pending {
+		fn()
+	}
 	// The registry lists compute kernels. A stage is reached through a render
 	// pipeline, which specs/033-render-api.md owns and which does not exist, so
 	// listing one here would advertise something no caller can use.
@@ -150,6 +153,14 @@ func Generate(p Package) ([]byte, error) {
 type emitter struct {
 	buf *bytes.Buffer
 	err error
+
+	// pending holds package-level helpers a record needed, emitted after every
+	// record so a closure and the function it calls are not interleaved.
+	pending []func()
+
+	// flattened is the varyings types whose packers have been emitted, so two
+	// stages sharing a type get one pair rather than two.
+	flattened map[string]bool
 
 	// needsKMath records whether the body reached a scalar math intrinsic, so
 	// the import is present exactly when it is used. An unused import does not
@@ -285,9 +296,158 @@ func (e *emitter) stage(k *ir.Func) {
 	if k.Discards {
 		e.printf("\tDiscards: true,\n")
 	}
+	e.stageAdapter(k, lower)
 	e.printf("\tDigest: %q,\n", Digest(k))
 	e.printf("\tGenerator: kernelabi.Version,\n")
 	e.printf("}\n\n")
+}
+
+// stageAdapter emits the flat-form closure a rasterizer calls.
+//
+// It is the only place the mapping between a stage's authored signature and the
+// rasterizer's flat floats exists. Putting it here rather than in the backend is
+// what keeps the rasterizer free of the type system: it never learns what a
+// varyings struct is, and the compiler stays the one thing that knows the
+// layout — which is also what lets the two disagree loudly rather than quietly,
+// since a mismatch fails to compile in generated code.
+func (e *emitter) stageAdapter(k *ir.Func, lower string) {
+	uniforms := 0
+	for _, p := range k.Params {
+		if p.Type() != nil && p.Type().Kind == ir.Struct && p.Index > 0 &&
+			(k.Varyings == nil || p.Type() != k.Varyings) {
+			uniforms++
+		}
+	}
+
+	if k.Stage == ir.StageVertex {
+		e.printf("\tRunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {\n")
+		e.printf("\t\tpos, vary := %s(v", lower)
+		ui, ai := 0, 0
+		for _, p := range k.Params[1:] {
+			t := p.Type()
+			switch {
+			case t != nil && t.Kind == ir.Array:
+				e.printf(", %s(a[%d])", e.goType(t), ai)
+				ai++
+			case t != nil && t.Kind == ir.Struct:
+				e.printf(", u[%d].(%s)", ui, e.goType(t))
+				ui++
+			default:
+				e.printf(", %s{}", e.goType(t))
+			}
+		}
+		e.printf(")\n")
+		e.printf("\t\treturn pos, %s(vary)\n", flattenName(k))
+		e.printf("\t},\n")
+		e.stageFlatten(k)
+		return
+	}
+
+	e.printf("\tRunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {\n")
+	e.printf("\t\tout := %s(f, %s(vv)", lower, unflattenName(k))
+	ui := 0
+	for _, p := range k.Params[2:] {
+		t := p.Type()
+		if t != nil && t.Kind == ir.Struct {
+			e.printf(", u[%d].(%s)", ui, e.goType(t))
+			ui++
+			continue
+		}
+		e.printf(", %s{}", e.goType(t))
+	}
+	e.printf(")\n")
+	e.printf("\t\treturn [][4]float32{")
+	for i, o := range k.Outputs {
+		if i > 0 {
+			e.printf(", ")
+		}
+		e.printf("out.%s", o.Name)
+	}
+	e.printf("}\n")
+	e.printf("\t},\n")
+}
+
+// stageFlatten emits the varyings packers the two stages share.
+//
+// Emitted once per stage rather than once per varyings type, because a package
+// may hold several stages and the generator has no cross-stage table. They are
+// pure functions over the same field order, so two copies agree by construction
+// — and if they ever did not, the flat length would differ and the rasterizer
+// would interpolate the wrong count rather than silently the wrong values.
+func (e *emitter) stageFlatten(k *ir.Func) {
+	if k.Varyings == nil {
+		return
+	}
+	if e.flattened[varyingsTypeName(k)] {
+		return
+	}
+	if e.flattened == nil {
+		e.flattened = map[string]bool{}
+	}
+	e.flattened[varyingsTypeName(k)] = true
+	e.pending = append(e.pending, func() {
+		vt := e.goType(k.Varyings)
+		n := varyingFloats(k.Varyings)
+
+		e.printf("// %s packs %s into the flat form a rasterizer interpolates.\n",
+			flattenName(k), vt)
+		e.printf("func %s(v %s) []float32 {\n", flattenName(k), vt)
+		e.printf("\tout := make([]float32, 0, %d)\n", n)
+		for _, f := range k.Varyings.Fields {
+			if f.Type != nil && f.Type.Kind == ir.Array {
+				for i := range f.Type.Len {
+					e.printf("\tout = append(out, v.%s[%d])\n", f.Name, i)
+				}
+				continue
+			}
+			e.printf("\tout = append(out, v.%s)\n", f.Name)
+		}
+		e.printf("\treturn out\n}\n\n")
+
+		e.printf("// %s is %s's inverse.\n", unflattenName(k), flattenName(k))
+		e.printf("func %s(f []float32) %s {\n", unflattenName(k), vt)
+		e.printf("\tvar v %s\n", vt)
+		at := 0
+		for _, f := range k.Varyings.Fields {
+			if f.Type != nil && f.Type.Kind == ir.Array {
+				for i := range f.Type.Len {
+					e.printf("\tv.%s[%d] = f[%d]\n", f.Name, i, at)
+					at++
+				}
+				continue
+			}
+			e.printf("\tv.%s = f[%d]\n", f.Name, at)
+			at++
+		}
+		e.printf("\treturn v\n}\n\n")
+	})
+}
+
+// varyingFloats is how many floats a varyings struct flattens to.
+func varyingFloats(t *ir.Type) int {
+	n := 0
+	for _, f := range t.Fields {
+		if f.Type != nil && f.Type.Kind == ir.Array {
+			n += f.Type.Len
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// The packers are named for the varyings type, not the stage, because the two
+// stages of a pipeline share one type and must therefore share one packing. A
+// per-stage name would emit two, and two packings of one struct is exactly the
+// disagreement the identity rule exists to prevent.
+func flattenName(k *ir.Func) string   { return "flatten" + varyingsTypeName(k) }
+func unflattenName(k *ir.Func) string { return "unflatten" + varyingsTypeName(k) }
+
+func varyingsTypeName(k *ir.Func) string {
+	if k.Varyings == nil {
+		return "NoVaryings"
+	}
+	return k.Varyings.Name
 }
 
 // stageResultName is the authored name of a fragment stage's result struct.

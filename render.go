@@ -275,3 +275,222 @@ func (p *RenderPipeline) Close() error {
 	p.dev.countPipelines(-1)
 	return nil
 }
+
+// LoadOp is what happens to an attachment at the start of a pass.
+type LoadOp uint8
+
+const (
+	// LoadClear clears to a stated value. On a tiler this costs nothing, where
+	// a full-screen clear draw costs a full write of tile memory.
+	LoadClear LoadOp = iota
+
+	// LoadKeep preserves existing contents, which makes the attachment a read
+	// as well as a write.
+	LoadKeep
+
+	// LoadDontCare leaves the contents undefined, and carries no data
+	// dependency on whatever wrote the attachment last — so the
+	// read-after-write edge disappears. The write-after-write edge does not.
+	LoadDontCare
+)
+
+// StoreOp is what happens to an attachment at the end of a pass.
+type StoreOp uint8
+
+const (
+	// StoreKeep makes the contents readable after the pass.
+	StoreKeep StoreOp = iota
+
+	// StoreDiscard leaves them undefined. On a tiler this saves writing a whole
+	// depth buffer out to memory every frame.
+	StoreDiscard
+)
+
+// ColorAttachment is one colour target of a render pass.
+type ColorAttachment struct {
+	View  BufferView
+	Load  LoadOp
+	Clear [4]float32
+	Store StoreOp
+}
+
+// DepthAttachment is a pass's depth target.
+type DepthAttachment struct {
+	View  BufferView
+	Load  LoadOp
+	Clear float32
+	Store StoreOp
+}
+
+// RenderPassDescriptor describes one render pass.
+//
+// Attachments are buffer views rather than textures at this milestone, because
+// specs/035-cpu-rasterizer.md's reference rasterizer writes float components and
+// the texture path needs the format encode/decode 033 leaves to the backend.
+// The shape a caller writes does not change when that lands.
+type RenderPassDescriptor struct {
+	Color []ColorAttachment
+	Depth *DepthAttachment
+
+	// Width and Height are the render area, validated against every attachment
+	// at build.
+	Width, Height int
+
+	Label string
+}
+
+// RenderPass records draws into one graph node.
+//
+// One pass is one node and a draw is not, because the pass is the unit at which
+// synchronisation is expressible: Vulkan cannot barrier inside a render pass in
+// the general case, tile-based hardware physically cannot — attachment contents
+// live in tile memory until the pass ends — and Metal's encoder has the same
+// shape. Draw granularity would promise an ordering the hardware cannot provide.
+//
+// Two rules follow, and both are caller-visible. Draws execute in recorded order
+// and the builder never reorders them, because blending is order dependent. And
+// the builder inserts no barriers inside a pass, because per-pixel ordering
+// between draws is the ROP's job.
+type RenderPass struct {
+	r    *Recorder
+	desc RenderPassDescriptor
+	id   NodeID
+
+	pipeline *RenderPipeline
+	buffers  []BufferView
+	draws    []drawCall
+	failed   bool
+}
+
+// drawCall is one recorded draw.
+type drawCall struct {
+	pipeline  *RenderPipeline
+	vertices  int
+	instances int
+	first     int
+	firstInst int
+	uniforms  []UniformValue
+	vertexBuf []BufferView
+}
+
+// Draw is one non-instanced or instanced draw's counts.
+//
+// Instancing is the instance count and not a separate call, which is why the
+// non-instanced case is this one with a count of one: a caller never picks
+// between two entry points for the same drawing.
+type Draw struct {
+	VertexCount   int
+	InstanceCount int
+	FirstVertex   int
+	FirstInstance int
+}
+
+// RenderPass begins recording a render pass. The pass becomes one node.
+func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
+	label := desc.Label
+	if label == "" {
+		label = "render pass"
+	}
+	p := &RenderPass{r: r, desc: desc}
+
+	if len(desc.Color) == 0 {
+		r.fail("RenderPass %q: no colour attachments", label)
+		p.failed = true
+	}
+	if desc.Width <= 0 || desc.Height <= 0 {
+		r.fail("RenderPass %q: the render area is %dx%d, and an area has positive extents",
+			label, desc.Width, desc.Height)
+		p.failed = true
+	}
+
+	// What the pass declares, which is what the builder infers edges from. An
+	// attachment loaded Keep is a read as well as a write; one loaded Clear or
+	// DontCare is a write only, and DontCare is what makes the
+	// read-after-write edge to its previous writer disappear.
+	var accesses []access
+	declare := func(v BufferView, load LoadOp, what string) {
+		mode := AccessWrite
+		if load == LoadKeep {
+			mode = AccessReadWrite
+		}
+		a, ok := r.declare("RenderPass "+label+" "+what, v, mode)
+		if !ok {
+			p.failed = true
+			return
+		}
+		accesses = append(accesses, a)
+	}
+	for i, c := range desc.Color {
+		if c.View.Buffer == nil {
+			r.fail("RenderPass %q: colour attachment %d names no resource", label, i)
+			p.failed = true
+			continue
+		}
+		declare(c.View, c.Load, fmt.Sprintf("colour %d", i))
+	}
+	if desc.Depth != nil {
+		declare(desc.Depth.View, desc.Depth.Load, "depth")
+	}
+
+	p.id = r.node(NodeRenderPass, label, accesses, nil)
+	return p
+}
+
+// SetPipeline selects the pipeline subsequent draws use.
+func (p *RenderPass) SetPipeline(pipe *RenderPipeline) {
+	if pipe == nil {
+		p.r.fail("RenderPass %q: SetPipeline with no pipeline", p.desc.Label)
+		p.failed = true
+		return
+	}
+	p.pipeline = pipe
+}
+
+// SetVertexBuffer binds a vertex buffer at one slot.
+func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
+	for len(p.vertexBuffers()) <= slot {
+		p.buffers = append(p.buffers, BufferView{})
+	}
+	p.buffers[slot] = v
+}
+
+func (p *RenderPass) vertexBuffers() []BufferView { return p.buffers }
+
+// Draw records one draw.
+//
+// It executes in the order recorded, and the builder never reorders it: blending
+// is order dependent, and so is any reasoning about overdraw.
+func (p *RenderPass) Draw(d Draw, uniforms ...UniformValue) {
+	if p.failed {
+		return
+	}
+	if p.pipeline == nil {
+		p.r.fail("RenderPass %q: a draw with no pipeline; call SetPipeline first",
+			p.desc.Label)
+		p.failed = true
+		return
+	}
+	if d.VertexCount <= 0 {
+		p.r.fail("RenderPass %q: a draw of %d vertices", p.desc.Label, d.VertexCount)
+		p.failed = true
+		return
+	}
+	instances := d.InstanceCount
+	if instances == 0 {
+		// The non-instanced case is the instanced case with a count of one, so
+		// an omitted count is one rather than nothing drawn. Zero stays
+		// available and means what it says: a graph recorded for a fixed
+		// maximum draws nothing for an absent object.
+		instances = 1
+	}
+	p.draws = append(p.draws, drawCall{
+		pipeline: p.pipeline, vertices: d.VertexCount, instances: instances,
+		first: d.FirstVertex, firstInst: d.FirstInstance,
+		uniforms:  append([]UniformValue(nil), uniforms...),
+		vertexBuf: append([]BufferView(nil), p.buffers...),
+	})
+}
+
+// Node is the graph node this pass records into, for a caller who wants to
+// name it in a diagnostic.
+func (p *RenderPass) Node() NodeID { return p.id }

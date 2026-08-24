@@ -40,6 +40,19 @@ type Stage struct {
 	// promise an early depth test this stage cannot have.
 	Discards bool
 
+	// RunVertex and RunFragment are the generated adapters a rasterizer calls.
+	//
+	// One fixed signature per stage kind, because a rasterizer cannot know the
+	// authored one: each stage has its own attributes, varyings and uniforms.
+	// The generated adapter unpacks the flat form into the typed call and packs
+	// the result back, which is the only place that mapping exists — so the
+	// rasterizer stays free of the type system and the compiler stays the one
+	// thing that knows the layout.
+	//
+	// Exactly one is set, matching Kind.
+	RunVertex   VertexFn
+	RunFragment FragmentFn
+
 	// Digest identifies the authored source this was generated from.
 	Digest string
 
@@ -81,3 +94,17 @@ type StageOutput struct {
 	Name  string
 	Index int
 }
+
+// VertexFn is the flat form of a vertex stage.
+//
+// attrs is one slice per attribute, already fetched for this vertex, in the
+// order Attributes declares. The result is the clip position and the varyings
+// flattened into floats — which is what specs/035-cpu-rasterizer.md interpolates
+// and why it never has to know about a Go struct.
+type VertexFn func(v Vertex, uniforms []any, attrs [][]float32) (Clip, []float32)
+
+// FragmentFn is the flat form of a fragment stage.
+//
+// varyings arrives interpolated, in the same flat order VertexFn produced. The
+// result is one value per colour attachment, in declaration order.
+type FragmentFn func(f Fragment, uniforms []any, varyings []float32) [][4]float32

@@ -4658,6 +4658,10 @@ var GeometryVSStage = accel.Stage{
 		{Name: "pos", Index: 0, Components: 3},
 		{Name: "uv", Index: 1, Components: 2},
 	},
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+		pos, vary := geometryVSFlat(v, u[0].(StageTransform), [3]float32(a[0]), [2]float32(a[1]))
+		return pos, flattenVaryings(vary)
+	},
 	Digest:    "fa00db3070303ba0b70ca8dc3c4f1d72",
 	Generator: kernelabi.Version,
 }
@@ -4681,9 +4685,13 @@ func fullScreenVSFlat(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
 
 // FullScreenVSStage is the compiled form of FullScreenVS.
 var FullScreenVSStage = accel.Stage{
-	Name:      "FullScreenVS",
-	Kind:      accel.StageVertex,
-	Varyings:  "NoVaryings",
+	Name:     "FullScreenVS",
+	Kind:     accel.StageVertex,
+	Varyings: "NoVaryings",
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+		pos, vary := fullScreenVSFlat(v)
+		return pos, flattenNoVaryings(vary)
+	},
 	Digest:    "084938b28ae49efc1a106628f70700ba",
 	Generator: kernelabi.Version,
 }
@@ -4705,6 +4713,10 @@ var ShadeFSStage = accel.Stage{
 	Outputs: []accel.StageOutput{
 		{Name: "Albedo", Index: 0},
 		{Name: "Normal", Index: 1},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+		out := shadeFSFlat(f, unflattenVaryings(vv))
+		return [][4]float32{out.Albedo, out.Normal}
 	},
 	Digest:    "dc2adcd7b97a614657d79b40760b3295",
 	Generator: kernelabi.Version,
@@ -5526,6 +5538,42 @@ kernel void TopPMask(
 		}
 		return topPMaskCoop(t, kernelabi.UniformValue[TopDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]uint32](a, 1), f, slot, slot.Shared)
 	},
+}
+
+// flattenVaryings packs Varyings into the flat form a rasterizer interpolates.
+func flattenVaryings(v Varyings) []float32 {
+	out := make([]float32, 0, 6)
+	out = append(out, v.Colour[0])
+	out = append(out, v.Colour[1])
+	out = append(out, v.Colour[2])
+	out = append(out, v.Colour[3])
+	out = append(out, v.UV[0])
+	out = append(out, v.UV[1])
+	return out
+}
+
+// unflattenVaryings is flattenVaryings's inverse.
+func unflattenVaryings(f []float32) Varyings {
+	var v Varyings
+	v.Colour[0] = f[0]
+	v.Colour[1] = f[1]
+	v.Colour[2] = f[2]
+	v.Colour[3] = f[3]
+	v.UV[0] = f[4]
+	v.UV[1] = f[5]
+	return v
+}
+
+// flattenNoVaryings packs accel.NoVaryings into the flat form a rasterizer interpolates.
+func flattenNoVaryings(v accel.NoVaryings) []float32 {
+	out := make([]float32, 0, 0)
+	return out
+}
+
+// unflattenNoVaryings is flattenNoVaryings's inverse.
+func unflattenNoVaryings(f []float32) accel.NoVaryings {
+	var v accel.NoVaryings
+	return v
 }
 
 // Kernels is every kernel this package generated, in source order.

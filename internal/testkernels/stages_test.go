@@ -80,3 +80,62 @@ func TestFragmentFieldsAreDistinctAttachments(t *testing.T) {
 		t.Errorf("attachment 0 is %v, want the varying's colour %v", out.Albedo, in.Colour)
 	}
 }
+
+// The flat adapters a rasterizer calls agree with the typed stages.
+//
+// The adapter is the only place the mapping between a stage's authored
+// signature and the rasterizer's flat floats exists, which keeps
+// specs/035-cpu-rasterizer.md free of the type system. That makes it the one
+// place the mapping can be wrong, so it is checked against the typed call
+// rather than assumed from the shape of the generated code.
+func TestStageAdaptersAgreeWithTheTypedStages(t *testing.T) {
+	t.Run("vertex", func(t *testing.T) {
+		v := accel.NewVertexForTest(2, 0)
+		xf := StageTransform{Scale: 1.5, Offset: accel.Vec2{0.25, -0.5}}
+		pos := accel.Vec3{0.5, -1, 0.25}
+		uv := accel.Vec2{0.125, 0.875}
+
+		wantPos, wantVary := GeometryVS(v, xf, pos, uv)
+		gotPos, flat := GeometryVSStage.RunVertex(v, []any{xf},
+			[][]float32{pos[:], uv[:]})
+
+		if gotPos != wantPos {
+			t.Errorf("position: adapter %v, typed %v", gotPos, wantPos)
+		}
+		if got := unflattenVaryings(flat); got != wantVary {
+			t.Errorf("varyings round-tripped to %v, typed %v", got, wantVary)
+		}
+		if len(flat) != 6 {
+			t.Errorf("Varyings flattened to %d floats, want 6 (Vec4 plus Vec2)", len(flat))
+		}
+	})
+
+	t.Run("fragment", func(t *testing.T) {
+		f := accel.NewFragmentForTest(accel.Vec4{3.5, 1.5, 0.75, 1}, true)
+		in := Varyings{Colour: accel.Vec4{0.2, 0.4, 0.6, 1}, UV: accel.Vec2{0.3, 0.7}}
+
+		want := ShadeFS(f, in)
+		got := ShadeFSStage.RunFragment(f, nil, flattenVaryings(in))
+
+		if len(got) != 2 {
+			t.Fatalf("the adapter returned %d attachments, want 2", len(got))
+		}
+		if got[0] != want.Albedo || got[1] != want.Normal {
+			t.Errorf("attachments: adapter %v, typed %+v", got, want)
+		}
+	})
+
+	// A stage with no varyings still round-trips, which is the degenerate case
+	// a packer generated per-field would get wrong by emitting nothing.
+	t.Run("no varyings", func(t *testing.T) {
+		v := accel.NewVertexForTest(1, 0)
+		wantPos, _ := FullScreenVS(v)
+		gotPos, flat := FullScreenVSStage.RunVertex(v, nil, nil)
+		if gotPos != wantPos {
+			t.Errorf("position: adapter %v, typed %v", gotPos, wantPos)
+		}
+		if len(flat) != 0 {
+			t.Errorf("NoVaryings flattened to %d floats", len(flat))
+		}
+	})
+}

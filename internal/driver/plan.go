@@ -68,6 +68,14 @@ const (
 	// OpDispatch runs a compiled kernel over a grid of workgroups.
 	OpDispatch
 
+	// OpRenderPass rasterizes a set of draws into a set of attachments.
+	//
+	// One op for the whole pass rather than one per draw, because the pass is
+	// the unit at which synchronisation is expressible: no backend can barrier
+	// inside one, and a per-draw op would let a planner promise an ordering the
+	// hardware cannot provide. See specs/033-render-api.md.
+	OpRenderPass
+
 	// OpCopyRows moves a rectangle whose two sides have different row pitches,
 	// which is what a texture-buffer copy is: the device pads rows to its own
 	// alignment and the accel API boundary does not.
@@ -107,6 +115,9 @@ type PlanNode struct {
 
 	// Rows is OpCopyRows's payload.
 	Rows *RowCopy
+
+	// Render is OpRenderPass's payload.
+	Render *RenderPass
 
 	// BarrierBefore asks for every prior write to be visible before this node
 	// runs. A backend with real barriers emits one; a backend that executes
@@ -507,4 +518,60 @@ func (p *Plan) checkOperand(node int, which string, o Operand) error {
 		return fmt.Errorf("accel: plan node %d's %s operand has kind %d", node, which, o.kind)
 	}
 	return nil
+}
+
+// RenderPass is what a backend needs to rasterize one pass.
+//
+// The attachments are operands like any other, so the planner places and
+// barriers them without knowing they are attachments. What a backend has to
+// understand is the draw list and the stage functions, and those are opaque to
+// the planner in the same way a kernel's entry point is.
+type RenderPass struct {
+	Label string
+
+	// Color and Depth are the attachments, as operands.
+	Color []Operand
+	Depth *Operand
+
+	// ColorLoad and DepthLoad are 0 for clear, 1 for keep, 2 for don't-care,
+	// mirroring the public LoadOp. The backend needs the distinction because
+	// clear is free on a tiler and a full-screen clear draw is not.
+	ColorLoad  []uint8
+	ColorClear [][4]float32
+	DepthLoad  uint8
+	DepthClear float32
+
+	Width, Height int
+
+	// Draws is the recorded draw list, in order. A backend never reorders it,
+	// because blending is order dependent.
+	Draws []RenderDraw
+}
+
+// RenderDraw is one recorded draw.
+type RenderDraw struct {
+	// Stage is the compiled pair, opaque to the planner.
+	Vertex, Fragment any
+
+	// Fixed-function state, as the public enums encode it.
+	Topology  uint8
+	FrontFace uint8
+	Cull      uint8
+
+	DepthTest    bool
+	DepthWrite   bool
+	DepthCompare uint8
+
+	Masks []uint8
+
+	VertexCount   int
+	InstanceCount int
+	FirstVertex   int
+	FirstInstance int
+
+	// Vertex is the attribute source, one operand per bound slot.
+	VertexBuffers []Operand
+
+	// Uniforms are the stages' by-value parameters.
+	Uniforms []any
 }
