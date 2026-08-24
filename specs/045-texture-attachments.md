@@ -189,6 +189,50 @@ to read that badge will assume it does.
 is half-built. A tag cut here would ship graphics verified on one backend while
 the previous commit verified it on two, and no gate in CI would say so.
 
+### Closed, 2026-08-24
+
+Metal renders into the attachment's declared format. The plan already carried
+`ColorFormat` and `ColorPitch`; the backend ignored both. Three changes and none
+of them needed a texture in the driver layer:
+
+- **the format reaches the texture and the pipeline.** A mapping that refuses
+  what it cannot spell, rather than defaulting — defaulting is how the original
+  defect worked;
+- **the pipeline cache key gains the formats.** Metal validates a pipeline's
+  colour formats against the pass's attachments at draw time, so two passes
+  differing only in format would share a cached pipeline and the device would
+  reject the second. Visible only when one plan holds both, which is what a key
+  omission produces and a test rarely finds;
+- **a row copy lowers**, as the blit encoder's contiguous copy once per row. It
+  was refused, so a texture attachment could not be given prior contents.
+
+**Two entries written before their features fired.** The render differential
+passes again. And §6's texture round trip — written while Metal refused a
+texture copy, skipping with that refusal as its condition — ran for the first
+time and passed: Metal returns texture rows in caller order, matching the
+oracle byte for byte. `docs/conventions.md` records that origin as *known* to
+differ between backends, and until this commit nothing compared it.
+
+**A defect the new test found.** A Metal depth attachment was allocated by code
+no test reached, found in a coverage report rather than by a failure. It works;
+it is now compared against the oracle with two overlapping triangles at
+different depths.
+
+**And one that is left open, deliberately.** Metal's render write-back does not
+align a row to 256 bytes where `ReadTexture` does, so an attachment whose row is
+narrower reads back partly blank: at 4×4 an RGBA32Float row is 64 bytes and
+three quarters of the image is lost, at 8×8 it is half, and at 16×16 and above
+it is exact. The differential and the format test are pinned to sizes above the
+boundary and say why. This is a real bug with a known shape, and it is recorded
+here rather than fixed in the same commit as the change that revealed it.
+
+**`internal/metal` is at 89.8%**, from 72.3% before this work, and the 90% gate
+is not met. Every function in the package is exercised — there are no
+uncovered functions — and the shortfall is 84 statements across 31 error arms
+that need an allocation or an encoder to fail. Recorded rather than papered
+over: the gate is right and the number is honest, and closing it wants fault
+injection rather than another test.
+
 ## 7. Done
 
 - an attachment names a `TextureView`, and `MipLevels`/`ArrayLayers` above one
