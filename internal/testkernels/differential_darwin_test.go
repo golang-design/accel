@@ -472,6 +472,20 @@ func diffCases() []diffCase {
 			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
 		},
 		{
+			// The same prefill over an f16 cache. Both backends read the same
+			// halves, so this compares the two lowerings of the widening
+			// conversion rather than the conversion itself -- and the widening
+			// is exact, so the ceiling is the f32 kernel's.
+			kernel: &testkernels.AttentionPrefillF16Kernel,
+			counts: []int{4 * 2 * 8, 4 * 1 * 8, 4 * 1 * 8, 1, 4 * 2 * 8},
+			uniforms: []any{testkernels.PrefillDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, QSeq: 4, Base: 0,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 4 * 2},
+			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
+		},
+		{
 			// The same prefill through a page table, with the pages out of
 			// order so the two backends must agree about the addressing and
 			// not only about the attention.

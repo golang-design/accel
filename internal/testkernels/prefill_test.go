@@ -702,6 +702,59 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("AttentionPrefillF16", func(t *testing.T) {
+		const qHeads, kvHeads, headDim, qSeq = 2, 1, 8, 4
+		dims := testkernels.PrefillDims{
+			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+			QSeq: qSeq, Base: 0,
+			Scale: float32(1) / float32(math.Sqrt(headDim)),
+		}
+		q := make([]float32, qSeq*qHeads*headDim)
+		k := make([]accel.Float16, qSeq*kvHeads*headDim)
+		v := make([]accel.Float16, qSeq*kvHeads*headDim)
+		for i := range q {
+			q[i] = float32(math.Sin(float64(i) * 0.29))
+		}
+		for i := range k {
+			k[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.13)))
+			v[i] = accel.ToFloat16(float32(i%5) - 2)
+		}
+
+		lengths := []uint32{qSeq}
+		authored := make([]float32, len(q))
+		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
+		for g := range groups.X {
+			var scores, red [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+				groups, 128, func(th kernel.Thread) {
+					testkernels.AttentionPrefillF16(th, dims, q, k, v, lengths, authored,
+						&scores, &red)
+				})
+		}
+
+		generated := make([]float32, len(q))
+		if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillF16Kernel,
+			accel.ID3{X: groups.X},
+			kernelabi.Args{
+				Slices: []any{q, k, v, lengths, generated}, Uniforms: []any{dims},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// The f32 prefill's ceiling above, unchanged. The two forms differ by
+		// the product roundings a contraction saves: the authored Go may fuse a
+		// multiply-add and the generated Go's explicit f32 rounding points
+		// forbid it (specs/008-numerics.md section 5). The widening adds
+		// nothing to that -- TestTheF16PrefillMatchesTheF32OneExactly compares
+		// the two storage widths bit for bit.
+		for i := range generated {
+			if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+				t.Fatalf("element %d: authored %v, generated %v; both halves of "+
+					"specs/004-kernel-authoring.md's fifth level must agree",
+					i, authored[i], generated[i])
+			}
+		}
+	})
+
 	t.Run("GatherRowsF16", func(t *testing.T) {
 		const vocab, width, rows = 8, 4, 3
 		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: vocab}
