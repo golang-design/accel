@@ -49,9 +49,15 @@ func GatherRows(b *Builder, table, ids *Tensor) *Tensor {
 	if poisoned(table, ids) {
 		return b.poison()
 	}
-	if table.dtype != accel.F32 {
-		return b.fail(1, "GatherRows", "the table is %v and the registered kernel reads f32; "+
-			"specs/010-kernel-corpus.md owns the f16 variant", table.dtype)
+	// A narrow table is storage that converts on load, which is
+	// specs/002-compute-model.md's rule and applies cleanly here because a
+	// gather performs no arithmetic: the value read is the value written, one
+	// conversion wider. A consumer reported the cost of f32-only -- an
+	// embedding table is the largest single tensor in a small model, and there
+	// was nothing between full width and int8 (accel issue 11).
+	if table.dtype != accel.F32 && table.dtype != accel.F16 {
+		return b.fail(1, "GatherRows", "the table is %v and the registered kernels read "+
+			"f32 or f16; a quantized table is QuantGatherRows", table.dtype)
 	}
 	if ids.dtype != accel.U32 {
 		return b.fail(1, "GatherRows", "ids are %v and must be u32", ids.dtype)
@@ -66,17 +72,27 @@ func GatherRows(b *Builder, table, ids *Tensor) *Tensor {
 	out = append(out, ids.shape...)
 	out = append(out, width)
 
+	// The result is f32 whatever the table is: what follows an embedding lookup
+	// is a normalize, which specs/010-kernel-corpus.md registers at f32, so
+	// narrowing the output would only make the caller widen it again.
+	gather := &testkernels.GatherRowsKernel
+	why := "the gather variant; an id at or above the table's capacity writes zeros, " +
+		"because a GPU cannot report one"
+	if table.dtype == accel.F16 {
+		gather = &testkernels.GatherRowsF16Kernel
+		why = "the gather variant over an f16 table, widening on load; an id at or " +
+			"above the table's capacity writes zeros, because a GPU cannot report one"
+	}
 	return b.record(node{
-		op: "GatherRows", inputs: []*Tensor{table, ids}, kernel: &testkernels.GatherRowsKernel,
+		op: "GatherRows", inputs: []*Tensor{table, ids}, kernel: gather,
 		uniform: func(map[string]ScalarValue) any {
 			return testkernels.RowParams{
 				Rows: uint32(rows), Width: uint32(width), Capacity: uint32(capacity),
 			}
 		},
-		grid: perElement(int(testkernels.GatherRowsKernel.WorkgroupSize.X)),
-		reason: "the gather variant; an id at or above the table's capacity writes zeros, " +
-			"because a GPU cannot report one",
-	}, table.dtype, out)
+		grid:   perElement(int(gather.WorkgroupSize.X)),
+		reason: why,
+	}, accel.F32, out)
 }
 
 // RMSNorm normalizes each row by its root mean square and scales by a gain.

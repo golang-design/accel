@@ -435,9 +435,9 @@ func TestOperatorRefusals(t *testing.T) {
 		build: func(b *tensor.Builder) { tensor.GatherRows(b, f32(b, "t", 8, 4), f32(b, "i", 2)) },
 		want:  "ids are f32",
 	}, {
-		name:  "an f16 table",
-		build: func(b *tensor.Builder) { tensor.GatherRows(b, f16(b, "t", 8, 4), u32(b, "i", 2)) },
-		want:  "010-kernel-corpus.md owns the f16 variant",
+		name:  "a table that is neither f32 nor f16",
+		build: func(b *tensor.Builder) { tensor.GatherRows(b, u32(b, "t", 8, 4), u32(b, "i", 2)) },
+		want:  "a quantized table is QuantGatherRows",
 	}, {
 		name:  "a gain that is not one per feature",
 		build: func(b *tensor.Builder) { tensor.RMSNorm(b, f32(b, "x", 4, 8), f32(b, "g", 4), 1e-5) },
@@ -603,6 +603,86 @@ func TestLinearFusesItsBias(t *testing.T) {
 			}
 			if math.Abs(float64(got[r*n+col])-want) > 1e-3 {
 				t.Fatalf("(%d,%d) is %v, want %v", r, col, got[r*n+col], want)
+			}
+		}
+	}
+}
+
+// An f16 embedding table gathers to f32 activations.
+//
+// accel issue 11: the table is the largest single tensor in a small model and
+// had no width between f32 and int8, so an otherwise-f16 model held its most
+// quantization-sensitive tensor at full width or quantized it.
+//
+// A gather does no arithmetic, so the values must come back exactly what the
+// halves hold -- this compares against the widened table rather than against
+// the numbers it was built from, because anything else would charge this
+// operator for the narrowing the caller asked for.
+func TestGatherRowsReadsAnF16Table(t *testing.T) {
+	const vocab, width = 8, 4
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("gatherf16")
+
+	table := tensor.Input(b, tensor.ValueDesc{
+		Name: "t", DType: accel.F16, Shape: tensor.Shape{vocab, width},
+	})
+	ids := tensor.Input(b, tensor.ValueDesc{
+		Name: "i", DType: accel.U32, Shape: tensor.Shape{3},
+	})
+	got := tensor.GatherRows(b, table, ids)
+	if got.DType() != accel.F32 {
+		t.Fatalf("the result is %v, want f32: what follows an embedding lookup is a "+
+			"normalize, which reads f32", got.DType())
+	}
+	tensor.Output(b, "out", got)
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "gatherf16"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	var named bool
+	for _, s := range plan.Selections() {
+		if s.Op == "GatherRows" && strings.Contains(s.Reason, "f16") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("Selections does not say the f16 kernel ran: %v", plan.Selections())
+	}
+
+	vals := make([]float32, vocab*width)
+	for i := range vals {
+		vals[i] = float32(i)*0.25 - 3
+	}
+	// Ids include one past the table, which writes zeros rather than reading
+	// another token's vector.
+	idv := []uint32{5, 0, vocab + 2}
+
+	out := f32Buffer(t, d, "out", make([]float32, len(idv)*width))
+	f := plan.Submit(d.Queue(), tensor.Bindings{
+		Buffers: map[string]accel.BufferView{
+			"t": f16Buffer(t, d, "t", vals), "i": u32Buffer(t, d, "i", idv), "out": out,
+		},
+	})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	res := make([]float32, len(idv)*width)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, res); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	for r, id := range idv {
+		for c := range width {
+			want := float32(0)
+			if int(id) < vocab {
+				want = accel.ToFloat16(vals[int(id)*width+c]).F32()
+			}
+			if g := res[r*width+c]; g != want {
+				t.Fatalf("row %d (id %d) element %d is %v, want exactly %v: a gather "+
+					"converts and does not compute", r, id, c, g, want)
 			}
 		}
 	}

@@ -131,6 +131,42 @@ func GatherRows(t accel.Thread, p RowParams, table []float32, ids []uint32,
 	}
 }
 
+// GatherRowsF16 is [GatherRows] over an f16 table, widening on load.
+//
+// # Why the table may be narrow where an accumulator may not
+//
+// specs/002-compute-model.md's rule is that a narrow type is storage which
+// converts on load, and this is that case exactly: a gather performs no
+// arithmetic at all. There is nothing to accumulate and therefore nothing to
+// lose -- the value read is the value written, one conversion wider.
+//
+// It exists because the embedding table is the largest single tensor in a small
+// model and had no width between f32 and int8. A consumer costed it at 1.56 GB
+// against 778 MB for a 151936 x 2560 vocabulary, inside an 8 GB budget, and the
+// choice was to hold the one tensor most sensitive to quantization at full
+// width or to quantize it (accel issue 11).
+//
+// The output is f32 because what follows an embedding lookup is a normalize,
+// and specs/010-kernel-corpus.md registers that at f32. Narrowing here would
+// make the caller widen again at the next operator.
+//
+//accel:kernel workgroup=64
+func GatherRowsF16(t accel.Thread, p RowParams, table []accel.Float16, ids []uint32,
+	out []float32) {
+
+	i := t.GlobalID().X
+	if i < p.Rows*p.Width {
+		r := i / p.Width
+		c := i % p.Width
+		id := ids[r]
+		if id < p.Capacity {
+			out[i] = table[id*p.Width+c].F32()
+		} else {
+			out[i] = float32(0)
+		}
+	}
+}
+
 // ScatterRows writes rows[r] into state[ids[r]].
 //
 // The inverse of [GatherRows] and the one that mutates persistent state, which

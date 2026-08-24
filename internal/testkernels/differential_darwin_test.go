@@ -194,6 +194,20 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The same gather over an f16 table. A gather does no arithmetic, so
+			// what this compares is the two lowerings of the widening load, and
+			// the widening is exact -- hence no ULP budget.
+			kernel: &testkernels.GatherRowsF16Kernel, counts: []int{8 * 16, 4, 4 * 16},
+			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 16, Capacity: 8}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return float32(i % 8) // row ids, inside the table
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			kernel: &testkernels.ScatterRowsKernel, counts: []int{4 * 16, 4, 8 * 16},
 			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 16, Capacity: 8}},
 			groups:   accel.WorkgroupCount{X: 1},
