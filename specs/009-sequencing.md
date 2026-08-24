@@ -1675,9 +1675,10 @@ flowchart TD
     E["subgroup shuffles and scans"]
   end
   subgraph W2["Wave 2 — gated by Wave 0"]
-    F["texel fetch in a stage"]
-    G["texture attachments"]
-    H["render-feedback rejection"]
+    M["widen the barrier stage mask"]
+    N["texture-origin corpus entry"]
+    F["texture attachments<br/>+ texel fetch, together"]
+    H["the repair pass"]
     I["line/point rasterization"]
   end
   subgraph W3["Wave 3 — consumer-paced"]
@@ -1686,10 +1687,11 @@ flowchart TD
     L["Vulkan and the SPIR-V emitter"]
   end
   A --> F
-  A --> G
+  A --> H
   B --> I
-  F --> G
-  G --> H
+  M --> F
+  N --> F
+  F --> H
 ```
 
 **Wave 0 — two investigations.** Both produce a decision and no code. The
@@ -1716,12 +1718,43 @@ replaced it with pass state — one value per pass where the case needs one per
 draw. Found while sequencing this milestone, by asking what the item in Wave 1
 actually connected to.
 
-**Wave 2 — the graphics chain, and it is a chain.** Texel fetch
-([032](032-stage-abi.md) §5) unblocks both texture attachments
-([033](033-render-api.md)) and 033's feedback rejection, which cannot be stated
-until a stage can read a texture. Attachments are buffer views "at this
-milestone" today. Line and point rasterization joins this wave once Wave 0's
-measurement says what rule to state.
+**Wave 2 — the graphics chain, and Wave 0 made it shorter and stricter.**
+
+The review landed ([042](042-surface-completion.md) §5.2) and its verdict is
+**not ready**. The chain is not "texel fetch, then attachments, then the rest":
+the attachment model is the item **everything else is downstream of**, and it is
+not an additive change. Anything built on the buffer attachment is built to be
+rebuilt — the format fields become real, V13 becomes implementable, sRGB becomes
+possible, feedback rejection unblocks, the per-pass staging copies and the
+present conversion draw disappear.
+
+So Wave 2 is exactly two things, in order, and **every other graphics feature
+waits behind them**:
+
+1. **texture attachments and texel fetch in a stage**, together, because a
+   stage that cannot read a texture cannot demonstrate that attachments became
+   textures;
+2. the **repair pass** over what the review found — eight declarations accepted
+   that reach nothing, four implemented-and-unreachable paths, eleven pieces of
+   spec/code drift.
+
+Two items move *ahead* of both, because doing them later is more expensive than
+doing them now:
+
+- **widen the barrier stage mask.** It is two bits, transfer and compute, and
+  every render pass is classified as transfer by fallthrough. Inert while the
+  only backends are a CPU rasterizer with no barriers and a Metal backend that
+  tracks hazards itself — and live the moment a Vulkan backend exists, which
+  needs six stages. Widening it changes every inferred edge and every hazard the
+  graph reports, so doing it under a bring-up means re-validating the barrier
+  corpus at the worst moment.
+- **write the texture-origin corpus entry.** Origin is per *resource kind*, not
+  per backend, and this library has one kind on the render path today. The day
+  it has two, a bug that survives its own tests becomes available. The entry
+  goes in before the feature.
+
+Line and point rasterization joins this wave once Wave 0's measurement says what
+rule to state.
 
 **Wave 3 — paced by a consumer rather than by this list.** Per-row query
 extents are the last per-dispatch value in the batching story and the same move
