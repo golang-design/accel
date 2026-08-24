@@ -562,6 +562,13 @@ type RenderPass struct {
 	DepthLoad  LoadOp
 	DepthClear float32
 
+	// ColorStore and DepthStore are the store actions. A discarded attachment's
+	// contents are undefined after the pass, which lets a backend skip writing
+	// them out -- on a tiler that is a whole depth buffer per frame, and here it
+	// is the blit back into the caller's buffer.
+	ColorStore []StoreOp
+	DepthStore StoreOp
+
 	Width, Height int
 
 	// Draws is the recorded draw list, in order. A backend never reorders it,

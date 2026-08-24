@@ -83,15 +83,22 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 	// And back into the buffers the graph ordered other nodes against. Writing
 	// anywhere else would make every inferred edge describe memory nobody
 	// wrote.
+	// A discarded attachment is not written back. Its contents are undefined
+	// after the pass, so the blit would be copying bytes nobody may read -- and
+	// on a depth attachment that is the whole buffer every frame, which is the
+	// saving specs/033-render-api.md names.
 	blit := p.blit()
 	for i, a := range targets.color {
+		if rp.ColorStore[i] == driver.StoreDiscard {
+			continue
+		}
 		op, err := e.operand(rp.Color[i])
 		if err != nil {
 			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
 		}
 		blit.CopyTextureToBuffer(a.Texture, op.buf, op.off)
 	}
-	if targets.depth != nil {
+	if targets.depth != nil && rp.DepthStore != driver.StoreDiscard {
 		op, err := e.operand(*rp.Depth)
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
@@ -130,7 +137,7 @@ func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, er
 		out.color = append(out.color, mtl.RenderAttachment{
 			Texture: t,
 			Load:    metalLoadAction(rp.ColorLoad[i]),
-			Store:   mtl.StoreActionStore,
+			Store:   metalStoreAction(rp.ColorStore[i]),
 			ClearColor: [4]float64{
 				float64(rp.ColorClear[i][0]), float64(rp.ColorClear[i][1]),
 				float64(rp.ColorClear[i][2]), float64(rp.ColorClear[i][3]),
@@ -149,11 +156,19 @@ func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, er
 		out.depth = &mtl.RenderAttachment{
 			Texture:    t,
 			Load:       metalLoadAction(rp.DepthLoad),
-			Store:      mtl.StoreActionStore,
+			Store:      metalStoreAction(rp.DepthStore),
 			ClearDepth: float64(rp.DepthClear),
 		}
 	}
 	return out, nil
+}
+
+// metalStoreAction maps a plan's store action onto Metal's.
+func metalStoreAction(s driver.StoreOp) int {
+	if s == driver.StoreDiscard {
+		return mtl.StoreActionDontCare
+	}
+	return mtl.StoreActionStore
 }
 
 // metalLoadAction maps a plan's load action onto Metal's.

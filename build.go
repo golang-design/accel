@@ -427,6 +427,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		}
 		out.Color = append(out.Color, op)
 		out.ColorLoad = append(out.ColorLoad, c.Load)
+		out.ColorStore = append(out.ColorStore, c.Store)
 		out.ColorClear = append(out.ColorClear, c.Clear)
 	}
 	if p.desc.Depth != nil {
@@ -440,6 +441,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		}
 		out.Depth = &op
 		out.DepthLoad = p.desc.Depth.Load
+		out.DepthStore = p.desc.Depth.Store
 		out.DepthClear = p.desc.Depth.Clear
 		if c := p.desc.Depth.Clear; c < 0 || c > 1 {
 			return nil, fmt.Errorf("accel: Build: render pass %q clears depth to %v, and "+
