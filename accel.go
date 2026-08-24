@@ -73,10 +73,13 @@
 //
 // Subgroup shuffles and scans are unbuilt.
 //
-// Graphics is designed and being written, and none of it is in this API yet.
-// The stage receivers and the sampler family were exported ahead of the code
-// that gives them meaning and have been withdrawn until a stage can run; see
-// specs/036-documentation.md's freeze record.
+// Graphics runs on the CPU backend and on Metal, and the two are compared pixel
+// by pixel: render pipelines, passes, vertex and index buffers, by-value stage
+// parameters, depth, blending, indexed and indirect draws, and a surface that
+// presents to a window the caller owns. It is newer than the compute half and
+// is not covered by specs/036-documentation.md's freeze record, so treat its
+// shape as provisional. The sampler family is still withdrawn: a stage cannot
+// read a texture until specs/032-stage-abi.md section 5's texel fetch exists.
 //
 // # The model
 //

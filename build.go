@@ -12,28 +12,17 @@ import (
 	"golang.design/x/accel/internal/driver"
 )
 
-// Build validates the recorded nodes, assigns transient memory, plans barriers,
-// and lowers the result for the device.
-//
-// # The plan this milestone produces
-//
-// Nodes execute in record order with a barrier before each one, and every
-// transient gets its own bytes. That is deliberately the most conservative plan
-// there is, and it is correct rather than merely safe: every dependency edge a
-// hazard analysis could infer runs from a lower node id to a higher one, since
-// an edge exists only because a later node's declared access conflicts with an
-// earlier one's. Record order is therefore a topological order of that DAG, and
-// a full barrier between consecutive nodes covers every read-after-write,
-// write-after-read, and write-after-write it could classify.
-//
-// specs/016-graph-execution.md computes the edges instead of assuming them all,
-// and specs/017-graph-aliasing.md packs the transients. This plan is not thrown
-// away when they land: it is what 017's differential fuzz compares against, and
-// an oracle that already existed before the optimizer cannot have inherited the
-// optimizer's bugs.
 // BuildNaive builds the graph under the conservative plan of
 // specs/015-graph-recording.md: nodes in record order, a barrier before each,
 // and no transient aliasing.
+//
+// Nodes in record order with a full barrier between them is correct rather than
+// merely safe, and the reason is worth stating: every dependency edge a hazard
+// analysis could infer runs from a lower node id to a higher one, because an
+// edge exists only where a later node's declared access conflicts with an
+// earlier one's. Record order is therefore a topological order of that DAG, and
+// a barrier between consecutive nodes covers every read-after-write,
+// write-after-read and write-after-write it could classify.
 //
 // It exists so that an optimized plan has something to be compared against.
 // specs/003-command-graph.md defines the whole-plan oracle as executing a graph
@@ -50,6 +39,23 @@ import (
 // is slower by construction and never the right choice otherwise.
 func (r *Recorder) BuildNaive() (*Graph, error) { return r.build(true) }
 
+// Build validates the recorded nodes, infers the dependency edges between them,
+// computes the barriers those edges require, packs the transients into
+// overlapping memory where their live ranges allow, and lowers the result for
+// the device.
+//
+// The graph it returns is immutable and replayable: what varies between
+// submissions is what slots are bound to, the contents of buffers, and
+// device-supplied dispatch and draw counts. Nothing else, which is what lets a
+// plan be built once and submitted every frame.
+//
+// A build error is a statement about the recording rather than about the
+// device: an operand outside its resource, a slot smaller than the use it is
+// bound to, a transient nothing wrote. Every one of them is cheaper here than
+// at submission, which is why they are here.
+//
+// [Recorder.BuildNaive] produces the conservative plan this one is checked
+// against.
 func (r *Recorder) Build() (*Graph, error) { return r.build(false) }
 
 func (r *Recorder) build(naive bool) (*Graph, error) {
