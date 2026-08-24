@@ -158,6 +158,109 @@ func F(f accel.Fragment, in In) accel.Vec4 { return in.C }`,
 			line: 4, want: "one field per attachment, even when there is one",
 		},
 		{
+			name: "a stage as a method",
+			body: `type R struct{}
+
+//accel:vertex
+func (R) V(v accel.Vertex) (accel.Clip, accel.NoVaryings) { return accel.Clip{}, accel.NoVaryings{} }`,
+			line: 4, want: "is a method: a stage is a package-level function",
+		},
+		{
+			name: "a generic stage",
+			body: `//accel:vertex
+func V[T any](v accel.Vertex) (accel.Clip, accel.NoVaryings) { return accel.Clip{}, accel.NoVaryings{} }`,
+			line: 2, want: "is generic: generic stages are out of scope",
+		},
+		{
+			name: "a stage with no parameters",
+			body: `//accel:vertex
+func V() (accel.Clip, accel.NoVaryings) { return accel.Clip{}, accel.NoVaryings{} }`,
+			line: 2, want: "takes no parameters: the first is accel.Vertex",
+		},
+		{
+			name: "a stage reaching shared memory",
+			body: `//accel:vertex
+func V(v accel.Vertex, sh *[4]float32) (accel.Clip, accel.NoVaryings) {
+	sh[0] = 1
+	return accel.Clip{}, accel.NoVaryings{}
+}`,
+			line: 2, want: "those need a workgroup, and a graphics stage has none",
+		},
+		{
+			name: "a fragment stage whose varyings are not a struct",
+			body: `//accel:fragment
+func F(f accel.Fragment, in float32) accel.NoVaryings { return accel.NoVaryings{} }`,
+			line: 2, want: "as its varyings parameter, and varyings are a struct",
+		},
+		{
+			name: "a fragment stage taking a by-value array",
+			body: `type Out struct{ C accel.Vec4 }
+
+//accel:fragment
+func F(f accel.Fragment, in accel.NoVaryings, a accel.Vec3) Out { return Out{} }`,
+			line: 4, want: "a by-value array is a vertex attribute",
+		},
+		{
+			name: "a vertex attribute of an unrepresentable element",
+			body: `//accel:vertex
+func V(v accel.Vertex, a [2]bool) (accel.Clip, accel.NoVaryings) {
+	return accel.Clip{}, accel.NoVaryings{}
+}`,
+			line: 2, want: `attribute "a" is [2]bool`,
+		},
+		{
+			name: "a stage returning nothing",
+			body: `//accel:vertex
+func V(v accel.Vertex) {}`,
+			line: 2, want: "returns nothing",
+		},
+		{
+			name: "a vertex stage returning three values",
+			body: `//accel:vertex
+func V(v accel.Vertex) (accel.Clip, accel.NoVaryings, float32) {
+	return accel.Clip{}, accel.NoVaryings{}, 0
+}`,
+			line: 2, want: "returns 3 values",
+		},
+		{
+			name: "a vertex stage whose position is not a clip position",
+			body: `//accel:vertex
+func V(v accel.Vertex) (accel.Vec3, accel.NoVaryings) {
+	return accel.Vec3{}, accel.NoVaryings{}
+}`,
+			line: 2, want: "as its position, and a clip position is accel.Clip",
+		},
+		{
+			name: "a vertex stage whose varyings are not a struct",
+			body: `//accel:vertex
+func V(v accel.Vertex) (accel.Clip, float32) { return accel.Clip{}, 0 }`,
+			line: 2, want: "as its varyings, and varyings are a struct",
+		},
+		{
+			name: "a fragment stage returning two values",
+			body: `type Out struct{ C accel.Vec4 }
+
+//accel:fragment
+func F(f accel.Fragment, in accel.NoVaryings) (Out, float32) { return Out{}, 0 }`,
+			line: 4, want: "returns 2 values",
+		},
+		{
+			name: "a fragment stage returning an empty struct",
+			body: `type Out struct{}
+
+//accel:fragment
+func F(f accel.Fragment, in accel.NoVaryings) Out { return Out{} }`,
+			line: 4, want: "a struct with no fields, so it writes no attachment",
+		},
+		{
+			name: "a fragment stage whose attachment is not a vec4",
+			body: `type Out struct{ C accel.Vec3 }
+
+//accel:fragment
+func F(f accel.Fragment, in accel.NoVaryings) Out { return Out{} }`,
+			line: 4, want: "attachment 0 (C) is [3]float32, and a colour attachment is accel.Vec4",
+		},
+		{
 			name: "composite literal in a compute kernel",
 			body: `type P struct{ A float32 }
 
