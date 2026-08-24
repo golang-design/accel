@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.design/x/accel/internal/driver"
 )
 
 // The surface and present path of specs/034-surface-present.md.
@@ -56,6 +58,11 @@ type Surface struct {
 	label string
 	impl  surfaceImpl
 
+	// present is the on-screen target, or nil for a headless surface. What it
+	// changes is Present: acquire takes an image from it and Present converts
+	// the frame into that image.
+	present driver.PresentTarget
+
 	mu sync.Mutex
 	// gen increments on every resize. A graph records the generation it was
 	// built against, so a frame from before a resize is refused by identity
@@ -99,6 +106,9 @@ type Frame struct {
 	// headless surface it is already signalled, because nothing else holds the
 	// image; a windowed surface signals it when the compositor releases one.
 	Acquired *Fence
+
+	// image is the backend's acquired drawable, for a windowed surface.
+	image driver.PresentImage
 
 	presented bool
 }
@@ -194,12 +204,24 @@ func (s *Surface) Acquire(timeout time.Duration) (*Frame, error) {
 	}
 
 	i := s.next
-	s.next = (s.next + 1) % s.impl.count()
-	s.inFlight++
-	return &Frame{
+	f := &Frame{
 		surface: s, gen: s.gen, index: i, view: s.impl.image(i),
 		Acquired: signalledFence(),
-	}, nil
+	}
+	if s.present != nil {
+		// The drawable is taken here rather than at Present, because this is
+		// where a compositor makes a caller wait: a windowed Acquire is the
+		// call that blocks, and taking the image later would move the wait to
+		// where the loop cannot act on it.
+		img, err := s.present.Acquire(timeout)
+		if err != nil {
+			return nil, fmt.Errorf("accel: Acquire on %q: %w", s.label, err)
+		}
+		f.image = img
+	}
+	s.next = (s.next + 1) % s.impl.count()
+	s.inFlight++
+	return f, nil
 }
 
 // Present hands the frame back, to be shown once the fence signals.
@@ -216,14 +238,26 @@ func (s *Surface) Present(f *Frame, after *Fence) error {
 			f.surface.label, s.label)
 	}
 	if f.presented {
-		return fmt.Errorf("accel: Present: frame %d of %q was already presented",
-			f.index, s.label)
+		return fmt.Errorf("accel: Present: frame %d of %q was already presented or "+
+			"discarded", f.index, s.label)
 	}
 	if after != nil {
 		if err := after.Wait(); err != nil {
 			return fmt.Errorf("accel: Present: the submission that rendered frame %d "+
 				"failed: %w", f.index, err)
 		}
+	}
+
+	if f.image != nil {
+		blk, base := blockFor(f.view.Buffer)
+		if err := f.image.Present(blk, base+f.view.Offset*f.view.DType.Size()); err != nil {
+			f.presented = true
+			s.mu.Lock()
+			s.inFlight--
+			s.mu.Unlock()
+			return fmt.Errorf("accel: Present on %q: %w", s.label, err)
+		}
+		f.image = nil
 	}
 
 	s.mu.Lock()
@@ -236,6 +270,41 @@ func (s *Surface) Present(f *Frame, after *Fence) error {
 		return nil
 	}
 	s.inFlight--
+	return nil
+}
+
+// Discard hands a frame back without presenting it.
+//
+// Every acquired frame is either presented or discarded. On a windowed surface
+// the frame holds a drawable the compositor lent it, and one abandoned rather
+// than returned exhausts the pool -- whose symptom is a frame loop that stops,
+// with no error and no stack pointing at the cause.
+//
+// A caller reaches this when a frame cannot be rendered after all: a graph that
+// failed to build, a resize noticed between acquire and submit, a frame skipped
+// for timing.
+func (s *Surface) Discard(f *Frame) error {
+	if f == nil {
+		return fmt.Errorf("accel: Discard: no frame")
+	}
+	if f.surface != s {
+		return fmt.Errorf("accel: Discard: the frame came from %q and this is %q",
+			f.surface.label, s.label)
+	}
+	if f.presented {
+		return fmt.Errorf("accel: Discard: frame %d of %q was already presented or "+
+			"discarded", f.index, s.label)
+	}
+	f.presented = true
+	if f.image != nil {
+		f.image.Discard()
+		f.image = nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f.gen == s.gen {
+		s.inFlight--
+	}
 	return nil
 }
 
@@ -256,6 +325,11 @@ func (s *Surface) Resize(w, h int) error {
 	}
 	if err := s.impl.reconfigure(w, h); err != nil {
 		return err
+	}
+	if s.present != nil {
+		if err := s.present.Configure(w, h); err != nil {
+			return err
+		}
 	}
 	s.width, s.height = w, h
 	s.gen++
@@ -284,7 +358,14 @@ func (s *Surface) Close() error {
 		return nil
 	}
 	s.closed = true
-	return s.impl.closeImpl()
+	err := s.impl.closeImpl()
+	if s.present != nil {
+		if perr := s.present.Close(); err == nil {
+			err = perr
+		}
+		s.present = nil
+	}
+	return err
 }
 
 // signalledFence is a fence that has already completed.
@@ -425,4 +506,99 @@ func (g *Graph) BindPresent(slot Slot, f *Frame) error {
 			f.index, ps.surface.label)
 	}
 	return g.Bind(SlotBinding{Slot: slot, Buffer: f.view})
+}
+
+// NativeHandleKind says what a [NativeHandle] points at.
+type NativeHandleKind = driver.NativeHandleKind
+
+const (
+	// NativeMetalLayer is a `CAMetalLayer*` the caller created and attached to
+	// a window. It must be created and resized on the main thread.
+	NativeMetalLayer = driver.NativeMetalLayer
+
+	// NativeNSView is an `NSView*`. accel makes the layer, and that call must
+	// itself be on the main thread.
+	NativeNSView = driver.NativeNSView
+)
+
+// NativeHandle is a platform-tagged pointer to a window resource the caller
+// owns.
+//
+// Tagged rather than bare, because a backend given the wrong kind of pointer
+// sends a message to an object that does not answer it, and the crash names
+// neither the caller nor the mistake.
+type NativeHandle = driver.NativeHandle
+
+// ErrNoPresent reports that a device has no on-screen path.
+//
+// Reported rather than discovered, which is decision 6: a caller asks and is
+// told, instead of finding out when a frame does not appear.
+var ErrNoPresent = driver.ErrNoPresent
+
+// NewWindowSurface makes a surface that presents to a window the caller owns.
+//
+// # What is yours and what is accel's
+//
+// accel does not create windows. specs/034-surface-present.md section 6 puts
+// the window, its event loop, input, focus and DPI on your side of the line,
+// and everything from the swapchain inward on accel's — because window creation
+// is an operating system concern with no relation to GPU work, and absorbing it
+// would drag a windowing library and an opinion about event loops into a
+// library whose subject is device work.
+//
+// So you create the window and hand over a native handle. accel owns the
+// drawables, acquire, present and resize.
+//
+// # Main-thread obligation on macOS
+//
+// A `CAMetalLayer` must be created and resized on the main thread. accel cannot
+// check this and does not try: call this from the main thread, and call
+// [Surface.Resize] from it too. Given a [NativeNSView] this call creates the
+// layer, so the obligation applies to this call itself.
+//
+// # What the frame loop looks like
+//
+// The same as a headless one, which is the point of the headless surface
+// existing: [Surface.Acquire], [Graph.BindPresent], submit after the frame's
+// fence, then [Surface.Present]. Nothing in the loop changes when the pixels
+// start going to a screen.
+func (d *Device) NewWindowSurface(h NativeHandle, desc SurfaceDescriptor) (*Surface, error) {
+	if err := d.state.checkOpen("NewWindowSurface"); err != nil {
+		return nil, err
+	}
+	label := desc.Label
+	if label == "" {
+		label = "window surface"
+	}
+	if desc.Width <= 0 || desc.Height <= 0 {
+		return nil, fmt.Errorf("accel: NewWindowSurface %q: the extent is %dx%d",
+			label, desc.Width, desc.Height)
+	}
+	p, ok := d.dev.(driver.Presenter)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrNoPresent, d.info.Name)
+	}
+	target, err := p.NewPresentTarget(h, desc.Width, desc.Height)
+	if err != nil {
+		return nil, fmt.Errorf("accel: NewWindowSurface %q: %w", label, err)
+	}
+
+	images := desc.Images
+	if images == 0 {
+		images = 2
+	}
+	// The rotating images are buffers, exactly as the headless surface's are,
+	// and presenting converts one into a drawable. specs/033-render-api.md
+	// makes an attachment a buffer view, so the graph renders into a buffer
+	// either way -- and that is what keeps the frame loop identical.
+	hl := &headless{dev: d, label: label, images: make([]*Buffer, images)}
+	s := &Surface{
+		dev: d, label: label, impl: hl, present: target,
+		width: desc.Width, height: desc.Height,
+	}
+	if err := hl.reconfigure(desc.Width, desc.Height); err != nil {
+		_ = target.Close()
+		return nil, err
+	}
+	return s, nil
 }
