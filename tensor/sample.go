@@ -98,7 +98,11 @@ const TopMaxRounds = testkernels.TopMaxRounds
 func sampleShape(x *Tensor) (rows, vocab int, out Shape) {
 	vocab = x.shape[len(x.shape)-1]
 	rows = x.shape.Elements() / vocab
-	out = x.shape[:len(x.shape)-1]
+	// Copied rather than sliced. The result shares no backing array with the
+	// operand's shape, so an operator that later grows one -- the way
+	// GatherRows appends a width -- cannot write through into the tensor it
+	// read from.
+	out = append(Shape(nil), x.shape[:len(x.shape)-1]...)
 	if len(out) == 0 {
 		out = Shape{1}
 	}

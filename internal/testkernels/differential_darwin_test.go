@@ -437,6 +437,35 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// Two rows of the same distribution against two different draws,
+			// which is specs/043-per-row-values.md section 8's assertion made
+			// cross-backend. The single-row case above cannot see it: at one
+			// row the draws binding has one element and the walk's row base is
+			// zero, so a kernel that ignored the row entirely would agree with
+			// itself.
+			//
+			// Equal masses again, so the boundary each draw lands on is one an
+			// in-order walk and a parallel scan would place differently.
+			kernel: &testkernels.SampleCategoricalKernel, counts: []int{512, 2, 2},
+			uniforms: []any{testkernels.SampleDims{Vocab: 256, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					// Far apart, so the two rows must land on tokens roughly a
+					// hundred indices apart rather than merely on different
+					// ones.
+					if i == 0 {
+						return 0.2
+					}
+					return 0.8
+				}
+				if b != 0 {
+					return 0
+				}
+				return 1.0 / 256
+			},
+		},
+		{
 			// The quantized GEMM. Exact between backends: both widen each
 			// product to f32 and sum in the same order, so quantization changes
 			// what is computed and not whether the two agree about it.
