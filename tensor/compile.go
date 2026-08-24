@@ -258,6 +258,23 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 				"than a computed value; a plan that only copies is a copy, not a plan",
 				o.name)
 		}
+		// An output naming a *state* read. It is not a computed value either:
+		// the value is the state's own buffer, which the caller already holds
+		// and can read directly.
+		//
+		// Checked because the lowering matches an output to the node that
+		// produces it by tensor identity, and ReadState builds a fresh tensor
+		// rather than returning the writing node's result -- so this bound a
+		// port nothing ever wrote and the caller read zeros, with the state's
+		// buffer holding the right answer all along. A silent wrong answer
+		// through the public surface, which is the one failure this package
+		// refuses to have.
+		if o.t.port != "" {
+			return nil, fmt.Errorf("accel/tensor: output %q names state %q rather than a "+
+				"computed value. A state is a buffer the caller owns and binds, so its "+
+				"contents are already theirs to read -- bind it and read it, rather than "+
+				"asking the plan to copy it into a second buffer", o.name, o.t.port)
+		}
 	}
 
 	g, err := r.Build()

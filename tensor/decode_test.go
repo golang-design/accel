@@ -1085,3 +1085,42 @@ func TestABatchOfSequencesStepsTogether(t *testing.T) {
 		}
 	}
 }
+
+// An output naming a state is refused rather than silently producing zeros.
+//
+// The lowering matches an output to the node that produces it by tensor
+// identity, and ReadState builds a fresh tensor rather than returning the
+// writing node's result. So this bound a port nothing ever wrote: the caller
+// read zeros while the state's own buffer held the right answer the whole time.
+//
+// Found by asking whether a repetition penalty composes from what exists --
+// gather the seen tokens' logits, scale them, scatter them back -- which is a
+// shape nothing in the suite had written, because every state test reads the
+// state's bound buffer directly rather than naming it as an output.
+func TestAnOutputNamingAStateIsRefused(t *testing.T) {
+	const vocab = 16
+	rt := newRuntime(t)
+	b := rt.NewBuilder("stateout")
+
+	st := tensor.NewState(b, tensor.StateDesc{
+		Name: "s", DType: accel.F32, Shape: tensor.Shape{vocab, 1},
+	})
+	rows := tensor.Input(b, tensor.ValueDesc{
+		Name: "rows", DType: accel.F32, Shape: tensor.Shape{3, 1},
+	})
+	ids := tensor.Input(b, tensor.ValueDesc{
+		Name: "ids", DType: accel.U32, Shape: tensor.Shape{3},
+	})
+	next := tensor.ScatterRows(b, st, rows, ids)
+	tensor.Output(b, "out", tensor.ReadState(b, next))
+
+	_, err := b.Compile(rt, tensor.CompileOptions{Label: "stateout"})
+	if err == nil {
+		t.Fatal("an output naming a state was accepted, and it produces zeros")
+	}
+	for _, want := range []string{`names state "s"`, "bind it and read it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal should say %q, got %v", want, err)
+		}
+	}
+}
