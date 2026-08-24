@@ -95,6 +95,29 @@ func TestARecordedAttributeReachesTheIdentity(t *testing.T) {
 				Lengths: lens, ScaleName: "scale", Pages: pages, Block: block,
 			}))
 		},
+		"TopKMask.k": func(b *tensor.Builder, alt bool) {
+			x := tensor.Input(b, tensor.ValueDesc{
+				Name: "x", DType: accel.F32, Shape: tensor.Shape{2, 32},
+			})
+			k := 4
+			if alt {
+				k = 8
+			}
+			tensor.Output(b, "o", tensor.TopKMask(b, x, k))
+		},
+		"TopPMask.p": func(b *tensor.Builder, alt bool) {
+			x := tensor.Input(b, tensor.ValueDesc{
+				Name: "x", DType: accel.F32, Shape: tensor.Shape{2, 32},
+			})
+			p := float32(0.5)
+			if alt {
+				// Both are zero as integers, so a digest writing uint64(p)
+				// rather than the bit pattern collides here while passing on
+				// any pair that straddles 1.
+				p = 0.9
+			}
+			tensor.Output(b, "o", tensor.TopPMask(b, x, p))
+		},
 	}
 
 	for name, build := range rows {
@@ -188,5 +211,72 @@ func TestAPlanCacheTellsTwoRotaryWidthsApart(t *testing.T) {
 		t.Errorf("two rotary widths produced %d cached plans; the cache cannot tell "+
 			"them apart, so the second caller ran the first caller's rotation",
 			cache.Len())
+	}
+}
+
+// A plan cache asked for two truncations returns two plans.
+//
+// The same claim as the rotary widths above, on the operator that made the hole
+// worth finding: a serving process compiles a top-k of 40 for one request and a
+// top-k of 5 for the next, and a cache that cannot tell them apart draws the
+// second request's token from forty candidates.
+func TestAPlanCacheTellsTwoTruncationsApart(t *testing.T) {
+	rt := newRuntime(t)
+	cache := tensor.NewPlanCache(rt)
+	defer cache.Close()
+
+	const vocab = 64
+	// Strictly descending, so a top-k keeps the first k indices and counting
+	// the survivors is the whole assertion.
+	w := make([]float32, vocab)
+	for i := range w {
+		w[i] = float32(vocab - i)
+	}
+
+	keptFor := func(k int) int {
+		plan, err := cache.Compile(func(b *tensor.Builder) {
+			x := tensor.Input(b, tensor.ValueDesc{
+				Name: "x", DType: accel.F32, Shape: tensor.Shape{vocab},
+			})
+			tensor.Output(b, "mask", tensor.TopKMask(b, x, k))
+		}, tensor.CompileOptions{Label: "trunc"})
+		if err != nil {
+			t.Fatalf("compile k=%d: %v", k, err)
+		}
+		d := rt.Device()
+		out := f32Buffer(t, d, "mask", make([]float32, vocab))
+		f := plan.Submit(d.Queue(), tensor.Bindings{
+			Buffers: map[string]accel.BufferView{
+				"x": f32Buffer(t, d, "x", w), "mask": out,
+			},
+		})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit k=%d: %v", k, err)
+		}
+		got := make([]float32, vocab)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		n := 0
+		for _, v := range got {
+			if v != 0 {
+				n++
+			}
+		}
+		return n
+	}
+
+	// The larger k first, so a cache that cannot tell them apart answers the
+	// second call with the first plan -- the direction that gives a sampler
+	// more candidates than it asked for.
+	if n := keptFor(40); n != 40 {
+		t.Fatalf("a top-k of 40 kept %d entries", n)
+	}
+	if n := keptFor(5); n != 5 {
+		t.Fatalf("a top-k of 5 kept %d entries; the cache returned the plan it compiled "+
+			"for k=40, so the identity does not cover k", n)
+	}
+	if cache.Len() != 2 {
+		t.Errorf("two truncations produced %d cached plans", cache.Len())
 	}
 }
