@@ -265,6 +265,17 @@ func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, positions *Tens
 // f16 to f32 is exact; f32 to f16 rounds to nearest-even and a value outside
 // f16's range becomes an infinity rather than a saturated maximum, because a
 // silently clamped weight is a plausible weight.
+//
+// # bf16 widens and does not narrow
+//
+// A checkpoint ships bf16 -- Qwen3 does -- and bf16 to f32 is exact: bf16 is
+// f32's top half, the same eight-bit exponent with sixteen zero bits below, so
+// the conversion is a shift. Going to f16 instead is the one lossy step in this
+// pipeline, because f16 carries a five-bit exponent where bf16 carries f32's
+// and a bf16 value can be outside f16's range entirely. Only the widening is
+// registered, so a caller who wants f16 writes both casts and sees where the
+// error enters -- which is the reason this operator exists at all rather than
+// happening implicitly at a boundary.
 func Cast(b *Builder, x *Tensor, to DType) *Tensor {
 	if poisoned(x) {
 		return b.poison()
@@ -281,15 +292,29 @@ func Cast(b *Builder, x *Tensor, to DType) *Tensor {
 		k = &testkernels.CastF32ToF16Kernel
 	case x.dtype == accel.F16 && to == accel.F32:
 		k = &testkernels.CastF16ToF32Kernel
+	case x.dtype == accel.BF16 && to == accel.F32:
+		k = &testkernels.CastBF16ToF32Kernel
+	case x.dtype == accel.BF16:
+		// Named separately from the general refusal, because a caller reaching
+		// here has a bf16 checkpoint and needs to be told the route rather than
+		// the rule. Narrowing bf16 directly is the lossy step this package
+		// declines to hide.
+		return b.fail(1, "Cast", "bf16 to %v; only the widening to f32 is registered, "+
+			"because it is a shift and exact. bf16 carries f32's eight-bit exponent "+
+			"and %v does not, so narrowing loses range as well as precision -- Cast to "+
+			"f32 first, and the loss is where you wrote it", to, to)
 	default:
-		return b.fail(1, "Cast", "%v to %v; specs/010-kernel-corpus.md registers f32 to f16 "+
-			"and f16 to f32, and a conversion it does not register is a kernel rather than "+
-			"something this layer can compose", x.dtype, to)
+		return b.fail(1, "Cast", "%v to %v; specs/010-kernel-corpus.md registers f32 to f16, "+
+			"f16 to f32 and bf16 to f32, and a conversion it does not register is a kernel "+
+			"rather than something this layer can compose", x.dtype, to)
 	}
 	reason := "the exact widening: every f16 value is an f32 value"
-	if to == accel.F16 {
+	switch {
+	case to == accel.F16:
 		reason = "the narrowing, rounding to nearest even; a value outside f16's range " +
 			"becomes an infinity rather than a saturated maximum"
+	case x.dtype == accel.BF16:
+		reason = "the exact widening: bf16 is f32's top half, so this is a 16-bit shift"
 	}
 	return b.record(node{
 		op: "Cast", inputs: []*Tensor{x}, kernel: k, bcast: true, reason: reason,

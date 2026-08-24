@@ -240,16 +240,16 @@ func TestQuantizedRefusals(t *testing.T) {
 		},
 		want: "both a quant plane and a scale plane",
 	}, {
-		name: "f32 activations",
+		// f32 activations are now selected rather than refused, because the
+		// weight's width is not the activation's business. A width no kernel
+		// reads at all still is.
+		name: "i8 activations",
 		build: func(b *tensor.Builder) {
-			x := tensor.Input(b, tensor.ValueDesc{
-				Name: "x", DType: accel.F32, Shape: tensor.Shape{2, 64},
-			})
-			tensor.QuantMatMul(b, x, tensor.Quantized{
+			tensor.QuantMatMul(b, i8(b, "x", 2, 64), tensor.Quantized{
 				Quants: i8(b, "q", 64, 4), Scales: f16(b, "s", 8),
 			})
 		},
-		want: "the registered kernel reads",
+		want: "f16 and f32 activations",
 	}, {
 		name: "contracted axes that disagree",
 		build: func(b *tensor.Builder) {

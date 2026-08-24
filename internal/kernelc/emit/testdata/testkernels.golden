@@ -1738,6 +1738,53 @@ kernel void CastF16ToF32(
 	},
 }
 
+// castBF16ToF32Flat is the generated flat lowering of CastBF16ToF32.
+//
+// It is what the CPU backend runs. The authored CastBF16ToF32 is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func castBF16ToF32Flat(t accel.Thread, in []accel.BFloat16, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		out[i] = in[i].F32()
+	}
+}
+
+// CastBF16ToF32Kernel is the compiled form of CastBF16ToF32.
+var CastBF16ToF32Kernel = kernelabi.Kernel{
+	Name:          "CastBF16ToF32",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "in", DType: kernelabi.BF16, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "d7fec22cbd94db93448cdae45fe2f1a2",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void CastBF16ToF32(
+    const device ushort *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        out[i] = as_type<float>(uint(in[i]) << 16);
+    }
+}
+`,
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		castBF16ToF32Flat(t, kernelabi.Slice[accel.BFloat16](a, 0), kernelabi.Slice[float32](a, 1))
+	},
+}
+
 // exchangeFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -3215,6 +3262,222 @@ kernel void MatMulTiledF32(
 	},
 }
 
+// matMulTiledF32F16Frame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type matMulTiledF32F16Frame struct {
+	pc     int
+	lx0    uint32
+	ly1    uint32
+	tid2   uint32
+	row3   uint32
+	col4   uint32
+	acc5   float32
+	zeroA6 float32
+	zeroB7 accel.Float16
+	k08    uint32
+	kk9    uint32
+	nn10   uint32
+	kk211  uint32
+	k12    uint32
+	av13   float32
+	bv14   float32
+}
+
+// matMulTiledF32F16Coop runs one invocation of MatMulTiledF32F16 to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func matMulTiledF32F16Coop(t accel.Thread, d GEMMDims, a []float32, b []accel.Float16, out []float32, tileA *[128]float32, tileB *[256]accel.Float16, f *matMulTiledF32F16Frame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lx0 = t.LocalID().X
+			f.ly1 = t.LocalID().Y
+			f.tid2 = ((f.ly1 * uint32(16)) + f.lx0)
+			f.row3 = ((t.GroupID().Y * uint32(8)) + f.ly1)
+			f.col4 = ((t.GroupID().X * uint32(16)) + f.lx0)
+			f.acc5 = float32(0)
+			f.zeroA6 = float32(0)
+			f.zeroB7 = accel.ToFloat16(float32(0))
+			f.pc = 1
+			continue
+		case 1:
+			f.k08 = uint32(0)
+			f.pc = 7
+			continue
+		case 2:
+			if (f.row3 < d.M) && ((f.k08 + f.lx0) < d.K) {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = a[(((f.row3 * d.K) + f.k08) + f.lx0)]
+			} else {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = f.zeroA6
+			}
+			f.kk9 = (f.tid2 / uint32(16))
+			f.nn10 = (f.tid2 % uint32(16))
+			if ((f.k08 + f.kk9) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn10) < d.N) {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = b[((((f.k08 + f.kk9) * d.N) + (t.GroupID().X * uint32(16))) + f.nn10)]
+			} else {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = f.zeroB7
+			}
+			f.kk211 = (f.kk9 + uint32(8))
+			if ((f.k08 + f.kk211) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn10) < d.N) {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = b[((((f.k08 + f.kk211) * d.N) + (t.GroupID().X * uint32(16))) + f.nn10)]
+			} else {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = f.zeroB7
+			}
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: ""}
+			return true
+		case 4:
+			{
+				f.k12 = uint32(0)
+				for ; f.k12 < uint32(16); f.k12 = (f.k12 + uint32(1)) {
+					f.av13 = tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k12)))]
+					f.bv14 = tileB[tr.ReadAt(1, int(((f.k12*uint32(16))+f.lx0)))].F32()
+					f.acc5 = float32(f.acc5 + float32(f.av13*f.bv14))
+				}
+			}
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: ""}
+			return true
+		case 6:
+			f.k08 = (f.k08 + uint32(16))
+			f.pc = 7
+			continue
+		case 7:
+			if f.k08 < d.K {
+				f.pc = 2
+				continue
+			}
+			f.pc = 8
+			continue
+		case 8:
+			if (f.row3 < d.M) && (f.col4 < d.N) {
+				out[((f.row3 * d.N) + f.col4)] = f.acc5
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// MatMulTiledF32F16Kernel is the compiled form of MatMulTiledF32F16.
+var MatMulTiledF32F16Kernel = kernelabi.Kernel{
+	Name:          "MatMulTiledF32F16",
+	WorkgroupSize: accel.ID3{X: 16, Y: 8, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "a", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "b", DType: kernelabi.F16, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "6a3c864db4ee41354b04031d06a5dc7b",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void MatMulTiledF32F16(
+    const device float *a [[buffer(0)]],
+    const device half *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant GEMMDims &d [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float tileA[128];
+    threadgroup half tileB[256];
+    uint lx = _lid.x;
+    uint ly = _lid.y;
+    uint tid = ((ly * uint(16)) + lx);
+    uint row = ((_wid.y * uint(8)) + ly);
+    uint col = ((_wid.x * uint(16)) + lx);
+    float acc = float(0);
+    float zeroA = float(0);
+    half zeroB = half(float(0));
+    for (uint k0 = uint(0); (k0 < d.K); k0 = (k0 + uint(16))) {
+        if (((row < d.M) && ((k0 + lx) < d.K))) {
+            tileA[tid] = a[(((row * d.K) + k0) + lx)];
+        } else {
+            tileA[tid] = zeroA;
+        }
+        uint kk = (tid / uint(16));
+        uint nn = (tid % uint(16));
+        if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[tid] = zeroB;
+        }
+        uint kk2 = (kk + uint(8));
+        if ((((k0 + kk2) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[(tid + uint(128))] = b[((((k0 + kk2) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[(tid + uint(128))] = zeroB;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
+            float av = tileA[((ly * uint(16)) + k)];
+            float bv = float(tileB[((k * uint(16)) + lx)]);
+            acc = (acc + (av * bv));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (((row < d.M) && (col < d.N))) {
+        out[((row * d.N) + col)] = acc;
+    }
+}
+`,
+	Suspensions: 2,
+	SharedSizes: []int{128, 256},
+	SharedBytes: 1024,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		var s1 [256]accel.Float16
+		kernelabi.Poison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*matMulTiledF32F16Frame)
+		if f == nil {
+			f = &matMulTiledF32F16Frame{}
+			slot.State = f
+		}
+		return matMulTiledF32F16Coop(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[accel.Float16](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[256]accel.Float16](a, 1), f, slot, slot.Shared)
+	},
+}
+
 // matVecFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -3539,6 +3802,175 @@ kernel void QuantMatVec(
 			slot.State = f
 		}
 		return quantMatVecCoop(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[accel.Float16](a, 0), kernelabi.Slice[int8](a, 1), kernelabi.Slice[accel.Float16](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Shared[[128]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// quantMatVecF32Frame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type quantMatVecF32Frame struct {
+	pc      int
+	col0    uint32
+	lid1    uint32
+	acc2    float32
+	k3      uint32
+	w4      uint32
+	q5      float32
+	s6      float32
+	stride7 uint32
+}
+
+// quantMatVecF32Coop runs one invocation of QuantMatVecF32 to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func quantMatVecF32Coop(t accel.Thread, d GEMMDims, a []float32, bq []int8, bs []accel.Float16, out []float32, sh *[128]float32, f *quantMatVecF32Frame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.col0 = t.GroupID().X
+			f.lid1 = t.LocalID().X
+			f.acc2 = float32(0)
+			if f.col0 < d.N {
+				{
+					f.k3 = f.lid1
+					for ; f.k3 < d.K; f.k3 = (f.k3 + uint32(128)) {
+						f.w4 = ((f.k3 * d.N) + f.col0)
+						f.q5 = float32(bq[f.w4])
+						f.s6 = bs[(f.w4 / uint32(32))].F32()
+						f.acc2 = float32(f.acc2 + float32(a[f.k3]*float32(f.q5*f.s6)))
+					}
+				}
+			}
+			tr.Write(0, int(f.lid1))
+			sh[f.lid1] = f.acc2
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: ""}
+			return true
+		case 2:
+			f.stride7 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid1 < f.stride7 {
+				tr.Write(0, int(f.lid1))
+				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride7)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: ""}
+			return true
+		case 5:
+			f.stride7 = (f.stride7 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride7 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			if (f.lid1 == uint32(0)) && (f.col0 < d.N) {
+				out[f.col0] = sh[tr.ReadAt(0, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// QuantMatVecF32Kernel is the compiled form of QuantMatVecF32.
+var QuantMatVecF32Kernel = kernelabi.Kernel{
+	Name:          "QuantMatVecF32",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "a", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "bq", DType: kernelabi.I8, Access: kernelabi.Read},
+		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "83af43931ad5272979454046375df990",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void QuantMatVecF32(
+    const device float *a [[buffer(0)]],
+    const device char *bq [[buffer(1)]],
+    const device half *bs [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant GEMMDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[128];
+    uint col = _wid.x;
+    uint lid = _lid.x;
+    float acc = float(0);
+    if ((col < d.N)) {
+        for (uint k = lid; (k < d.K); k = (k + uint(128))) {
+            uint w = ((k * d.N) + col);
+            float q = float(bq[w]);
+            float s = float(bs[(w / uint(32))]);
+            acc = (acc + (a[k] * (q * s)));
+        }
+    }
+    sh[lid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (((lid == uint(0)) && (col < d.N))) {
+        out[col] = sh[int(0)];
+    }
+}
+`,
+	Suspensions: 2,
+	SharedSizes: []int{128},
+	SharedBytes: 512,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		return []any{&s0}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*quantMatVecF32Frame)
+		if f == nil {
+			f = &quantMatVecF32Frame{}
+			slot.State = f
+		}
+		return quantMatVecF32Coop(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[int8](a, 1), kernelabi.Slice[accel.Float16](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Shared[[128]float32](a, 0), f, slot, slot.Shared)
 	},
 }
 
@@ -6143,6 +6575,91 @@ kernel void QuantRows(
 	},
 }
 
+// quantMatMulF32Flat is the generated flat lowering of QuantMatMulF32.
+//
+// It is what the CPU backend runs. The authored QuantMatMulF32 is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func quantMatMulF32Flat(t accel.Thread, d GEMMDims, a []float32, bq []int8, bs []accel.Float16, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < (d.M * d.N) {
+		var row uint32 = (i / d.N)
+		var col uint32 = (i % d.N)
+		var acc float32 = float32(0)
+		{
+			var k uint32 = uint32(0)
+			for ; k < d.K; k = (k + uint32(1)) {
+				var w uint32 = ((k * d.N) + col)
+				var q float32 = float32(bq[w])
+				var s float32 = bs[(w / uint32(32))].F32()
+				acc = float32(acc + float32(a[((row*d.K)+k)]*float32(q*s)))
+			}
+		}
+		out[i] = acc
+	}
+}
+
+// QuantMatMulF32Kernel is the compiled form of QuantMatMulF32.
+var QuantMatMulF32Kernel = kernelabi.Kernel{
+	Name:          "QuantMatMulF32",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "a", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "bq", DType: kernelabi.I8, Access: kernelabi.Read},
+		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "2dcbd579a6c67ec9ab88112539385ea9",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void QuantMatMulF32(
+    const device float *a [[buffer(0)]],
+    const device char *bq [[buffer(1)]],
+    const device half *bs [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant GEMMDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < (d.M * d.N))) {
+        uint row = (i / d.N);
+        uint col = (i % d.N);
+        float acc = float(0);
+        for (uint k = uint(0); (k < d.K); k = (k + uint(1))) {
+            uint w = ((k * d.N) + col);
+            float q = float(bq[w]);
+            float s = float(bs[(w / uint(32))]);
+            acc = (acc + (a[((row * d.K) + k)] * (q * s)));
+        }
+        out[i] = acc;
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		quantMatMulF32Flat(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[int8](a, 1), kernelabi.Slice[accel.Float16](a, 2), kernelabi.Slice[float32](a, 3))
+	},
+}
+
 // segmentSumFlat is the generated flat lowering of SegmentSum.
 //
 // It is what the CPU backend runs. The authored SegmentSum is never registered as
@@ -8304,6 +8821,7 @@ var Kernels = []*kernelabi.Kernel{
 	&AttentionDecodeBatchedKernel,
 	&CastF32ToF16Kernel,
 	&CastF16ToF32Kernel,
+	&CastBF16ToF32Kernel,
 	&ExchangeKernel,
 	&ReduceLoopKernel,
 	&ReduceUnrolledKernel,
@@ -8319,8 +8837,10 @@ var Kernels = []*kernelabi.Kernel{
 	&RoPEKernel,
 	&MatMulTiledKernel,
 	&MatMulTiledF32Kernel,
+	&MatMulTiledF32F16Kernel,
 	&MatVecKernel,
 	&QuantMatVecKernel,
+	&QuantMatVecF32Kernel,
 	&LinearTiledKernel,
 	&RMSNormKernel,
 	&SoftmaxKernel,
@@ -8332,6 +8852,7 @@ var Kernels = []*kernelabi.Kernel{
 	&AttentionPrefillPagedKernel,
 	&QuantMatMulKernel,
 	&QuantRowsKernel,
+	&QuantMatMulF32Kernel,
 	&SegmentSumKernel,
 	&CountAboveKernel,
 	&NormalizeKernel,

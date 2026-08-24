@@ -93,24 +93,6 @@ func TestAnF32MatMulNeedsNoCast(t *testing.T) {
 	}
 }
 
-// Operands of different widths are refused, because one kernel reads both.
-func TestAMixedWidthMatMulIsRefused(t *testing.T) {
-	rt := newRuntime(t)
-	b := rt.NewBuilder("mixed")
-	x := tensor.Input(b, tensor.ValueDesc{
-		Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 8},
-	})
-	w := tensor.Weight(b, tensor.ValueDesc{
-		Name: "w", DType: accel.F16, Shape: tensor.Shape{8, 4},
-	})
-	tensor.MatMul(b, x, w)
-	if err := b.Err(); err == nil {
-		t.Fatal("operands of different widths were accepted")
-	} else if !strings.Contains(err.Error(), "share a dtype") {
-		t.Errorf("the refusal should say they share a dtype, got %v", err)
-	}
-}
-
 // Linear stays f16 and says what to use instead.
 //
 // The composed form — MatMul then Add — takes f32 and is the reference the

@@ -634,6 +634,12 @@ func (m *msl) dtype(t *ir.Type) string {
 		return "float"
 	case ir.F16:
 		return "half"
+	case ir.BF16:
+		// ushort, not bfloat: the type is a Metal family capability and the
+		// storage is not. specs/021-metal-bringup.md section 5 admits bf16 as
+		// sixteen opaque bits, which is all a binding that is only loaded and
+		// widened ever needs -- ir.go already forbids arithmetic on it.
+		return "ushort"
 	case ir.I8:
 		// char, not int8_t: MSL's char is signed 8-bit, and the narrow integer
 		// types exist here for the reason specs/001-device-resources.md gives
@@ -1007,10 +1013,22 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.value(v.Args[0])
 		m.printf(")")
 		return
-	case ir.OpBF16ToF32, ir.OpF32ToBF16:
-		// bfloat exists in Metal 3.1 on some families and not others, so it is
-		// a capability rather than a spelling. Refused by name until the
-		// capability table can answer for it.
+	case ir.OpBF16ToF32:
+		// The widening needs no bfloat type. bf16 *is* f32's top half -- the
+		// same eight-bit exponent, seven mantissa bits, and sixteen zero bits
+		// below -- so widening is a shift and a bitcast over the storage, which
+		// every Metal family has. That includes the infinities and NaNs, whose
+		// payload bits move with everything else.
+		m.printf("as_type<float>(uint(")
+		m.value(v.Recv)
+		m.printf(") << 16)")
+		return
+	case ir.OpF32ToBF16:
+		// The narrowing is a different question and stays refused. It has to
+		// round, and the rounding this project admits is to nearest-even
+		// (specs/008-numerics.md section 4) with a tie rule over a mantissa
+		// Metal has no type for: bfloat exists in Metal 3.1 on some families
+		// and not others, so it is a capability rather than a spelling.
 		m.refuse(v.Op.String()+" (bfloat is a Metal family capability, not a type)", v.Pos())
 		return
 	}

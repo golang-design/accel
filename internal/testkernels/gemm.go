@@ -177,3 +177,93 @@ func MatMulTiledF32(t accel.Thread, d GEMMDims, a []float32, b []float32,
 		out[row*d.N+col] = acc
 	}
 }
+
+// MatMulTiledF32F16 computes out = a·b where a is f32 and b is f16.
+//
+// # Why a kernel that reads two widths
+//
+// Because a transformer's two operands are never the same width and cannot be.
+// The activations are f32 -- every other operator in the tensor layer is, from
+// RMSNorm through the residual Add -- and the weights are f16, because a four
+// billion parameter model is 16 GB in f32, so f32 weights are not a precision
+// choice but the choice not to load the model. A rule that the two agree
+// therefore makes the graph pay for the weight's memory decision: a consumer
+// measured four casts per layer, 144 dispatches per forward pass at 36 layers,
+// each a full pass over the activations that existed only to satisfy a dtype
+// check (accel issue 14).
+//
+// The mixed form is not new arithmetic. [MatMulTiled] already widens each f16
+// operand to f32 before multiplying, because the narrow types carry no
+// operators; this kernel starts one of them wide. Its result is therefore what
+// MatMulTiled computes on operands f16 holds exactly, bit for bit, which is
+// what the test asserts.
+//
+// # Why the wide operand is the first one
+//
+// `a` is the activation and `b` the weight, by position. A weight wider than
+// the activation it multiplies is the memory decision made in the expensive
+// direction, so that pairing stays refused and the tensor layer's diagnostic
+// names which operand is which rather than telling a caller to Cast.
+//
+// The two tiles differ in width for the same reason the operands do: 512 bytes
+// of f32 activations and 512 of f16 weights, which sits between the f16 and f32
+// forms' shared-memory footprints and inside the portable budget
+// specs/010-kernel-corpus.md fixes.
+//
+//accel:kernel workgroup=16,8
+func MatMulTiledF32F16(t accel.Thread, d GEMMDims, a []float32, b []accel.Float16,
+	out []float32, tileA *[128]float32, tileB *[256]accel.Float16) {
+
+	lx := t.LocalID().X // 0..15, along N
+	ly := t.LocalID().Y // 0..7, along M
+	tid := ly*TileN + lx
+
+	row := t.GroupID().Y*TileM + ly
+	col := t.GroupID().X*TileN + lx
+
+	acc := float32(0)
+	zeroA := float32(0)
+	zeroB := accel.ToFloat16(float32(0))
+
+	for k0 := uint32(0); k0 < d.K; k0 += TileK {
+		// A's tile is 8 rows by 16 K, one element per invocation.
+		if row < d.M && k0+lx < d.K {
+			tileA[tid] = a[row*d.K+k0+lx]
+		} else {
+			tileA[tid] = zeroA
+		}
+
+		// B's tile is 16 K by 16 N, two elements per invocation, because 256
+		// slots are filled by 128 invocations. The guard zeroes what is past
+		// the edge, so the accumulation below needs no second guard.
+		kk := tid / TileN
+		nn := tid % TileN
+		if k0+kk < d.K && t.GroupID().X*TileN+nn < d.N {
+			tileB[tid] = b[(k0+kk)*d.N+t.GroupID().X*TileN+nn]
+		} else {
+			tileB[tid] = zeroB
+		}
+		kk2 := kk + TileM
+		if k0+kk2 < d.K && t.GroupID().X*TileN+nn < d.N {
+			tileB[tid+128] = b[(k0+kk2)*d.N+t.GroupID().X*TileN+nn]
+		} else {
+			tileB[tid+128] = zeroB
+		}
+
+		t.Barrier()
+
+		// The tile is loaded; every invocation reads a row of A and a column of
+		// B out of it. The zero padding above is what makes this unguarded.
+		for k := uint32(0); k < TileK; k++ {
+			av := tileA[ly*TileK+k]
+			bv := tileB[k*TileN+lx].F32()
+			acc = acc + av*bv
+		}
+
+		t.Barrier()
+	}
+
+	if row < d.M && col < d.N {
+		out[row*d.N+col] = acc
+	}
+}

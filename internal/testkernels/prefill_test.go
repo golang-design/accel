@@ -306,6 +306,33 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("CastBF16ToF32", func(t *testing.T) {
+		const n = 128
+		in := make([]accel.BFloat16, n)
+		for i := range in {
+			// bf16 keeps f32's eight-bit exponent, so the inputs range over
+			// magnitudes f16 could not hold at all -- which is the reason this
+			// widening is the one registered and bf16 to f16 is not.
+			in[i] = accel.ToBFloat16(float32(i)*0.375 - 20)
+		}
+		authored := make([]float32, n)
+		for i := range in {
+			testkernels.CastBF16ToF32(flatThread(i, n), in, authored)
+		}
+		generated := make([]float32, n)
+		if err := kernel.Dispatch(&testkernels.CastBF16ToF32Kernel, accel.ID3{X: 2},
+			kernelabi.Args{Slices: []any{in, generated}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			// Exact, and more strongly than f16's: bf16 is f32's top half, so
+			// the conversion is a shift and every input is a witness.
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
 	t.Run("QuantMatMul", func(t *testing.T) {
 		const m, k, n = 2, 32, 4
 		a := make([]accel.Float16, m*k)
@@ -328,6 +355,40 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 		generated := make([]float32, m*n)
 		if err := kernel.Dispatch(&testkernels.QuantMatMulKernel, accel.ID3{X: 1},
+			kernelabi.Args{
+				Slices: []any{a, bq, bs, generated}, Uniforms: []any{dims},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("QuantMatMulF32", func(t *testing.T) {
+		const m, k, n = 2, 32, 4
+		a := make([]float32, m*k)
+		bq := make([]int8, k*n)
+		bs := make([]accel.Float16, (k*n+31)/32)
+		for i := range a {
+			a[i] = float32(i%7) - 3
+		}
+		for i := range bq {
+			bq[i] = int8(i%61) - 30
+		}
+		for i := range bs {
+			bs[i] = accel.ToFloat16(0.25 + float32(i)/16)
+		}
+		dims := testkernels.GEMMDims{M: m, N: n, K: k}
+
+		authored := make([]float32, m*n)
+		for i := range authored {
+			testkernels.QuantMatMulF32(flatThread(i, m*n), dims, a, bq, bs, authored)
+		}
+		generated := make([]float32, m*n)
+		if err := kernel.Dispatch(&testkernels.QuantMatMulF32Kernel, accel.ID3{X: 1},
 			kernelabi.Args{
 				Slices: []any{a, bq, bs, generated}, Uniforms: []any{dims},
 			}); err != nil {
@@ -865,6 +926,89 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		for i := range generated {
 			if authored[i] != generated[i] {
 				t.Fatalf("column %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("QuantMatVecF32", func(t *testing.T) {
+		const n, k = 8, 32
+		d := testkernels.GEMMDims{M: 1, N: n, K: k}
+		a := make([]float32, k)
+		bq := make([]int8, k*n)
+		bs := make([]accel.Float16, k*n/testkernels.QuantBlock)
+		for i := range a {
+			a[i] = float32(math.Sin(float64(i) * 0.21))
+		}
+		for i := range bq {
+			bq[i] = int8(i%201 - 100)
+		}
+		for i := range bs {
+			bs[i] = accel.ToFloat16(0.25 + float32(i%3)/8)
+		}
+
+		authored := make([]float32, n)
+		for col := range uint32(n) {
+			var sh [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: col},
+				kernel.ID3{X: n, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+					testkernels.QuantMatVecF32(th, d, a, bq, bs, authored, &sh)
+				})
+		}
+		generated := make([]float32, n)
+		if err := kernel.DispatchCooperative(&testkernels.QuantMatVecF32Kernel,
+			accel.ID3{X: n},
+			kernelabi.Args{
+				Slices: []any{a, bq, bs, generated}, Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("column %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("MatMulTiledF32F16", func(t *testing.T) {
+		// All three tails, so every guarded edge of the mixed tile runs. A
+		// shape that fitted the tile exactly would exercise none of them.
+		const m, n, k = 9, 19, 23
+		a := make([]float32, m*k)
+		b := make([]accel.Float16, k*n)
+		for i := range a {
+			a[i] = float32((i%13)-6) / 4
+		}
+		for i := range b {
+			b[i] = accel.ToFloat16(float32((i%11)-5) / 2)
+		}
+		d := testkernels.GEMMDims{M: m, N: n, K: k}
+		groups := kernel.ID3{
+			X: uint32((n + testkernels.TileN - 1) / testkernels.TileN),
+			Y: uint32((m + testkernels.TileM - 1) / testkernels.TileM),
+			Z: 1,
+		}
+		size := kernel.ID3{X: testkernels.TileN, Y: testkernels.TileM, Z: 1}
+
+		authored := make([]float32, m*n)
+		for gy := range groups.Y {
+			for gx := range groups.X {
+				var tileA [128]float32
+				var tileB [256]accel.Float16
+				kernel.RunAuthored(size, kernel.ID3{X: gx, Y: gy}, groups,
+					size.X*size.Y, func(th kernel.Thread) {
+						testkernels.MatMulTiledF32F16(th, d, a, b, authored, &tileA, &tileB)
+					})
+			}
+		}
+		generated := make([]float32, m*n)
+		if err := kernel.DispatchCooperative(&testkernels.MatMulTiledF32F16Kernel,
+			accel.ID3{X: groups.X, Y: groups.Y, Z: 1},
+			kernelabi.Args{Slices: []any{a, b, generated}, Uniforms: []any{d}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range authored {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
 			}
 		}
 	})

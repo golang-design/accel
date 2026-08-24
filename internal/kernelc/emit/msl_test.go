@@ -48,11 +48,15 @@ func TestMSLRefusals(t *testing.T) {
 	}{{
 		name: "bfloat",
 		mut: func(k *ir.Func) {
-			// bfloat is a Metal family capability rather than a spelling, so
-			// the conversion is refused rather than guessed at.
+			// The *narrowing* is refused: it has to round, and bfloat is a
+			// Metal family capability rather than a spelling, so the rounding
+			// cannot be spelled either. The widening lowers -- it is a shift
+			// over the storage and needs no type -- which is why this case
+			// names ToBFloat16 and not BFloat16.F32.
 			k.Body = &ir.Block{List: []ir.Stmt{ir.NewExprStmt(k.Pos(),
-				ir.NewIntrinsic(k.Pos(), &ir.Type{Kind: ir.F32}, ir.OpBF16ToF32,
-					ir.NewConst(k.Pos(), &ir.Type{Kind: ir.F32}, constant.MakeFloat64(1)), nil))}}
+				ir.NewIntrinsic(k.Pos(), &ir.Type{Kind: ir.BF16}, ir.OpF32ToBF16, nil,
+					[]ir.Value{ir.NewConst(k.Pos(), &ir.Type{Kind: ir.F32},
+						constant.MakeFloat64(1))}))}}
 		},
 		want: "bfloat",
 	}, {

@@ -201,7 +201,11 @@ allowed to be slow.
 Exactly enough for a straight-line kernel over buffers, which is
 [012](012-kernel-pipeline.md)'s subset re-targeted:
 
-- scalar types `i32`, `u32`, `f32`, `bool`, and `f16` as a storage type;
+- scalar types `i32`, `u32`, `f32`, `bool`, and `f16` and `bf16` as storage
+  types. `bf16` is spelled `ushort` rather than `bfloat`, because `bfloat` is a
+  Metal family capability and the storage is not: a bf16 binding is only loaded
+  and widened, and widening it is `as_type<float>(uint(x) << 16)` because bf16
+  is f32's top half. Narrowing f32 to bf16 has to round and stays refused;
 - buffer parameters as `device T *name [[buffer(k)]]`, indexed by binding order;
 - one std140 uniform block as `constant U &u [[buffer(n)]]`;
 - `t.GlobalID()` as `[[thread_position_in_grid]]`, and `len()` as a generated

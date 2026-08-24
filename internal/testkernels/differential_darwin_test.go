@@ -295,6 +295,20 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// And the mixed one, f32 activations against f16 weights. Bit-exact
+			// again: the f16 form already widens its weight load before
+			// multiplying, so this kernel differs only in where the widening of
+			// the *activation* happens, which is not arithmetic either backend
+			// performs differently.
+			kernel:   &testkernels.MatMulTiledF32F16Kernel,
+			counts:   []int{9 * 23, 23 * 19, 9 * 19},
+			uniforms: []any{testkernels.GEMMDims{M: 9, N: 19, K: 23}},
+			groups: accel.WorkgroupCount{
+				X: (19 + testkernels.TileN - 1) / testkernels.TileN,
+				Y: (9 + testkernels.TileM - 1) / testkernels.TileM,
+			},
+		},
+		{
 			kernel: &testkernels.LinearTiledKernel, counts: []int{9 * 23, 23 * 19, 19, 9 * 19},
 			uniforms: []any{testkernels.GEMMDims{M: 9, N: 19, K: 23}},
 			groups: accel.WorkgroupCount{
@@ -402,12 +416,49 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The same kernel over f32 activations. The quant and scale planes
+			// keep their widths -- a weight is loaded from a file and an
+			// activation is produced by the graph -- so only binding 0 changes,
+			// and the seed table is the one above.
+			kernel:   &testkernels.QuantMatMulF32Kernel,
+			counts:   []int{4 * 32, 32 * 8, 32 * 8 / 32, 4 * 8},
+			uniforms: []any{testkernels.GEMMDims{M: 4, N: 8, K: 32}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i%201) - 100
+				case 2:
+					return 0.25 + float32(i%3)/8
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			// The M=1 quantized selection. It folds K across the lanes and tree
 			// reduces where QuantMatMul sums sequentially, so its rounding
 			// differs from that kernel's -- but both backends run *this* order,
 			// which is what this compares. The tree is the reason for the ULP
 			// budget where QuantMatMul needed none.
 			kernel:   &testkernels.QuantMatVecKernel,
+			counts:   []int{32, 32 * 8, 32 * 8 / 32, 8},
+			uniforms: []any{testkernels.GEMMDims{M: 1, N: 8, K: 32}},
+			groups:   accel.WorkgroupCount{X: 8},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i%201) - 100
+				case 2:
+					return 0.25 + float32(i%3)/8
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
+			// The decode shape with f32 activations, which is where a
+			// transformer spends nearly all of its dispatches: M=1 is every
+			// step after the first, and the graph feeding it is f32.
+			kernel:   &testkernels.QuantMatVecF32Kernel,
 			counts:   []int{32, 32 * 8, 32 * 8 / 32, 8},
 			uniforms: []any{testkernels.GEMMDims{M: 1, N: 8, K: 32}},
 			groups:   accel.WorkgroupCount{X: 8},
@@ -444,6 +495,18 @@ func diffCases() []diffCase {
 			// backend's widening were not a widening.
 			kernel: &testkernels.CastF16ToF32Kernel, counts: []int{256, 256},
 			groups: accel.WorkgroupCount{X: 4},
+		},
+		{
+			// bf16 to f32 is exact for a stronger reason than f16's: bf16 *is*
+			// f32's top half, so the widening is a 16-bit shift and a backend
+			// that got it wrong would be wrong on every input rather than on
+			// the ones near a rounding boundary.
+			kernel: &testkernels.CastBF16ToF32Kernel, counts: []int{256, 256},
+			groups: accel.WorkgroupCount{X: 4},
+			// bf16 carries seven mantissa bits, so the default seed's quarters
+			// survive it -- but a value with more precision than that would
+			// round on upload and the comparison would be about the seed.
+			seed: func(b, i int) float32 { return float32((i+b*7)%13-6) / 4 },
 		},
 		{
 			// f32 to f16 rounds, and to nearest-even, which is the only
@@ -779,6 +842,8 @@ func dtypeOf(d kernelabi.DType) accel.DType {
 	switch d {
 	case kernelabi.F16:
 		return accel.F16
+	case kernelabi.BF16:
+		return accel.BF16
 	case kernelabi.U32:
 		return accel.U32
 	case kernelabi.I32:
@@ -802,6 +867,14 @@ func writeSeed(t *testing.T, r *accel.Recorder, v accel.BufferView, dt accel.DTy
 		vals := make([]uint16, n)
 		for i := range vals {
 			vals[i] = accel.ToFloat16(at(i)).Bits()
+		}
+		r.UploadToBuffer(v, vals)
+	case accel.BF16:
+		// Also []uint16 at the boundary, and for the same reason: the API moves
+		// bit patterns and BFloat16's layout is not part of the contract.
+		vals := make([]uint16, n)
+		for i := range vals {
+			vals[i] = accel.ToBFloat16(at(i)).Bits()
 		}
 		r.UploadToBuffer(v, vals)
 	case accel.U32:
@@ -853,6 +926,14 @@ func readAsF32(t *testing.T, d *accel.Device, b *accel.Buffer, dt kernelabi.DTyp
 		}
 		for i, v := range raw {
 			out[i] = accel.Float16FromBits(v).F32()
+		}
+	case kernelabi.BF16:
+		raw := make([]uint16, n)
+		if err := d.Queue().ReadBuffer(b, 0, raw); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		for i, v := range raw {
+			out[i] = accel.BFloat16FromBits(v).F32()
 		}
 	case kernelabi.U32:
 		raw := make([]uint32, n)

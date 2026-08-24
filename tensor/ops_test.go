@@ -494,11 +494,15 @@ func TestOperatorRefusals(t *testing.T) {
 		},
 		want: "x has 4 rows and positions holds 1",
 	}, {
-		name: "a MatMul of mixed dtypes",
+		// The direction that stays refused. f32 activations against f16
+		// weights is the pair a transformer has and now multiplies; a weight
+		// wider than its activations is the memory decision made in the
+		// expensive direction and has no registered GEMM.
+		name: "a MatMul whose weight is wider than its activations",
 		build: func(b *tensor.Builder) {
-			tensor.MatMul(b, f32(b, "x", 4, 8), f16(b, "w", 8, 4))
+			tensor.MatMul(b, f16(b, "x", 4, 8), f32(b, "w", 8, 4))
 		},
-		want: "one kernel reads both, so they share a dtype",
+		want: "wider than the activation",
 	}, {
 		name:  "contracted axes that disagree",
 		build: func(b *tensor.Builder) { tensor.MatMul(b, f16(b, "x", 4, 8), f16(b, "w", 5, 4)) },
@@ -519,6 +523,19 @@ func TestOperatorRefusals(t *testing.T) {
 			tensor.Linear(b, f16(b, "x", 4, 8), f16(b, "w", 8, 6), f16(b, "c", 6))
 		},
 		want: "the epilogue adds in f32",
+	}, {
+		// The pair MatMul now admits and the fused epilogue still cannot read.
+		// matShape accepts it, so Linear has to check the operands itself --
+		// and the message names both, because the activation is not the one
+		// with the problem.
+		name: "a Linear over f32 activations and an f16 weight",
+		build: func(b *tensor.Builder) {
+			x := tensor.Input(b, tensor.ValueDesc{
+				Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 8},
+			})
+			tensor.Linear(b, x, f16(b, "w", 8, 6), f32(b, "c", 6))
+		},
+		want: "operands are f32 and f16 and the fused epilogue reads f16 on both",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := rt.NewBuilder(tc.name)
