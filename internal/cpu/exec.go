@@ -161,8 +161,14 @@ type resolvedNode struct {
 	// copying it, which is what makes a kernel write where the graph said it
 	// would.
 	dispatch *driver.Dispatch
-	args     kernel.Args
-	rows     *driver.RowCopy
+
+	// render is OpRenderPass's payload, with its attachments already resolved
+	// to the device memory they name.
+	render      *driver.RenderPass
+	colorAttach [][]float32
+	depthAttach []float32
+	args        kernel.Args
+	rows        *driver.RowCopy
 
 	// subgroupSize and diagnostics come from the device's options, so a graph
 	// submitted in developer mode is checked and one in strict mode is not.
@@ -191,7 +197,7 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 	for i := range e.plan.Nodes {
 		n := &e.plan.Nodes[i]
 		var dst []byte
-		if n.Op != driver.OpDispatch {
+		if n.Op.HasDestination() {
 			var err error
 			dst, err = e.bytes(n.Dst)
 			if err != nil {
@@ -205,6 +211,11 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 				return nil, fmt.Errorf("accel: node %d source: %w", n.ID, err)
 			}
 			r.src = src
+		}
+		if n.Op == driver.OpRenderPass {
+			if err := e.resolveRender(&r, n); err != nil {
+				return nil, err
+			}
 		}
 		if n.Op == driver.OpDispatch {
 			if err := e.resolveDispatch(&r, n); err != nil {
@@ -381,6 +392,10 @@ func run(nodes []resolvedNode) error {
 			if err := dispatch(n); err != nil {
 				return err
 			}
+		case driver.OpRenderPass:
+			if err := renderPass(n); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("accel: node %d has operation %v", n.id, n.op)
 		}
@@ -530,4 +545,40 @@ func (f *fence) Done() bool {
 	default:
 		return false
 	}
+}
+
+// resolveRender resolves a render pass's attachments to the memory they name.
+//
+// The slices alias device memory rather than copying it, for the same reason a
+// dispatch's bindings do: an attachment written anywhere else is not the
+// attachment the graph ordered against.
+func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
+	rp := n.Render
+	if rp == nil {
+		return fmt.Errorf("accel: node %d is a render pass with no payload", n.ID)
+	}
+	r.render = rp
+	for i, o := range rp.Color {
+		raw, err := e.bytes(o)
+		if err != nil {
+			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
+		}
+		s, err := typedSlice(kernel.F32, raw)
+		if err != nil {
+			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
+		}
+		r.colorAttach = append(r.colorAttach, s.([]float32))
+	}
+	if rp.Depth != nil {
+		raw, err := e.bytes(*rp.Depth)
+		if err != nil {
+			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
+		}
+		s, err := typedSlice(kernel.F32, raw)
+		if err != nil {
+			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
+		}
+		r.depthAttach = s.([]float32)
+	}
+	return nil
 }
