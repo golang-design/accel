@@ -269,12 +269,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	}
 
 	out := Shape{qHeads, headDim}
-	if prefill && cacheDType != accel.F32 {
-		return b.fail(1, "Attention", "the cache is %v and only the decode kernel reads a "+
-			"narrow cache; specs/010-kernel-corpus.md owns the prefill variant. A prefill "+
-			"over an f16 cache is refused rather than run against the f32 kernel, which "+
-			"would read every second entry", cacheDType)
-	}
 	if prefill {
 		out = Shape{qSeq, qHeads, headDim}
 		if opts.BaseName == "" {
@@ -289,6 +283,9 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		// this is a selection and Selections reports it -- the shape every
 		// other choice here takes.
 		prefillKernel := &testkernels.AttentionPrefillKernel
+		if cacheDType == accel.F16 {
+			prefillKernel = &testkernels.AttentionPrefillF16Kernel
+		}
 		prefillInputs := []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths}
 		prefillWhy := fmt.Sprintf("the causal prefill kernel: one workgroup per query "+
 			"position and head, %d of them", qSeq*qHeads)
@@ -357,12 +354,10 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 
 	switch {
 	case opts.Pages != nil:
-		if cacheDType != accel.F32 {
-			return b.fail(1, "Attention", "the cache is %v and only the contiguous decode "+
-				"kernel reads a narrow cache; specs/010-kernel-corpus.md owns the paged "+
-				"f16 variant", cacheDType)
-		}
 		decode = &testkernels.AttentionDecodePagedKernel
+		if cacheDType == accel.F16 {
+			decode = &testkernels.AttentionDecodePagedF16Kernel
+		}
 		decodeWhy = fmt.Sprintf("the paged decode kernel: blocks of %d, addressed through "+
 			"a page table", opts.Block)
 		// Pages before lengths, which is the kernel's binding order.

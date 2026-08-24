@@ -206,9 +206,25 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 	if s == nil || s.poison || poisoned(rows, ids) {
 		return &State{b: b, poison: true, producer: -1}
 	}
-	if s.desc.DType != accel.F32 || rows.dtype != accel.F32 {
-		b.fail(1, "ScatterRows", "state is %v and rows are %v; the registered kernel writes "+
-			"f32", s.desc.DType, rows.dtype)
+	// A narrow state is the case specs/002-compute-model.md's storage rule was
+	// written for: a scatter moves bytes and computes nothing, so there is no
+	// accumulator to lose precision in. It exists because a consumer found that
+	// Attention could *read* an f16 cache and nothing could write one, so the
+	// halving that motivated the read path could not be reached from a graph --
+	// accel issue 13. A test that fills the cache from the host cannot see that.
+	if s.desc.DType != accel.F32 && s.desc.DType != accel.F16 {
+		b.fail(1, "ScatterRows", "state is %v; the registered kernels write f32 or f16",
+			s.desc.DType)
+		return &State{b: b, poison: true, producer: -1}
+	}
+	// One kernel reads the rows and writes the state, so they share a width.
+	// Cast is how a caller crosses it, and that is one pass over one token's
+	// key and value rather than over the activations -- the trade MatMul makes
+	// the other way for the same reason.
+	if rows.dtype != s.desc.DType {
+		b.fail(1, "ScatterRows", "state is %v and rows are %v; one kernel reads the rows "+
+			"and writes the state, so they share a dtype -- Cast the rows",
+			s.desc.DType, rows.dtype)
 		return &State{b: b, poison: true, producer: -1}
 	}
 	if ids.dtype != accel.U32 {
@@ -235,9 +251,13 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 		b.fail(1, "ScatterRows", "%s", staleMessage(b, s))
 		return &State{b: b, poison: true, producer: -1}
 	}
+	scatter := &testkernels.ScatterRowsKernel
+	if s.desc.DType == accel.F16 {
+		scatter = &testkernels.ScatterRowsF16Kernel
+	}
 	out := b.record(node{
 		op: "ScatterRows", inputs: []*Tensor{rows, ids},
-		kernel:  &testkernels.ScatterRowsKernel,
+		kernel:  scatter,
 		outPort: s.desc.Name,
 		outOff:  s.offset,
 		uniform: func(map[string]ScalarValue) any {
@@ -246,7 +266,7 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 			}
 		},
 		grid: func(*Tensor) accel.WorkgroupCount {
-			wg := int(testkernels.ScatterRowsKernel.WorkgroupSize.X)
+			wg := int(scatter.WorkgroupSize.X)
 			n := count * width
 			return accel.WorkgroupCount{X: (n + wg - 1) / wg}
 		},
