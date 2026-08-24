@@ -339,6 +339,36 @@ Named so the milestone is not read as further along than it is:
   [006](006-backends.md) §6.3 owns and which should not be decided by whichever
   backend landed most recently.
 
+## 10. The render bindings — 2026-08-24
+
+`internal/mtl` gained the graphics half: `Texture` and `NewRenderTarget`,
+`RenderPipelineSpec` with `BlendSpec` and `VertexLayoutSpec`, `RenderPipeline`,
+`DepthState`, `RenderAttachment`, `RenderEncoder` and `CommandBuffer.Render`,
+`CompileFunction` and `Function`, `ClearColor`, the two pixel formats and the
+load and store action constants, plus `BlitEncoder.CopyTextureToBuffer` and
+`CopyBufferToTexture`. Listed because a package layout no spec records is
+undocumented structure.
+
+Three hazards this section exists to record, because each one compiles.
+
+**An invalid pipeline descriptor aborts the process.**
+`-newRenderPipelineStateWithDescriptor:error:` calls `assert` in Metal's
+validation layer rather than returning nil with an error, so a missing vertex
+function is not a bad diagnostic — it is the caller's process gone, with a line
+on stderr and no Go frame. Every field the validator inspects is checked in Go
+first.
+
+**A class looked up at package initialization is zero.** `objc.GetClass` runs
+before `Devices()` has dlopened Metal, and a message to nil is answered with
+zero rather than crashing — so the symptom is an object that "could not be
+created" from a call that never reached Metal at all. The render classes are
+looked up on first use.
+
+**The render encoder is autoreleased and must be retained.** §2's ownership rule
+again: `renderCommandEncoderWithDescriptor:` is not a `new*` selector, so the
+pool drains the encoder before `End` is called and Metal asserts "released
+without endEncoding". A third abort rather than an error.
+
 ## Outcome — 2026-08-23
 
 **Every section here is built except one, and that one is named rather than

@@ -438,6 +438,32 @@ compared against the CPU rasterizer pixel by pixel over seven cases.
   count capability a device-written count above the build-time maximum is clamped
   and reported.
 
+### 7.1 Where the oracle stops: undefined contents
+
+The CPU rasterizer is the oracle every other backend is checked against, and
+there is exactly one region where it cannot be: **an attachment's undefined
+contents.**
+
+`LoadDontCare` says prior contents are undefined at the start of a pass, and
+`StoreDiscard` says they are undefined at the end. Both backends honour that and
+they honour it differently, because the shapes differ:
+
+| | CPU | Metal |
+| --- | --- | --- |
+| `LoadDontCare`, untouched pixel | the framebuffer aliases the caller's buffer, so prior contents remain | a fresh texture, so whatever that memory held |
+| `StoreDiscard` | nothing to skip; the pass already wrote the caller's buffer | the blit back is skipped, so the buffer is untouched |
+
+Neither is wrong. The rule is therefore stated rather than tested away:
+
+> **What a pass writes is defined and every backend must agree on it. What a
+> pass does not write is undefined, and a caller who reads it has a bug the API
+> cannot catch.**
+
+The differential asserts the first half and deliberately asserts that the second
+half *does* differ. That second assertion is the one worth having: a backend
+that quietly began preserving undefined contents would be making a promise this
+spec does not, and the next backend would inherit it.
+
 ## 8. Deviations
 
 ### Deviation 1: the draw-time uniform channel was removed
