@@ -105,13 +105,10 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 
 // drawOne rasterizes one draw.
 func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, indices, args []byte) error {
-	vs, ok := d.Vertex.(kernel.VertexFn)
-	if !ok {
-		return fmt.Errorf("the vertex stage is %T, not a compiled stage", d.Vertex)
-	}
-	fs, ok := d.Fragment.(kernel.FragmentFn)
-	if !ok {
-		return fmt.Errorf("the fragment stage is %T, not a compiled stage", d.Fragment)
+	vs, fs := d.Vertex.RunVertex, d.Fragment.RunFragment
+	if vs == nil || fs == nil {
+		return fmt.Errorf("stage %q or %q carries no generated adapter, so this backend "+
+			"has nothing to run", d.Vertex.Name, d.Fragment.Name)
 	}
 
 	ps := raster.PassState{

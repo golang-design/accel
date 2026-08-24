@@ -124,7 +124,7 @@ func TestValidateRejectsMalformedPlans(t *testing.T) {
 				Draws: []driver.RenderDraw{{VertexCount: 3, InstanceCount: 1}}}}}}, "missing a stage"},
 		{"render pass draw of no vertices", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
 			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
-				Draws: []driver.RenderDraw{{Vertex: struct{}{}, Fragment: struct{}{}, InstanceCount: 1}}}}}},
+				Draws: []driver.RenderDraw{{Vertex: &kernel.Stage{Name: "v"}, Fragment: &kernel.Stage{Name: "f"}, InstanceCount: 1}}}}}},
 			"draws 0 vertices"},
 	}
 	for _, c := range cases {
@@ -453,7 +453,7 @@ func TestARenderPassNeedsNoDestinationOperand(t *testing.T) {
 			Width: 4, Height: 4,
 			Color: []driver.Operand{op(0, 4*4*4*4)},
 			Draws: []driver.RenderDraw{{
-				Vertex: struct{}{}, Fragment: struct{}{},
+				Vertex: &kernel.Stage{Name: "v"}, Fragment: &kernel.Stage{Name: "f"},
 				VertexCount: 3, InstanceCount: 1,
 			}},
 		},

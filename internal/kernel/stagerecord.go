@@ -117,6 +117,16 @@ type StageUniform struct {
 	Name  string
 	Type  string
 	Index int
+
+	// Size is the encoded std140 block size in bytes, and Encode writes a value
+	// into that layout.
+	//
+	// Carried for the reason [Uniform] carries them: a backend holds the value
+	// as an any and needs std140 bytes, and without this it would reflect over
+	// the Go struct -- a second layout implementation beside the generated
+	// codec, which would disagree with it eventually.
+	Size   int
+	Encode func(dst []byte, v any) error
 }
 
 // StageOutput is one colour attachment a fragment stage writes.

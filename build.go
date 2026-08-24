@@ -461,7 +461,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 				pipe.label, has(pipe.desc.DepthStencil != nil), has(p.desc.Depth != nil))
 		}
 		rd := driver.RenderDraw{
-			Vertex: pipe.desc.Vertex.RunVertex, Fragment: pipe.desc.Fragment.RunFragment,
+			Vertex: pipe.desc.Vertex, Fragment: pipe.desc.Fragment,
 			Topology:    uint8(pipe.desc.Primitive.Topology),
 			FrontFace:   uint8(pipe.desc.Primitive.FrontFace),
 			Cull:        uint8(pipe.desc.Primitive.Cull),

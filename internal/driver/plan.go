@@ -571,8 +571,13 @@ type RenderPass struct {
 
 // RenderDraw is one recorded draw.
 type RenderDraw struct {
-	// Stage is the compiled pair, opaque to the planner.
-	Vertex, Fragment any
+	// Vertex and Fragment are the generated stage records.
+	//
+	// The record and not the flat adapter, for the reason Dispatch carries a
+	// Kernel rather than a function: a backend takes what it needs. The CPU
+	// oracle runs RunVertex, Metal reads MSL and the uniform codecs, and
+	// neither is handed a shape chosen for the other.
+	Vertex, Fragment *kernel.Stage
 
 	// Fixed-function state, as the public enums encode it.
 	Topology  uint8

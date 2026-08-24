@@ -288,7 +288,10 @@ func (e *emitter) stage(k *ir.Func) {
 	if len(k.Uniforms) > 0 {
 		e.printf("\tUniforms: []accel.StageUniform{\n")
 		for i, u := range k.Uniforms {
-			e.printf("\t\t{Name: %q, Type: %q, Index: %d},\n", u.Name, u.TypeName, i)
+			e.printf("\t\t{Name: %q, Type: %q, Index: %d, Size: %d, Encode: func(dst []byte, v any) error {\n",
+				u.Name, u.TypeName, i, u.Size)
+			e.printf("\t\t\treturn kernelabi.EncodeUniform(dst, v, %sCodec{}.Encode)\n", u.TypeName)
+			e.printf("\t\t}},\n")
 		}
 		e.printf("\t},\n")
 	}
