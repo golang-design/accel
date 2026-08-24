@@ -383,7 +383,12 @@ type ColorAttachment struct {
 	// rebindable binding point. Exactly one is set, the way exactly one of
 	// [Binding]'s two is: a swapchain image cannot be named at record time,
 	// because which one the frame gets is decided at acquire.
-	View BufferView
+	//
+	// A [TextureView] and not a [BufferView], because the view is what carries
+	// the format the pass writes through and the subresource
+	// specs/033-render-api.md section 3.3 compares. See
+	// [RenderPassDescriptor].
+	View TextureView
 	Slot Slot
 
 	Load  LoadOp
@@ -393,7 +398,7 @@ type ColorAttachment struct {
 
 // DepthAttachment is a pass's depth target.
 type DepthAttachment struct {
-	View BufferView
+	View TextureView
 	Slot Slot
 
 	Load  LoadOp
@@ -403,17 +408,20 @@ type DepthAttachment struct {
 
 // RenderPassDescriptor describes one render pass.
 //
-// Attachments are buffer views rather than textures at this milestone, because
-// specs/035-cpu-rasterizer.md's reference rasterizer writes float components and
-// the texture path needs the format encode/decode 033 leaves to the backend.
+// # Attachments are texture views
 //
-// Correction, 2026-08-24: the shape does change when that lands, and this
-// comment used to say it would not. A BufferView cannot name a mip level, an
-// array layer or a format, and specs/033-render-api.md section 3.3's feedback
-// rejection compares subresources. specs/042-surface-completion.md section 5.2
-// records what else follows from the same decision -- the format fields that
-// reach no backend, the per-pass staging copies, and the conversion draw a
-// present costs every frame.
+// They were buffer views, and this comment used to say the shape a caller
+// writes would not change when textures landed. It did.
+// specs/042-surface-completion.md section 5.2 found that eight of the largest
+// findings in a review of this surface were consequences of that one decision,
+// and specs/045-texture-attachments.md is the change: a buffer view carries a
+// dtype, so ColorTargetState.Format reached no backend, sRGB had no owner, the
+// V13 check was unimplementable, and 033 section 3.3's feedback rejection had
+// no subresource to compare.
+//
+// A [TextureView] names one subresource of one texture and carries a concrete
+// format, and it is the same type a shader-visible binding takes -- which is
+// what makes the feedback rule compare one shape rather than two.
 type RenderPassDescriptor struct {
 	Color []ColorAttachment
 	Depth *DepthAttachment
@@ -522,7 +530,7 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 	// DontCare is a write only, and DontCare is what makes the
 	// read-after-write edge to its previous writer disappear.
 	var accesses []access
-	declare := func(v BufferView, slot Slot, load LoadOp, what string, elems int, st stage) {
+	declare := func(v TextureView, slot Slot, load LoadOp, what string, elems int, st stage) {
 		mode := AccessWrite
 		if load == LoadKeep {
 			mode = AccessReadWrite
@@ -535,7 +543,7 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 		if slot != 0 {
 			a, ok = r.slotAccess(op, slot, 0, elems*F32.Size(), mode)
 		} else {
-			a, ok = r.declare(op, v, mode)
+			a, ok = r.declareTexture(op, v, mode)
 		}
 		if !ok {
 			p.failed = true
@@ -546,9 +554,9 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 	}
 	for i, c := range desc.Color {
 		what := fmt.Sprintf("colour %d", i)
-		if (c.View.Buffer == nil) == (c.Slot == 0) {
+		if (c.View.Texture == nil) == (c.Slot == 0) {
 			r.fail("RenderPass %q: %s names %s; an attachment is one resource or one "+
-				"slot", label, what, either(c.View.Buffer != nil, c.Slot != 0))
+				"slot", label, what, either(c.View.Texture != nil, c.Slot != 0))
 			p.failed = true
 			continue
 		}
@@ -559,10 +567,10 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 		declare(c.View, c.Slot, c.Load, what, desc.Width*desc.Height*4, stageColourOutput)
 	}
 	if dep := desc.Depth; dep != nil {
-		if (dep.View.Buffer == nil) == (dep.Slot == 0) {
+		if (dep.View.Texture == nil) == (dep.Slot == 0) {
 			r.fail("RenderPass %q: the depth attachment names %s; an attachment is one "+
 				"resource or one slot", label,
-				either(dep.View.Buffer != nil, dep.Slot != 0))
+				either(dep.View.Texture != nil, dep.Slot != 0))
 			p.failed = true
 		} else {
 			// Both fragment-test stages, and that is not hedging. Where the
@@ -583,8 +591,8 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 
 // either names what an attachment supplied, for an error that has to say which
 // of "neither" and "both" happened.
-func either(hasView, hasSlot bool) string {
-	if hasView && hasSlot {
+func either(hasTexture, hasSlot bool) string {
+	if hasTexture && hasSlot {
 		return "both a resource and a slot"
 	}
 	return "no resource"

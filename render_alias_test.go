@@ -10,32 +10,45 @@ import (
 	"golang.design/x/accel"
 )
 
-// A transient used as a render attachment is live at the pass that writes it.
+// A transient a render pass reads is live at that pass.
 //
 // It was not. Every node kind had to call Recorder.touch for itself, and the
 // render pass — the first kind added after that rule existed — did not, so a
-// transient attachment's live range covered the upload and the readback and not
-// the pass in between. With no readback the range was one node long, and the
-// aliasing pass was free to put another transient over bytes the pass writes.
+// transient it touched had a live range that covered the upload and the
+// readback and not the pass in between. With no readback the range was one node
+// long, and the aliasing pass was free to put another transient over bytes the
+// pass uses.
 //
 // Asserted on the placement rather than on pixels, because the corruption needs
 // a second transient of the right size in the right span to appear at all — the
 // bug is that the *permission* exists, and that is what this reads.
-func TestATransientAttachmentIsLiveAtItsPass(t *testing.T) {
+//
+// # What this covered before, and what it covers now
+//
+// It read the same property through a transient *attachment*, which
+// specs/045-texture-attachments.md ended: an attachment is a texture view and a
+// texture cannot be a transient. The regression this pins is Recorder.touch on
+// a render pass and that is unchanged, but the attachment path specifically is
+// no longer reachable from a transient, so nothing here exercises it.
+func TestATransientAPassReadsIsLiveAtThatPass(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 	r := d.NewRecorder()
-	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
-	att := r.Transient(accel.BufferDescriptor{
-		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "attachment",
+	verts := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: len(triangleVertices()),
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+		Label: "vertices",
 	})
-	r.UploadToBuffer(att, make([]float32, w*h*4))
+	r.UploadToBuffer(verts, triangleVertices())
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: att, Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{
+			View: view(t, colourTarget(t, d, "colour", w, h)), Load: accel.LoadClear,
+		}},
 		Width: w, Height: h, Label: "pass",
 	})
-	p.SetPipeline(solidPipeline(t, d))
+	p.SetPipeline(attributePipeline(t, d))
+	p.SetVertexBuffer(0, verts)
 	p.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()
@@ -46,7 +59,7 @@ func TestATransientAttachmentIsLiveAtItsPass(t *testing.T) {
 
 	places := g.TransientPlacement()
 	if len(places) != 1 {
-		t.Fatalf("%d placements, want the one attachment", len(places))
+		t.Fatalf("%d placements, want the one transient", len(places))
 	}
 	var atPass bool
 	for _, n := range places[0].Users {
@@ -56,54 +69,72 @@ func TestATransientAttachmentIsLiveAtItsPass(t *testing.T) {
 	}
 	if !atPass {
 		t.Errorf("%q is live at nodes %v and the pass is node %d; a transient the pass "+
-			"writes is not in its own live range, so another transient may be placed "+
+			"reads is not in its own live range, so another transient may be placed "+
 			"over it", places[0].Label, places[0].Users, p.Node())
 	}
 }
 
-// Two render targets share memory when one is dead before the other is written.
+// Two transients a pass each touches share memory when one is dead before the
+// other is written.
 //
 // specs/033-render-api.md section 7's aliasing consequence, stated as what the
 // placement shows: two transients at one offset is aliasing, and it is sound
 // only when every user of one is ordered against every user of the other. The
-// ordering here is a real chain — render, read the result back, use it as the
-// next pass's geometry — because without one the two passes may run
-// concurrently and must *not* share bytes, which is the case that first ran.
-func TestTwoRenderTargetsAliasWhenTheirRangesDoNot(t *testing.T) {
+// ordering here is a real chain — render, read the result back, feed it to the
+// next pass — because without one the two passes may run concurrently and must
+// *not* share bytes, which is the case that first ran.
+//
+// The transients are the passes' vertex data rather than their render targets,
+// which is what this read before specs/045-texture-attachments.md made an
+// attachment a texture. A texture cannot be a transient, so the aliasing of two
+// render *targets* is no longer expressible; the relation being checked is the
+// same one.
+func TestTwoTransientsARenderPassTouchesAliasWhenTheirRangesDoNot(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 	q := d.Queue()
 	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
-	mid := newBuffer(t, d, "mid", w*h*4, usage)
-	out := newBuffer(t, d, "out", w*h*4, usage)
+	verts := triangleVertices()
+
+	first := colourTarget(t, d, "first", w, h)
+	second := colourTarget(t, d, "second", w, h)
+	bridge := newBuffer(t, d, "bridge", w*h*4, usage)
 
 	r := d.NewRecorder()
-	first := r.Transient(accel.BufferDescriptor{
-		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "first",
+	firstVerts := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: len(verts), Usage: usage, Label: "first vertices",
 	})
-	second := r.Transient(accel.BufferDescriptor{
-		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "second",
+	secondVerts := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: len(verts), Usage: usage, Label: "second vertices",
 	})
 
-	// Pass 0 renders into first; the copy reads it, and first is dead after.
+	// Pass 0 reads firstVerts, which is dead after it.
+	r.UploadToBuffer(firstVerts, verts)
 	p0 := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: first, Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, first), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "first pass",
 	})
-	p0.SetPipeline(solidPipeline(t, d))
+	p0.SetPipeline(attributePipeline(t, d))
+	p0.SetVertexBuffer(0, firstVerts)
 	p0.Draw(accel.Draw{VertexCount: 3})
-	r.CopyBuffer(whole(t, mid), first)
 
-	// Pass 1 renders into second, taking its geometry from what the copy
-	// wrote. That read is the edge that orders it after every user of first.
+	// The chain: the pass's output is read back into a buffer, and that buffer
+	// writes the second transient. Every user of firstVerts is ordered before
+	// every user of secondVerts, which is exactly what makes aliasing sound.
+	r.CopyTextureToBuffer(whole(t, bridge), first)
+	src, err := bridge.View(0, len(verts))
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	r.CopyBuffer(secondVerts, src)
+
 	p1 := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: second, Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, second), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "second pass",
 	})
 	p1.SetPipeline(attributePipeline(t, d))
-	p1.SetVertexBuffer(0, whole(t, mid))
+	p1.SetVertexBuffer(0, secondVerts)
 	p1.Draw(accel.Draw{VertexCount: 3})
-	r.CopyBuffer(whole(t, out), second)
 
 	g, err := r.Build()
 	if err != nil {
@@ -125,12 +156,23 @@ func TestTwoRenderTargetsAliasWhenTheirRangesDoNot(t *testing.T) {
 	}
 
 	// And it still runs, because a placement that aliased unsoundly would have
-	// the second pass writing over what the first copy had not yet read.
+	// the copy writing over vertices the first pass had not yet read.
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if got := readback(t, d, mid); got[(h-1)*w*4] != 0.25 {
-		t.Errorf("the first pass's copy holds %v, want its drawn colour",
-			got[(h-1)*w*4:(h-1)*w*4+4])
+	if got := readback(t, d, bridge); got[(h-1)*w*4+3] != 1 {
+		t.Errorf("the first pass's output has alpha %v at the bottom left, want 1: every "+
+			"vertex supplied 1, so the pass did not draw through its transient",
+			got[(h-1)*w*4+3])
 	}
+}
+
+// triangleVertices is the interleaved position-and-colour triangle the
+// attribute pipeline reads, with its three vertices on viewport corners.
+func triangleVertices() []float32 {
+	var v []float32
+	v = append(v, interleaved(-1, -1, 0, [4]float32{1, 0, 0, 1})...)
+	v = append(v, interleaved(1, -1, 0, [4]float32{0, 1, 0, 1})...)
+	v = append(v, interleaved(-1, 1, 0, [4]float32{0, 0, 1, 1})...)
+	return v
 }

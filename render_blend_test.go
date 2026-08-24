@@ -59,13 +59,12 @@ func TestBlendedDrawsRunInRecordedOrder(t *testing.T) {
 		if err := q.WriteBuffer(vb, 0, pos); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		target := newBuffer(t, d, "colour", w*h*4,
-			accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+		target := colourTarget(t, d, "colour", w, h)
 
 		r := d.NewRecorder()
 		pass := r.RenderPass(accel.RenderPassDescriptor{
 			Color: []accel.ColorAttachment{{
-				View: whole(t, target), Load: accel.LoadClear,
+				View: view(t, target), Load: accel.LoadClear,
 				Clear: [4]float32{0, 0, 0, 0},
 			}},
 			Width: w, Height: h, Label: "order",
@@ -86,7 +85,7 @@ func TestBlendedDrawsRunInRecordedOrder(t *testing.T) {
 		if err := q.Submit(g).Wait(); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
-		got := readback(t, d, target)
+		got := readTarget(t, d, target)
 		return [4]float32{got[0], got[1], got[2], got[3]}
 	}
 
@@ -154,21 +153,20 @@ func TestABlendedDepthTestedPassIsAccepted(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	pos := []float32{-1, -1, 0, 3, -1, 0, -1, 3, 0}
 	vb := newBuffer(t, d, "pos", len(pos), accel.BufferStorage|accel.BufferCopyDst)
 	if err := q.WriteBuffer(vb, 0, pos); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	colour := newBuffer(t, d, "colour", w*h*4, usage)
-	depth := newBuffer(t, d, "depth", w*h, usage)
+	colour := colourTarget(t, d, "colour", w, h)
+	depth := depthTarget(t, d, "depth", w, h)
 
 	r := d.NewRecorder()
 	// Both attachments loaded Keep, which is the case a naive feedback check
 	// rejects: the pass reads and writes each of them.
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, colour), Load: accel.LoadKeep}},
-		Depth: &accel.DepthAttachment{View: whole(t, depth), Load: accel.LoadKeep},
+		Color: []accel.ColorAttachment{{View: view(t, colour), Load: accel.LoadKeep}},
+		Depth: &accel.DepthAttachment{View: view(t, depth), Load: accel.LoadKeep},
 		Width: w, Height: h, Label: "rmw",
 	})
 	pass.SetPipeline(pipe)
@@ -203,14 +201,13 @@ func TestTheZeroBlendStateReplaces(t *testing.T) {
 	if err := q.WriteBuffer(vb, 0, pos); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	tint := [4]float32{0.25, 0.5, 0.75, 0.5}
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
-			View: whole(t, target), Load: accel.LoadClear, Clear: [4]float32{1, 1, 1, 1},
+			View: view(t, target), Load: accel.LoadClear, Clear: [4]float32{1, 1, 1, 1},
 		}},
 		Width: w, Height: h, Label: "replace",
 	})
@@ -228,7 +225,7 @@ func TestTheZeroBlendStateReplaces(t *testing.T) {
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 	px := [4]float32{got[0], got[1], got[2], got[3]}
 	if px != tint {
 		t.Errorf("pixel (0,0) is %v, want exactly the fragment's %v; the zero BlendState "+

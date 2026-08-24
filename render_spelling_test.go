@@ -137,12 +137,11 @@ func TestAnOmittedWriteMaskWritesEverything(t *testing.T) {
 		}
 		defer pipe.Close()
 
-		target := newBuffer(t, d, "colour", w*h*4,
-			accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+		target := colourTarget(t, d, "colour", w, h)
 		r := d.NewRecorder()
 		p := r.RenderPass(accel.RenderPassDescriptor{
 			Color: []accel.ColorAttachment{{
-				View: whole(t, target), Load: accel.LoadClear,
+				View: view(t, target), Load: accel.LoadClear,
 				Clear: [4]float32{0, 0, 0, 0},
 			}},
 			Width: w, Height: h, Label: "masked",
@@ -157,7 +156,7 @@ func TestAnOmittedWriteMaskWritesEverything(t *testing.T) {
 		if err := q.Submit(g).Wait(); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
-		return readback(t, d, target)
+		return readTarget(t, d, target)
 	}
 
 	// The bottom-left pixel, which the triangle covers.

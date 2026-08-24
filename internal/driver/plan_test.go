@@ -99,6 +99,8 @@ func TestValidateRejectsMalformedPlans(t *testing.T) {
 		return o
 	}
 
+	depthOp := func(o driver.Operand) *driver.Operand { return &o }
+
 	cases := []struct {
 		name string
 		plan driver.Plan
@@ -118,12 +120,32 @@ func TestValidateRejectsMalformedPlans(t *testing.T) {
 		{"render pass with no attachments", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
 			Render: &driver.RenderPass{Width: 2, Height: 2}}}}, "no colour attachments"},
 		{"render pass with no draws", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
-			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)}}}}}, "no draws"},
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorFormat: []driver.Format{driver.RGBA32Float}, ColorPitch: []int{32}}}}}, "no draws"},
+		{"render pass with no attachment format", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorFormat: []driver.Format{driver.FormatInvalid}, ColorPitch: []int{32}}}}},
+			"names no format"},
+		{"render pass with no row pitch", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorFormat: []driver.Format{driver.RGBA32Float}, ColorPitch: []int{0}}}}},
+			"row pitch of 0"},
+		{"render pass with fewer formats than attachments", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorPitch: []int{32}}}}},
+			"1 colour attachments, 0 formats"},
+		{"render pass with a depth attachment and no depth format", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorFormat: []driver.Format{driver.RGBA32Float}, ColorPitch: []int{32},
+				Depth: depthOp(op(0, 16)), DepthPitch: 8}}}},
+			"depth attachment names no format"},
 		{"render pass draw with no stage", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
 			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorFormat: []driver.Format{driver.RGBA32Float}, ColorPitch: []int{32},
 				Draws: []driver.RenderDraw{{VertexCount: 3, InstanceCount: 1}}}}}}, "missing a stage"},
 		{"render pass draw of no vertices", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
 			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				ColorFormat: []driver.Format{driver.RGBA32Float}, ColorPitch: []int{32},
 				Draws: []driver.RenderDraw{{Vertex: &kernel.Stage{Name: "v"}, Fragment: &kernel.Stage{Name: "f"}, InstanceCount: 1}}}}}},
 			"draws 0 vertices"},
 	}
@@ -451,7 +473,9 @@ func TestARenderPassNeedsNoDestinationOperand(t *testing.T) {
 		Op: driver.OpRenderPass,
 		Render: &driver.RenderPass{
 			Width: 4, Height: 4,
-			Color: []driver.Operand{op(0, 4*4*4*4)},
+			Color:       []driver.Operand{op(0, 4*4*4*4)},
+			ColorFormat: []driver.Format{driver.RGBA32Float},
+			ColorPitch:  []int{4 * 16},
 			Draws: []driver.RenderDraw{{
 				Vertex: &kernel.Stage{Name: "v"}, Fragment: &kernel.Stage{Name: "f"},
 				VertexCount: 3, InstanceCount: 1,

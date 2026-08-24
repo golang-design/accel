@@ -87,12 +87,12 @@ type TextureDescriptor struct {
 	Size   Extent
 	Usage  TextureUsage
 
-	// MipLevels of 0 means one level. v0 rejects values greater than one until the
-	// public API can name subresources.
+	// MipLevels of 0 means one level. Values greater than one are still
+	// rejected; see [TextureViewDesc] for what changed and what did not.
 	MipLevels int
 
-	// ArrayLayers of 0 means one layer. v0 rejects values greater than one until
-	// the public API can name subresources.
+	// ArrayLayers of 0 means one layer. Values greater than one are rejected
+	// for the same reason MipLevels are.
 	ArrayLayers int
 
 	// Kind is the memory the implicit pool behind [Device.NewTexture] is taken

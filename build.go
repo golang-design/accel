@@ -424,16 +424,25 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 	out := &driver.RenderPass{
 		Label: p.desc.Label, Width: p.desc.Width, Height: p.desc.Height,
 	}
+	// colorFormats and depthFormat are what check V13 compares a pipeline
+	// against. Kept in the public spelling rather than read back out of the
+	// plan, because the message a caller reads names the format they wrote.
+	var colorFormats []Format
+	depthFormat := FormatInvalid
 	for i, c := range p.desc.Color {
 		op, err := g.operand(n, n.accesses[i])
 		if err != nil {
 			return nil, err
 		}
-		if err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i),
-			c.View, c.Slot, 4); err != nil {
+		format, pitch, err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i),
+			c.View, c.Slot, 4)
+		if err != nil {
 			return nil, err
 		}
+		colorFormats = append(colorFormats, format)
 		out.Color = append(out.Color, op)
+		out.ColorFormat = append(out.ColorFormat, format.plan())
+		out.ColorPitch = append(out.ColorPitch, pitch)
 		out.ColorLoad = append(out.ColorLoad, c.Load)
 		out.ColorStore = append(out.ColorStore, c.Store)
 		out.ColorClear = append(out.ColorClear, c.Clear)
@@ -443,11 +452,15 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View,
-			p.desc.Depth.Slot, 1); err != nil {
+		format, pitch, err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View,
+			p.desc.Depth.Slot, 1)
+		if err != nil {
 			return nil, err
 		}
+		depthFormat = format
 		out.Depth = &op
+		out.DepthFormat = format.plan()
+		out.DepthPitch = pitch
 		out.DepthLoad = p.desc.Depth.Load
 		out.DepthStore = p.desc.Depth.Store
 		out.DepthClear = p.desc.Depth.Clear
@@ -469,6 +482,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the pipeline %q "+
 				"%s depth state and the pass %s depth attachment", p.desc.Label, i,
 				pipe.label, has(pipe.desc.DepthStencil != nil), has(p.desc.Depth != nil))
+		}
+		if err := g.checkTargetFormats(n, p, i, pipe, colorFormats, depthFormat); err != nil {
+			return nil, err
 		}
 		rd := driver.RenderDraw{
 			Vertex: pipe.desc.Vertex, Fragment: pipe.desc.Fragment,
@@ -666,13 +682,26 @@ func has(b bool) string {
 	return "has no"
 }
 
-// checkAttachment validates one attachment against the render area.
+// checkAttachment validates one attachment against the render area and reports
+// the format its bytes are in and the distance between its rows.
 //
-// components is what one pixel occupies: four for a colour attachment and one
-// for depth. Checked here rather than only in a backend, because an undersized
-// attachment is a recording mistake and every backend would report it in its
-// own words at its own moment -- and a backend that did not check it would read
-// past the end of a buffer instead.
+// components is what one pixel occupies in the rasterizer's framebuffer: four
+// for a colour attachment and one for depth. It is also what distinguishes the
+// two aspects here, which is why a colour attachment of a depth format is
+// caught in this one place rather than twice.
+//
+// Checked here rather than only in a backend, because an undersized attachment
+// is a recording mistake and every backend would report it in its own words at
+// its own moment -- and a backend that did not check it would read past the end
+// of an allocation instead.
+//
+// # The two cases, and why a slot is not exempt
+//
+// A texture attachment is measured against the texture's extent, and its
+// format is the view's rather than the texture's: a view may reinterpret
+// within a compatible family, and the whole point of specs/045-texture-attachments.md
+// section 2.1 is that writing through an sRGB view of a linear texture is a
+// different operation from writing through the texture's own format.
 //
 // A slot is checked through its MinCount, which is the size check moved from
 // build to bind: whatever is bound is at least that large, so a MinCount big
@@ -681,20 +710,137 @@ func has(b bool) string {
 // is the exemption shape that has already been wrong twice here, and a slot
 // declared four elements wide and used as a 64x64 attachment would otherwise
 // reach a backend.
-func (g *Graph) checkAttachment(p *RenderPass, what string, v BufferView, s Slot, components int) error {
-	want := p.desc.Width * p.desc.Height * components
-	have, where := v.Count, "holds"
+func (g *Graph) checkAttachment(p *RenderPass, what string, v TextureView, s Slot, components int) (Format, int, error) {
 	if s != 0 {
-		if int(s) < 1 || int(s) > len(g.slots) {
-			return fmt.Errorf("accel: Build: render pass %q %s names slot %d of %d",
-				p.desc.Label, what, s, len(g.slots))
-		}
-		have, where = g.slots[s-1].MinCount, "declares a MinCount of"
+		return g.checkSlotAttachment(p, what, s, components)
 	}
-	if have < want {
-		return fmt.Errorf("accel: Build: render pass %q %s %s %d elements and a %dx%d "+
-			"area at %d components per pixel needs %d",
-			p.desc.Label, what, where, have, p.desc.Width, p.desc.Height, components, want)
+	t := v.Texture
+	if t.desc.Usage&TextureRenderTarget == 0 {
+		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is texture %q, which needs "+
+			"%v and was created with %v", ErrUsage, p.desc.Label, what, t.desc.Label,
+			TextureRenderTarget, t.desc.Usage)
+	}
+	if t.desc.Size.Width < p.desc.Width || t.desc.Size.Height < p.desc.Height {
+		return 0, 0, fmt.Errorf("accel: Build: render pass %q %s is texture %q, which is "+
+			"%dx%d, and the render area is %dx%d", p.desc.Label, what, t.desc.Label,
+			t.desc.Size.Width, t.desc.Size.Height, p.desc.Width, p.desc.Height)
+	}
+
+	// The aspect check, and what it is worth given V13 exists.
+	//
+	// V13 would refuse every input this refuses, because NewRenderPipeline
+	// already rejects a depth format as a colour target and a colour format as
+	// a depth one -- so a pipeline that *agreed* with a wrong-aspect attachment
+	// cannot be constructed, and the format comparison would catch the
+	// disagreement. This runs first and says something better: "a colour
+	// attachment does not take a depth format" names the mistake, where
+	// "colour target 0 is RGBA8Unorm and attachment 0 is Depth32Float" leaves a
+	// caller to work out which of the two they got wrong.
+	//
+	// The ordering is therefore load-bearing rather than incidental. Moving
+	// V13 ahead of this would leave the check dead with its tests still
+	// passing on V13's message, which is the shape a rule ends up withdrawn in.
+	info := g.dev.FormatInfo(v.Format)
+	if info.IsDepth != (components == 1) {
+		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is viewed as %v, and %s",
+			ErrFormat, p.desc.Label, what, v.Format, aspectMismatch(components == 1))
+	}
+	pitch := g.dev.AlignedRowPitch(v.Format, t.desc.Size.Width)
+	if pitch == 0 {
+		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is %v, whose layout is "+
+			"device-defined -- there is no row pitch to give a backend and no one "+
+			"encoding for the reference rasterizer to check against",
+			ErrFormat, p.desc.Label, what, v.Format)
+	}
+
+	// The backend gate, and it is honest rather than defensive: only the CPU
+	// backend lowers a texture attachment today. specs/045-texture-attachments.md
+	// section 4 gives the Metal path its own slice, and until it lands a Metal
+	// device would stage a texture allocation through a buffer path that
+	// assumes RGBA32Float and tight rows -- a plausible image rather than an
+	// error. Decision 6: absence is reported, not discovered.
+	if g.dev.info.Backend != BackendCPU {
+		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is texture %q, and %q does "+
+			"not lower a texture attachment at specs/045-texture-attachments.md section 4",
+			ErrUnsupported, p.desc.Label, what, t.desc.Label, g.dev.info.Name)
+	}
+	return v.Format, pitch, nil
+}
+
+// checkSlotAttachment is the rebindable half.
+//
+// A slot's resource is a buffer -- specs/034-surface-present.md makes a
+// presented image one, and [Recorder.PresentSlot] declares it F32 with four
+// elements per pixel -- so its format is what those bytes already are rather
+// than anything the descriptor states. Saying it here is what lets the backend
+// stop assuming it, and it is byte for byte what a slot attachment has always
+// been.
+func (g *Graph) checkSlotAttachment(p *RenderPass, what string, s Slot, components int) (Format, int, error) {
+	if int(s) < 1 || int(s) > len(g.slots) {
+		return 0, 0, fmt.Errorf("accel: Build: render pass %q %s names slot %d of %d",
+			p.desc.Label, what, s, len(g.slots))
+	}
+	want := p.desc.Width * p.desc.Height * components
+	if have := g.slots[s-1].MinCount; have < want {
+		return 0, 0, fmt.Errorf("accel: Build: render pass %q %s declares a MinCount of "+
+			"%d elements and a %dx%d area at %d components per pixel needs %d",
+			p.desc.Label, what, have, p.desc.Width, p.desc.Height, components, want)
+	}
+	if components == 1 {
+		return Depth32Float, p.desc.Width * Depth32Float.BytesPerPixel(), nil
+	}
+	return RGBA32Float, p.desc.Width * RGBA32Float.BytesPerPixel(), nil
+}
+
+// checkTargetFormats is check V13: a pipeline's declared attachment formats are
+// the pass's.
+//
+// # Why this is checked at all, and why it could not be before
+//
+// Every target compiles a render pipeline against its attachment formats --
+// Vulkan through the render pass or the dynamic-rendering format list, Metal
+// through the render pipeline's colour attachment descriptors, D3D12 through
+// RTVFormats. Binding a pipeline to attachments it was not compiled for is
+// undefined on some of them and a validation error on others, and neither
+// tells a caller which attachment.
+//
+// specs/003-command-graph.md's table has carried V13 since it was written, and
+// specs/042-surface-completion.md section 5.2 found it unimplementable rather
+// than merely unimplemented: an attachment was a buffer view and a buffer view
+// has no format, so there was nothing on one side to compare. That is the
+// same category as the withdrawn V23, with the difference that V23 was marked.
+//
+// # It compares the view's format and not the texture's
+//
+// A view may reinterpret within a compatible family, and a pass writing an
+// RGBA8Unorm texture through an RGBA8UnormSRGB view is doing sRGB. The
+// pipeline is compiled for what the writes go through, which is the view.
+// Comparing the texture's own format would refuse exactly the case
+// specs/045-texture-attachments.md section 2.1 exists for.
+func (g *Graph) checkTargetFormats(n *recNode, p *RenderPass, draw int,
+	pipe *RenderPipeline, colour []Format, depth Format) error {
+	for i, tgt := range pipe.desc.Targets {
+		if tgt.Format == colour[i] {
+			continue
+		}
+		return fmt.Errorf("%w: Build: render pass %q (node %d) draw %d: the pipeline %q "+
+			"declares colour target %d as %v and attachment %d is %v. A pipeline is "+
+			"compiled against its attachment formats on every backend, so the two are "+
+			"the same format (check V13)",
+			ErrFormat, p.desc.Label, n.id, draw, pipe.label, i, tgt.Format, i, colour[i])
+	}
+	if ds := pipe.desc.DepthStencil; ds != nil && ds.Format != depth {
+		return fmt.Errorf("%w: Build: render pass %q (node %d) draw %d: the pipeline %q "+
+			"declares depth as %v and the depth attachment is %v (check V13)",
+			ErrFormat, p.desc.Label, n.id, draw, pipe.label, ds.Format, depth)
 	}
 	return nil
+}
+
+// aspectMismatch names which way round an attachment's format is wrong.
+func aspectMismatch(wantDepth bool) string {
+	if wantDepth {
+		return "a depth attachment takes a depth format"
+	}
+	return "a colour attachment does not take a depth format"
 }

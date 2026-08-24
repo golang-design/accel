@@ -5,7 +5,9 @@
 package accel_test
 
 import (
+	"encoding/binary"
 	"errors"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -53,6 +55,132 @@ func readback(t *testing.T, d *accel.Device, b *accel.Buffer) []float32 {
 		t.Fatalf("readback: %v", err)
 	}
 	return out
+}
+
+// The render-target helpers. A render attachment is a texture view, so a test
+// that wants pixels back allocates a texture rather than a buffer, and reads it
+// through the path its aspect allows: a colour target is host-copyable and a
+// depth target is not, on this backend as on Metal.
+
+func newTexture(t *testing.T, d *accel.Device, label string, w, h int,
+	f accel.Format, u accel.TextureUsage, kind accel.MemoryKind) *accel.Texture {
+	t.Helper()
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: f, Size: accel.Extent{Width: w, Height: h},
+		Usage: u, Kind: kind, Label: label,
+	})
+	if err != nil {
+		t.Fatalf("new texture %q: %v", label, err)
+	}
+	t.Cleanup(func() { _ = tex.Close() })
+	return tex
+}
+
+// colourTarget is the render target most tests write: RGBA32Float, in readback
+// memory so the assertion can map it, and copyable both ways so a pass that
+// loads Keep can be given something to keep.
+func colourTarget(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
+	t.Helper()
+	return newTexture(t, d, label, w, h, accel.RGBA32Float,
+		accel.TextureRenderTarget|accel.TextureCopySrc|accel.TextureCopyDst,
+		accel.MemoryReadback)
+}
+
+// depthTarget is a Depth32Float render target. It is not in readback memory,
+// because a depth format is device-private on several backends and FormatInfo
+// reports it non-host-copyable here for the same reason -- so it is read
+// through a recorded copy rather than mapped.
+func depthTarget(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
+	t.Helper()
+	return newTexture(t, d, label, w, h, accel.Depth32Float,
+		accel.TextureRenderTarget|accel.TextureCopySrc|accel.TextureCopyDst,
+		accel.MemoryDevice)
+}
+
+// view is the whole of a texture, in its own format.
+func view(t *testing.T, tex *accel.Texture) accel.TextureView {
+	t.Helper()
+	v, err := tex.Whole()
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	return v
+}
+
+// viewAs is the whole of a texture reinterpreted as another format of the same
+// family.
+func viewAs(t *testing.T, tex *accel.Texture, f accel.Format) accel.TextureView {
+	t.Helper()
+	v, err := tex.View(accel.TextureViewDesc{Format: f})
+	if err != nil {
+		t.Fatalf("view as %v: %v", f, err)
+	}
+	return v
+}
+
+// readTarget reads a float32 colour target back as components.
+func readTarget(t *testing.T, d *accel.Device, tex *accel.Texture) []float32 {
+	t.Helper()
+	raw := readTargetBytes(t, d, tex)
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+	}
+	return out
+}
+
+// readTargetBytes reads a host-copyable texture back as tightly packed rows.
+func readTargetBytes(t *testing.T, d *accel.Device, tex *accel.Texture) []byte {
+	t.Helper()
+	sz := tex.Size()
+	raw := make([]byte, sz.Width*sz.Height*tex.Format().BytesPerPixel())
+	if err := d.Queue().ReadTexture(tex, raw); err != nil {
+		t.Fatalf("read texture %v", err)
+	}
+	return raw
+}
+
+// readDepth reads a depth target through a recorded copy, which is the only
+// way: a depth format is not host-copyable.
+func readDepth(t *testing.T, d *accel.Device, tex *accel.Texture) []float32 {
+	t.Helper()
+	sz := tex.Size()
+	n := sz.Width * sz.Height
+	dst := newBuffer(t, d, "depth readback", n,
+		accel.BufferStorage|accel.BufferCopyDst|accel.BufferCopySrc)
+	r := d.NewRecorder()
+	r.CopyTextureToBuffer(whole(t, dst), tex)
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("depth readback build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("depth readback submit: %v", err)
+	}
+	return readback(t, d, dst)
+}
+
+// fillTarget writes tightly packed components into a texture through a
+// recorded copy. There is no Queue.WriteTexture, and a pass that loads Keep
+// needs something to keep.
+func fillTarget(t *testing.T, d *accel.Device, tex *accel.Texture, data []float32) {
+	t.Helper()
+	src := newBuffer(t, d, "fill", len(data),
+		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	if err := d.Queue().WriteBuffer(src, 0, data); err != nil {
+		t.Fatalf("fill write: %v", err)
+	}
+	r := d.NewRecorder()
+	r.CopyBufferToTexture(tex, whole(t, src))
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("fill build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("fill submit: %v", err)
+	}
 }
 
 // The child's end-to-end criterion: record a graph of copies, submit it, wait,

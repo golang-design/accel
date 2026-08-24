@@ -35,13 +35,12 @@ func TestATriangleRendersOffscreen(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
-			View:  whole(t, target),
+			View:  view(t, target),
 			Load:  accel.LoadClear,
 			Clear: [4]float32{1, 0, 0, 1},
 		}},
@@ -59,7 +58,7 @@ func TestATriangleRendersOffscreen(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 
 	// The stage places its vertices at clip (-1,-1), (1,-1) and (-1,1), which
 	// after the viewport transform is the screen-space triangle (0,h), (w,h),
@@ -137,15 +136,14 @@ func TestARenderPassClearsAndWritesDepth(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
-	colour := newBuffer(t, d, "colour", w*h*4, usage)
-	depth := newBuffer(t, d, "depth", w*h, usage)
+	colour := colourTarget(t, d, "colour", w, h)
+	depth := depthTarget(t, d, "depth", w, h)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, colour), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, colour), Load: accel.LoadClear}},
 		Depth: &accel.DepthAttachment{
-			View: whole(t, depth), Load: accel.LoadClear, Clear: 1,
+			View: view(t, depth), Load: accel.LoadClear, Clear: 1,
 		},
 		Width: w, Height: h, Label: "depth pass",
 	})
@@ -167,7 +165,7 @@ func TestARenderPassClearsAndWritesDepth(t *testing.T) {
 	// 0.5 here is the [0, 1]-clip convention of Metal and Vulkan, and
 	// docs/conventions.md records that mixing the two reads as a broken
 	// transform rather than as a convention mismatch.
-	got := readback(t, d, depth)
+	got := readDepth(t, d, depth)
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			want := float32(1)
@@ -199,19 +197,16 @@ func TestARenderPassKeepsWhatWasThere(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 	prior := make([]float32, w*h*4)
 	for i := range prior {
 		prior[i] = 9
 	}
-	if err := q.WriteBuffer(target, 0, prior); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	fillTarget(t, d, target, prior)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadKeep}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadKeep}},
 		Width: w, Height: h, Label: "keep pass",
 	})
 	pass.SetPipeline(pipe)
@@ -228,7 +223,7 @@ func TestARenderPassKeepsWhatWasThere(t *testing.T) {
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			got := readback(t, d, target)[(y*w+x)*4]
+			got := readTarget(t, d, target)[(y*w+x)*4]
 			want := float32(9)
 			if y > x {
 				want = 0.25
@@ -264,11 +259,10 @@ func TestAPanickingStageBecomesAnError(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	target := newBuffer(t, d, "colour", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", 4, 4)
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: 4, Height: 4, Label: "exploding",
 	})
 	pass.SetPipeline(pipe)

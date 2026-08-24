@@ -47,12 +47,11 @@ func TestAnIndirectDrawMatchesTheDirectOne(t *testing.T) {
 		if err := q.WriteBuffer(ab, 0, drawArgs(3, 1, 0, 0)); err != nil {
 			t.Fatalf("write args: %v", err)
 		}
-		target := newBuffer(t, d, "colour", w*h*4,
-			accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+		target := colourTarget(t, d, "colour", w, h)
 
 		r := d.NewRecorder()
 		p := r.RenderPass(accel.RenderPassDescriptor{
-			Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+			Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 			Width: w, Height: h, Label: "indirect",
 		})
 		p.SetPipeline(attributePipeline(t, d))
@@ -70,7 +69,7 @@ func TestAnIndirectDrawMatchesTheDirectOne(t *testing.T) {
 		if err := q.Submit(g).Wait(); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
-		return readback(t, d, target)
+		return readTarget(t, d, target)
 	}
 
 	direct, indirect := render(t, false), render(t, true)
@@ -115,12 +114,11 @@ func TestAnIndirectDrawClampsToItsMaximum(t *testing.T) {
 	if err := q.WriteBuffer(ab, 0, drawArgs(30, 7, 0, 0)); err != nil {
 		t.Fatalf("write args: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "clamped",
 	})
 	p.SetPipeline(attributePipeline(t, d))
@@ -139,7 +137,7 @@ func TestAnIndirectDrawClampsToItsMaximum(t *testing.T) {
 	// The bottom-left pixel, which the triangle covers. The top-left corner sits
 	// exactly on the hypotenuse and the top-left fill rule excludes it, so it
 	// would read as "nothing drawn" however well the clamp worked.
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 	i := (h - 1) * w * 4
 	if got[i] == 0 && got[i+1] == 0 && got[i+2] == 0 {
 		t.Errorf("pixel (0,%d) is %v: nothing was drawn, so the clamp took the count to "+
@@ -176,13 +174,12 @@ func TestAnIndirectCountBelowTheMaximumIsUsed(t *testing.T) {
 	if err := q.WriteBuffer(ab, 0, drawArgs(3, 1, 0, 0)); err != nil {
 		t.Fatalf("write args: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
-			View: whole(t, target), Load: accel.LoadClear, Clear: [4]float32{0, 0, 1, 1},
+			View: view(t, target), Load: accel.LoadClear, Clear: [4]float32{0, 0, 1, 1},
 		}},
 		Width: w, Height: h, Label: "under",
 	})
@@ -198,7 +195,7 @@ func TestAnIndirectCountBelowTheMaximumIsUsed(t *testing.T) {
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 
 	// The first triangle is the lower-left half in red; the second would cover
 	// the upper-right in green. The upper-right must still be the clear.
@@ -223,8 +220,7 @@ func TestAnIndirectDrawDeclaresItsArguments(t *testing.T) {
 	if err := q.WriteBuffer(vb, 0, make([]float32, 21)); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	args := r.Transient(accel.BufferDescriptor{
@@ -233,7 +229,7 @@ func TestAnIndirectDrawDeclaresItsArguments(t *testing.T) {
 	})
 	r.UploadToBuffer(args, drawArgs(3, 1, 0, 0))
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "ordered",
 	})
 	p.SetPipeline(attributePipeline(t, d))
@@ -290,12 +286,11 @@ func TestIndirectDrawRefusals(t *testing.T) {
 			if err := q.WriteBuffer(vb, 0, make([]float32, 21)); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			target := newBuffer(t, d, "colour", 4*4*4,
-				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			target := colourTarget(t, d, "colour", 4, 4)
 
 			r := d.NewRecorder()
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, target)}},
+				Color: []accel.ColorAttachment{{View: view(t, target)}},
 				Width: 4, Height: 4, Label: "refused",
 			})
 			p.SetPipeline(attributePipeline(t, d))
@@ -324,11 +319,10 @@ func TestIndirectDrawRefusals(t *testing.T) {
 		if err := q.WriteBuffer(vb, 0, make([]float32, 21)); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		target := newBuffer(t, d, "colour", 4*4*4,
-			accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+		target := colourTarget(t, d, "colour", 4, 4)
 		r := d.NewRecorder()
 		p := r.RenderPass(accel.RenderPassDescriptor{
-			Color: []accel.ColorAttachment{{View: whole(t, target)}},
+			Color: []accel.ColorAttachment{{View: view(t, target)}},
 			Width: 4, Height: 4, Label: "short args",
 		})
 		p.SetPipeline(attributePipeline(t, d))

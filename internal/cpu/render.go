@@ -49,41 +49,81 @@ func renderPass(n *resolvedNode) (err error) {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
 	}
-	return nil
+	return storeAttachments(n, fb)
 }
 
-// framebufferFor wraps the resolved attachments as raster targets.
+// framebufferFor decodes the resolved attachments into raster targets.
 //
-// The targets alias the attachment memory rather than copying it: the graph
-// ordered other nodes against those bytes, so writing anywhere else would make
-// every inferred edge describe memory nobody wrote.
+// # Why this decodes rather than aliasing
+//
+// It used to alias: the attachment bytes were reinterpreted as []float32 and
+// handed to the rasterizer, which is correct for exactly one format and wrong
+// in silence for every other. The rasterizer works in float32 components and
+// an attachment holds whatever its format holds, so the conversion has to
+// happen somewhere, and the only place it can happen without teaching the
+// rasterizer about formats is here.
+//
+// What that costs is a copy in and a copy out per pass. That is the same cost
+// specs/045-texture-attachments.md section 1 charges the Metal backend for, and
+// it is not the same mistake: Metal pays it to move bytes between two
+// resources of the same format, and this pays it to convert. A backend with a
+// fixed-function output stage does the conversion in hardware and pays
+// nothing.
+//
+// Every attachment is decoded, including one loaded Clear whose contents the
+// clear is about to overwrite. Per-attachment special cases here would be a
+// second definition of what a load action means, and the one in applyLoads is
+// the definition.
 func framebufferFor(n *resolvedNode) (*raster.Framebuffer, error) {
 	rp := n.render
 	fb := &raster.Framebuffer{}
-	for i, pix := range n.colorAttach {
-		want := rp.Width * rp.Height * 4
-		if len(pix) < want {
-			return nil, fmt.Errorf("accel: render pass %q colour attachment %d holds %d "+
-				"floats and a %dx%d area needs %d", rp.Label, i, len(pix),
-				rp.Width, rp.Height, want)
+	for i, raw := range n.colorAttach {
+		c := n.colorCodec[i]
+		pix := make([]float32, rp.Width*rp.Height*c.components)
+		if err := c.decodeImage(pix, raw, rp.Width, rp.Height, rp.ColorPitch[i]); err != nil {
+			return nil, fmt.Errorf("accel: render pass %q colour attachment %d: %w",
+				rp.Label, i, err)
 		}
-		fb.Color = append(fb.Color, &raster.ColorTarget{
-			W: rp.Width, H: rp.Height, Pix: pix[:want],
-		})
+		fb.Color = append(fb.Color, &raster.ColorTarget{W: rp.Width, H: rp.Height, Pix: pix})
 	}
 	if n.depthAttach != nil {
-		want := rp.Width * rp.Height
-		if len(n.depthAttach) < want {
-			return nil, fmt.Errorf("accel: render pass %q depth attachment holds %d floats "+
-				"and a %dx%d area needs %d", rp.Label, len(n.depthAttach),
-				rp.Width, rp.Height, want)
+		c := n.depthCodec
+		z := make([]float32, rp.Width*rp.Height*c.components)
+		if err := c.decodeImage(z, n.depthAttach, rp.Width, rp.Height, rp.DepthPitch); err != nil {
+			return nil, fmt.Errorf("accel: render pass %q depth attachment: %w", rp.Label, err)
 		}
 		fb.Depth = &raster.DepthTarget{
-			W: rp.Width, H: rp.Height, Z: n.depthAttach[:want],
-			Stencil: make([]uint8, want),
+			W: rp.Width, H: rp.Height, Z: z,
+			Stencil: make([]uint8, rp.Width*rp.Height),
 		}
 	}
 	return fb, nil
+}
+
+// storeAttachments encodes the framebuffer back into the attachment memory.
+//
+// Unconditionally, including for an attachment stored Discard. Discard leaves
+// the contents undefined, and undefined permits writing them; skipping the
+// write would leave the bytes the pass started with, which is a *defined*
+// result that happens to look wrong, and a test asserting it would be
+// asserting an accident. What StoreDiscard buys on this backend is the graph
+// consequence, the same way LoadDontCare does.
+func storeAttachments(n *resolvedNode, fb *raster.Framebuffer) error {
+	rp := n.render
+	for i, raw := range n.colorAttach {
+		if err := n.colorCodec[i].encodeImage(raw, fb.Color[i].Pix,
+			rp.Width, rp.Height, rp.ColorPitch[i]); err != nil {
+			return fmt.Errorf("accel: render pass %q colour attachment %d: %w",
+				rp.Label, i, err)
+		}
+	}
+	if n.depthAttach != nil {
+		if err := n.depthCodec.encodeImage(n.depthAttach, fb.Depth.Z,
+			rp.Width, rp.Height, rp.DepthPitch); err != nil {
+			return fmt.Errorf("accel: render pass %q depth attachment: %w", rp.Label, err)
+		}
+	}
+	return nil
 }
 
 // applyLoads performs each attachment's load action.

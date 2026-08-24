@@ -94,6 +94,41 @@ func stageTestPipeline(t *testing.T, d *Device) *RenderPipeline {
 	return p
 }
 
+// stageTestTarget is a render target, which is a texture now that an
+// attachment is a texture view.
+func stageTestTarget(t *testing.T, d *Device, label string, w, h int, f Format) TextureView {
+	t.Helper()
+	tex, err := d.NewTexture(TextureDescriptor{
+		Format: f, Size: Extent{Width: w, Height: h},
+		Usage: TextureRenderTarget | TextureCopySrc | TextureCopyDst, Label: label,
+	})
+	if err != nil {
+		t.Fatalf("new texture %q: %v", label, err)
+	}
+	t.Cleanup(func() { _ = tex.Close() })
+	v, err := tex.Whole()
+	if err != nil {
+		t.Fatalf("view %q: %v", label, err)
+	}
+	return v
+}
+
+// stageOfTexture is stageOf for an access that names a texture.
+func stageOfTexture(t *testing.T, r *Recorder, id NodeID, v TextureView) stage {
+	t.Helper()
+	var found []stage
+	for _, a := range r.state.nodes[id].accesses {
+		if a.res.tex == v.Texture {
+			found = append(found, a.stage)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("node %d declares %d accesses of %q, want exactly one",
+			int(id), len(found), v.Texture.desc.Label)
+	}
+	return found[0]
+}
+
 // stageOf returns the stage recorded for the access naming v on node id.
 //
 // It matches on the buffer, so it assumes each test gives one buffer one range.
@@ -141,8 +176,8 @@ func TestEveryRenderPassAccessNamesItsOwnStage(t *testing.T) {
 	const w, h = 4, 4
 	d := stageTestDevice(t)
 
-	colour := stageTestBuffer(t, d, "colour", w*h*4)
-	depth := stageTestBuffer(t, d, "depth", w*h)
+	colour := stageTestTarget(t, d, "colour", w, h, RGBA32Float)
+	depth := stageTestTarget(t, d, "depth", w, h, Depth32Float)
 	verts := stageTestBuffer(t, d, "vertices", 9)
 	index := stageTestBuffer(t, d, "indices", 3)
 	args := stageTestBuffer(t, d, "args", 4)
@@ -161,7 +196,7 @@ func TestEveryRenderPassAccessNamesItsOwnStage(t *testing.T) {
 
 	for _, c := range []struct {
 		what string
-		view BufferView
+		view TextureView
 		want stage
 		why  string
 	}{{
@@ -173,7 +208,17 @@ func TestEveryRenderPassAccessNamesItsOwnStage(t *testing.T) {
 		want: stageEarlyDepth | stageLateDepth,
 		why: "where the depth test runs depends on the pipeline's discard and " +
 			"depth-write behaviour, so a depth barrier names both fragment-test stages",
-	}, {
+	}} {
+		if got := stageOfTexture(t, r, p.Node(), c.view); got != c.want {
+			t.Errorf("%s is in the %v stage, want %v: %s", c.what, got, c.want, c.why)
+		}
+	}
+	for _, c := range []struct {
+		what string
+		view BufferView
+		want stage
+		why  string
+	}{{
 		what: "a vertex buffer", view: verts, want: stageVertexInput,
 		why: "attributes are fetched by the vertex input stage, before the vertex " +
 			"shader runs, so a write to them must be visible earlier than a shader read",
@@ -283,7 +328,7 @@ func TestOneRangeFetchedInTwoRolesIsOneAccess(t *testing.T) {
 	const w, h = 4, 4
 	d := stageTestDevice(t)
 
-	colour := stageTestBuffer(t, d, "colour", w*h*4)
+	colour := stageTestTarget(t, d, "colour", w, h, RGBA32Float)
 	// Nine float32 is thirty-six bytes: three vertices of a float32x3 attribute
 	// at stride 12, and more than the sixteen an argument buffer needs. So one
 	// range is legal in both roles and the pass declares it in both.
@@ -352,7 +397,7 @@ func TestABarrierNamesTheStageOfTheAccessThatNeedsIt(t *testing.T) {
 	const w, h = 4, 4
 	d := stageTestDevice(t)
 
-	colour := stageTestBuffer(t, d, "colour", w*h*4)
+	colour := stageTestTarget(t, d, "colour", w, h, RGBA32Float)
 	verts := stageTestBuffer(t, d, "vertices", 9)
 
 	r := d.NewRecorder()

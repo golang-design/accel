@@ -1,6 +1,6 @@
 ---
 title: "Texture attachments, texture views, and texel fetch"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -174,3 +174,153 @@ Two more belong in the same place, written before rather than after:
 - Metal's per-pass staging copies and the present conversion draw are gone, and
   a frame's transfers are counted in a test so their absence is asserted rather
   than assumed.
+
+## 8. Outcome — the resources and CPU rows, 2026-08-24
+
+§4's first two rows and the CPU-backend row are built. The Metal row, the stage
+row and the graph row are not, and each is owed to a separate slice.
+
+### 8.1 What was built
+
+| § | Item | State |
+| --- | --- | --- |
+| 2 | `TextureView`, `Texture.View`, `Texture.Whole`, the compatibility rule | done (landed just before this work) |
+| 4 | `ColorAttachment.View` and `DepthAttachment.View` are a `TextureView` | done |
+| 4 | the plan carries each attachment's format and row pitch | done |
+| 4 | the CPU backend converts through a format codec instead of `typedSlice(kernel.F32, raw)` | done |
+| 2.1, 4 | sRGB converts on write and on read, decided by the view's format | done |
+| 4 | **V13**: `ColorTargetState.Format` and `DepthStencilState.Format` against the attachment's | done |
+| 4 | `MipLevels`/`ArrayLayers` above one | **still refused** — see §8.3 |
+| 4 | Metal attachments, the staging copies, the present conversion draw | not started |
+| 4 | texel fetch | not started |
+| 4 | feedback rejection over subresources | not started |
+
+Four rules the pass now owns, all at build and all named: the texture declares
+`TextureRenderTarget`; its extent covers the render area; a colour attachment is
+not a depth format and a depth attachment is; and a format whose layout is
+device-defined — `Depth24PlusStencil8` — is refused rather than given a guess at
+an encoding.
+
+### 8.2 The conversions, stated
+
+The CPU rasterizer is the oracle, so each conversion has one definition and a
+format with two defensible readings is refused rather than given one.
+
+$$\text{unorm8}: \quad \text{decode}(b) = \frac{b}{255}, \qquad \text{encode}(v) = \operatorname{round}\big(255 \cdot \operatorname{clamp}(v, 0, 1)\big)$$
+
+Round to nearest and not truncate, which every target specifies: truncation
+sends $1/255$ back to $0$ and the loss is invisible in an image. `NaN` encodes
+as zero.
+
+sRGB is IEC 61966-2-1's piecewise curve, applied to the three colour channels
+and not to alpha — alpha is a coverage weight rather than a light intensity, and
+putting it through a display transfer function makes a half-covered pixel
+composite wrong:
+
+$$\text{linear}(c) = \begin{cases} c/12.92 & c \le 0.04045 \\ \left(\dfrac{c + 0.055}{1.055}\right)^{2.4} & \text{otherwise} \end{cases} \qquad \text{srgb}(c) = \begin{cases} 12.92\,c & c \le 0.0031308 \\ 1.055\,c^{1/2.4} - 0.055 & \text{otherwise} \end{cases}$$
+
+It is applied in `internal/cpu/texel.go`, at the two ends of a pass: the
+attachment decodes into the rasterizer's linear float components before the
+loads, and the components encode back after the last draw. That is exactly what
+[035](035-cpu-rasterizer.md) §5 says — *"sRGB attachment formats convert on
+write and on read, not in the fragment stage"* — and the view's `Format` is what
+selects the codec, so one texture written through two views is two different
+operations over the same bytes.
+
+`Depth24PlusStencil8` is refused in the codec **and** at build, because "24
+plus" means at least 24 bits and a backend may store it as 32 with 8 unused or
+pack it with the stencil. The other formats each have one reading: `BGRA8Unorm`
+differs from `RGBA8Unorm` in channel order and nothing else, the float formats
+are a reinterpretation, and the half formats go through the same
+round-to-nearest-even conversion a narrow kernel binding uses.
+
+### 8.3 Deviations from what this spec drew
+
+**`MipLevels` and `ArrayLayers` are still refused, and were not half-admitted.**
+§4 said they "become admissible rather than refused". They did not, and the
+reason is not the one the refusal used to give. A view names a subresource now,
+so *binding* is no longer the obstacle; what is, is that everything underneath
+still addresses a whole allocation — `textureBytes` sizes one level, a
+texture-buffer copy moves one, and a recorded access covers the texture's whole
+byte range, which is what the barrier plan reasons over. Admitting mips means
+sizing a chain, computing a subresource's byte offset, and narrowing a hazard
+range: three changes in three layers, none of which falls out of this one. The
+refusal's *reason* was updated instead, because a limit whose stated cause has
+stopped being true is how a limit outlives the thing that caused it.
+
+**The plan carries a row pitch, which §4 did not mention.** A texture's rows are
+padded to the device's copy alignment — 256 bytes on both backends — so an
+attachment's bytes are not $w \cdot \text{bpp}$ per row and the stride cannot be
+divided out of the operand size. It is carried explicitly rather than derived,
+because deriving it works exactly while an attachment is a whole allocation and
+stops the day one names a mip.
+
+**The CPU backend copies in and out per pass.** §1 charges Metal for exactly
+that cost, and this is not the same mistake: Metal paid it to move bytes between
+two resources of the same format, and this pays it to *convert*, because the
+rasterizer works in float32 components and the attachment does not. A backend
+with a fixed-function output stage pays nothing.
+
+**`driver.Format` is a second spelling of `Format`.** The alternative was moving
+the public type down to the seam, which would have dragged the per-device
+capability table — `Renderable`, `Sampleable`, `Blendable` — to where a backend
+could read it, and a backend is told what to do rather than asked what is
+possible. [LoadOp](003-command-graph.md)'s warning about two definitions
+swapping silently does not transfer: a swapped load action is invisible to every
+test and a swapped format changes pixels. The mapping is a switch and a test
+walks the whole enumeration in both directions.
+
+**Two transient-aliasing tests changed subject.** `render_alias_test.go` read
+its property through a transient *attachment*, and a texture cannot be a
+transient. Both were retargeted at a transient the pass reads — its vertex data
+— which pins the same regression (`Recorder.touch` on a render pass) and the
+same relation (aliasing is sound when every user of one transient is ordered
+against every user of the other). **The attachment path specifically is no
+longer covered by them**, and nothing else covers it: a transient render target
+is not expressible.
+
+**A slot attachment did not change shape.** [034](034-surface-present.md) makes
+a presented image a *buffer* slot, so `ColorAttachment.Slot` still names one and
+its bytes are `RGBA32Float` with tight rows — which is byte for byte what a slot
+attachment already was. `SlotDescriptor.Format` was left alone; wiring it here
+was not asked for and a present slot does not set it.
+
+### 8.4 What Metal does, and what it costs
+
+Only the CPU backend lowers a texture attachment. A Metal device refuses one at
+build, naming the pass, the attachment and this spec — decision 6, absence is
+reported rather than discovered. The alternative was worse than a refusal: the
+Metal path stages an attachment through a buffer that assumes `RGBA32Float` and
+tight rows, so a texture attachment would have produced a plausible image rather
+than an error.
+
+The differential entries on that path skip with the reason rather than being
+deleted, the arrangement `TestATextureRoundTripKeepsCallerOrderOnMetal` already
+uses, so the comparison resumes on the first day it can.
+
+**The cost is measured, and it is stated as a level rather than as a drop.**
+Running the coverage gate on a Mac after this change puts `internal/metal` at
+85.8% (680/793 statements) and `internal/mtl` at 84.1% (408/485), both under the
+90% bar, because the Metal render encoder is no longer reached by any running
+test. What those two packages measured *before* was not recorded, so no delta is
+claimed here — only that they are below the gate now and that the Metal slice is
+what brings them back.
+
+The repository's coverage job runs on Linux, where both packages are
+documentation-only and contribute no statements, so CI does not see this. That
+is why it is written down: **the Metal slice is not optional cleanup, and the
+one gate that would have argued for it does not run where anyone would notice.**
+
+### 8.5 What is still owed
+
+Unchanged from §7, minus what §8.1 marks done:
+
+- a fragment stage fetching a texel from a texture a previous pass wrote, on
+  both backends, compared pixel for pixel;
+- an overlapping subresource refused at build naming both views, and a disjoint
+  one accepted and producing the expected pixels;
+- Metal's real `MTLRenderPassDescriptor` attachments, with the per-pass staging
+  copies and the present conversion draw deleted and a frame's transfers counted
+  in a test;
+- `MipLevels` and `ArrayLayers`, once the allocation, the copy and the hazard
+  range name a subresource.

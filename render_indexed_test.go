@@ -48,11 +48,10 @@ func TestAnIndexedDrawMatchesTheDirectOne(t *testing.T) {
 		if err := q.WriteBuffer(vb, 0, flat); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		target := newBuffer(t, d, "colour", w*h*4,
-			accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+		target := colourTarget(t, d, "colour", w, h)
 		r := d.NewRecorder()
 		p := r.RenderPass(accel.RenderPassDescriptor{
-			Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+			Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 			Width: w, Height: h, Label: "direct",
 		})
 		p.SetPipeline(attributePipeline(t, d))
@@ -66,7 +65,7 @@ func TestAnIndexedDrawMatchesTheDirectOne(t *testing.T) {
 		if err := q.Submit(g).Wait(); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
-		return readback(t, d, target)
+		return readTarget(t, d, target)
 	}(t)
 
 	for _, c := range []struct {
@@ -111,12 +110,11 @@ func TestAnIndexedDrawMatchesTheDirectOne(t *testing.T) {
 			if err := q.WriteBuffer(ib, 0, packed); err != nil {
 				t.Fatalf("write indices: %v", err)
 			}
-			target := newBuffer(t, d, "colour", w*h*4,
-				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			target := colourTarget(t, d, "colour", w, h)
 
 			r := d.NewRecorder()
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+				Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 				Width: w, Height: h, Label: "indexed",
 			})
 			p.SetPipeline(attributePipeline(t, d))
@@ -133,7 +131,7 @@ func TestAnIndexedDrawMatchesTheDirectOne(t *testing.T) {
 				t.Fatalf("submit: %v", err)
 			}
 
-			got := readback(t, d, target)
+			got := readTarget(t, d, target)
 			for i := range direct {
 				if got[i] != direct[i] {
 					t.Fatalf("float %d is %v and the direct draw gives %v; the index "+
@@ -176,10 +174,9 @@ func TestAnIndexedDrawDeclaresItsBuffers(t *testing.T) {
 	r.UploadToBuffer(vb, make([]float32, 21))
 	r.UploadToBuffer(ib, []float32{f32bits(0), f32bits(1), f32bits(2)})
 
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "ordered",
 	})
 	p.SetPipeline(attributePipeline(t, d))
@@ -259,12 +256,11 @@ func TestIndexedDrawRefusals(t *testing.T) {
 			if err := q.WriteBuffer(vb, 0, make([]float32, 28)); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			target := newBuffer(t, d, "colour", 4*4*4,
-				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			target := colourTarget(t, d, "colour", 4, 4)
 
 			r := d.NewRecorder()
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, target)}},
+				Color: []accel.ColorAttachment{{View: view(t, target)}},
 				Width: 4, Height: 4, Label: "refused",
 			})
 			p.SetPipeline(attributePipeline(t, d))
@@ -310,12 +306,11 @@ func TestAnIndexPastTheVertexBuffer(t *testing.T) {
 	if err := q.WriteBuffer(ib, 0, []float32{f32bits(0), f32bits(1), f32bits(9)}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", 4, 4)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: 4, Height: 4, Label: "overrun",
 	})
 	p.SetPipeline(attributePipeline(t, d))
@@ -371,12 +366,11 @@ func TestBaseVertexOffsetsTheFetchOnly(t *testing.T) {
 	if err := q.WriteBuffer(ib, 0, []float32{f32bits(0), f32bits(1), f32bits(2)}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "base vertex",
 	})
 	p.SetPipeline(attributePipeline(t, d))
@@ -393,7 +387,7 @@ func TestBaseVertexOffsetsTheFetchOnly(t *testing.T) {
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 	at := func(x, y int) [4]float32 {
 		i := (y*w + x) * 4
 		return [4]float32{got[i], got[i+1], got[i+2], got[i+3]}

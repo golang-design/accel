@@ -1136,6 +1136,18 @@ point at its own structure.
 | V23 | ~~No two **statically bound** views at one node overlap unless both are read-only~~ **Withdrawn, 2026-08-24. Never implemented, and not implementable as worded — see below.** | — | [001](001-device-resources.md) 6.1 concrete same-node alias rule |
 | V24 | (at rebind and submit) No resource supplied through a graph slot overlaps another dynamic binding or any concrete graph resource, including a transient, when either side may write anywhere in the graph | both slots/resources, both graph-wide access unions, overlap | this spec, below |
 
+**V13 is implemented, 2026-08-24.** It could not be before, and that is worth
+recording next to V23 rather than only in a changelog: an attachment was a
+`BufferView`, a buffer view carries a dtype and not a format, so there was
+nothing on one side to compare. [042](042-surface-completion.md) §5.2 named it
+the same category as the withdrawn V23, with the difference that V23 was marked
+and this was not — by 033 §7's own accounting the check was done.
+[045](045-texture-attachments.md) made an attachment a `TextureView`, and the
+comparison is against **the view's** format rather than the texture's, because a
+view may reinterpret within a compatible family and the writes go through the
+view. Comparing the texture's own format would refuse exactly the linear-write,
+sRGB-present case 045 §2.1 exists for.
+
 **V23 is withdrawn: the alias it forbids is a supported feature.** The check was
 specified and never built, which was found by binding one buffer to a read
 binding and a write binding of one dispatch and watching it succeed. Building it

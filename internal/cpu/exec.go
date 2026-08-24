@@ -179,9 +179,13 @@ type resolvedNode struct {
 	dispatch *driver.Dispatch
 
 	// render is OpRenderPass's payload, with its attachments already resolved
-	// to the device memory they name.
+	// to the device memory they name. The bytes are kept as bytes and paired
+	// with the codec their format asks for: the rasterizer works in float32
+	// components and the attachment holds whatever its format holds, so the
+	// pass converts on the way in and on the way out.
 	render      *driver.RenderPass
-	colorAttach [][]float32
+	colorAttach [][]byte
+	colorCodec  []texelCodec
 
 	// vertexBytes is the attribute source, per draw and then per bound slot.
 	// indexBytes is one per draw, nil for a non-indexed one.
@@ -190,7 +194,8 @@ type resolvedNode struct {
 
 	// indirectArgs is one per draw, nil for a direct one.
 	indirectArgs [][]byte
-	depthAttach  []float32
+	depthAttach  []byte
+	depthCodec   texelCodec
 	args         kernel.Args
 	rows         *driver.RowCopy
 
@@ -597,22 +602,23 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 		if err != nil {
 			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
 		}
-		s, err := typedSlice(kernel.F32, raw)
+		c, err := codecFor(rp.ColorFormat[i])
 		if err != nil {
 			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
 		}
-		r.colorAttach = append(r.colorAttach, s.([]float32))
+		r.colorAttach = append(r.colorAttach, raw)
+		r.colorCodec = append(r.colorCodec, c)
 	}
 	if rp.Depth != nil {
 		raw, err := e.bytes(*rp.Depth)
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
-		s, err := typedSlice(kernel.F32, raw)
+		c, err := codecFor(rp.DepthFormat)
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
-		r.depthAttach = s.([]float32)
+		r.depthAttach, r.depthCodec = raw, c
 	}
 
 	// The attribute bytes, resolved here for the same reason the attachments
