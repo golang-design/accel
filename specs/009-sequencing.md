@@ -1741,13 +1741,21 @@ waits behind them**:
 Two items move *ahead* of both, because doing them later is more expensive than
 doing them now:
 
-- **widen the barrier stage mask.** It is two bits, transfer and compute, and
-  every render pass is classified as transfer by fallthrough. Inert while the
-  only backends are a CPU rasterizer with no barriers and a Metal backend that
-  tracks hazards itself — and live the moment a Vulkan backend exists, which
-  needs six stages. Widening it changes every inferred edge and every hazard the
-  graph reports, so doing it under a bring-up means re-validating the barrier
-  corpus at the worst moment.
+- ~~**widen the barrier stage mask**~~ **done.** It was two bits, transfer and
+  compute, and every render pass was classified as transfer by fallthrough.
+  Inert while the only backends are a CPU rasterizer with no barriers and a
+  Metal backend that tracks hazards itself — and live the moment a Vulkan
+  backend exists, which needs six stages. It is seven bits now, carried per
+  access rather than per node, which is what a render pass needs since its five
+  accesses sit in four different stages.
+
+  The reason given for doing it early was wrong, and the item was still worth
+  doing early. Widening it changed **no** inferred edge, hazard count or barrier
+  count — inference reads the access mode and the range and never the stage — so
+  there was no corpus to re-validate. What deferring would have cost is a wrong
+  barrier to debug during a bring-up, which is the worse of the two. See
+  [042](042-surface-completion.md) §5.3 and
+  [003](003-command-graph.md#what-the-builder-classifies-and-what-it-does-not-yet).
 - **write the texture-origin corpus entry.** Origin is per *resource kind*, not
   per backend, and this library has one kind on the render path today. The day
   it has two, a bug that survives its own tests becomes available. The entry

@@ -75,7 +75,7 @@ func (g *Graph) planBarriers() {
 	// a transient pool whose bytes the last submission also used.
 	if len(g.nodes) > 0 {
 		g.barriersBefore[0] = &barrier{
-			src: stageTransfer | stageCompute, dst: stageTransfer | stageCompute, memory: true,
+			src: stageAll, dst: stageAll, memory: true,
 			reasons: []barrierReason{{from: -1, label: "head of submission"}},
 		}
 	}
@@ -83,12 +83,16 @@ func (g *Graph) planBarriers() {
 	for i := range g.nodes {
 		n := &g.nodes[i]
 		var b *barrier
-		need := func(h hazard, src stage, from NodeID, label string) {
+		// dst is the stage of the access that needs the ordering, not the
+		// node's. A pass reading a vertex buffer an earlier node wrote must
+		// wait at vertex input, and naming the whole pass instead would stall
+		// the colour and depth stages on a hazard neither one has.
+		need := func(h hazard, src, dst stage, from NodeID, label string) {
 			if b == nil {
 				b = &barrier{}
 			}
 			b.src |= src
-			b.dst |= n.stage
+			b.dst |= dst
 			// A write-after-read needs ordering only. Any other hazard in the
 			// same batch upgrades the whole barrier, which is correct: the union
 			// of what the accesses need.
@@ -106,15 +110,15 @@ func (g *Graph) planBarriers() {
 				}
 				if a.mode == AccessRead || a.mode == AccessReadWrite {
 					if rs.written {
-						need(hazardRAW, rs.lastWriteStage, rs.lastWriteNode, g.labelOf(a.res))
+						need(hazardRAW, rs.lastWriteStage, a.stage, rs.lastWriteNode, g.labelOf(a.res))
 					}
 				}
 				if a.writes() {
 					if rs.written {
-						need(hazardWAW, rs.lastWriteStage, rs.lastWriteNode, g.labelOf(a.res))
+						need(hazardWAW, rs.lastWriteStage, a.stage, rs.lastWriteNode, g.labelOf(a.res))
 					}
 					for _, r := range rs.readNodes {
-						need(hazardWAR, rs.readStages, r, g.labelOf(a.res))
+						need(hazardWAR, rs.readStages, a.stage, r, g.labelOf(a.res))
 					}
 				}
 			}
@@ -213,7 +217,7 @@ func (g *Graph) planSerialBarriers() {
 	g.barriersBefore = make([]*barrier, len(g.nodes))
 	for i := range g.nodes {
 		g.barriersBefore[i] = &barrier{
-			src: stageTransfer | stageCompute, dst: stageTransfer | stageCompute, memory: true,
+			src: stageAll, dst: stageAll, memory: true,
 			reasons: []barrierReason{{from: -1, label: "the conservative plan"}},
 		}
 	}

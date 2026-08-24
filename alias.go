@@ -296,7 +296,7 @@ func (t *transient) lastUser() NodeID {
 func (g *Graph) requireBarrier(before NodeID, from NodeID) {
 	b := g.barriersBefore[before]
 	if b == nil {
-		b = &barrier{src: stageTransfer | stageCompute, dst: g.nodes[before].stage, memory: true}
+		b = &barrier{src: stageAll, dst: g.nodes[before].stage, memory: true}
 		g.barriersBefore[before] = b
 	}
 	b.memory = true

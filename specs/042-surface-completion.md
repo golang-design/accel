@@ -294,6 +294,38 @@ This is also the sharpest irony in the review: the barrier inference model is
 this library's biggest advantage over the field, and it is the one part of the
 design that graphics did not get.
 
+**Built.** The stage moved off the node and onto the access, which is where
+[003](003-command-graph.md) always put it, and the mask widened to that spec's
+`StageMask` less the three names no declaration can produce yet — see 003's
+[table](003-command-graph.md#what-the-builder-classifies-and-what-it-does-not-yet)
+for the mapping and for why `StageHost`, `StageVertex` and `StageFragment` are
+absent rather than declared. A barrier's destination is now the stage of the
+access that needed it rather than the whole node's, so a pass waiting on a
+vertex buffer waits at vertex input instead of stalling its colour and depth
+stages too.
+
+Two things this paragraph got wrong, and both are worth keeping visible because
+the second is why the work was scheduled here:
+
+- The accesses were *four* distinguishable reads and writes, not three: a
+  vertex-buffer read, an index-buffer read, an indirect-argument read and an
+  attachment write, with the depth attachment a fifth once it is separated from
+  colour.
+- **Widening it changed no inferred edge, no hazard count and no barrier
+  count.** Edge inference reads the access mode and the range and never the
+  stage, and barrier *existence* is decided by the same two — the stage only
+  decides what a barrier names on each side. A six-graph corpus spanning copies,
+  transients, dispatches, render passes under all three load actions, and slots
+  produces byte-identical plans before and after. So the argument for doing it
+  before a Vulkan bring-up was sound but its stated reason was not: the cost of
+  deferring would have been a wrong barrier to debug, not a corpus to
+  re-validate.
+
+The compute half had a bug too, which the review did not look for because it
+framed this as a graphics finding: an indirect dispatch's count buffer was
+classified as a compute read, contradicting the doc comment on the call that
+records it. It is `StageIndirectFetch` now, and the doc comment is true.
+
 ### 5.4 One thing to write before the feature, not after
 
 A renderer's hardest-won convention lesson is that texture origin is not per

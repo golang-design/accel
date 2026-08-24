@@ -7,6 +7,7 @@ package accel
 import (
 	"fmt"
 	"math/bits"
+	"strings"
 )
 
 // hazard is why one node must be ordered after another.
@@ -33,26 +34,67 @@ func (h hazard) String() string {
 // stage is the part of the pipeline an access happens in.
 //
 // It is a mask rather than an enum because a barrier names a set on each side,
-// and a node reading one resource in one stage and another in a second is
-// ordinary. Only two exist while the graph holds transfers and flat dispatches;
-// specs/005-graphics.md adds the rest.
+// and one access happening in two stages is ordinary: a depth attachment is
+// touched by both fragment-test stages, and one view bound in two roles is one
+// access naming both.
+//
+// It is a property of the *access*, not of the node. A render pass is one node
+// whose accesses sit in four different stages, so a node-wide stage cannot
+// express what any of them needs -- which is how every render pass came to be
+// classified as a transfer.
+//
+// The set mirrors specs/003-command-graph.md's StageMask, less the stages no
+// declared access can be in yet. StageHost is absent because a host write is a
+// staged blit on the queue, so its queue-side stage is transfer. StageVertex
+// and StageFragment are absent because nothing a pass declares is read by a
+// shader stage: uniforms are by-value and there is no texel fetch. Both arrive
+// with the accesses that produce them rather than as names nothing sets.
 type stage uint8
 
 const (
 	stageTransfer stage = 1 << iota
+	stageIndirectFetch
+	stageVertexInput
+	stageEarlyDepth
+	stageLateDepth
+	stageColourOutput
 	stageCompute
 )
 
+// stageAll is every stage, which is what an ordering point that names no
+// particular access has to say on both sides.
+const stageAll = stageTransfer | stageIndirectFetch | stageVertexInput |
+	stageEarlyDepth | stageLateDepth | stageColourOutput | stageCompute
+
+var stageNames = []struct {
+	bit  stage
+	name string
+}{
+	{stageTransfer, "transfer"},
+	{stageIndirectFetch, "indirect fetch"},
+	{stageVertexInput, "vertex input"},
+	{stageEarlyDepth, "early depth"},
+	{stageLateDepth, "late depth"},
+	{stageColourOutput, "colour output"},
+	{stageCompute, "compute"},
+}
+
+// String joins the bits set rather than switching on the whole value.
+//
+// A switch is what it was, and its default answered "transfer and compute" for
+// every value it did not name. That was true while two bits existed and became
+// a lie the moment a third did, in the direction that reads as a real answer.
 func (s stage) String() string {
-	switch s {
-	case 0:
+	if s == 0 {
 		return "none"
-	case stageTransfer:
-		return "transfer"
-	case stageCompute:
-		return "compute"
 	}
-	return "transfer and compute"
+	names := make([]string, 0, len(stageNames))
+	for _, n := range stageNames {
+		if s&n.bit != 0 {
+			names = append(names, n.name)
+		}
+	}
+	return strings.Join(names, " and ")
 }
 
 // span is one resource range an access covers, plus who made it.
@@ -238,7 +280,7 @@ func (g *Graph) spansOf(n *recNode) []accessSpan {
 	for i, a := range n.accesses {
 		out[i] = accessSpan{
 			res: a.res, off: a.off, size: a.size,
-			node: n.id, mode: a.mode, stage: n.stage,
+			node: n.id, mode: a.mode, stage: a.stage,
 		}
 	}
 	return out
