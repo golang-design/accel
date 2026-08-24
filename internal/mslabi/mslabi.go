@@ -46,3 +46,28 @@ func LengthsIndex(n int) int { return n }
 // UniformIndex reports the buffer index uniform i occupies for a kernel with n
 // bindings.
 func UniformIndex(n, i int) int { return n + 1 + i }
+
+// StageVertexBufferLimit is how many vertex buffers a render pipeline may bind.
+//
+// The limit exists because a vertex stage's uniforms and its vertex buffers
+// share one Metal buffer index space, so the two have to be separated by a rule
+// both the emitter and the backend follow. The emitter does not know how many
+// buffers a pipeline will bind -- that is pipeline state and this is stage state
+// -- so the split is a constant rather than a computation.
+const StageVertexBufferLimit = 16
+
+// StageUniformIndex reports the buffer index a vertex stage's uniform i occupies.
+//
+// Above every vertex buffer, for the reason above. Getting this wrong is not a
+// compile error on either side: the uniform lands on top of vertex buffer zero,
+// the stage reads geometry as a transform, and the picture is wrong in a way
+// that looks like a bad matrix.
+func StageUniformIndex(i int) int { return StageVertexBufferLimit + i }
+
+// StageFragmentUniformIndex reports the buffer index a fragment stage's uniform
+// i occupies.
+//
+// A fragment stage binds no vertex buffers, so its uniforms start at zero and
+// no reservation is needed. Named anyway, so the two sides of the ABI are two
+// calls to one place rather than one call and a literal.
+func StageFragmentUniformIndex(i int) int { return i }

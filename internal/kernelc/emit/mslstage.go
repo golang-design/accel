@@ -7,6 +7,8 @@ package emit
 import (
 	"fmt"
 
+	"golang.design/x/accel/internal/mslabi"
+
 	"golang.design/x/accel/internal/kernelc/ir"
 )
 
@@ -85,7 +87,7 @@ func (m *msl) vertexStage(k *ir.Func) {
 	}
 	for i, u := range k.Uniforms {
 		params = append(params, fmt.Sprintf("constant %s &%s [[buffer(%d)]]",
-			u.TypeName, u.Name, i))
+			u.TypeName, u.Name, mslabi.StageUniformIndex(i)))
 	}
 	// The two ids are always declared, for the reason a compute kernel's three
 	// are: the signature stays a function of the declared inputs alone, and MSL
@@ -124,7 +126,7 @@ func (m *msl) fragmentStage(k *ir.Func) {
 	params := []string{fmt.Sprintf("%s _in [[stage_in]]", in)}
 	for i, u := range k.Uniforms {
 		params = append(params, fmt.Sprintf("constant %s &%s [[buffer(%d)]]",
-			u.TypeName, u.Name, i))
+			u.TypeName, u.Name, mslabi.StageFragmentUniformIndex(i)))
 	}
 	// No separate [[position]] parameter: the varyings struct already carries
 	// one, and MSL rejects a signature declaring the attribute twice. The
@@ -189,6 +191,18 @@ func (m *msl) stageReturn(s *ir.Return, depth int) {
 		m.stageAssign(s.Values[1], depth, func(i int) string {
 			return m.stageVaryings.Fields[i].Name
 		}, len(m.stageVaryings.Fields))
+
+		// The depth convention, converted here and nowhere else.
+		//
+		// specs/032-stage-abi.md section 2.3 fixes clip depth as -w <= z <= w,
+		// which is OpenGL's and what the CPU rasterizer implements. Metal's
+		// clip space is 0 <= z <= w. Emitting the author's z unchanged puts
+		// every near-half vertex behind the near plane, so geometry straddling
+		// it loses its near half and reads as a broken projection rather than
+		// as a convention mismatch -- which is the symptom
+		// docs/conventions.md names.
+		m.printf("%s%s._pos.z = (%s._pos.z + %s._pos.w) * 0.5;\n",
+			ind, m.stageOut, m.stageOut, m.stageOut)
 		m.printf("%sreturn %s;\n", ind, m.stageOut)
 		return
 	}

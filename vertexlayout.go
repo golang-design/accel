@@ -4,7 +4,11 @@
 
 package accel
 
-import "fmt"
+import (
+	"fmt"
+
+	"golang.design/x/accel/internal/mslabi"
+)
 
 // The vertex input layout of specs/033-render-api.md section 2.
 //
@@ -118,6 +122,17 @@ type VertexBufferLayout struct {
 // locations that are not dense let an attribute read another's data: the stage
 // indexes its attributes densely, so a gap shifts every one after it.
 func checkVertexLayout(label string, vs *Stage, bufs []VertexBufferLayout) error {
+	// The ceiling exists because a Metal vertex stage's uniforms and its vertex
+	// buffers share one buffer index space, and the two are separated by a
+	// constant both the MSL emitter and the backend follow. Refused here, where
+	// a caller can act on it, rather than at a draw where a uniform would land
+	// on top of a vertex buffer and the stage would read geometry as a
+	// transform.
+	if len(bufs) > mslabi.StageVertexBufferLimit {
+		return fmt.Errorf("accel: NewRenderPipeline %q: %d vertex buffers, and a stage's "+
+			"uniforms begin at index %d on Metal, so %d is the ceiling", label,
+			len(bufs), mslabi.StageVertexBufferLimit, mslabi.StageVertexBufferLimit)
+	}
 	declared := map[int]VertexAttribute{}
 	for i, b := range bufs {
 		if b.Stride <= 0 {
