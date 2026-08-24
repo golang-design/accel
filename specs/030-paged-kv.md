@@ -83,6 +83,13 @@ was the enabler; `AttentionDecodeBatched` is the thing it enabled. Each
 workgroup handles one (sequence, head) pair and reads that sequence's *own*
 length and page table.
 
+**Reachable from the tensor layer on 2026-08-24, and not before.** The kernel
+above was written, tested and unreachable: `Attention` read `q`'s rank as the
+phase, so a batched decode was rank 3 and indistinguishable from a prefill. A
+rank-4 `q` is the batched form now. Recorded here because this section read as
+though the capability existed, which is how it went four milestones unnoticed —
+see [009](009-sequencing.md)'s correction.
+
 **Nothing is padded to a common length.** A short sequence's lanes past its end
 contribute the identity to each reduction, exactly as they do unbatched, so a
 batch of one long and three short sequences costs what the long one costs rather

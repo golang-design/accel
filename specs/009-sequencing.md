@@ -1104,6 +1104,24 @@ Independently scoped later work includes:
   member costs. What remains is the *scheduler* deciding who runs together and
   when to admit a request, which is policy over this mechanism rather than more
   of it; and
+
+  > **Correction, 2026-08-24.** The sentence above was true of the *kernel* and
+  > false of the library. `AttentionDecodeBatched` existed, was tested, and no
+  > operator reached it, so no caller could step a batch — for four milestones,
+  > while this paragraph said batching had landed and the bug table below
+  > recorded the kernel as uncalled. Both were written and neither was
+  > reconciled.
+  >
+  > What blocked it was the shape language rather than anything missing:
+  > `Attention` read `q`'s rank as the phase, so a batched decode was rank 3,
+  > indistinguishable from a prefill. A consumer found it by trying to build a
+  > scheduler (accel issue 12). `q` now takes a rank-4 batched form.
+  >
+  > The generalization is the one this table keeps finding from the other side:
+  > **a kernel is not a capability.** A corpus entry with tests and no operator
+  > is indistinguishable, from inside, from one a caller can use — every gate
+  > passes either way — and the sentence that says a feature "landed" is the
+  > one nobody re-derives.
 - ~~additional transient sets~~ — **[031](031-shared-transients.md), complete
   2026-08-23**: a caller-owned pool several graphs plan into, sized to the
   largest rather than to the sum, which is [007](007-tensor-layer.md)'s
