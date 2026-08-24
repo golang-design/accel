@@ -406,7 +406,14 @@ type DepthAttachment struct {
 // Attachments are buffer views rather than textures at this milestone, because
 // specs/035-cpu-rasterizer.md's reference rasterizer writes float components and
 // the texture path needs the format encode/decode 033 leaves to the backend.
-// The shape a caller writes does not change when that lands.
+//
+// Correction, 2026-08-24: the shape does change when that lands, and this
+// comment used to say it would not. A BufferView cannot name a mip level, an
+// array layer or a format, and specs/033-render-api.md section 3.3's feedback
+// rejection compares subresources. specs/042-surface-completion.md section 5.2
+// records what else follows from the same decision -- the format fields that
+// reach no backend, the per-pass staging copies, and the conversion draw a
+// present costs every frame.
 type RenderPassDescriptor struct {
 	Color []ColorAttachment
 	Depth *DepthAttachment

@@ -162,6 +162,150 @@ distinguishes. `tensor.Contiguous` was on this list from an audit. The RoPE
 scalar was not on any list, because nothing about the *surface* looked wrong —
 it looked wrong only to someone batching two sequences.
 
+### 5.2 The review, done — 2026-08-24
+
+It found more than §5 expected, and the finding that matters is not a count.
+
+#### One decision, many symptoms
+
+**A render attachment is a `BufferView`, not a texture.** `render.go` states it
+plainly — *"Attachments are buffer views rather than textures at this
+milestone… The shape a caller writes does not change when that lands."*
+
+**The last sentence is not true, and correcting it is the point of this
+section.** `ColorAttachment.View BufferView` cannot name a mip level, an array
+layer, or a format, and [033](033-render-api.md) §3.3's whole feedback-rejection
+design turns on comparing subresources. The shape does change.
+
+Eight of the largest findings are that one decision's consequences rather than
+independent defects:
+
+| Consequence | Why it follows |
+| --- | --- |
+| `ColorTargetState.Format` and `DepthStencilState.Format` reach no backend | a `BufferView` carries a dtype, not a format, so there is nothing to lower into. Metal hardcodes `RGBA32Float` per attachment; the CPU backend reinterprets attachment bytes as `[]float32` unconditionally |
+| The per-device `FormatInfo` table is built and thrown away | the render path reads two of its twelve fields; `Blendable` is populated and read **nowhere** |
+| Check **V13** is unimplementable in this shape | the same category as the withdrawn V23, and unlike V23 it was not marked |
+| sRGB never converts | [035](035-cpu-rasterizer.md) §5 says it converts on write and on read; the rasterizer explicitly declines format encoding, and no layer owns it |
+| No stage can sample or fetch a texture | so no pass reads a previous pass's output: no deferred shading, no shadow maps, no material textures |
+| 033 §7's feedback rejection is blocked | it needs a subresource to compare |
+| `LoadKeep` costs a copy in and a copy out **per pass** on Metal | a buffer is not an attachment, so it is staged into one and back |
+| Presenting costs a full-screen conversion draw **every frame** | RGBA32Float is not a compositor format and a blit cannot convert |
+
+**So the cost is not a missing feature, it is a frame's cost model.** At 1080p a
+Metal frame makes several full-frame round trips through system memory at four
+times the natural byte width, and none of that is visible as a failing test.
+
+#### The verdict
+
+**Not ready to build features on.** Two reasons, in order of weight.
+
+*First, the attachment change is not additive.* Everything built on the buffer
+attachment is built to be rebuilt: `Format` fields become real, V13 becomes
+implementable, sRGB becomes possible, feedback rejection unblocks, the per-pass
+blits and the present conversion draw disappear, `Renderable` and `Blendable`
+acquire consumers, three `TextureUsage` flags acquire meaning, and the sampler
+block acquires a shape. §2.1 already listed texture attachments and texel fetch
+as work to land. What the review adds is that they are not two more items on
+that list — **they are the item everything else is downstream of.**
+
+*Second, the defect density matches the compute half before its consumer
+arrived.* Eight declarations accepted that reach nothing, four implemented-and
+unreachable paths, eleven pieces of spec/code drift, and one panic. **Every one
+passed every gate.** Four resemble what the inference consumer filed closely
+enough to name:
+
+- `Stage.Discards` is declared in the IR *and* in the stage record, guarded in
+  the emitter, and **assigned nowhere in the compiler** — three layers of
+  machinery for a value that is permanently false. The ninth instance.
+- The stencil pipeline is fully implemented and tested in `internal/raster` and
+  is reachable by nothing, `DepthStencilState` having no stencil fields. Worse,
+  the CPU backend allocates its stencil buffer per pass, so the cross-pass case
+  the rasterizer's own test exercises could not work even if the state were
+  reachable. This is `AttentionDecodeBatched`'s shape exactly.
+- 033 §7's Outstanding table does not list the attachment-format check, so **by
+  the spec's own accounting it is done**. It is not, and cannot be.
+- 033 §6 rules out push constants, and the shipped by-value channel is Metal's
+  `setVertexBytes`, baked at record — the exact mechanism and cost §6 rejected —
+  while the mechanism §6 chose instead cannot be bound to a render pass at all.
+  §3.1 above then kept `UniformBuffer[T]` on the strength of that argument.
+
+The last one is the pattern that should decide it: a spec argued a design, a
+second spec relied on the first's argument, and neither noticed that the render
+path implements the option the first rejected and cannot implement the one it
+chose. **That is not a defect anyone finds by adding a feature.**
+
+#### What is right, and must not be disturbed
+
+Named because a review that only lists faults invites throwing out the good with
+them. Each of these was independently confirmed as correct by looking at a
+renderer that did *not* do it and paid for it:
+
+- **one clip-space convention**, with backends folding the remap;
+- **`FrontFace` with no backend-default zero value**, so winding is stated;
+- **author-once stages**, where the differences between hand-maintained GLSL and
+  MSL copies of one shader turn out to be precisely the clip-z and winding
+  conventions this library normalizes;
+- **a real barrier and aliasing model**, against `WaitIdle` after every dispatch;
+- **pass-granularity synchronisation**, store actions at all, and the per-device
+  `FormatInfo` design — which is the right shape even though the render path
+  does not ask it.
+
+### 5.3 Three forces shaping the surface that are not the abstraction
+
+Ranked by damage. These are design findings rather than defects, and they are
+the reason the review asked more than "does every declaration reach something".
+
+**The CPU oracle is setting the public API's ceiling.** Vertex attributes admit
+only float32 vector formats, and the stated reason is that normalized integer
+formats "convert on fetch, which is a conversion the CPU rasterizer would have
+to match bit for bit to stay an oracle". Every one of the four target APIs has
+normalized integer vertex formats. The abstraction is narrower than *all* of its
+targets for a reason about testability, and §8's open question — whether the CPU
+backend should implement everything — has therefore already been answered by
+default, in the direction of a smaller API, without anyone recording the
+decision. The constraint is right and the conclusion is too strong: an
+unorm8 fetch has one obvious correct definition and snorm16 has two that every
+API documents. State the conversion the way the fill rule is stated. Reserve the
+refusal for what genuinely has no portable definition — lines, points, and
+filtered sampling.
+
+**Metal's ABI is refusing callers on devices that are not Metal.** A pipeline
+with more than sixteen vertex buffers is refused on *any* device because a
+stage's uniforms begin at index sixteen **on Metal**. That is a device limit
+wearing a constant's clothes; report it as `Limits.MaxVertexBuffers` and name
+the device's number in the error. Decision 6 already says absence is reported
+rather than discovered, and a constant in `internal/mslabi` is neither.
+
+**The barrier vocabulary has no graphics in it.** `stage` is a two-bit mask —
+transfer and compute — with a comment saying graphics adds the rest. It has not,
+so every render pass is classified as transfer by fallthrough. This is inert
+today because the CPU backend has no barriers and Metal tracks hazards
+automatically, which is exactly why nothing caught it. A Vulkan backend needs
+six stages to place a barrier correctly. **Widen the mask before the first
+non-Metal backend**, because widening it changes every inferred edge and every
+hazard the graph reports, and doing that under a working bring-up means
+re-validating the whole barrier corpus at the worst possible moment. The
+accesses are already distinguishable from what a pass records — a vertex-buffer
+read, an indirect-argument read and an attachment write are three different
+things today, all flattened into one bit.
+
+This is also the sharpest irony in the review: the barrier inference model is
+this library's biggest advantage over the field, and it is the one part of the
+design that graphics did not get.
+
+### 5.4 One thing to write before the feature, not after
+
+A renderer's hardest-won convention lesson is that texture origin is not per
+*backend* but per *resource kind*: on GL, render-target readback is bottom-origin
+while compute storage output is not — which is why such a bug survives its own
+tests, since the pass that reads storage output never sees the flip.
+
+accel has never met this because it has exactly one resource kind on the render
+path: the attachment is a buffer. **The day texture attachments land, accel
+acquires a second resource kind and this bug becomes available.** The corpus
+entry that compares a texture-attachment readback against a storage-buffer write
+of the same image is therefore written *before* the feature.
+
 ## 6. The documentation guard
 
 [036](036-documentation.md) §3.1 requires tutorial code to live in `Example`
