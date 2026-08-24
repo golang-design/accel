@@ -296,9 +296,9 @@ drift:**
 | Drawn here | Built | Why |
 | --- | --- | --- |
 | `ScatterRows(b, state, rows, indexName string)` | `ScatterRows(b, state, rows, ids *Tensor)` | the indices are device data that a previous operator may have produced, not a host-side name; a name would force them through the host |
-| `RoPE(b, x, positions *Tensor, rotaryDim, baseName)` | `RoPE(b, x, rotaryDim, baseName, offsetName)` | the registered kernel takes a *starting offset* and derives each row's position from it, which is what a decode step has; a positions tensor is the general form and needs a kernel that reads one |
+| `RoPE(b, x, positions *Tensor, rotaryDim, baseName)` | `RoPE(b, x, rotaryDim, baseName, positions *Tensor)` | **this spec was right and the first build was not.** The built form took a starting offset and derived each row's position as `row + offset`, which is correct for one sequence and wrong for two: in a batched decode the row index is the *slot*. Corrected 2026-08-24 after a consumer reported it — see [043](043-per-row-values.md) |
 | `SoftmaxOptions{Axis, ScaleName, Mask, Causal}` | `SoftmaxOptions{Axis}` | the registered kernel has no mask parameter and no scale; `Axis` must be the last, which is the only axis it reduces over |
-| `AttentionOptions{CurrentLengthName, Causal}` | `AttentionOptions{CurrentLengthName, ScaleName, BaseName}` | the scale is named for the reason every other per-step value is, and `BaseName` is the prefill's first query position — what decides what the causal mask hides, which a boolean cannot say |
+| `AttentionOptions{CurrentLengthName, Causal}` | `AttentionOptions{Lengths *Tensor, Pages *Tensor, Block, ScaleName, BaseName}` | the scale is named for the reason every other model constant is; `BaseName` is the prefill's first query position, which decides what the causal mask hides and which a boolean cannot say. `Lengths` is a tensor because cache lengths are independent across a batch, and `Pages` reaches the paged cache [030](030-paged-kv.md) built and nothing could call — both 2026-08-24, see [043](043-per-row-values.md) |
 
 **`Causal` is not a flag anywhere, and that is the substantive change.** This
 spec made it a compile-time attribute; the built form makes it the *kernel*.
@@ -377,8 +377,11 @@ type SoftmaxOptions struct {
 func Softmax(b *Builder, x *Tensor, opts SoftmaxOptions) *Tensor
 
 type AttentionOptions struct {
-	CurrentLengthName string
-	Causal            bool
+	Lengths   *Tensor // one entry per sequence
+	Pages     *Tensor // optional page table; nil is a contiguous cache
+	Block     int     // positions per block, with Pages
+	ScaleName string
+	BaseName  string // prefill only
 }
 func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tensor
 ```

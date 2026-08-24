@@ -37,11 +37,12 @@ three kernel gaps:
 
 | Gap | What exists today | What a batch needs |
 | --- | --- | --- |
-| batched paged attention at the tensor layer | `tensor.Attention` selects only the decode and prefill kernels; the batched and paged kernels live under `internal/testkernels` and nothing in `tensor/` references them | an operator that binds `pages` and `lengths` |
-| position rotation | `RoPE` takes one scalar `Offset` and computes `pos := r + Offset`, so the *row index* is part of the position | a positions tensor, one entry per slot, read as a binding |
-| sampling | `SampleDims.Draw` is a scalar in the uniform block; `SampleCategorical` is `workgroup=1` and writes `out[0]` | one row and one **independent** draw per slot |
+| ~~paged attention at the tensor layer~~ **closed 2026-08-24** | `tensor.Attention` selected only the decode and prefill kernels; the batched and paged kernels lived under `internal/testkernels` and nothing in `tensor/` referenced them | `AttentionOptions` binds `Pages` and `Lengths`, and the operator selects the paged kernel. *Batched* attention — several sequences in one dispatch — is still this spec's, and is what the scheduler needs |
+| ~~position rotation~~ **closed 2026-08-24** | `RoPE` took one scalar `Offset` and computed `pos := r + Offset`, so the *row index* was part of the position | a positions tensor, one entry per row, read as a binding — see [043](043-per-row-values.md) |
+| ~~sampling~~ **closed 2026-08-24** | `SampleDims.Draw` was a scalar and `SampleCategorical` was `workgroup=1` writing `out[0]` | one row and one **independent** draw per slot — built, and `SampleArgmax` is per row too, since one batched sampler beside one single-row sampler would leave a caller choosing |
 
-The `RoPE` gap is the dangerous one. In an unbatched prefill `r` really is the
+The `RoPE` gap was the dangerous one, and a consumer building on the library
+reported it before this spec's scheduler existed to trip over it. In an unbatched prefill `r` really is the
 position within the prompt, so the kernel is correct there. In a batched decode
 `r` is the *slot index*: slot 0 rotates at `Offset`, slot 1 at `Offset+1`, and
 only one member is ever rotated at its own cache length. The output stays

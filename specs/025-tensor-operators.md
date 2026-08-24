@@ -33,8 +33,7 @@ Two rules follow, and each is a refusal rather than a silent repair:
 - **`Reshape` requires a contiguous operand.** A strided view's elements are not
   adjacent, so a different extent over them names *different elements*. The
   error says that, and says what to do instead: reshape before the transpose or
-  slice that made the view strided. **There is no `Contiguous` operator** — see
-  the open questions.
+  slice that made the view strided, or insert `Contiguous`, which packs one.
 - **`Slice` is unit-step.** A strided step would still be a view and nothing in
   v0 needs one, so it is absent rather than untested.
 
@@ -141,9 +140,12 @@ materialization is.
 
 ## Open questions
 
-- **A `Contiguous` operator.** Four places in `tensor/views.go` named one,
+- ~~**A `Contiguous` operator.**~~ **Built 2026-08-24.** Four places named one,
   including an error telling a caller to insert it, and it was never written —
   so a user following the error went looking for an API that does not exist.
-  The messages now say what is actually possible. Packing an arbitrary strided
-  view needs a gather kernel: `Plan.materialize` handles only a contiguous run
-  repeated a whole number of times, which is broadcast, not transposition.
+  It exists: a gather kernel packs an arbitrary strided view, each destination
+  element decomposing its linear index into coordinates and dotting them with
+  the source strides. It stays explicit rather than automatic, which is
+  [007](007-tensor-layer.md)'s choice — *a copy nobody asked for is a cost
+  nobody can see* — and an operand already contiguous is returned unchanged, so
+  a defensive call is free.
