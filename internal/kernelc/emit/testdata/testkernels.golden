@@ -4778,6 +4778,55 @@ var SolidFSStage = accel.Stage{
 	Generator: kernelabi.Version,
 }
 
+// attributeVSFlat is the generated lowering of the vertex stage AttributeVS.
+//
+// specs/032-stage-abi.md. The authored AttributeVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func attributeVSFlat(v accel.Vertex, pos [3]float32, tint [4]float32) (accel.Clip, ColourVaryings) {
+	return [4]float32{pos[int32(0)], pos[int32(1)], pos[int32(2)], float32(1)}, ColourVaryings{tint}
+}
+
+// AttributeVSStage is the compiled form of AttributeVS.
+var AttributeVSStage = accel.Stage{
+	Name:     "AttributeVS",
+	Kind:     accel.StageVertex,
+	Varyings: "ColourVaryings",
+	Attributes: []accel.StageAttribute{
+		{Name: "pos", Index: 0, Components: 3},
+		{Name: "tint", Index: 1, Components: 4},
+	},
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+		pos, vary := attributeVSFlat(v, [3]float32(a[0]), [4]float32(a[1]))
+		return pos, flattenColourVaryings(vary)
+	},
+	Digest:    "07f4590d8e263615e631368241b1911d",
+	Generator: kernelabi.Version,
+}
+
+// tintFSFlat is the generated lowering of the fragment stage TintFS.
+//
+// specs/032-stage-abi.md. The authored TintFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func tintFSFlat(f accel.Fragment, in ColourVaryings) Solid {
+	return Solid{in.Tint}
+}
+
+// TintFSStage is the compiled form of TintFS.
+var TintFSStage = accel.Stage{
+	Name:     "TintFS",
+	Kind:     accel.StageFragment,
+	Varyings: "ColourVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+		out := tintFSFlat(f, unflattenColourVaryings(vv))
+		return [][4]float32{out.Colour}
+	},
+	Digest:    "b078a031784853ff457d0c9c754d57d4",
+	Generator: kernelabi.Version,
+}
+
 // subgroupReduceFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -5629,6 +5678,26 @@ func flattenNoVaryings(v accel.NoVaryings) []float32 {
 // unflattenNoVaryings is flattenNoVaryings's inverse.
 func unflattenNoVaryings(f []float32) accel.NoVaryings {
 	var v accel.NoVaryings
+	return v
+}
+
+// flattenColourVaryings packs ColourVaryings into the flat form a rasterizer interpolates.
+func flattenColourVaryings(v ColourVaryings) []float32 {
+	out := make([]float32, 0, 4)
+	out = append(out, v.Tint[0])
+	out = append(out, v.Tint[1])
+	out = append(out, v.Tint[2])
+	out = append(out, v.Tint[3])
+	return out
+}
+
+// unflattenColourVaryings is flattenColourVaryings's inverse.
+func unflattenColourVaryings(f []float32) ColourVaryings {
+	var v ColourVaryings
+	v.Tint[0] = f[0]
+	v.Tint[1] = f[1]
+	v.Tint[2] = f[2]
+	v.Tint[3] = f[3]
 	return v
 }
 

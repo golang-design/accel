@@ -95,3 +95,26 @@ type Solid struct {
 func SolidFS(f accel.Fragment, in accel.NoVaryings) Solid {
 	return Solid{Colour: accel.Vec4{0.25, 0.5, 0.75, 1}}
 }
+
+// ColourVaryings is what the attribute stages interpolate.
+type ColourVaryings struct {
+	Tint accel.Vec4
+}
+
+// AttributeVS reads its position and colour from vertex buffers.
+//
+// No by-value parameter, unlike GeometryVS: a stage that declares one cannot be
+// drawn yet, so this is the stage the attribute path can be tested through.
+//
+//accel:vertex
+func AttributeVS(v accel.Vertex, pos accel.Vec3, tint accel.Vec4) (accel.Clip, ColourVaryings) {
+	return accel.Clip{pos[0], pos[1], pos[2], 1}, ColourVaryings{Tint: tint}
+}
+
+// TintFS writes the interpolated colour, so what a test reads back is decided
+// by the fetch and the interpolation together.
+//
+//accel:fragment
+func TintFS(f accel.Fragment, in ColourVaryings) Solid {
+	return Solid{Colour: in.Tint}
+}
