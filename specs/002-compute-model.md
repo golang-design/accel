@@ -575,7 +575,31 @@ are rejected, and the two known families are a barrier whose predicate is
 uniform by construction but flows through a shared-memory location, and a loop
 whose trip count is computed from a storage buffer the caller knows holds the
 same value everywhere. Both are real, and neither is common enough to trade for
-the failure mode above. The escape hatch is an open question, not a v0 feature.
+the failure mode above.
+
+**The escape hatch stays closed, and now for a reason rather than a deferral.**
+The tempting fix is to make the second family disappear: a load from a binding
+**no invocation writes** could be as uniform as its index, since the seed's own
+justification — "another invocation may have written the location" — does not
+apply to it. `Binding.Write` is already inferred from the body, counts an atomic
+as a write, and propagates out of helpers, so the compiler has the fact.
+
+It is unsound, and what makes it unsound is a deliberate capability. The
+conclusion needs no *other* binding of the same node to write that memory, and
+[003](003-command-graph.md) permits exactly that alias: one buffer bound to a
+read binding and a write binding of one dispatch is how in-place elementwise
+work is expressed, with a test defending it. 003's check V23 would forbid the
+alias and is not implemented; implementing it as worded would delete the
+feature. So the load's value can change under a workgroup mid-dispatch, and a
+barrier admitted on the strength of it would hang on a device — the failure this
+section chose conservatism to avoid.
+
+What a kernel does instead is bound the loop by the binding's **extent** rather
+than its **contents**. `len()` is seeded workgroup-uniform above and is fixed
+when the node is recorded, so no aliased write can move it.
+[044](044-unbounded-context.md) is the worked example: five attention kernels
+walk a cache of any length under a barrier-bearing loop, each taking its bound
+from the binding that describes its reach.
 
 The analysis runs on the IR, once, and is therefore shared by every target, which
 is [004](004-kernel-authoring.md)'s argument for having an IR at all.

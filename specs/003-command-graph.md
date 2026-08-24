@@ -166,8 +166,10 @@ once**: a *binding slot* is an entry in a pipeline's binding layout, declared by
 *graph slot* is a rebindable input of a graph, declared by `Recorder.Slot` and
 bound per submission. A pipeline's binding slot is where a resource is *used*; a
 graph's slot is where it *comes from*. V21 proves the graph-slot descriptor
-covers every binding-slot use. V23 handles concrete same-node aliases at build;
-V24 handles graph-slot aliases against the whole graph at bind and submit.
+covers every binding-slot use. V24 handles graph-slot aliases against the whole
+graph at bind and submit. Concrete same-node aliases are **not** checked: V23
+claimed to and is withdrawn below, because the alias it forbids is how in-place
+work is expressed.
 
 A `Binding` therefore names either a concrete resource or a graph slot, and a
 node records whichever it was given. Three rules make the rest fall out:
@@ -1064,8 +1066,29 @@ point at its own structure.
 | V20 | The planned transient pool fits the device's reported budget | pool size, budget | 001 pools |
 | V21 | Every recorded use through a graph slot is covered by its `SlotDescriptor`: kind, dtype, optional format, access union, and slot-relative range | slot, descriptor field, recorded use, node | this spec, below |
 | V22 | (internal assertion) The inferred edge set is acyclic | node ids on the cycle | builder defect only |
-| V23 | No two **statically bound** views at one node overlap unless both are read-only | both bindings, both view ranges, the overlap | [001](001-device-resources.md) 6.1 concrete same-node alias rule |
+| V23 | ~~No two **statically bound** views at one node overlap unless both are read-only~~ **Withdrawn, 2026-08-24. Never implemented, and not implementable as worded — see below.** | — | [001](001-device-resources.md) 6.1 concrete same-node alias rule |
 | V24 | (at rebind and submit) No resource supplied through a graph slot overlaps another dynamic binding or any concrete graph resource, including a transient, when either side may write anywhere in the graph | both slots/resources, both graph-wide access unions, overlap | this spec, below |
+
+**V23 is withdrawn: the alias it forbids is a supported feature.** The check was
+specified and never built, which was found by binding one buffer to a read
+binding and a write binding of one dispatch and watching it succeed. Building it
+as worded would have deleted in-place elementwise work — `t = t + in` binds one
+transient to both, and `TestInPlaceWorkOnAWrittenTransientIsFine` defends it
+with the reasoning that a rule "simply forbidding a node from reading and
+writing one transient" is too strong.
+
+The rule that is actually true cannot be checked here. Read/write aliasing at
+one node is safe exactly when no invocation touches another invocation's
+elements — true for an elementwise kernel and false for a stencil — and the
+graph sees whole bindings, not element patterns. So it is a **caller
+responsibility**, and this is where it is written down: alias a read binding
+onto a written one only when each invocation of that kernel touches only its own
+elements. A caller who gets it wrong has a race the recorder cannot see.
+
+This also closes a question in [002](002-compute-model.md) §3.3. That section
+wondered whether a load from a binding nothing writes could be treated as
+workgroup-uniform; it cannot, because this alias is permitted, so such a
+binding's contents can change under a workgroup mid-dispatch.
 
 **V24 is the check that cannot happen at build**, and it is intentionally
 graph-wide. Hazards are tracked against `resourceID`, and a graph slot is its own
@@ -1086,8 +1109,8 @@ small dynamic declaration set plus a linear scan of the graph's indexed static
 ranges, paid once per binding update/submit rather than per node execution.
 
 V21 makes that submit-time decision sound: a node cannot access outside the
-range or modes summarized by its descriptor. V23 remains a separate build-time
-same-node rule for concrete bindings. Static/static aliases across different
+range or modes summarized by its descriptor. V23 was to have been a separate build-time
+same-node rule for concrete bindings, and is withdrawn. Static/static aliases across different
 nodes need no rejection because their shared resource identity and exact ranges
 were known when edges were inferred.
 
@@ -1727,8 +1750,9 @@ passes on one device and fails on the next.
 - V21: a slot descriptor whose access omits a recorded write, or whose
   `MinCount` does not cover a recorded range, fails at build naming both the slot
   and node.
-- V23: two overlapping *statically* bound views used by one node fail at build,
-  with the recording call site in the message; a read-only pair succeeds.
+- V23: withdrawn, so the test is the opposite one — a read binding and a write
+  binding of one dispatch bound to the same transient **succeed**, because that
+  is in-place work. `TestInPlaceWorkOnAWrittenTransientIsFine`.
 - V24: bind two slots used by different nodes to overlapping writable ranges;
   submit fails even though no node binds both. Repeat with one graph slot
   overlapping a statically bound resource. Read-only/read-only overlaps succeed.
