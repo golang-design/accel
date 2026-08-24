@@ -834,3 +834,50 @@ func TestAnUnboundSlotIsReportedBySlotNumber(t *testing.T) {
 		t.Errorf("the error should say the operand is outside its binding, got %v", err)
 	}
 }
+
+// A render pass whose attachment slot was never bound is reported when the
+// submission is encoded, naming the attachment.
+//
+// LoadKeep is what makes it reachable before a draw: it stages the buffer's
+// current contents into the pass's texture, so the attachment has to resolve
+// before any stage compiles. A slot bound for one submission and cleared for
+// the next is exactly the case a build-time check cannot see, which is why the
+// backend resolves rather than assumes.
+func TestARenderPassWithAnUnboundAttachmentIsReported(t *testing.T) {
+	d := open(t)
+	c := d.(driver.GraphCompiler)
+	slot, err := driver.SlotOperand(1, 0, 4*4*16)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	ex, err := c.Compile(&driver.Plan{
+		Slots: 1,
+		Nodes: []driver.PlanNode{{
+			Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{
+				Width: 4, Height: 4,
+				Color:       []driver.Operand{slot},
+				ColorFormat: []driver.Format{driver.RGBA32Float},
+				ColorPitch:  []int{4 * 16},
+				ColorLoad:   []driver.LoadOp{driver.LoadKeep},
+				ColorStore:  []driver.StoreOp{driver.StoreKeep},
+				ColorClear:  [][4]float32{{}},
+				Draws: []driver.RenderDraw{{
+					Vertex:      &testkernels.FullScreenVSStage,
+					Fragment:    &testkernels.SolidFSStage,
+					VertexCount: 3, InstanceCount: 1,
+					Masks:  []uint8{0xf},
+					Blends: []driver.Blend{{}},
+				}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if _, err := ex.Submit(); err == nil {
+		t.Fatal("a render pass with an unbound attachment succeeded")
+	} else if !strings.Contains(err.Error(), "colour attachment 0") {
+		t.Errorf("the error should name the attachment, got %v", err)
+	}
+}

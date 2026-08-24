@@ -244,14 +244,23 @@ tests — an unbound slot, an operand past its binding, an acquire after close, 
 nil layer — and each is an ordinary caller mistake rather than a fault-injection
 case.
 
-What is left is not a testing gap of the usual kind, and the measurement says so:
-`pipelineFor` is **100% covered by its own package's tests and 0% in the
-`-coverpkg=./...` profile the gate reads**. The two profiles measure different
-things and each covers what the other misses, so the gated number understates
-what is exercised. That is worth knowing before anyone spends a day writing
-tests against it: the remaining statements are error arms needing an allocation
-or an encoder to fail, and the honest closing move is fault injection or a
-correction to what the gate measures, not more tests.
+**The gate passes.** The last statement came from a render pass whose attachment
+slot was never bound — reachable because `LoadKeep` stages the buffer's contents
+into the pass's texture *before* any stage compiles, so the attachment has to
+resolve first. A slot bound for one submission and cleared for the next is
+exactly the case a build-time check cannot see.
+
+**A correction worth keeping**, because it was almost written into this spec as
+a finding. An earlier reading claimed the gate understated what was exercised —
+that `pipelineFor` was 100% covered by its own package's tests and 0% in the
+profile the gate reads. The second number came from running `go tool cover` on
+the **raw** union profile, where `-coverpkg` makes every test binary emit every
+block, so one statement appears once per binary and mostly with a zero count.
+`cover.Merge` folds those by block identity and sums, which is correct and is
+what the gate uses. The gate was right and the reading of it was wrong. Nearly
+recording a measurement artefact as a defect in the measurement is the same
+mistake this project keeps finding in the other direction, and it is only caught
+by reading the thing that computes the number.
 
 ## 7. Done
 
