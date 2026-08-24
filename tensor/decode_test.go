@@ -278,6 +278,36 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "Lengths is f32",
 	}, {
+		// accel issue 10: this compiled, ignored Pages, and returned a
+		// plausible wrong answer -- the first accepted-and-silently-wrong case
+		// reported here rather than a refusal.
+		name: "a page table on a prefill",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+			o := opts(b)
+			o.Pages = u32(b, "pages", 2)
+			o.Block = 2
+			o.BaseName = "base"
+			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 4, 2, 8),
+				cache(b, "v", 4, 2, 8), o)
+		},
+		want: "only the decode kernels read a page table",
+	}, {
+		// The Block guard lived inside the decode switch, so a prefill reached
+		// neither it nor the page table.
+		name: "a page table with no block size, on a prefill",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+			o := opts(b)
+			o.Pages = u32(b, "pages", 2)
+			o.BaseName = "base"
+			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 4, 2, 8),
+				cache(b, "v", 4, 2, 8), o)
+		},
+		want: "how many positions one holds is required",
+	}, {
 		name: "a layer that does not exist",
 		build: func(b *tensor.Builder) {
 			tensor.LayerState(b, cache(b, "c", 2, 8, 4), 5)

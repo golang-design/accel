@@ -158,6 +158,25 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		return b.fail(1, "Attention", "the value cache is %s", staleMessage(b, v))
 	}
 
+	// The page table is checked before the shape decides which kernel runs,
+	// because a check that lives inside one branch is a check the other branch
+	// does not have. This one lived inside the decode selection, so a prefill
+	// reached neither it nor the table: Pages was accepted, never bound, and
+	// the cache was read contiguously -- a plausible wrong answer rather than a
+	// diagnostic, which a consumer measured at 0.74 absolute against a reversed
+	// table (accel issue 10).
+	if opts.Pages != nil {
+		if opts.Pages.dtype != accel.U32 {
+			return b.fail(1, "Attention", "Pages is %v and a page table is u32",
+				opts.Pages.dtype)
+		}
+		if opts.Block <= 0 {
+			return b.fail(1, "Attention", "Pages is set and Block is %d; a page table "+
+				"addresses blocks, so how many positions one holds is required",
+				opts.Block)
+		}
+	}
+
 	out := Shape{qHeads, headDim}
 	if prefill && cacheDType != accel.F32 {
 		return b.fail(1, "Attention", "the cache is %v and only the decode kernel reads a "+
@@ -167,6 +186,13 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	}
 	if prefill {
 		out = Shape{qSeq, qHeads, headDim}
+		if opts.Pages != nil {
+			return b.fail(1, "Attention", "Pages is set on a prefill and only the decode "+
+				"kernels read a page table; specs/010-kernel-corpus.md owns the paged "+
+				"prefill variant. Refused rather than run against the contiguous kernel, "+
+				"which would read the pool in order and answer over another sequence's "+
+				"blocks")
+		}
 		if opts.BaseName == "" {
 			return b.fail(1, "Attention", "a prefill needs BaseName: the position of its "+
 				"first query within the cache, which decides what the causal mask hides")
@@ -196,6 +222,16 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		}, accel.F32, out)
 	}
 
+	// A base position places a causal mask over a sequence of queries, and a
+	// decode step has one query token and no mask. Accepting it here would be
+	// the same defect as Pages on a prefill, one field over: a value the caller
+	// set, that reaches nothing, with no way to tell.
+	if opts.BaseName != "" {
+		return b.fail(1, "Attention", "BaseName is set on a decode step, which has one "+
+			"query token and therefore no causal mask to place; it belongs to a prefill. "+
+			"A decode attends over the whole cache its Lengths names")
+	}
+
 	// Which decode kernel runs. The caller writes one shape and the choice is
 	// reported in Plan.Selections, which is how every other operator here
 	// behaves: a variant is a selection, not a second API.
@@ -206,15 +242,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 
 	switch {
 	case opts.Pages != nil:
-		if opts.Pages.dtype != accel.U32 {
-			return b.fail(1, "Attention", "Pages is %v and a page table is u32",
-				opts.Pages.dtype)
-		}
-		if opts.Block <= 0 {
-			return b.fail(1, "Attention", "Pages is set and Block is %d; a page table "+
-				"addresses blocks, so how many positions one holds is required",
-				opts.Block)
-		}
 		if cacheDType != accel.F32 {
 			return b.fail(1, "Attention", "the cache is %v and only the contiguous decode "+
 				"kernel reads a narrow cache; specs/010-kernel-corpus.md owns the paged "+
