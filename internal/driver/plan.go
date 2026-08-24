@@ -373,6 +373,23 @@ type GraphCompiler interface {
 	Compile(p *Plan) (Executable, error)
 }
 
+// HasDestination reports whether the op writes through PlanNode.Dst.
+//
+// Stated as a list of the ops that have one rather than as an exemption for the
+// ones that do not. The exemption form -- "every op but a dispatch" -- was
+// correct while a dispatch was the only many-operand op, and it silently
+// demanded a Dst of the next such op added. A render pass writes through its
+// attachments and a dispatch through its bindings; adding either to this list
+// is what a reader has to decide, and forgetting to is now a refusal at the
+// list rather than a nil dereference in a backend.
+func (o PlanOp) HasDestination() bool {
+	switch o {
+	case OpCopy, OpHostWrite, OpCopyRows:
+		return true
+	}
+	return false
+}
+
 // Validate reports why a plan cannot be compiled.
 //
 // A backend calls it before doing anything expensive. It checks the invariants
@@ -392,7 +409,7 @@ func (p *Plan) Validate() error {
 		if n.Op == OpInvalid {
 			return fmt.Errorf("accel: plan node %d has no operation", i)
 		}
-		if n.Op != OpDispatch {
+		if n.Op.HasDestination() {
 			if err := p.checkOperand(i, "destination", n.Dst); err != nil {
 				return err
 			}
@@ -423,6 +440,10 @@ func (p *Plan) Validate() error {
 				return err
 			}
 			if err := p.checkRows(i, n); err != nil {
+				return err
+			}
+		case OpRenderPass:
+			if err := p.checkRenderPass(i, n); err != nil {
 				return err
 			}
 		}
@@ -574,4 +595,48 @@ type RenderDraw struct {
 
 	// Uniforms are the stages' by-value parameters.
 	Uniforms []any
+}
+
+// checkRenderPass reports why a render pass node cannot be compiled.
+//
+// The attachments are ordinary operands and are checked as such. What is
+// specific to a pass is that every draw needs both stages and a positive
+// vertex count: a backend that reached a nil stage would have no honest error
+// to give, because by then the plan is already accepted.
+func (p *Plan) checkRenderPass(node int, n *PlanNode) error {
+	r := n.Render
+	if r == nil {
+		return fmt.Errorf("accel: plan node %d is a render pass with no payload", node)
+	}
+	if r.Width <= 0 || r.Height <= 0 {
+		return fmt.Errorf("accel: plan node %d renders a %dx%d area",
+			node, r.Width, r.Height)
+	}
+	if len(r.Color) == 0 {
+		return fmt.Errorf("accel: plan node %d is a render pass with no colour attachments",
+			node)
+	}
+	for i, c := range r.Color {
+		if err := p.checkOperand(node, fmt.Sprintf("colour attachment %d", i), c); err != nil {
+			return err
+		}
+	}
+	if r.Depth != nil {
+		if err := p.checkOperand(node, "depth attachment", *r.Depth); err != nil {
+			return err
+		}
+	}
+	if len(r.Draws) == 0 {
+		return fmt.Errorf("accel: plan node %d is a render pass with no draws", node)
+	}
+	for i, d := range r.Draws {
+		if d.Vertex == nil || d.Fragment == nil {
+			return fmt.Errorf("accel: plan node %d draw %d is missing a stage", node, i)
+		}
+		if d.VertexCount <= 0 || d.InstanceCount <= 0 {
+			return fmt.Errorf("accel: plan node %d draw %d draws %d vertices in %d instances",
+				node, i, d.VertexCount, d.InstanceCount)
+		}
+	}
+	return nil
 }

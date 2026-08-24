@@ -112,6 +112,20 @@ func TestValidateRejectsMalformedPlans(t *testing.T) {
 		{"host write with source", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpHostWrite, Dst: op(0, 4), Src: op(8, 4), Data: []byte{1, 2, 3, 4}}}}, "has a source operand"},
 		{"slot out of range", driver.Plan{Slots: 1, Nodes: []driver.PlanNode{{Op: driver.OpHostWrite, Dst: slot(2, 0, 4), Data: []byte{1, 2, 3, 4}}}}, "names slot 2 of 1"},
 		{"negative slot count", driver.Plan{Slots: -1}, "declares -1 slots"},
+		{"render pass with no payload", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass}}}, "no payload"},
+		{"render pass with no area", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Color: []driver.Operand{op(0, 4)}}}}}, "renders a 0x0 area"},
+		{"render pass with no attachments", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2}}}}, "no colour attachments"},
+		{"render pass with no draws", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)}}}}}, "no draws"},
+		{"render pass draw with no stage", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				Draws: []driver.RenderDraw{{VertexCount: 3, InstanceCount: 1}}}}}}, "missing a stage"},
+		{"render pass draw of no vertices", driver.Plan{Nodes: []driver.PlanNode{{Op: driver.OpRenderPass,
+			Render: &driver.RenderPass{Width: 2, Height: 2, Color: []driver.Operand{op(0, 64)},
+				Draws: []driver.RenderDraw{{Vertex: struct{}{}, Fragment: struct{}{}, InstanceCount: 1}}}}}},
+			"draws 0 vertices"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -415,4 +429,44 @@ func openCompiler(t *testing.T, o cpu.Options) (driver.Device, driver.GraphCompi
 		t.Fatal("the CPU device should compile graphs")
 	}
 	return dev, c
+}
+
+// A render pass validates with no PlanNode.Dst, because it writes through its
+// attachments.
+//
+// Validate once demanded a destination of every op but a dispatch, which was
+// true only while a dispatch was the only many-operand op. The render pass was
+// the next one added, and the plan it produced was refused before any backend
+// saw it. This asserts the property directly rather than through a rendered
+// image, so the next many-operand op fails here rather than in a backend.
+func TestARenderPassNeedsNoDestinationOperand(t *testing.T) {
+	op := func(off, size int) driver.Operand {
+		o, err := driver.SlotOperand(1, off, size)
+		if err != nil {
+			t.Fatalf("operand: %v", err)
+		}
+		return o
+	}
+	p := driver.Plan{Slots: 1, Nodes: []driver.PlanNode{{
+		Op: driver.OpRenderPass,
+		Render: &driver.RenderPass{
+			Width: 4, Height: 4,
+			Color: []driver.Operand{op(0, 4*4*4*4)},
+			Draws: []driver.RenderDraw{{
+				Vertex: struct{}{}, Fragment: struct{}{},
+				VertexCount: 3, InstanceCount: 1,
+			}},
+		},
+	}}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("a render pass writes through its attachments and has no Dst: %v", err)
+	}
+	if driver.OpRenderPass.HasDestination() {
+		t.Error("OpRenderPass reports a destination operand it does not have")
+	}
+	for _, o := range []driver.PlanOp{driver.OpCopy, driver.OpHostWrite, driver.OpCopyRows} {
+		if !o.HasDestination() {
+			t.Errorf("%v writes through Dst and reports that it does not", o)
+		}
+	}
 }
