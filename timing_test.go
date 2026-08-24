@@ -6,6 +6,7 @@ package accel_test
 
 import (
 	"testing"
+	"time"
 
 	"golang.design/x/accel"
 )
@@ -28,7 +29,7 @@ func TestASubmissionReportsDeviceTimeWhenAsked(t *testing.T) {
 	q := d.Queue()
 	p := addPipeline(t, d)
 
-	build := func(timed bool) *accel.Graph {
+	build := func(timed bool, dispatches int) *accel.Graph {
 		storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 		a := newBuffer(t, d, "a", n, storage)
 		b := newBuffer(t, d, "b", n, storage)
@@ -39,7 +40,7 @@ func TestASubmissionReportsDeviceTimeWhenAsked(t *testing.T) {
 			r.CollectTimings(true)
 		}
 		// Several dispatches, so the device has something to spend time on.
-		for range 8 {
+		for range dispatches {
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: whole(t, a)},
 				{Index: 1, Buffer: whole(t, b)},
@@ -54,22 +55,44 @@ func TestASubmissionReportsDeviceTimeWhenAsked(t *testing.T) {
 		return g
 	}
 
-	timed := build(true)
-	f := q.Submit(timed)
-	if err := f.Wait(); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	stats, err := f.Stats()
-	if err != nil {
-		t.Fatalf("stats: %v", err)
+	// The work is sized from the platform's clock rather than fixed, because a
+	// zero here is ambiguous in a way this test cannot resolve otherwise:
+	// Elapsed is zero both when no timing was collected and when the work
+	// finished inside one tick of the monotonic clock. Windows' tick is coarse
+	// -- hundreds of microseconds where Linux and macOS are tens of nanoseconds
+	// -- and eight adds over 4096 elements finish well inside it, so this test
+	// failed there while testing nothing about the timer.
+	//
+	// Doubling until the timer resolves the run is self-calibrating and
+	// terminates: the cap is what fails, and it fails saying how much work went
+	// unmeasured rather than reporting a zero whose cause is unknown.
+	tick := clockTick()
+	var stats accel.SubmissionStats
+	dispatches := 8
+	for {
+		timed := build(true, dispatches)
+		f := q.Submit(timed)
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		var err error
+		stats, err = f.Stats()
+		if err != nil {
+			t.Fatalf("stats: %v", err)
+		}
+		if stats.Elapsed > 0 || dispatches >= 8192 {
+			break
+		}
+		dispatches *= 2
 	}
 	if stats.Elapsed <= 0 {
-		t.Errorf("a graph that asked for timings reported %v; the device ran eight "+
-			"dispatches over %d elements, which does not take zero", stats.Elapsed, n)
+		t.Errorf("a graph that asked for timings reported %v after %d dispatches over "+
+			"%d elements; this platform's monotonic clock resolves %v, so the work was "+
+			"not too small to measure", stats.Elapsed, dispatches, n, tick)
 	}
 
 	// And silence when nobody asked, so the cost is only paid on request.
-	quiet := build(false)
+	quiet := build(false, dispatches)
 	f2 := q.Submit(quiet)
 	if err := f2.Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -115,5 +138,21 @@ func TestTimingsAreNotReadableBeforeCompletion(t *testing.T) {
 	}
 	if err := f.Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
+	}
+}
+
+// clockTick is the smallest non-zero interval this platform's monotonic clock
+// reports.
+//
+// Go's clock resolution is not uniform across platforms -- it is tens of
+// nanoseconds on Linux and macOS and hundreds of microseconds or worse on
+// Windows -- so a test that asserts a duration is positive is asserting
+// something about the platform unless it knows this number.
+func clockTick() time.Duration {
+	start := time.Now()
+	for {
+		if d := time.Since(start); d > 0 {
+			return d
+		}
 	}
 }
