@@ -9,6 +9,7 @@ package metal
 import (
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.design/x/accel/internal/driver"
@@ -592,6 +593,21 @@ func (e *executable) Close() error {
 // caller who has not waited on the fence gets whatever the buffers hold, which
 // is why this is documented on driver.StatsReporter as being about the last
 // *completed* submission.
+// Elapsed reports how long the device spent on the last completed submission.
+//
+// Read from the command buffer's own GPU timestamps rather than measured
+// around the call: the wall clock includes queueing and driver work, and
+// reporting that as device time answers the wrong question convincingly. Zero
+// when the graph did not ask for timing or the driver recorded none.
+func (e *executable) Elapsed() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.plan.CollectTimings || e.cur == nil {
+		return 0
+	}
+	return e.cur.gpuTime()
+}
+
 func (e *executable) IndirectStats() []driver.IndirectStat {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -621,6 +637,16 @@ type fence struct {
 	cb     *mtl.CommandBuffer
 	dev    *device
 	closed bool
+}
+
+// gpuTime is the device time this submission took, or zero before it completes.
+func (f *fence) gpuTime() time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed || f.cb == nil {
+		return 0
+	}
+	return f.cb.GPUTime()
 }
 
 // Wait blocks until the submission completes, and reports device loss.

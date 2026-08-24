@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"golang.design/x/accel/internal/driver"
 )
@@ -252,6 +253,29 @@ type Slot int
 // submission.
 func (r *Recorder) CollectRunStats(on bool) { r.state.collectStats = on }
 
+// CollectTimings makes each submission of this graph report how long the device
+// took, through [SubmissionStats.Elapsed].
+//
+// # Why this is opt-in
+//
+// The same reason [Recorder.CollectRunStats] is: it costs the backend a query
+// it would not otherwise make, and a library whose subject is throughput should
+// not spend a caller's time measuring itself unless asked.
+//
+// # Why it is the whole submission and not per node
+//
+// specs/003-command-graph.md predicts per-node timestamps and warns in the same
+// paragraph that barrier batching merges the boundaries a timestamp would sit
+// on. Per-node therefore needs the planner to stop merging, which changes what
+// a graph *is* rather than what it reports. This answers "how long did this
+// take" and does not pretend to answer "which node is slow".
+//
+// A backend with no device clock reports zero rather than wall-clock time. The
+// difference between "the GPU ran for 3ms" and "the call took 3ms" is the whole
+// question a caller asking about throughput has, and a substitute would answer
+// the wrong one convincingly.
+func (r *Recorder) CollectTimings(on bool) { r.state.collectTimings = on }
+
 // NodeID identifies a recorded node, for referring to it in errors.
 type NodeID int
 
@@ -314,6 +338,9 @@ type Graph struct {
 	memory   GraphMemory
 	barriers int
 	hazards  int
+
+	// collectTimings is whether each submission reports device time.
+	collectTimings bool
 
 	// collectStats is whether this graph carries back the counters only the
 	// device knows, which cost a readback and are therefore opt-in.
@@ -735,6 +762,15 @@ func (f *Fence) Stats() (SubmissionStats, error) {
 // SubmissionStats is what one submission's device-written counters reported.
 type SubmissionStats struct {
 	Indirect []IndirectStats
+
+	// Elapsed is how long the device took, and is zero unless the graph asked
+	// with [Recorder.CollectTimings] or the backend has no device clock.
+	//
+	// Zero rather than a wall-clock substitute: a caller measuring throughput
+	// needs "the GPU ran for this long", and the time the call took includes
+	// queueing, driver work and whatever else the process was doing. A
+	// substitute would answer the wrong question convincingly.
+	Elapsed time.Duration
 }
 
 // IndirectStats is one indirect node's actual count and whether it was clamped.

@@ -7,6 +7,7 @@ package cpu
 import (
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.design/x/accel/internal/driver"
@@ -47,6 +48,9 @@ type executable struct {
 	mu     sync.Mutex
 	bound  []driver.SlotBinding // indexed by one-based slot; index 0 unused
 	closed bool
+
+	// elapsed is the last timed submission's duration.
+	elapsed time.Duration
 
 	// cur is the most recent submission, and "in flight" is derived from it
 	// rather than tracked alongside it.
@@ -140,9 +144,21 @@ func (e *executable) Submit() (driver.Fence, error) {
 	e.mu.Unlock()
 
 	go func() {
+		start := time.Now()
 		f.err = run(nodes)
 		if lost := e.dev.Lost(); lost != nil {
 			f.err = lost
+		}
+		// The wall clock around the run, and this backend is the one place that
+		// is honest rather than a substitute: its "device" is this goroutine,
+		// so the time the work took and the time the device took are the same
+		// number. A GPU backend must not do this -- there the two differ by
+		// queueing and driver work, and reporting one as the other answers the
+		// wrong question convincingly.
+		if e.plan.CollectTimings {
+			e.mu.Lock()
+			e.elapsed = time.Since(start)
+			e.mu.Unlock()
 		}
 		close(f.done)
 	}()
@@ -514,6 +530,16 @@ func dispatch(n *resolvedNode) (err error) {
 // because a backend that cannot produce them should be discovered by assertion
 // rather than by a method that fails when called
 // (specs/006-backends.md section 1).
+// Elapsed reports how long the last timed submission took.
+//
+// See the note where it is measured: on this backend the device is a goroutine,
+// so wall clock is device time rather than a stand-in for it.
+func (e *executable) Elapsed() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.elapsed
+}
+
 func (e *executable) IndirectStats() []driver.IndirectStat {
 	e.mu.Lock()
 	defer e.mu.Unlock()

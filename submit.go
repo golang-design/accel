@@ -336,15 +336,26 @@ func (g *Graph) run() error {
 // should be discovered by assertion rather than by a method that fails when
 // called. See specs/006-backends.md section 1.
 func (g *Graph) readStats() SubmissionStats {
+	var out SubmissionStats
+
+	// Timing is its own opt-in and its own optional interface, so a backend
+	// with a device clock and no counters reports the clock rather than
+	// nothing.
+	if g.collectTimings {
+		if t, ok := g.exe.(driver.Timer); ok {
+			out.Elapsed = t.Elapsed()
+		}
+	}
+
 	if !g.collectStats {
-		return SubmissionStats{}
+		return out
 	}
 	r, ok := g.exe.(driver.StatsReporter)
 	if !ok {
-		return SubmissionStats{}
+		return out
 	}
 	raw := r.IndirectStats()
-	out := SubmissionStats{Indirect: make([]IndirectStats, len(raw))}
+	out.Indirect = make([]IndirectStats, len(raw))
 	for i, s := range raw {
 		out.Indirect[i] = IndirectStats{
 			Node:    NodeID(s.Node),

@@ -7,6 +7,7 @@ package driver
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"golang.design/x/accel/internal/kernel"
 )
@@ -28,6 +29,11 @@ import (
 // specs/006-backends.md section 4.5 states is enough: category (1), plan-once,
 // is backend-independent and is most of the value.
 type Plan struct {
+	// CollectTimings asks the backend to time this submission on the device.
+	// Off by default for the reason CollectStats is: it costs a query the
+	// backend would not otherwise make.
+	CollectTimings bool
+
 	// CollectStats makes the executable record each indirect node's actual
 	// count. Off by default: see [IndirectStat].
 	CollectStats bool
@@ -329,6 +335,24 @@ type StatsReporter interface {
 	// IndirectStats reports the last completed submission's counts, in node
 	// order.
 	IndirectStats() []IndirectStat
+}
+
+// Timer is a backend that can report how long a submission took on the device.
+//
+// Optional, and a backend without it reports nothing rather than a wall-clock
+// figure dressed up as device time: the difference between "the GPU ran for
+// 3ms" and "the call took 3ms" is the entire question a caller asking about
+// throughput has.
+//
+// Whole-submission rather than per-node. specs/003-command-graph.md predicts a
+// timestamp pool written at node boundaries and warns in the same breath that
+// barrier batching merges the boundaries a timestamp would sit on -- so per-node
+// needs the planner to stop merging, and that is a change to what a graph is
+// rather than an addition to what it reports.
+type Timer interface {
+	// Elapsed reports the last completed submission's device time, or zero when
+	// the submission did not ask for timing.
+	Elapsed() time.Duration
 }
 
 type Executable interface {

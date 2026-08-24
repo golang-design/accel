@@ -81,13 +81,14 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 	}
 
 	g := &Graph{
-		dev:          r.state.dev,
-		nodes:        r.state.nodes,
-		slots:        r.state.slots,
-		present:      r.state.present,
-		transients:   r.state.transients,
-		collectStats: r.state.collectStats,
-		shared:       r.state.shared,
+		dev:            r.state.dev,
+		nodes:          r.state.nodes,
+		slots:          r.state.slots,
+		present:        r.state.present,
+		transients:     r.state.transients,
+		collectStats:   r.state.collectStats,
+		collectTimings: r.state.collectTimings,
+		shared:         r.state.shared,
 	}
 	g.naive = naive
 	g.inferEdges()
@@ -241,7 +242,8 @@ func (g *Graph) lower() error {
 
 	plan := &driver.Plan{
 		Slots: len(g.slots), Transients: g.pool, Label: "graph",
-		CollectStats: g.collectStats,
+		CollectStats:   g.collectStats,
+		CollectTimings: g.collectTimings,
 	}
 	for i := range g.nodes {
 		n := &g.nodes[i]

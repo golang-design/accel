@@ -169,6 +169,9 @@ type recorderState struct {
 	// collectStats is whether the graph carries back the counters only the
 	// device knows. Off by default, because they cost a readback.
 	collectStats bool
+
+	// collectTimings is whether each submission reports device time.
+	collectTimings bool
 }
 
 func (r *Recorder) fail(format string, args ...any) {

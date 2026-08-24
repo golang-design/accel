@@ -7,6 +7,7 @@
 package mtl
 
 import (
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -194,4 +195,34 @@ func (cb *CommandBuffer) Err() error {
 func (cb *CommandBuffer) Close() {
 	release(cb.id)
 	cb.id = 0
+}
+
+var (
+	selGPUStartTime = objc.RegisterName("GPUStartTime")
+	selGPUEndTime   = objc.RegisterName("GPUEndTime")
+)
+
+// GPUTime reports how long the device spent on this command buffer.
+//
+// Valid only after completion, and zero when the driver did not record it.
+//
+// This is device time, which is the number a caller measuring throughput wants:
+// the wall clock around Commit and Wait includes queueing, driver work and
+// whatever else the process was doing, and reporting that as GPU time answers
+// the wrong question convincingly. Metal gives both timestamps for free on a
+// completed buffer, so no timestamp pool is needed for the whole-submission
+// figure.
+func (cb *CommandBuffer) GPUTime() time.Duration {
+	var start, end float64
+	withPool(func() {
+		start = objc.Send[float64](cb.id, selGPUStartTime)
+		end = objc.Send[float64](cb.id, selGPUEndTime)
+	})
+	// Seconds as a CFTimeInterval. A non-positive span means the driver did not
+	// record one, which is reported as zero rather than as a negative duration
+	// a caller would have to know to discard.
+	if end <= start {
+		return 0
+	}
+	return time.Duration((end - start) * float64(time.Second))
 }
