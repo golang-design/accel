@@ -302,6 +302,13 @@ func (e *emitter) stage(k *ir.Func) {
 		}
 		e.printf("\t},\n")
 	}
+	if len(k.Textures) > 0 {
+		e.printf("\tTextures: []accel.StageTexture{\n")
+		for _, tx := range k.Textures {
+			e.printf("\t\t{Name: %q, Index: %d, Reads: %v},\n", tx.Name, tx.Index, tx.Reads)
+		}
+		e.printf("\t},\n")
+	}
 	if k.Discards {
 		e.printf("\tDiscards: true,\n")
 	}
@@ -321,6 +328,20 @@ func (e *emitter) stage(k *ir.Func) {
 // layout — which is also what lets the two disagree loudly rather than quietly,
 // since a mismatch fails to compile in generated code.
 func (e *emitter) stageAdapter(k *ir.Func, lower string) {
+	// A stage that fetches a texture gets no flat adapter, and the varyings
+	// packers with it.
+	//
+	// The flat form carries a uniform slice and interpolated floats and has
+	// nowhere to put a texture, so this stage cannot be run through it. The
+	// alternative is an adapter that passes accel.Texture2D{}, whose every
+	// fetch is out of range and therefore returns zero — a black picture that
+	// fails nothing, which is worse than an absent adapter a pipeline can
+	// refuse by name. specs/032-stage-abi.md section 5 records that the flat
+	// form gains a texture channel when a render pass can bind one.
+	if len(k.Textures) > 0 {
+		return
+	}
+
 	uniforms := 0
 	for _, p := range k.Params {
 		if p.Type() != nil && p.Type().Kind == ir.Struct && p.Index > 0 &&
@@ -1172,6 +1193,27 @@ func (e *emitter) intrinsic(v *ir.IntrinsicCall) {
 		return
 	}
 
+	// A texel fetch lowers to the same function the authored stage calls, for
+	// the reason an atomic does: this backend is the oracle for the operation,
+	// so the definition lives in one place rather than being restated by the
+	// generator. The arguments are a texture and two signed coordinates, none
+	// of which is an f32 rounding point, so they are emitted unrounded.
+	if v.Op == ir.OpTexelFetch {
+		if len(v.Args) != 3 {
+			e.fail("Fetch takes a texture and two coordinates at %v", v.Pos())
+			return
+		}
+		e.printf("accel.Fetch(")
+		for i, a := range v.Args {
+			if i > 0 {
+				e.printf(", ")
+			}
+			e.value(a)
+		}
+		e.printf(")")
+		return
+	}
+
 	// Atomics lower to the same functions the authored kernel calls, so the two
 	// agree by construction on this backend. A GPU backend emits its own
 	// instruction instead, which is the whole reason these are intrinsics
@@ -1326,6 +1368,8 @@ func (e *emitter) goType(t *ir.Type) string {
 		return t.Name
 	case ir.Slice:
 		return "[]" + e.goType(t.Elem)
+	case ir.Texture2D:
+		return "accel.Texture2D"
 	case ir.Array:
 		return fmt.Sprintf("[%d]%s", t.Len, e.goType(t.Elem))
 	}

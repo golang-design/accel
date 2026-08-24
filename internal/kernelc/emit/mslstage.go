@@ -89,6 +89,7 @@ func (m *msl) vertexStage(k *ir.Func) {
 		params = append(params, fmt.Sprintf("constant %s &%s [[buffer(%d)]]",
 			u.TypeName, u.Name, mslabi.StageUniformIndex(i)))
 	}
+	params = append(params, m.textureParams(k)...)
 	// The two ids are always declared, for the reason a compute kernel's three
 	// are: the signature stays a function of the declared inputs alone, and MSL
 	// does not object to a parameter nothing reads.
@@ -128,6 +129,7 @@ func (m *msl) fragmentStage(k *ir.Func) {
 		params = append(params, fmt.Sprintf("constant %s &%s [[buffer(%d)]]",
 			u.TypeName, u.Name, mslabi.StageFragmentUniformIndex(i)))
 	}
+	params = append(params, m.textureParams(k)...)
 	// No separate [[position]] parameter: the varyings struct already carries
 	// one, and MSL rejects a signature declaring the attribute twice. The
 	// interpolated window position arrives in that field, which is what
@@ -144,6 +146,26 @@ func (m *msl) fragmentStage(k *ir.Func) {
 	m.printf("    %s _out;\n", out)
 	m.stageBody(k)
 	m.printf("}\n")
+}
+
+// textureParams spells a stage's texture bindings.
+//
+// texture2d<float> whatever the bound format is, which is the same decision the
+// Go lowering makes by holding four float32 per texel: a float-typed texture
+// decodes its format in fixed function and hands the shader four floats, so one
+// spelling covers every format in the table. An integer-typed texture would be
+// a second binding type with a second intrinsic, and nothing asks for one.
+//
+// The default access is sample, which permits read. Declaring access::read
+// instead would be narrower and would also stop the same view being sampled if
+// a later spec ever admits it, for no gain here.
+func (m *msl) textureParams(k *ir.Func) []string {
+	out := make([]string, 0, len(k.Textures))
+	for _, t := range k.Textures {
+		out = append(out, fmt.Sprintf("texture2d<float> %s [[texture(%d)]]",
+			t.Name, mslabi.StageTextureIndex(t.Index)))
+	}
+	return out
 }
 
 // paramList prints a parameter list one per line, which is what the compute

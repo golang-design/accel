@@ -71,3 +71,14 @@ func StageUniformIndex(i int) int { return StageVertexBufferLimit + i }
 // no reservation is needed. Named anyway, so the two sides of the ABI are two
 // calls to one place rather than one call and a literal.
 func StageFragmentUniformIndex(i int) int { return i }
+
+// StageTextureIndex reports the texture index a stage's texture binding i
+// occupies.
+//
+// Metal's texture argument space is separate from its buffer argument space, so
+// this needs no reservation the way StageUniformIndex does: a texture at index
+// zero and a vertex buffer at index zero do not collide. It is named rather
+// than written as a literal on both sides for the same reason the buffer
+// numbering is -- the emitter writes it into the shader and the backend binds
+// against it, and a disagreement is a stage reading the wrong texture.
+func StageTextureIndex(i int) int { return i }

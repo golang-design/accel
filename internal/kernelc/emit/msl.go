@@ -208,6 +208,28 @@ var mslPrelude = []struct{ name, text string }{
     return expected;
 }
 `},
+
+	// # Why the fetch is a function and why the guard is spelled this way
+	//
+	// Metal leaves texture2d::read out of bounds undefined, and
+	// specs/032-stage-abi.md section 5 requires zero, so the test is emitted
+	// here whatever the coordinate. A function rather than a conditional
+	// expression at the call site, because the coordinate arguments would
+	// otherwise be evaluated three times each and the subset admits an argument
+	// with a side effect.
+	//
+	// The two halves of the test are not interchangeable. get_width returns
+	// uint, so `x < t.get_width()` with an int x is compared *unsigned* by C's
+	// usual arithmetic conversions: x = -1 becomes 4294967295, which passes
+	// every plausible width and produces exactly the out-of-range read the rule
+	// exists to prevent. The sign test comes first, and the magnitude test
+	// converts explicitly only after it is known non-negative.
+	{"fetch2d", `static float4 _accel_fetch2d(texture2d<float> t, int x, int y) {
+    if (x < 0 || y < 0) { return float4(0.0); }
+    if (uint(x) >= t.get_width() || uint(y) >= t.get_height()) { return float4(0.0); }
+    return t.read(uint2(uint(x), uint(y)));
+}
+`},
 }
 
 // body emits the uniform blocks, the helpers, and the kernel itself.
@@ -962,6 +984,22 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		return
 	case ir.OpFrontFacing:
 		m.printf("_front")
+		return
+
+	case ir.OpTexelFetch:
+		if len(v.Args) != 3 {
+			m.fail("Fetch takes a texture and two coordinates at %v", v.Pos())
+			return
+		}
+		m.need["fetch2d"] = true
+		m.printf("_accel_fetch2d(")
+		for i, a := range v.Args {
+			if i > 0 {
+				m.printf(", ")
+			}
+			m.value(a)
+		}
+		m.printf(")")
 		return
 
 	case ir.OpGlobalID:
