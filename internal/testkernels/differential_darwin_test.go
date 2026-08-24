@@ -552,6 +552,26 @@ func diffCases() []diffCase {
 			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
 		},
 		{
+			// The paged decode over an f16 cache, where the two memory savings
+			// meet. The page table is out of order for the case above's reason,
+			// and the ceiling is the f32 kernel's because the widening is
+			// exact.
+			kernel: &testkernels.AttentionDecodePagedF16Kernel,
+			counts: []int{2 * 8, 8 * 4 * 1 * 8, 8 * 4 * 1 * 8, 2, 1, 2 * 8},
+			uniforms: []any{testkernels.PagedDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, Block: 4,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b == 3 {
+					return []float32{5, 2}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
+		},
+		{
 			kernel: &testkernels.AttentionDecodeKernel,
 			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 1, 2 * 8},
 			uniforms: []any{testkernels.AttnDims{

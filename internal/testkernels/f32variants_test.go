@@ -212,6 +212,73 @@ func TestTheF16PrefillMatchesTheF32OneExactly(t *testing.T) {
 	}
 }
 
+// The paged f16 decode matches the paged f32 one on a cache exact in f16.
+//
+// The same argument again, over the kernel where the two savings meet: the page
+// table removes the fragmentation and the narrow element halves what is left.
+// The pages are deliberately out of order and non-adjacent, so a widening that
+// had disturbed the addressing shows here rather than reading the pool in
+// sequence and looking right.
+func TestTheF16PagedDecodeMatchesTheF32OneExactly(t *testing.T) {
+	for _, c := range []struct {
+		qHeads, kvHeads, headDim, block, kvLen uint32
+		pages                                  []uint32
+	}{
+		{2, 1, 8, 4, 6, []uint32{5, 2}},
+		{4, 2, 8, 2, 5, []uint32{3, 0, 6}},
+		{2, 2, 16, 4, 8, []uint32{7, 1}},
+	} {
+		name := fmt.Sprintf("q%d_kv%d_d%d_blk%d_len%d", c.qHeads, c.kvHeads, c.headDim,
+			c.block, c.kvLen)
+		t.Run(name, func(t *testing.T) {
+			const poolBlocks = 8
+			d := testkernels.PagedDims{
+				QHeads: c.qHeads, KVHeads: c.kvHeads, HeadDim: c.headDim, Block: c.block,
+				Scale: float32(1 / math.Sqrt(float64(c.headDim))),
+			}
+			lengths := []uint32{c.kvLen}
+
+			q := make([]float32, c.qHeads*c.headDim)
+			for i := range q {
+				q[i] = float32((i%9)-4) / 8
+			}
+			k16 := make([]accel.Float16, poolBlocks*c.block*c.kvHeads*c.headDim)
+			v16 := make([]accel.Float16, len(k16))
+			k32 := make([]float32, len(k16))
+			v32 := make([]float32, len(k16))
+			for i := range k16 {
+				k16[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.11)))
+				v16[i] = accel.ToFloat16(float32(math.Sin(float64(i) * 0.13)))
+				k32[i] = k16[i].F32()
+				v32[i] = v16[i].F32()
+			}
+
+			groups := accel.ID3{X: c.qHeads}
+			wide := make([]float32, len(q))
+			narrow := make([]float32, len(q))
+			if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel, groups,
+				kernelabi.Args{
+					Slices: []any{q, k32, v32, c.pages, lengths, wide}, Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("f32 dispatch: %v", err)
+			}
+			if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedF16Kernel,
+				groups, kernelabi.Args{
+					Slices: []any{q, k16, v16, c.pages, lengths, narrow}, Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("f16 dispatch: %v", err)
+			}
+			for i := range wide {
+				if wide[i] != narrow[i] {
+					t.Fatalf("element %d is %v with an f32 cache and %v with an f16 one "+
+						"holding the same values; the two must agree bit for bit",
+						i, wide[i], narrow[i])
+				}
+			}
+		})
+	}
+}
+
 // The f16 scatter places the same rows the f32 scatter does, and drops the same
 // write.
 //
