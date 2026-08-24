@@ -279,6 +279,27 @@ func (StageTransformCodec) Encode(dst []byte, value StageTransform) error {
 	return w.Err()
 }
 
+// StageTintCodec is the generated std140 codec for StageTint.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type StageTintCodec struct{}
+
+// StageTintBlockSize is the encoded size of a StageTint block, in bytes.
+const StageTintBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (StageTintCodec) EncodedSize() int { return StageTintBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (StageTintCodec) Encode(dst []byte, value StageTint) error {
+	w := accel.NewUniformWriter(dst)
+	w.F32(0, value.Colour[0])
+	w.F32(4, value.Colour[1])
+	w.F32(8, value.Colour[2])
+	w.F32(12, value.Colour[3])
+	return w.Err()
+}
+
 // TopDimsCodec is the generated std140 codec for TopDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -4824,6 +4845,60 @@ var TintFSStage = accel.Stage{
 		return [][4]float32{out.Colour}
 	},
 	Digest:    "b078a031784853ff457d0c9c754d57d4",
+	Generator: kernelabi.Version,
+}
+
+// scaledVSFlat is the generated lowering of the vertex stage ScaledVS.
+//
+// specs/032-stage-abi.md. The authored ScaledVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func scaledVSFlat(v accel.Vertex, xf StageTransform, pos [3]float32) (accel.Clip, accel.NoVaryings) {
+	return [4]float32{float32(float32(pos[int32(0)]*xf.Scale) + xf.Offset[int32(0)]), float32(float32(pos[int32(1)]*xf.Scale) + xf.Offset[int32(1)]), pos[int32(2)], float32(1)}, accel.NoVaryings{}
+}
+
+// ScaledVSStage is the compiled form of ScaledVS.
+var ScaledVSStage = accel.Stage{
+	Name:     "ScaledVS",
+	Kind:     accel.StageVertex,
+	Varyings: "NoVaryings",
+	Attributes: []accel.StageAttribute{
+		{Name: "pos", Index: 0, Components: 3},
+	},
+	Uniforms: []accel.StageUniform{
+		{Name: "xf", Type: "StageTransform", Index: 0},
+	},
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+		pos, vary := scaledVSFlat(v, u[0].(StageTransform), [3]float32(a[0]))
+		return pos, flattenNoVaryings(vary)
+	},
+	Digest:    "23de7018632e135d68621adaa6e207a0",
+	Generator: kernelabi.Version,
+}
+
+// tintedFSFlat is the generated lowering of the fragment stage TintedFS.
+//
+// specs/032-stage-abi.md. The authored TintedFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func tintedFSFlat(f accel.Fragment, in accel.NoVaryings, tint StageTint) Solid {
+	return Solid{tint.Colour}
+}
+
+// TintedFSStage is the compiled form of TintedFS.
+var TintedFSStage = accel.Stage{
+	Name:     "TintedFS",
+	Kind:     accel.StageFragment,
+	Varyings: "NoVaryings",
+	Uniforms: []accel.StageUniform{
+		{Name: "tint", Type: "StageTint", Index: 0},
+	},
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+		out := tintedFSFlat(f, unflattenNoVaryings(vv), u[0].(StageTint))
+		return [][4]float32{out.Colour}
+	},
+	Digest:    "ecd833083023eb5fc2b0c150fc0c357b",
 	Generator: kernelabi.Version,
 }
 

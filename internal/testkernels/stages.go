@@ -118,3 +118,35 @@ func AttributeVS(v accel.Vertex, pos accel.Vec3, tint accel.Vec4) (accel.Clip, C
 func TintFS(f accel.Fragment, in ColourVaryings) Solid {
 	return Solid{Colour: in.Tint}
 }
+
+// StageTint is a fragment stage's by-value parameter.
+//
+// A different type from StageTransform on purpose: both stages below take a
+// uniform at index 0, so a render path that gave the two stages one shared
+// slice would hand this one a StageTransform and the generated adapter would
+// assert on the wrong type. The types are the assertion.
+type StageTint struct {
+	Colour accel.Vec4
+}
+
+// ScaledVS scales its position by a by-value parameter.
+//
+//accel:vertex
+func ScaledVS(v accel.Vertex, xf StageTransform, pos accel.Vec3) (accel.Clip, accel.NoVaryings) {
+	return accel.Clip{
+		pos[0]*xf.Scale + xf.Offset[0],
+		pos[1]*xf.Scale + xf.Offset[1],
+		pos[2], 1,
+	}, accel.NoVaryings{}
+}
+
+// TintedFS writes a by-value colour, so what a test reads back names which
+// uniform slice reached it.
+//
+// The varyings come first because specs/032-stage-abi.md identifies them by
+// position; the uniform follows.
+//
+//accel:fragment
+func TintedFS(f accel.Fragment, in accel.NoVaryings, tint StageTint) Solid {
+	return Solid{Colour: tint.Colour}
+}
