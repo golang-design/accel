@@ -307,6 +307,23 @@ acquires a second resource kind and this bug becomes available.** The corpus
 entry that compares a texture-attachment readback against a storage-buffer write
 of the same image is therefore written *before* the feature.
 
+**Written 2026-08-24, and it skips.** Writing it found something the review did
+not: **the texture path has no GPU comparison at all.** Every texture test in
+the root package runs on the CPU device, and Metal does not lower a texture copy
+— it refuses by name, pointing at [021](021-metal-bringup.md). So the one
+convention `docs/conventions.md` records as *known* to diverge between backends
+is covered by nothing, and has been since textures were added.
+
+The entry is therefore built to self-activate. Its oracle half asserts today
+that the CPU backend returns caller order; its Metal half skips with the
+refusal's own text as the reason, and starts comparing on the first day that
+refusal stops being returned. When it fails it names the row the byte actually
+came from and says whether that is a clean vertical flip or a shear, which is
+the measurement `docs/conventions.md` says localises this fastest.
+
+A skipped test that says what it is owed beats a comment saying the same thing,
+because the skip is attached to the code that will make it run.
+
 ## 6. The documentation guard
 
 [036](036-documentation.md) §3.1 requires tutorial code to live in `Example`
