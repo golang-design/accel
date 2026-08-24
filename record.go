@@ -176,12 +176,22 @@ func (r *Recorder) fail(format string, args ...any) {
 }
 
 // node appends a recorded node and returns its id.
+//
+// It touches every access it is given, so a transient's live range covers every
+// node that uses it. Done here rather than at each call site because it was an
+// obligation each site carried separately and the render pass -- the first node
+// kind added after the rule existed -- did not carry it. A transient used only
+// as an attachment then had a live range that excluded the pass writing it, and
+// another transient could be placed over those bytes.
 func (r *Recorder) node(kind NodeKind, label string, accesses []access, data []byte) NodeID {
 	id := NodeID(len(r.state.nodes))
 	r.state.nodes = append(r.state.nodes, recNode{
 		id: id, kind: kind, label: label, accesses: accesses, data: data,
 		stage: stageFor(kind),
 	})
+	for _, a := range accesses {
+		r.touch(id, a)
+	}
 	return id
 }
 

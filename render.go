@@ -865,6 +865,10 @@ func (p *RenderPass) declareRead(v BufferView, what string) int {
 	}
 	n.accesses = append(n.accesses, a)
 	p.r.state.nodes[p.id] = n
+	// Touched here for the same reason [Recorder.node] touches the accesses it
+	// is given: this access arrives after the node exists, so nothing else
+	// would put the buffer in the pass's live range.
+	p.r.touch(p.id, a)
 	return len(n.accesses) - 1
 }
 

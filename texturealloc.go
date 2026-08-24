@@ -322,9 +322,6 @@ func (r *Recorder) textureCopy(op string, buf BufferView, tex *Texture, toBuffer
 	id := r.node(kind, op, accesses, nil)
 	n := &r.state.nodes[id]
 	n.texture = tex
-	for _, a := range accesses {
-		r.touch(id, a)
-	}
 	return id
 }
 

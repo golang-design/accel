@@ -155,9 +155,6 @@ func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, us []UniformVa
 	n.pipeline = p
 	n.count = c
 	n.uniforms = uniforms
-	for _, a := range accesses {
-		r.touch(id, a)
-	}
 	return id
 }
 
@@ -399,9 +396,6 @@ func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, us []UniformVa
 	n.count = c
 	n.uniforms = uniforms
 	n.indirect = true
-	for _, a := range accesses {
-		r.touch(id, a)
-	}
 	return id
 }
 

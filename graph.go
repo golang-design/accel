@@ -79,7 +79,6 @@ func (r *Recorder) UploadToBuffer(dst BufferView, src any) NodeID {
 	copy(owned, data)
 
 	id := r.node(NodeHostWrite, "UploadToBuffer", []access{a}, owned)
-	r.touch(id, a)
 	return id
 }
 
@@ -113,7 +112,6 @@ func (r *Recorder) UploadToSlot(dst Slot, offset, count int, src any) NodeID {
 	copy(owned, data)
 
 	id := r.node(NodeHostWrite, "UploadToSlot", []access{a}, owned)
-	r.touch(id, a)
 	return id
 }
 
@@ -155,8 +153,6 @@ func (r *Recorder) copy(op string, dst, src declared) NodeID {
 	// Destination first, so that node.accesses[0] is always the write. Build
 	// reads them positionally and a reordering here would silently swap a copy.
 	id := r.node(NodeCopyBuffer, op, []access{dst.a, src.a}, nil)
-	r.touch(id, dst.a)
-	r.touch(id, src.a)
 	return id
 }
 
