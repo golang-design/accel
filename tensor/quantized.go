@@ -51,7 +51,7 @@ func checkQuantized(q Quantized, what string) string {
 	return ""
 }
 
-// QuantMatMul multiplies f16 activations by a quantized weight matrix.
+// QuantMatMul multiplies f16 or f32 activations by a quantized weight matrix.
 //
 // A separate operator rather than [MatMul] taking a different argument type,
 // because the cost is different and a caller should see which one they wrote.
@@ -59,6 +59,16 @@ func checkQuantized(q Quantized, what string) string {
 // unquantized one: the result is within a derived distance of what the
 // unquantized product would have given, and that distance is proportional to
 // the largest weight in each block.
+//
+// # Why the activation may be either width
+//
+// Because the weight's width is not the activation's business. int8 is what a
+// model reaches for when it is too large to hold otherwise, and every other
+// operator in this package produces f32 -- so requiring the activation to be
+// f16 put a Cast in front of every projection of the configuration least able
+// to afford one (accel issue 14). The quants and scales keep their widths in
+// both cases: a weight is loaded from a file and an activation is produced by
+// the graph, and only the second is free to be wide.
 func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 	// A nil plane is checked before the poison test, because poison propagation
 	// exists to suppress the *echoes* of an error and a missing argument is not
@@ -74,9 +84,9 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 	if why := checkQuantized(w, "the weight"); why != "" {
 		return b.fail(1, "QuantMatMul", "%s", why)
 	}
-	if x.dtype != accel.F16 {
-		return b.fail(1, "QuantMatMul", "activations are %v; the registered kernel reads "+
-			"f16, which is what specs/010-kernel-corpus.md registers", x.dtype)
+	if x.dtype != accel.F16 && x.dtype != accel.F32 {
+		return b.fail(1, "QuantMatMul", "activations are %v; specs/010-kernel-corpus.md "+
+			"registers f16 and f32 activations against int8 weights", x.dtype)
 	}
 	if len(x.shape) != 2 || len(w.Quants.shape) != 2 {
 		return b.fail(1, "QuantMatMul", "operands are %v and %v; v0 multiplies two matrices",
@@ -92,33 +102,55 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 	integer := "an integer-accumulating variant: it needs one scale per output " +
 		"column, and this representation has one per block"
 
+	// The activation's width picks the variant within each shape, and it has to
+	// be read here rather than assumed: the two kernels of a pair differ only in
+	// binding 0's element type, so an f32 activation sent to the f16 kernel is a
+	// buffer of the wrong element size read as the right one.
+	wide := x.dtype == accel.F32
+	acts := "f16"
+	if wide {
+		acts = "f32"
+	}
+
 	// The same M=1 selection MatMul makes, and it belongs here more than there.
 	// A decode step is M=1 and int8 is the width a model reaches for because it
 	// is large, so the quantized path is both where this shape is most common
 	// and where a missing specialization costs most -- a consumer reported the
-	// asymmetry rather than a measurement (accel issue 11).
+	// asymmetry rather than a measurement (accel issue 11). Both widths of it
+	// exist for that reason: closing issue 14's refusal on the general kernel
+	// alone would leave decode running the unspecialized shape again.
 	if m == 1 {
+		vec := &testkernels.QuantMatVecKernel
+		if wide {
+			vec = &testkernels.QuantMatVecF32Kernel
+		}
 		return b.record(node{
 			op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
-			kernel:  &testkernels.QuantMatVecKernel,
+			kernel:  vec,
 			uniform: func(map[string]ScalarValue) any { return dims },
 			grid: func(*Tensor) accel.WorkgroupCount {
 				return accel.WorkgroupCount{X: n}
 			},
-			reason: fmt.Sprintf("M is 1, so the quantized matrix-vector kernel gives each "+
-				"of the %d output columns a workgroup and folds K across the lanes", n),
+			reason: fmt.Sprintf("M is 1, so the quantized matrix-vector kernel over %s "+
+				"activations gives each of the %d output columns a workgroup and folds "+
+				"K across the lanes", acts, n),
 			rejected: []string{integer, "the per-element quantized GEMM: it gives each " +
 				"output element one invocation, which at M=1 leaves K unparallelized"},
 		}, accel.F32, Shape{m, n})
 	}
 
+	gemm := &testkernels.QuantMatMulKernel
+	if wide {
+		gemm = &testkernels.QuantMatMulF32Kernel
+	}
 	return b.record(node{
 		op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
-		kernel:  &testkernels.QuantMatMulKernel,
+		kernel:  gemm,
 		uniform: func(map[string]ScalarValue) any { return dims },
-		grid:    perElement(int(testkernels.QuantMatMulKernel.WorkgroupSize.X)),
-		reason: fmt.Sprintf("the int8 quantized GEMM over a %dx%d output; each product "+
-			"widens to f32 before accumulating, because the scale varies per block", m, n),
+		grid:    perElement(int(gemm.WorkgroupSize.X)),
+		reason: fmt.Sprintf("the int8 quantized GEMM over %s activations and a %dx%d "+
+			"output; each product widens to f32 before accumulating, because the scale "+
+			"varies per block", acts, m, n),
 		rejected: []string{integer, "the quantized matrix-vector kernel: it applies only at M=1"},
 	}, accel.F32, Shape{m, n})
 }
