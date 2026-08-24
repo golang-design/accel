@@ -51,9 +51,24 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	if poisoned(q) || k == nil || v == nil || k.poison || v.poison {
 		return b.poison()
 	}
-	if q.dtype != accel.F32 || k.desc.DType != accel.F32 || v.desc.DType != accel.F32 {
-		return b.fail(1, "Attention", "q is %v and the cache is %v; the registered decode "+
-			"kernel reads f32", q.dtype, k.desc.DType)
+	if q.dtype != accel.F32 {
+		return b.fail(1, "Attention", "q is %v and the registered kernels read an f32 "+
+			"query; it is one row and narrowing it saves nothing worth a variant", q.dtype)
+	}
+	// The cache may be f16, and specs/043-per-row-values.md §5 says why that is
+	// defensible where narrow accumulation is not: K and V are *operands*, and
+	// the score accumulates in f32 whatever they are stored as -- which is the
+	// trade MatMul already makes. It halves the largest allocation a serving
+	// process has after the weights, and the only one that scales with both
+	// concurrency and context.
+	if k.desc.DType != v.desc.DType {
+		return b.fail(1, "Attention", "the key cache is %v and the value cache is %v; one "+
+			"kernel reads both, so they are the same dtype", k.desc.DType, v.desc.DType)
+	}
+	cacheDType := k.desc.DType
+	if cacheDType != accel.F32 && cacheDType != accel.F16 {
+		return b.fail(1, "Attention", "the cache is %v; the registered kernels read f32 or "+
+			"f16", cacheDType)
 	}
 	// [qHeads, headDim] is one token and [qSeq, qHeads, headDim] is a prefill.
 	// Which one a caller wrote decides which kernel runs, and Selections says
@@ -119,6 +134,12 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	}
 
 	out := Shape{qHeads, headDim}
+	if prefill && cacheDType != accel.F32 {
+		return b.fail(1, "Attention", "the cache is %v and only the decode kernel reads a "+
+			"narrow cache; specs/010-kernel-corpus.md owns the prefill variant. A prefill "+
+			"over an f16 cache is refused rather than run against the f32 kernel, which "+
+			"would read every second entry", cacheDType)
+	}
 	if prefill {
 		out = Shape{qSeq, qHeads, headDim}
 		if opts.BaseName == "" {
@@ -150,9 +171,20 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		}, accel.F32, out)
 	}
 
+	// The narrow variant when the cache is narrow. A separate kernel rather
+	// than a dtype parameter, because specs/004-kernel-authoring.md keeps
+	// generics out of the subset and a variant is what
+	// specs/010-kernel-corpus.md registers.
+	decode := &testkernels.AttentionDecodeKernel
+	decodeWhy := "the fused decode kernel"
+	if cacheDType == accel.F16 {
+		decode = &testkernels.AttentionDecodeF16Kernel
+		decodeWhy = "the fused decode kernel over an f16 cache, accumulating f32"
+	}
+
 	return b.record(node{
 		op: "Attention", inputs: []*Tensor{q, readState(b, k), readState(b, v)},
-		kernel: &testkernels.AttentionDecodeKernel,
+		kernel: decode,
 		reads:  []string{opts.CurrentLengthName, opts.ScaleName},
 		uniform: func(vals map[string]ScalarValue) any {
 			return testkernels.AttnDims{
@@ -165,8 +197,8 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		grid: func(*Tensor) accel.WorkgroupCount {
 			return accel.WorkgroupCount{X: qHeads}
 		},
-		reason: fmt.Sprintf("the fused decode kernel: one workgroup per query head over %d "+
-			"cached positions", k.shape[0]),
+		reason: fmt.Sprintf("%s: one workgroup per query head over %d cached positions",
+			decodeWhy, k.shape[0]),
 		rejected: []string{"the causal prefill kernel: it takes a sequence of query tokens"},
 	}, accel.F32, out)
 }

@@ -464,6 +464,20 @@ func diffCases() []diffCase {
 			groups: accel.WorkgroupCount{X: 2},
 			ulp:    32, why: "a softmax composed with two dot products, per section 8's propagation",
 		},
+		{
+			// The same shape over an f16 cache. Both backends read the same
+			// halves, so this compares the two *lowerings* of the widening
+			// conversion rather than the conversion itself -- and the widening
+			// is exact, so the ceiling is the f32 kernel's.
+			kernel: &testkernels.AttentionDecodeF16Kernel,
+			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 2 * 8},
+			uniforms: []any{testkernels.AttnDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, KVLen: 3,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 2},
+			ulp:    32, why: "a softmax composed with two dot products, per section 8's propagation",
+		},
 	}
 }
 
