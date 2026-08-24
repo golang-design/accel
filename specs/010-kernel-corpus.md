@@ -113,14 +113,14 @@ state; `scatter_rows` first executes through a public graph in M3.
 | `reduce_sum` | tree | 128 invocations; arbitrary reduced length through guarded loads | Internal building block and numeric proof. |
 | `rmsnorm` | row | one or more workgroups per row chosen deterministically from width | f32 sum of squares and rsqrt. |
 | `softmax` | row, causal-mask row | selected from axis length and limits | stable max subtraction; optional broadcast mask and runtime scale. |
-| `matmul` | naive reference, tiled `16x8x16` | M/N/K guarded; required inner strides are 1 | Portable f16/f32 storage, f32 accumulation. |
+| `matmul` | naive reference, tiled `16x8x16` over f16, over f32, and mixed f32 activations against f16 weights | M/N/K guarded; required inner strides are 1; the *pair* of operand widths selects the variant | f32 accumulation in every variant. The mixed variant closes accel issue 14: a transformer's two operands are never the same width, because its activations are f32 like every other operator in the tensor layer and its weights are f16 because a four billion parameter model is 16 GB in f32. Defensible because it is not new arithmetic -- the f16 variant already widens both operands before multiplying, so on activations f16 holds exactly the two agree bit for bit, which is the test. The reverse pair, an f16 activation against an f32 weight, is refused: that is the memory decision made in the expensive direction, and it is what keeps the same-width rule for two operands that are both activations. No mixed variant of `matvec` exists, so a mixed decode takes the tile and the selection reports the seven idle rows. |
 | `linear` | tiled with bias epilogue | MatMul rules; broadcast-compatible bias | Shares tile body with MatMul, distinct stable ID. |
 | `matvec` | row/vector | selected exactly when M=1 | Decode-specialized MatMul implementation. |
 | `attention_decode` | fused contiguous KV; paged KV; f16 KV; batched paged | qSeq=1, headDim divisible by 8 and <=128, qHeads%kvHeads=0; any cache capacity | Required on CPU and Metal v0. The cache is walked a block at a time with a running softmax ([044](044-unbounded-context.md)), so the workgroup bounds a block and not a cache. The composed path is the reference where it is expressible, which is `kvHeads == 1`. |
 | `attention_prefill` | causal contiguous KV | a sequence of query positions, a base position within the cache | Registered. Bounded by the causal limit rather than the cache, so a prefill scores the triangle the mask describes. |
 | `attention_prefill_paged` | causal KV through a page table | a prefill's, plus a block size | Registered, closing accel issue 10. A paged decode is only useful over blocks a paged prefill wrote, so this is the first operation of every request in a paged design. One indirection and nothing else: [044](044-unbounded-context.md) §5 predicted the shape, since a prefill already walks the cache in blocks. Bounded by the page table's reach rather than the pool's, and checked against the same positions gathered contiguously — exactly, because an addressing change computes the same sums in the same order. |
 | `gather_rows` | f32 table; f16 table; int8 table with per-block scales | rows selected by a u32 index tensor | The f16 variant closes accel issue 11: an embedding table is the largest single tensor in a small model and had no width between f32 and int8. A gather does no arithmetic, so a narrow table is 002's storage rule with nothing to lose -- the value read is the value written, one conversion wider. The result is f32 whatever the table is, because a normalize follows. |
-| `quant_matmul` | per-element at every M; matrix-vector at M=1 | int8 weights with per-block scales | The M=1 variant closes accel issue 11's second half, and is the same selection `matvec` is for the unquantized path. Its reduction is a tree over lanes where the general kernel folds sequentially, so its rounding differs and its bound does not: 027 states the error over the number of terms rather than their order. |
+| `quant_matmul` | per-element at every M and matrix-vector at M=1, each over f16 and over f32 activations | int8 weights with per-block scales; the activation's width selects within each shape | The M=1 variant closes accel issue 11's second half, and is the same selection `matvec` is for the unquantized path. Its reduction is a tree over lanes where the general kernel folds sequentially, so its rounding differs and its bound does not: 027 states the error over the number of terms rather than their order. The f32-activation pair closes accel issue 14: int8 is the width a model reaches for *because* it is large, so requiring f16 activations put a Cast in front of every projection of the configuration least able to afford the pass. Both shapes have one rather than only the general kernel, because M=1 is every decode step and closing the refusal there alone would have repeated issue 11. Defensible on the same ground as the mixed GEMM: each is its f16 form with the activation load already wide, so on activations f16 holds exactly the two agree bit for bit, and 027's bound is stated against an evaluation neither changed. The quant and scale planes keep their widths in every variant. |
 
 The `16x8x16` GEMM tile means a 16-wide output-N tile, eight output rows, and a
 16-wide K step, for 128 invocations and a portable shared-memory footprint.
@@ -165,6 +165,34 @@ generated, which is the least debuggable failure this project could ship. They
 agree within the softmax's reduction budget rather than bit for bit, because the
 two reduce over different numbers of lanes and §7 bounds that rather than
 forbidding it.
+
+### Added for accel issue 14 — 2026-08-24
+
+Four kernels for the widths a transformer actually has. The corpus assumed the
+two operands of a product share a storage width; a transformer's never do and
+cannot, so the assumption did not make the graph narrow, it made the graph
+`Cast` — four per layer, 144 dispatches per forward pass at 36 layers.
+
+| Kernel | Obligation met |
+| --- | --- |
+| `MatMulTiledF32F16` | equal to `MatMulTiled` **bit for bit** on activations f16 holds exactly, across a table of shapes with every guarded tail, because the f16 form already widens both operands before multiplying |
+| `QuantMatMulF32` | equal to `QuantMatMul` bit for bit on the same class of activations; 027's error bound is stated against an evaluation the widening does not change |
+| `QuantMatVecF32` | equal to `QuantMatVec` bit for bit, over shapes including K past one lane's fold — below that, `k` and `lid` are the same number and a lane-indexed load looks correct |
+| `CastBF16ToF32` | exact widening, and more strongly than f16's: bf16 is f32's top half, so it is a shift and every input is a witness. Checked over magnitudes outside f16's range, which is what the target being f32 is for |
+
+**An authored form agreeing with its own lowering is not enough for a variant.**
+It is the check every kernel carries, and it passes on a kernel that reads the
+wrong element of a tile: the authored form and the generated one read the same
+wrong element. The obligation above is therefore a comparison against the
+*narrow* form on values both hold exactly, which fails on a swapped tile index —
+verified by reinstating one.
+
+**bf16 needed the MSL target, not only a kernel.** The emitter refused
+`OpBF16ToF32` and `OpF32ToBF16` together because `bfloat` is a Metal family
+capability. That is true of the type and irrelevant to the widening: the binding
+is `ushort` and the conversion is `as_type<float>(uint(x) << 16)`, which every
+family has, and `ir.go` already forbids arithmetic on a storage kind. The
+narrowing keeps the refusal, because it has to round.
 
 ## 3.1 What is built — 2026-08-23
 
