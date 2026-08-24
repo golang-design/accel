@@ -100,7 +100,7 @@ and do not require `CapF16Arithmetic`.
 | `swiglu` | contiguous, row-contiguous | equal inputs | Authored fused SiLU plus multiply. |
 | `contiguous_copy` | general-read to contiguous | any legal read layout | Separate dtype variants include i32/u32. |
 | `rows` | contiguous table, contiguous ids/output | ids i32/u32 | Strict path checks id range. |
-| `scatter_rows` | contiguous rows/state | state read-write | Strict path checks runtime index/capacity. |
+| `scatter_rows` | contiguous rows/state; f16 rows into an f16 state | state read-write | Strict path checks runtime index/capacity. The f16 variant closes the write half of accel issue 13: an f16 KV cache was readable and unwritable, so a model could attend over a cache no kernel could populate from inside the graph. A scatter does no arithmetic and this one does not convert either -- both sides are f16, so the two lowerings move the same bits and the differential keeps no budget at all. |
 | `rope` | row-contiguous | runtime positions/base | Pair rotation over declared rotary dimension. |
 
 These kernels are valid for M2's direct flat executor unless they use persistent
@@ -116,8 +116,8 @@ state; `scatter_rows` first executes through a public graph in M3.
 | `matmul` | naive reference, tiled `16x8x16` | M/N/K guarded; required inner strides are 1 | Portable f16/f32 storage, f32 accumulation. |
 | `linear` | tiled with bias epilogue | MatMul rules; broadcast-compatible bias | Shares tile body with MatMul, distinct stable ID. |
 | `matvec` | row/vector | selected exactly when M=1 | Decode-specialized MatMul implementation. |
-| `attention_decode` | fused contiguous KV; paged KV; f16 KV; batched paged | qSeq=1, headDim divisible by 8 and <=128, qHeads%kvHeads=0; any cache capacity | Required on CPU and Metal v0. The cache is walked a block at a time with a running softmax ([044](044-unbounded-context.md)), so the workgroup bounds a block and not a cache. The composed path is the reference where it is expressible, which is `kvHeads == 1`. |
-| `attention_prefill` | causal contiguous KV | a sequence of query positions, a base position within the cache | Registered. Bounded by the causal limit rather than the cache, so a prefill scores the triangle the mask describes. |
+| `attention_decode` | fused contiguous KV; paged KV; f16 KV; paged f16 KV; batched paged | qSeq=1, headDim divisible by 8 and <=128, qHeads%kvHeads=0; any cache capacity | Required on CPU and Metal v0. The cache is walked a block at a time with a running softmax ([044](044-unbounded-context.md)), so the workgroup bounds a block and not a cache. The composed path is the reference where it is expressible, which is `kvHeads == 1`. |
+| `attention_prefill` | causal contiguous KV; f16 KV | a sequence of query positions, a base position within the cache | Registered. Bounded by the causal limit rather than the cache, so a prefill scores the triangle the mask describes. The f16 variant closes the read half of accel issue 13: a prefill is the first operation of every request, so without it a narrow cache served every step except the one that fills it. |
 | `attention_prefill_paged` | causal KV through a page table | a prefill's, plus a block size | Registered, closing accel issue 10. A paged decode is only useful over blocks a paged prefill wrote, so this is the first operation of every request in a paged design. One indirection and nothing else: [044](044-unbounded-context.md) §5 predicted the shape, since a prefill already walks the cache in blocks. Bounded by the page table's reach rather than the pool's, and checked against the same positions gathered contiguously — exactly, because an addressing change computes the same sums in the same order. |
 | `gather_rows` | f32 table; f16 table; int8 table with per-block scales | rows selected by a u32 index tensor | The f16 variant closes accel issue 11: an embedding table is the largest single tensor in a small model and had no width between f32 and int8. A gather does no arithmetic, so a narrow table is 002's storage rule with nothing to lose -- the value read is the value written, one conversion wider. The result is f32 whatever the table is, because a normalize follows. |
 | `quant_matmul` | per-element at every M; matrix-vector at M=1 | int8 weights with per-block scales | The M=1 variant closes accel issue 11's second half, and is the same selection `matvec` is for the unquantized path. Its reduction is a tree over lanes where the general kernel folds sequentially, so its rounding differs and its bound does not: 027 states the error over the number of terms rather than their order. |
@@ -166,9 +166,34 @@ agree within the softmax's reduction budget rather than bit for bit, because the
 two reduce over different numbers of lanes and §7 bounds that rather than
 forbidding it.
 
+### Added for accel issue 13 — 2026-08-24
+
+An f16 KV cache was read-only and un-pageable. `AttentionDecodeF16` read a narrow
+cache, and nothing wrote one and nothing paged one, so the two savings the narrow
+read argues for did not compose and a model could not populate the cache it was
+meant to attend over. The three variants are the widening the decode kernel had
+already taken, applied where the sequence needed it:
+
+| Kernel | Obligation met |
+| --- | --- |
+| `ScatterRowsF16` | equal to `ScatterRows` over the widened rows, element for element, over a state seeded to a value no write produces so a dropped write is visible; one id past the capacity, so the range check is compared and not only the addressing |
+| `AttentionPrefillF16` | equal to `AttentionPrefill` over the same cache widened, **bit for bit**, at three head geometries and with `Base` moved off zero |
+| `AttentionDecodePagedF16` | the same, through a page table that is out of order and non-adjacent, so a kernel that ignored the table would not compare equal |
+
+The exactness claim is the one the f16 decode already makes: the widening loses
+nothing, so the narrow kernel and the wide one must agree exactly and a tolerance
+would pass a kernel that read the wrong element. The f32 side of each comparison
+is **derived** from the narrowed values rather than seeded beside them, so the
+claim does not rest on the seed being exact in f16.
+
+The sequence is checked end to end as well -- a prompt's KV scattered into an f16
+cache, a prefill over it, one more position scattered, a decode step over the
+longer cache -- because each kernel passing alone is what the closed issue #4
+already had.
+
 ## 3.1 What is built — 2026-08-23
 
-Every kernel in both tables above exists on the CPU backend, in
+Every kernel in the tables above exists on the CPU backend, in
 `internal/testkernels`, each checked against an independently written
 higher-precision reference and each authored form checked against its generated
 lowering.
