@@ -384,6 +384,192 @@ func TestTextureAttachmentRefusals(t *testing.T) {
 	}
 }
 
+// Check V13: a pipeline compiled for one attachment format is refused against
+// another, and the refusal names the pipeline, the node and the index.
+//
+// specs/003-command-graph.md has carried V13 since it was written and it could
+// not be implemented while an attachment was a buffer view: there was no format
+// on one side to compare. The index is asserted with a *second* attachment
+// mismatching, because an off-by-one there is invisible with one attachment.
+func TestV13RefusesAPipelineCompiledForAnotherFormat(t *testing.T) {
+	const w, h = 4, 4
+	for _, c := range []struct {
+		name   string
+		record func(t *testing.T, d *accel.Device, r *accel.Recorder)
+		says   []string
+	}{{
+		name: "a single attachment of another format",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder) {
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, unormTarget(t, d, "8bit", w, h))}},
+				Width: w, Height: h, Label: "mismatched",
+			})
+			// solidPipeline declares RGBA32Float.
+			p.SetPipeline(solidPipeline(t, d))
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: []string{`the pipeline "solid"`, "colour target 0 as RGBA32Float",
+			"attachment 0 is RGBA8Unorm", "check V13"},
+	}, {
+		name: "the second attachment of a pair",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder) {
+			mrt, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+				Vertex:   &testkernels.GeometryVSStage,
+				Fragment: &testkernels.ShadeFSStage,
+				VertexBuffers: []accel.VertexBufferLayout{{
+					Stride: 20,
+					Attributes: []accel.VertexAttribute{
+						{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+						{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+					},
+				}},
+				Targets: []accel.ColorTargetState{
+					{Format: accel.RGBA32Float}, {Format: accel.RGBA32Float},
+				},
+				Label: "mrt",
+			})
+			if err != nil {
+				t.Fatalf("pipeline: %v", err)
+			}
+			t.Cleanup(func() { _ = mrt.Close() })
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{
+					{View: view(t, colourTarget(t, d, "first", w, h))},
+					{View: view(t, unormTarget(t, d, "second", w, h))},
+				},
+				Width: w, Height: h, Label: "mrt",
+			})
+			p.SetPipeline(mrt)
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: []string{"colour target 1 as RGBA32Float", "attachment 1 is RGBA8Unorm"},
+	}, {
+		name: "a depth attachment of another format",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder) {
+			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+				Vertex:   &testkernels.HalfTriangleVSStage,
+				Fragment: &testkernels.SolidFSStage,
+				Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+				DepthStencil: &accel.DepthStencilState{
+					Format: accel.Depth24PlusStencil8, Test: true, Write: true,
+					Compare: accel.CompareLess,
+				},
+				Label: "packed depth",
+			})
+			if err != nil {
+				t.Fatalf("pipeline: %v", err)
+			}
+			t.Cleanup(func() { _ = pipe.Close() })
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, colourTarget(t, d, "c", w, h))}},
+				Depth: &accel.DepthAttachment{View: view(t, depthTarget(t, d, "z", w, h))},
+				Width: w, Height: h, Label: "depth format",
+			})
+			p.SetPipeline(pipe)
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: []string{"declares depth as Depth24PlusStencil8",
+			"the depth attachment is Depth32Float"},
+	}, {
+		name: "a pipeline compiled for the texture rather than the view",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder) {
+			// The texture is RGBA8Unorm and the view reads it as sRGB, so the
+			// writes go through sRGB and a pipeline compiled linear is wrong.
+			// This is the case that proves V13 reads the view.
+			tex := unormTarget(t, d, "linear texture", w, h)
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{
+					View: viewAs(t, tex, accel.RGBA8UnormSRGB),
+				}},
+				Width: w, Height: h, Label: "view format",
+			})
+			p.SetPipeline(unormPipeline(t, d))
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: []string{"colour target 0 as RGBA8Unorm", "attachment 0 is RGBA8UnormSRGB"},
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			d := openDevice(t)
+			r := d.NewRecorder()
+			c.record(t, d, r)
+			g, err := r.Build()
+			if err == nil {
+				_ = g.Close()
+				t.Fatal("Build accepted a pipeline compiled for another format")
+			}
+			for _, want := range append(c.says, "node") {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error should say %q, got %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// V13's accepting half, and the half that proves it reads the view.
+//
+// A pipeline compiled for RGBA8UnormSRGB against an RGBA8Unorm texture viewed
+// as sRGB must build and must produce sRGB bytes. A check that compared the
+// texture's own format would refuse this, which is the one case the view format
+// exists for; a check that compared nothing would accept the previous case too.
+func TestV13AcceptsAPipelineCompiledForTheViewsFormat(t *testing.T) {
+	const w, h = 4, 4
+	d := openDevice(t)
+	tex := unormTarget(t, d, "linear texture", w, h)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.HalfTriangleVSStage,
+		Fragment: &testkernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA8UnormSRGB}},
+		Label:    "srgb solid",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	r := d.NewRecorder()
+	pass := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{
+			View: viewAs(t, tex, accel.RGBA8UnormSRGB), Load: accel.LoadClear,
+			Clear: [4]float32{0, 0, 0, 1},
+		}},
+		Width: w, Height: h, Label: "srgb",
+	})
+	pass.SetPipeline(pipe)
+	pass.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("a pipeline compiled for the view's format was refused: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	// SolidFS returns linear (0.25, 0.5, 0.75, 1), which through an sRGB view
+	// stores as 137, 188 and 225: 1.055*v^(1/2.4) - 0.055, times 255, rounded.
+	got := readTargetBytes(t, d, tex)
+	var covered bool
+	for y := range h {
+		for x := range w {
+			px := [4]byte(got[(y*w+x)*4 : (y*w+x)*4+4])
+			want := [4]byte{0, 0, 0, 255}
+			if y > x {
+				want = [4]byte{137, 188, 225, 255}
+				covered = true
+			}
+			if px != want {
+				t.Fatalf("pixel (%d,%d) is %v, want %v", x, y, px, want)
+			}
+		}
+	}
+	if !covered {
+		t.Fatal("nothing was drawn, so the encoding proves nothing")
+	}
+}
+
 // A view that reinterprets a texture's format is accepted as an attachment,
 // and a view of a format outside the family is refused before it exists.
 //

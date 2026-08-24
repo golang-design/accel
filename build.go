@@ -424,6 +424,11 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 	out := &driver.RenderPass{
 		Label: p.desc.Label, Width: p.desc.Width, Height: p.desc.Height,
 	}
+	// colorFormats and depthFormat are what check V13 compares a pipeline
+	// against. Kept in the public spelling rather than read back out of the
+	// plan, because the message a caller reads names the format they wrote.
+	var colorFormats []Format
+	depthFormat := FormatInvalid
 	for i, c := range p.desc.Color {
 		op, err := g.operand(n, n.accesses[i])
 		if err != nil {
@@ -434,6 +439,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
+		colorFormats = append(colorFormats, format)
 		out.Color = append(out.Color, op)
 		out.ColorFormat = append(out.ColorFormat, format.plan())
 		out.ColorPitch = append(out.ColorPitch, pitch)
@@ -451,6 +457,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
+		depthFormat = format
 		out.Depth = &op
 		out.DepthFormat = format.plan()
 		out.DepthPitch = pitch
@@ -475,6 +482,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the pipeline %q "+
 				"%s depth state and the pass %s depth attachment", p.desc.Label, i,
 				pipe.label, has(pipe.desc.DepthStencil != nil), has(p.desc.Depth != nil))
+		}
+		if err := g.checkTargetFormats(n, p, i, pipe, colorFormats, depthFormat); err != nil {
+			return nil, err
 		}
 		rd := driver.RenderDraw{
 			Vertex: pipe.desc.Vertex, Fragment: pipe.desc.Fragment,
@@ -766,6 +776,51 @@ func (g *Graph) checkSlotAttachment(p *RenderPass, what string, s Slot, componen
 		return Depth32Float, p.desc.Width * Depth32Float.BytesPerPixel(), nil
 	}
 	return RGBA32Float, p.desc.Width * RGBA32Float.BytesPerPixel(), nil
+}
+
+// checkTargetFormats is check V13: a pipeline's declared attachment formats are
+// the pass's.
+//
+// # Why this is checked at all, and why it could not be before
+//
+// Every target compiles a render pipeline against its attachment formats --
+// Vulkan through the render pass or the dynamic-rendering format list, Metal
+// through the render pipeline's colour attachment descriptors, D3D12 through
+// RTVFormats. Binding a pipeline to attachments it was not compiled for is
+// undefined on some of them and a validation error on others, and neither
+// tells a caller which attachment.
+//
+// specs/003-command-graph.md's table has carried V13 since it was written, and
+// specs/042-surface-completion.md section 5.2 found it unimplementable rather
+// than merely unimplemented: an attachment was a buffer view and a buffer view
+// has no format, so there was nothing on one side to compare. That is the
+// same category as the withdrawn V23, with the difference that V23 was marked.
+//
+// # It compares the view's format and not the texture's
+//
+// A view may reinterpret within a compatible family, and a pass writing an
+// RGBA8Unorm texture through an RGBA8UnormSRGB view is doing sRGB. The
+// pipeline is compiled for what the writes go through, which is the view.
+// Comparing the texture's own format would refuse exactly the case
+// specs/045-texture-attachments.md section 2.1 exists for.
+func (g *Graph) checkTargetFormats(n *recNode, p *RenderPass, draw int,
+	pipe *RenderPipeline, colour []Format, depth Format) error {
+	for i, tgt := range pipe.desc.Targets {
+		if tgt.Format == colour[i] {
+			continue
+		}
+		return fmt.Errorf("%w: Build: render pass %q (node %d) draw %d: the pipeline %q "+
+			"declares colour target %d as %v and attachment %d is %v. A pipeline is "+
+			"compiled against its attachment formats on every backend, so the two are "+
+			"the same format (check V13)",
+			ErrFormat, p.desc.Label, n.id, draw, pipe.label, i, tgt.Format, i, colour[i])
+	}
+	if ds := pipe.desc.DepthStencil; ds != nil && ds.Format != depth {
+		return fmt.Errorf("%w: Build: render pass %q (node %d) draw %d: the pipeline %q "+
+			"declares depth as %v and the depth attachment is %v (check V13)",
+			ErrFormat, p.desc.Label, n.id, draw, pipe.label, ds.Format, depth)
+	}
+	return nil
 }
 
 // aspectMismatch names which way round an attachment's format is wrong.
