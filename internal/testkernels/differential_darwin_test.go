@@ -205,10 +205,21 @@ func diffCases() []diffCase {
 			},
 		},
 		{
-			kernel: &testkernels.RoPEKernel, counts: []int{4 * 16},
+			// Positions first, then the buffer it rotates. Four rows at four
+			// different positions, which a shared offset could not express and
+			// which is the whole point of specs/043-per-row-values.md.
+			kernel: &testkernels.RoPEKernel, counts: []int{4, 4 * 16},
 			uniforms: []any{testkernels.RoPEParams{
-				Rows: 4, Width: 16, RotaryDim: 8, Base: 10000, Offset: 3,
+				Rows: 4, Width: 16, RotaryDim: 8, Base: 10000,
 			}},
+			// Four positions, none of them row+k for a shared k, so a kernel
+			// that had kept the old arithmetic would disagree with itself.
+			seed: func(b, i int) float32 {
+				if b == 0 {
+					return float32(3 + 5*i)
+				}
+				return defaultSeed(b, i)
+			},
 			groups: accel.WorkgroupCount{X: 1},
 			// Absolute, not ULP: section 6 bounds sin and cos at 2^-20 absolute
 			// because argument reduction dominates and a ULP count near a zero

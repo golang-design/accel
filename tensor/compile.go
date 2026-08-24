@@ -294,12 +294,17 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		// because the operand and the result may both be caller buffers and
 		// the recorder moves bytes between a slot and a view rather than
 		// between two slots.
-		// binds holds the operands only. It used to hold the by-value parameter
-		// too, so this counted one extra; uniforms have their own argument
-		// since specs/036-documentation.md's freeze record split Binding.
-		if len(binds) != outIndex || outIndex != 1 {
-			return fmt.Errorf("accel/tensor: %s is in place and takes %d operands; an "+
-				"in-place kernel has exactly one", n.op, outIndex)
+		// The *last* operand is the one rewritten, and the ones before it are
+		// read-only companions. This used to require exactly one, which was
+		// true while every in-place kernel took only the buffer it rewrote --
+		// and wrong at the first one that also reads per-row data, which is
+		// RoPE reading positions (specs/043-per-row-values.md). Stating which
+		// operand is in place rather than how many there are is the same
+		// correction specs/009-sequencing.md records for exemption-shaped
+		// guards: say what the rule covers, not what it excludes.
+		if len(binds) != outIndex || outIndex < 1 {
+			return fmt.Errorf("accel/tensor: %s is in place and takes %d operands; the "+
+				"last is the one rewritten and there must be at least one", n.op, outIndex)
 		}
 		count := n.out.shape.Elements()
 		scratch := r.Transient(accel.BufferDescriptor{
@@ -317,7 +322,7 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 				"reads and a tensor is a value",
 		})
 		binds = binds[:len(binds)-1]
-		binds = append(binds, accel.Binding{Index: 0, Buffer: scratch})
+		binds = append(binds, accel.Binding{Index: outIndex - 1, Buffer: scratch})
 		inPlaceResult = &result
 		inPlaceScratch = scratch
 		inPlaceCount = count

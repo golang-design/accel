@@ -167,8 +167,25 @@ func Softmax(b *Builder, x *Tensor, opts SoftmaxOptions) *Tensor {
 // tensor is an immutable value. So this lowers to a copy into a transient
 // followed by a dispatch over it, and the copy is reported: it is real work and
 // hiding it would make a rotation look free.
-func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, offsetName string) *Tensor {
-	if poisoned(x) {
+//
+// # Why positions are a tensor and the base is a scalar
+//
+// specs/043-per-row-values.md draws the line: a value every row of a dispatch
+// shares is a uniform, and a value that differs per row is device data. The
+// frequency base is a property of the model; the position is a property of the
+// sequence.
+//
+// This took a scalar offset and computed `row + offset`, which is exactly right
+// for one sequence and exactly wrong for two. In a batched decode the row index
+// is the *slot*, so slot 0 rotates at the offset and slot 1 at offset+1 —
+// meaning one member of the batch is ever rotated at its own cache length. The
+// output stays finite and fluent; long-range coherence degrades in a way that
+// reads as "the model is a bit weak" rather than as a bug.
+//
+// A single sequence binds a one-row positions tensor. That is the same path, not
+// a special case.
+func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, positions *Tensor) *Tensor {
+	if poisoned(x, positions) {
 		return b.poison()
 	}
 	if x.dtype != accel.F32 {
@@ -187,21 +204,26 @@ func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, offsetName stri
 		return b.fail(1, "RoPE", "%q is not a declared f32 scalar; the frequency base varies "+
 			"per step and is named for that reason", baseName)
 	}
-	offset, ok := b.scalarKind(offsetName)
-	if !ok || offset != ScalarU32 {
-		return b.fail(1, "RoPE", "%q is not a declared u32 scalar; the position offset is the "+
-			"cache length at a decode step rather than zero", offsetName)
-	}
 	rows := x.shape.Elements() / width
+	if positions.dtype != accel.U32 {
+		return b.fail(1, "RoPE", "positions are %v and the kernel reads u32", positions.dtype)
+	}
+	if got := positions.shape.Elements(); got != rows {
+		return b.fail(1, "RoPE", "x has %d rows and positions holds %d; every row rotates "+
+			"at its own position, so there is exactly one per row "+
+			"(specs/043-per-row-values.md)", rows, got)
+	}
 
 	return b.record(node{
-		op: "RoPE", inputs: []*Tensor{x}, kernel: &testkernels.RoPEKernel,
+		// Positions first, then the buffer rewritten: operand order is the
+		// kernel's binding order, and the in-place operand is the last.
+		op: "RoPE", inputs: []*Tensor{positions, x}, kernel: &testkernels.RoPEKernel,
 		inPlace: true,
-		reads:   []string{baseName, offsetName},
+		reads:   []string{baseName},
 		uniform: func(vals map[string]ScalarValue) any {
 			return testkernels.RoPEParams{
 				Rows: uint32(rows), Width: uint32(width), RotaryDim: uint32(rotaryDim),
-				Base: vals[baseName].F32, Offset: vals[offsetName].U32,
+				Base: vals[baseName].F32,
 			}
 		},
 		// One invocation per rotated *pair*, not per element: the kernel bounds

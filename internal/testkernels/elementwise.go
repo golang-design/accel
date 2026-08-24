@@ -168,11 +168,13 @@ type RoPEParams struct {
 	// rotation applied to the wrong span is a plausible tensor.
 	RotaryDim uint32
 
-	// Base is the frequency base, conventionally 10000, and Offset the position
-	// of the first row — which for a decode step is the cache length rather
-	// than zero.
-	Base   float32
-	Offset uint32
+	// Base is the frequency base, conventionally 10000.
+	//
+	// It stays a scalar where the position does not, and the line between them
+	// is specs/043-per-row-values.md's: a value every row of a dispatch shares
+	// is a uniform, and a value that differs per row is device data. The base
+	// is a property of the model; the position is a property of the sequence.
+	Base float32
 }
 
 // RoPE rotates each row's leading pairs by an angle that depends on the
@@ -187,13 +189,18 @@ type RoPEParams struct {
 // since they may be in different workgroups.
 //
 //accel:kernel workgroup=64
-func RoPE(t accel.Thread, p RoPEParams, inout []float32) {
+func RoPE(t accel.Thread, p RoPEParams, positions []uint32, inout []float32) {
 	i := t.GlobalID().X
 	pairs := p.RotaryDim / 2
 	if i < p.Rows*pairs {
 		r := i / pairs
 		k := i % pairs
-		pos := float32(r + p.Offset)
+		// The row's own position, read from device data rather than derived
+		// from the row index plus a shared offset. specs/043-per-row-values.md:
+		// in a batched decode the row index is the *slot*, so a shared offset
+		// rotates exactly one member of the batch at its own cache length, and
+		// the output stays finite and fluent while long-range coherence rots.
+		pos := float32(positions[r])
 
 		// base^(-2k/rotaryDim), written as an exponential of a logarithm
 		// because the subset has no power operator and the two are the same

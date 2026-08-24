@@ -346,11 +346,13 @@ func TestIndexingNormalizationAndRotation(t *testing.T) {
 		const rows, width, rotary = 4, 16, 8
 		b := rt.NewBuilder("rope")
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarF32})
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "pos", Kind: tensor.ScalarU32})
 		x := tensor.Input(b, tensor.ValueDesc{
 			Name: "x", DType: accel.F32, Shape: tensor.Shape{rows, width},
 		})
-		tensor.Output(b, "y", tensor.RoPE(b, x, rotary, "base", "pos"))
+		pos := tensor.Input(b, tensor.ValueDesc{
+			Name: "pos", DType: accel.U32, Shape: tensor.Shape{rows},
+		})
+		tensor.Output(b, "y", tensor.RoPE(b, x, rotary, "base", pos))
 		plan, err := b.Compile(rt, tensor.CompileOptions{})
 		if err != nil {
 			t.Fatalf("compile: %v", err)
@@ -361,14 +363,16 @@ func TestIndexingNormalizationAndRotation(t *testing.T) {
 		for i := range xs {
 			xs[i] = float32(i%9) - 4
 		}
+		// Positions that are not an arithmetic sequence in the row index, which
+		// is what a shared scalar offset could only ever produce.
+		positions := []uint32{3, 17, 4, 29}
 		out := f32Buffer(t, d, "y", make([]float32, rows*width))
 		f := plan.Submit(d.Queue(), tensor.Bindings{
 			Buffers: map[string]accel.BufferView{
 				"x": f32Buffer(t, d, "x", xs), "y": out,
+				"pos": u32Buffer(t, d, "pos", positions),
 			},
-			Scalars: map[string]tensor.ScalarValue{
-				"base": tensor.F32(10000), "pos": tensor.U32(3),
-			},
+			Scalars: map[string]tensor.ScalarValue{"base": tensor.F32(10000)},
 		})
 		if err := f.Wait(); err != nil {
 			t.Fatalf("submit: %v", err)
@@ -379,7 +383,7 @@ func TestIndexingNormalizationAndRotation(t *testing.T) {
 		}
 		for r := range rows {
 			for k := range rotary / 2 {
-				pos := float64(r + 3)
+				pos := float64(positions[r])
 				freq := math.Exp(-2 * float64(k) / rotary * math.Log(10000))
 				th := pos * freq
 				lo, hi := r*width+2*k, r*width+2*k+1
@@ -466,24 +470,29 @@ func TestOperatorRefusals(t *testing.T) {
 		name: "a rotary dimension that is odd",
 		build: func(b *tensor.Builder) {
 			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarF32})
-			tensor.Scalar(b, tensor.ScalarDesc{Name: "pos", Kind: tensor.ScalarU32})
-			tensor.RoPE(b, f32(b, "x", 4, 8), 3, "base", "pos")
+			tensor.RoPE(b, f32(b, "x", 4, 8), 3, "base", u32(b, "pos", 4))
 		},
 		want: "positive, even, and no wider",
 	}, {
 		name: "a rotary base that is not declared",
 		build: func(b *tensor.Builder) {
-			tensor.RoPE(b, f32(b, "x", 4, 8), 4, "nope", "alsonope")
+			tensor.RoPE(b, f32(b, "x", 4, 8), 4, "nope", u32(b, "pos", 4))
 		},
 		want: "not a declared f32 scalar",
 	}, {
-		name: "a rotary offset of the wrong kind",
+		name: "positions of the wrong dtype",
 		build: func(b *tensor.Builder) {
 			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarF32})
-			tensor.Scalar(b, tensor.ScalarDesc{Name: "pos", Kind: tensor.ScalarF32})
-			tensor.RoPE(b, f32(b, "x", 4, 8), 4, "base", "pos")
+			tensor.RoPE(b, f32(b, "x", 4, 8), 4, "base", f32(b, "pos", 4))
 		},
-		want: "not a declared u32 scalar",
+		want: "positions are f32 and the kernel reads u32",
+	}, {
+		name: "one position for four rows",
+		build: func(b *tensor.Builder) {
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarF32})
+			tensor.RoPE(b, f32(b, "x", 4, 8), 4, "base", u32(b, "pos", 1))
+		},
+		want: "x has 4 rows and positions holds 1",
 	}, {
 		name:  "a MatMul of f32 operands",
 		build: func(b *tensor.Builder) { tensor.MatMul(b, f32(b, "x", 4, 8), f32(b, "w", 8, 4)) },
@@ -529,7 +538,7 @@ func TestOperatorRefusals(t *testing.T) {
 	tensor.GatherRows(b, bad, u32(b, "i", 2))
 	tensor.RMSNorm(b, bad, bad, 1e-5)
 	tensor.Softmax(b, bad, tensor.SoftmaxOptions{})
-	tensor.RoPE(b, bad, 2, "base", "pos")
+	tensor.RoPE(b, bad, 2, "base", bad)
 	tensor.MatMul(b, bad, bad)
 	tensor.Linear(b, bad, bad, bad)
 	tensor.Scale(b, bad, "f")

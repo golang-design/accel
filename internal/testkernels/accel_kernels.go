@@ -99,7 +99,7 @@ func (RowParamsCodec) Encode(dst []byte, value RowParams) error {
 type RoPEParamsCodec struct{}
 
 // RoPEParamsBlockSize is the encoded size of a RoPEParams block, in bytes.
-const RoPEParamsBlockSize = 32
+const RoPEParamsBlockSize = 16
 
 // EncodedSize reports the std140 block size.
 func (RoPEParamsCodec) EncodedSize() int { return RoPEParamsBlockSize }
@@ -111,7 +111,6 @@ func (RoPEParamsCodec) Encode(dst []byte, value RoPEParams) error {
 	w.U32(4, value.Width)
 	w.U32(8, value.RotaryDim)
 	w.F32(12, value.Base)
-	w.U32(16, value.Offset)
 	return w.Err()
 }
 
@@ -2107,13 +2106,13 @@ kernel void ScatterRows(
 // It is what the CPU backend runs. The authored RoPE is never registered as
 // an executable: it supplies the typed source this was built from, and it is
 // run only by the test that checks the two agree.
-func roPEFlat(t accel.Thread, p RoPEParams, inout []float32) {
+func roPEFlat(t accel.Thread, p RoPEParams, positions []uint32, inout []float32) {
 	var i uint32 = t.GlobalID().X
 	var pairs uint32 = (p.RotaryDim / uint32(2))
 	if i < (p.Rows * pairs) {
 		var r uint32 = (i / pairs)
 		var k uint32 = (i % pairs)
-		var pos float32 = float32((r + p.Offset))
+		var pos float32 = float32(positions[r])
 		var exponent float32 = (float32(float32(-2)*float32(k)) / float32(p.RotaryDim))
 		var freq float32 = kmath.Exp(float32(exponent * kmath.Log(p.Base)))
 		var theta float32 = (pos * freq)
@@ -2133,9 +2132,10 @@ var RoPEKernel = kernelabi.Kernel{
 	Name:          "RoPE",
 	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
 	Bindings: []kernelabi.Binding{
+		{Name: "positions", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "inout", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "00e80181fd0feaa2f9c5a9e89ff39ea7",
+	Digest:    "7aa5f89d5d920347a11e677bd3e16d47",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2146,14 +2146,13 @@ struct RoPEParams {
     uint Width;
     uint RotaryDim;
     float Base;
-    uint Offset;
-    char _tail[12];
 };
 
 kernel void RoPE(
-    device float *inout [[buffer(0)]],
-    constant uint *_lens [[buffer(1)]],
-    constant RoPEParams &p [[buffer(2)]],
+    const device uint *positions [[buffer(0)]],
+    device float *inout [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant RoPEParams &p [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2165,7 +2164,7 @@ kernel void RoPE(
     if ((i < (p.Rows * pairs))) {
         uint r = (i / pairs);
         uint k = (i % pairs);
-        float pos = float((r + p.Offset));
+        float pos = float(positions[r]);
         float exponent = ((float(-2) * float(k)) / float(p.RotaryDim));
         float freq = precise::exp((exponent * precise::log(p.Base)));
         float theta = (pos * freq);
@@ -2181,12 +2180,12 @@ kernel void RoPE(
 }
 `,
 	Uniforms: []kernelabi.Uniform{
-		{Name: "p", Type: "RoPEParams", Size: 32, Encode: func(dst []byte, v any) error {
+		{Name: "p", Type: "RoPEParams", Size: 16, Encode: func(dst []byte, v any) error {
 			return kernelabi.EncodeUniform(dst, v, RoPEParamsCodec{}.Encode)
 		}},
 	},
 	Flat: func(t accel.Thread, a kernelabi.Args) {
-		roPEFlat(t, kernelabi.UniformValue[RoPEParams](a, 0), kernelabi.Slice[float32](a, 0))
+		roPEFlat(t, kernelabi.UniformValue[RoPEParams](a, 0), kernelabi.Slice[uint32](a, 0), kernelabi.Slice[float32](a, 1))
 	},
 }
 

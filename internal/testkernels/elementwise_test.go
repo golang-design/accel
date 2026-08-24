@@ -206,8 +206,12 @@ func TestScatterRowsDropsAnOutOfRangeWrite(t *testing.T) {
 func TestRoPERotatesPairsAndLeavesTheTail(t *testing.T) {
 	const rows, width, rotary = 3, 8, 4
 	p := testkernels.RoPEParams{
-		Rows: rows, Width: width, RotaryDim: rotary, Base: 10000, Offset: 2,
+		Rows: rows, Width: width, RotaryDim: rotary, Base: 10000,
 	}
+	// One position per row. Every row at the same offset here, which is the
+	// single-sequence case; TestRoPERotatesEachRowAtItsOwnPosition covers the
+	// case a shared scalar could not express.
+	positions := []uint32{2, 3, 4}
 
 	inout := make([]float32, rows*width)
 	for i := range inout {
@@ -216,10 +220,10 @@ func TestRoPERotatesPairsAndLeavesTheTail(t *testing.T) {
 	before := append([]float32(nil), inout...)
 
 	runFlat(t, &testkernels.RoPEKernel, rows*rotary/2, kernelabi.Args{
-		Slices: []any{inout}, Uniforms: []any{p}})
+		Slices: []any{positions, inout}, Uniforms: []any{p}})
 
 	for r := range rows {
-		pos := float64(r) + float64(p.Offset)
+		pos := float64(positions[r])
 		for k := range rotary / 2 {
 			freq := math.Pow(float64(p.Base), -2*float64(k)/float64(rotary))
 			theta := pos * freq
@@ -249,15 +253,15 @@ func TestRoPERotatesPairsAndLeavesTheTail(t *testing.T) {
 // A decode step's row is at position cacheLen, not zero, so an implementation
 // ignoring the offset rotates every token as though it were the first — which
 // produces a fluent model that has lost track of order.
-func TestRoPEHonoursTheOffset(t *testing.T) {
+func TestRoPEHonoursThePosition(t *testing.T) {
 	const width, rotary = 4, 4
-	base := func(offset uint32) []float32 {
+	base := func(pos uint32) []float32 {
 		p := testkernels.RoPEParams{
-			Rows: 1, Width: width, RotaryDim: rotary, Base: 10000, Offset: offset,
+			Rows: 1, Width: width, RotaryDim: rotary, Base: 10000,
 		}
 		inout := []float32{1, 0, 1, 0}
 		runFlat(t, &testkernels.RoPEKernel, rotary/2, kernelabi.Args{
-			Slices: []any{inout}, Uniforms: []any{p}})
+			Slices: []any{[]uint32{pos}, inout}, Uniforms: []any{p}})
 		return inout
 	}
 	at0, at5 := base(0), base(5)
@@ -268,8 +272,8 @@ func TestRoPEHonoursTheOffset(t *testing.T) {
 		}
 	}
 	if same {
-		t.Fatal("the rotation is identical at offsets 0 and 5, so the offset is being " +
-			"ignored: a decode step's row is at position cacheLen, not zero")
+		t.Fatal("the rotation is identical at positions 0 and 5, so the position is " +
+			"being ignored: a decode step's row is at position cacheLen, not zero")
 	}
 }
 
@@ -394,18 +398,69 @@ func TestAuthoredRowAndRotationKernels(t *testing.T) {
 	})
 
 	t.Run("rope", func(t *testing.T) {
-		p := testkernels.RoPEParams{Rows: 2, Width: 6, RotaryDim: 4, Base: 10000, Offset: 1}
+		p := testkernels.RoPEParams{Rows: 2, Width: 6, RotaryDim: 4, Base: 10000}
 		start := make([]float32, p.Rows*p.Width)
 		for i := range start {
 			start[i] = float32(i%5) - 2
 		}
+		positions := []uint32{7, 11}
 		au := append([]float32(nil), start...)
 		drive(int(p.Rows*p.RotaryDim/2), func(th kernel.Thread) {
-			testkernels.RoPE(th, p, au)
+			testkernels.RoPE(th, p, positions, au)
 		})
 		gen := append([]float32(nil), start...)
 		runFlat(t, &testkernels.RoPEKernel, int(p.Rows*p.RotaryDim/2),
-			kernelabi.Args{Slices: []any{gen}, Uniforms: []any{p}})
+			kernelabi.Args{Slices: []any{positions, gen}, Uniforms: []any{p}})
 		compareExact(t, au, gen)
 	})
+}
+
+// Each row rotates at its own position, which is what a shared offset could not
+// express.
+//
+// specs/043-per-row-values.md. The old kernel computed `row + Offset`, so in a
+// batched decode — where the row index is the *slot* — slot 0 rotated at the
+// offset, slot 1 at offset+1, and exactly one member of the batch was ever
+// rotated at its own cache length.
+//
+// The failure this guards against is the one that does not announce itself: the
+// output stays finite and fluent, and what degrades is long-range coherence
+// several hundred tokens in. So the assertion is not "it did not crash" — it is
+// that a two-row batch at unrelated positions matches two single-row runs at
+// those positions, element for element.
+func TestRoPERotatesEachRowAtItsOwnPosition(t *testing.T) {
+	const width, rotary = 8, 4
+	// Deliberately not consecutive: `row + offset` can produce any arithmetic
+	// sequence, so consecutive positions would let the old behaviour pass.
+	positions := []uint32{5, 40}
+
+	row := func(pos uint32, src []float32) []float32 {
+		p := testkernels.RoPEParams{Rows: 1, Width: width, RotaryDim: rotary, Base: 10000}
+		out := append([]float32(nil), src...)
+		runFlat(t, &testkernels.RoPEKernel, rotary/2, kernelabi.Args{
+			Slices: []any{[]uint32{pos}, out}, Uniforms: []any{p}})
+		return out
+	}
+
+	src := make([]float32, 2*width)
+	for i := range src {
+		src[i] = float32(i%5) - 2
+	}
+
+	batched := append([]float32(nil), src...)
+	p := testkernels.RoPEParams{Rows: 2, Width: width, RotaryDim: rotary, Base: 10000}
+	runFlat(t, &testkernels.RoPEKernel, 2*rotary/2, kernelabi.Args{
+		Slices: []any{positions, batched}, Uniforms: []any{p}})
+
+	for r := range 2 {
+		alone := row(positions[r], src[r*width:(r+1)*width])
+		for c := range width {
+			got, want := batched[r*width+c], alone[c]
+			if math.Abs(float64(got-want)) > 1e-6 {
+				t.Fatalf("row %d at position %d: element %d is %v batched and %v alone; "+
+					"a batch member must rotate at its own position", r, positions[r],
+					c, got, want)
+			}
+		}
+	}
 }
