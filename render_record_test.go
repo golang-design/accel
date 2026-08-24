@@ -180,7 +180,7 @@ func TestRenderPassRefusals(t *testing.T) {
 		},
 		says: "has a depth state and the pass has no depth attachment",
 	}, {
-		name: "a stage that declares a by-value parameter",
+		name: "a stage whose by-value parameter has no value",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 				Vertex:   &testkernels.GeometryVSStage,
@@ -212,7 +212,7 @@ func TestRenderPassRefusals(t *testing.T) {
 			p.SetPipeline(pipe)
 			p.Draw(accel.Draw{VertexCount: 3})
 		},
-		says: `declares the by-value parameter "xf"`,
+		says: `GeometryVS takes "xf" at index 0 and no value was set`,
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
