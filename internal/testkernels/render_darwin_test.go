@@ -171,7 +171,6 @@ func TestARenderPassAgreesOnBothBackends(t *testing.T) {
 // buffer read at the wrong width. The oracle is the CPU rasterizer, which is
 // tested directly against the arithmetic elsewhere.
 func TestTheRenderSurfaceAgreesOnBothBackends(t *testing.T) {
-	const w, h = 16, 16
 	metal := openMetalDevice(t)
 	cpu, err := accel.OpenCPU(accel.CPUOptions{})
 	if err != nil {
@@ -197,8 +196,6 @@ func TestTheRenderSurfaceAgreesOnBothBackends(t *testing.T) {
 			compareBackends(t, onCPU, onMetal)
 		})
 	}
-	_ = w
-	_ = h
 }
 
 // compareBackends asserts the two agree within a derived bound and that neither
@@ -236,13 +233,14 @@ func compareBackends(t *testing.T, onCPU, onMetal []float32) {
 // renderFixture is the shared scaffolding: a pipeline, buffers, one pass, and
 // the readback.
 type renderFixture struct {
-	desc    accel.RenderPipelineDescriptor
-	verts   []float32
-	indices []uint32
-	depth   bool
-	keep    []float32
-	record  func(p *accel.RenderPass)
-	draws   func(p *accel.RenderPass)
+	desc     accel.RenderPipelineDescriptor
+	verts    []float32
+	indices  []uint32
+	depth    bool
+	keep     []float32
+	dontCare bool
+	record   func(p *accel.RenderPass)
+	draws    func(p *accel.RenderPass)
 }
 
 func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
@@ -286,6 +284,9 @@ func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
 	load := accel.LoadClear
 	if f.keep != nil {
 		load = accel.LoadKeep
+	}
+	if f.dontCare {
+		load = accel.LoadDontCare
 	}
 	desc := accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
@@ -542,4 +543,197 @@ func renderTwice(t *testing.T, d *accel.Device) []float32 {
 			}
 		},
 	})
+}
+
+// LoadDontCare is where the oracle claim stops, and this is the shape of the
+// gap.
+//
+// specs/033-render-api.md says DontCare leaves an attachment's prior contents
+// undefined. Both backends honour that and they honour it differently: the CPU
+// framebuffer aliases the caller's buffer, so untouched pixels keep what was
+// there, while Metal renders into a fresh texture whose untouched pixels are
+// whatever that memory held and blits the whole thing back. Neither is wrong,
+// and comparing them there would be comparing two legal answers.
+//
+// So this asserts what the contract does promise -- the pixels the pass wrote
+// agree exactly -- and asserts that the untouched region is *not* required to
+// agree, by observing that on this pair it does not. That second half is the
+// part worth having: a backend that quietly started preserving contents would
+// be making a promise the API does not, and the next backend would then have to
+// keep it.
+func TestLoadDontCareAgreesOnlyWhereThePassWrote(t *testing.T) {
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	onCPU := renderDontCare(t, cpu)
+	onMetal := renderDontCare(t, metal)
+
+	tint := [4]float32{1, 1, 1, 1}
+	var written, agreed, untouchedDiffer int
+	for i := 0; i+3 < len(onCPU); i += 4 {
+		c := [4]float32{onCPU[i], onCPU[i+1], onCPU[i+2], onCPU[i+3]}
+		m := [4]float32{onMetal[i], onMetal[i+1], onMetal[i+2], onMetal[i+3]}
+		if c == tint {
+			written++
+			if m == tint {
+				agreed++
+			} else {
+				t.Errorf("pixel %d was written by the pass and is %v on the CPU and %v "+
+					"on Metal; what a pass writes is defined and must agree", i/4, c, m)
+			}
+			continue
+		}
+		if c != m {
+			untouchedDiffer++
+		}
+	}
+	if written == 0 {
+		t.Fatal("the pass wrote nothing, so agreeing about what it wrote proves nothing")
+	}
+	if untouchedDiffer == 0 {
+		t.Errorf("every untouched pixel matched across the two backends, so one of them " +
+			"is preserving contents that specs/033-render-api.md leaves undefined; that " +
+			"is a promise the API does not make and the next backend would inherit")
+	}
+	t.Logf("%d pixels written and agreed, %d untouched pixels differ as the contract "+
+		"permits", agreed, untouchedDiffer)
+}
+
+func renderDontCare(t *testing.T, d *accel.Device) []float32 {
+	const w, h = 16, 16
+	prior := make([]float32, w*h*4)
+	for i := range prior {
+		prior[i] = float32(i%5) / 5
+	}
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &testkernels.ScaledVSStage,
+			Fragment:      &testkernels.TintedFSStage,
+			VertexBuffers: posOnly(),
+			Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:         "dontcare",
+		},
+		keep:     prior,
+		dontCare: true,
+		verts:    []float32{-1, -1, 0, 1, -1, 0, -1, 1, 0},
+		record: func(p *accel.RenderPass) {
+			p.SetVertexUniform(0, testkernels.StageTransform{Scale: 0.25})
+			p.SetFragmentUniform(0, testkernels.StageTint{Colour: accel.Vec4{1, 1, 1, 1}})
+		},
+		draws: func(p *accel.RenderPass) { p.Draw(accel.Draw{VertexCount: 3}) },
+	})
+}
+
+// StoreDiscard means the attachment is not written back, and this is where that
+// becomes observable.
+//
+// The field was accepted and read by nothing until this test existed, which is
+// the failure mode specs/009-sequencing.md records three times over: a value a
+// caller supplies, the API documents, and no backend reads. It manufactures
+// confidence — a caller discarding a depth buffer every frame believes they are
+// saving a write.
+//
+// On Metal the saving is real: the blit back is skipped. On the CPU there is
+// nothing to skip, because the framebuffer already aliases the caller's buffer.
+// So the two differ again, legally, and the assertion is the same shape as the
+// DontCare one: what the contract promises is that the contents are undefined,
+// and observing them differ is what proves the promise is being used.
+func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
+	const w, h = 8, 8
+	metal := openMetalDevice(t)
+
+	q := metal.Queue()
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+	target, err := metal.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "discarded",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer target.Close()
+	verts, err := metal.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: 9, Usage: usage, Label: "verts",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer verts.Close()
+	if err := q.WriteBuffer(verts, 0, []float32{-1, -1, 0, 3, -1, 0, -1, 3, 0}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// A recognisable pattern, so what survives says whether anything was
+	// written back.
+	prior := make([]float32, w*h*4)
+	for i := range prior {
+		prior[i] = 0.125
+	}
+	if err := q.WriteBuffer(target, 0, prior); err != nil {
+		t.Fatalf("write prior: %v", err)
+	}
+
+	pipe, err := metal.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:        &testkernels.ScaledVSStage,
+		Fragment:      &testkernels.TintedFSStage,
+		VertexBuffers: posOnly(),
+		Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:         "discard",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tv, err := target.View(0, target.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	vv, err := verts.View(0, verts.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	r := metal.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{
+			View: tv, Load: accel.LoadClear, Clear: [4]float32{1, 0, 0, 1},
+			Store: accel.StoreDiscard,
+		}},
+		Width: w, Height: h, Label: "discard",
+	})
+	p.SetPipeline(pipe)
+	p.SetVertexBuffer(0, vv)
+	p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+	p.SetFragmentUniform(0, testkernels.StageTint{Colour: accel.Vec4{0, 1, 0, 1}})
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := q.Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	out := make([]float32, w*h*4)
+	if err := q.ReadBuffer(target, 0, out); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	// The buffer is untouched, so it still holds the pattern written before the
+	// pass. Asserted exactly rather than as "not what the draw wrote", because
+	// the store action alone already makes the texture's contents undefined --
+	// so a backend that kept the blit would copy garbage, which is also not
+	// what the draw wrote and would pass a weaker assertion. Nothing written
+	// back is the claim, and an intact buffer is what that looks like.
+	for i, v := range out {
+		if v != 0.125 {
+			t.Fatalf("float %d is %v and the buffer held 0.125 before the pass; "+
+				"StoreDiscard did not skip the write back", i, v)
+		}
+	}
 }
