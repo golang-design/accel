@@ -4,7 +4,11 @@
 
 package accel
 
-import "fmt"
+import (
+	"fmt"
+
+	"golang.design/x/accel/internal/driver"
+)
 
 // DType reports the buffer's element type.
 func (b *Buffer) DType() DType { return b.desc.DType }
@@ -19,6 +23,68 @@ func (b *Buffer) Usage() BufferUsage { return b.desc.Usage }
 // It is the caller's number and is never rounded; the pool's allocation size,
 // which includes alignment padding, shows up in [PoolStats] instead.
 func (b *Buffer) Bytes() int { return b.bytes }
+
+// Access hands the buffer's host mapping to fn, for the duration of the call.
+//
+// # What this is for
+//
+// A model loader reads a shard, converts it, and uploads it — and without this
+// it holds all three at once: the shard, a fully converted host tensor, and the
+// device allocation. On a multi-gigabyte checkpoint that middle term is the
+// largest transient allocation in the process, and it exists only because the
+// converted bytes have nowhere to go but a slice of the caller's own.
+//
+// With this the loader converts *into* the destination. The middle allocation
+// does not shrink; it does not exist.
+//
+// On unified-memory hardware — which [Capabilities.SharedMemoryKind] reports —
+// the mapping *is* device memory, so a [MemoryShared] pool makes the upload
+// free rather than fast. On a discrete device the mapping is the staging
+// buffer, so the copy that remains is the one the hardware requires.
+//
+// # Why a callback and not a returned slice
+//
+// A returned slice is a promise about a lifetime accel cannot see. The pool can
+// be closed, the device can be lost, and a slice that outlived either would be
+// a use-after-free whose symptom is a plausible tensor. Scoped to the call, the
+// borrow is bounded by something the compiler and the reader can both see, and
+// the buffer's lifetime stays accel's.
+//
+// The slice is exactly this buffer's bytes: writing past its end is not
+// possible, and writing to it is visible to the device without a further call.
+//
+// # When it refuses
+//
+// Memory that is not host-visible has no mapping to hand out. That is a
+// property of the pool's [MemoryKind], reported rather than discovered:
+// [MemoryDevice] refuses here even on the CPU backend, where the memory
+// physically could be mapped, because a rule only one backend enforces is a
+// rule that fails in production.
+//
+// Do not retain the slice. Do not call this while a graph reading this buffer
+// is in flight; the bytes are the device's during a submission.
+func (b *Buffer) Access(fn func([]byte) error) error {
+	if fn == nil {
+		return fmt.Errorf("accel: Buffer.Access needs a function; the mapping is valid " +
+			"only for the duration of the call, so there is nothing to return")
+	}
+	if err := b.state.checkOpen("Buffer.Access"); err != nil {
+		return err
+	}
+	blk, base := blockFor(b)
+	host := driver.Unwrap(blk).Bytes()
+	if host == nil {
+		return fmt.Errorf("%w: Buffer.Access on %q: its pool is %v, which has no host "+
+			"mapping. Allocate from a %v pool to write into device memory directly, or "+
+			"use Queue.WriteBuffer, which stages the copy",
+			ErrUsage, b.desc.Label, b.pool.desc.Kind, MemoryShared)
+	}
+	if base < 0 || base+b.bytes > len(host) {
+		return fmt.Errorf("accel: Buffer.Access on %q: its %d bytes at offset %d are "+
+			"outside the pool's %d", b.desc.Label, b.bytes, base, len(host))
+	}
+	return fn(host[base : base+b.bytes])
+}
 
 // View returns a sub-range of the buffer as a [BufferView].
 //
