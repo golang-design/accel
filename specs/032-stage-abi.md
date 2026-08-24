@@ -545,3 +545,36 @@ never at pipeline creation:
 - **Point size.** A point-list topology needs one, every backend spells it as a
   vertex-stage built-in output, and no test in 005's corpus needs it. Deferred
   until the corpus does, rather than designed against no use.
+
+## 12. What is built — 2026-08-24
+
+The front end and the generated Go lowering. `//accel:vertex` and
+`//accel:fragment` compile; three stages are in the corpus; the differential
+test runs each generated lowering against its authored source, which is the
+obligation [012](012-kernel-pipeline.md) puts on every compute kernel and is
+the only reason the CPU path is an oracle rather than a second implementation.
+
+Two decisions were forced during implementation and are recorded here rather
+than only in a comment.
+
+**Composite literals are admitted in a stage and refused in a compute kernel.**
+A stage has to construct what it returns — a clip position, a varyings struct,
+an attachment struct — and there is no other way to say that. A kernel writes
+through its bindings and has nothing to build, so admitting literals everywhere
+would let one construct a value the target has no storage class for. The IR
+gained `Composite`, and the front end expands a keyed literal and fills every
+omitted field with its zero, so an emitter never has to know which spelling the
+author used and a half-initialised literal cannot reach a target as a hole.
+
+**An array-typed parameter is not automatically workgroup-shared.** The emitter
+decided "shared" from the type alone, which was sound while the only array
+parameters were `*[N]T`. A vertex attribute is a by-value array, so indexing one
+emitted a call to a shared-memory tracker no stage has. It now requires the name
+to be one the kernel declared as shared.
+
+### 12.1 Not built
+
+The MSL target for a stage, and the texel fetch of §5. Both wait on
+[033](033-render-api.md)'s pipeline, which is what would give either a caller:
+emitting a shader for a stage no pipeline can hold is a lowering nobody runs,
+which is the failure mode [009](009-sequencing.md)'s M6 outcome names.
