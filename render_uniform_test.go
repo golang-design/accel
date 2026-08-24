@@ -5,6 +5,7 @@
 package accel_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -264,5 +265,53 @@ func TestUniformsAreCapturedPerDraw(t *testing.T) {
 	if px != first {
 		t.Errorf("pixel (0,%d) is %v, want the first draw's %v; the second draw's "+
 			"uniforms reached the first", h-1, px, first)
+	}
+}
+
+// A slot outside the vertex layout is a diagnostic, not a panic.
+//
+// It was a panic: a negative slot skipped SetVertexBuffer's grow loop and
+// indexed the slice, taking the caller's process down from inside a recording
+// call (render.go:588, found by a surface audit and reproduced here). Every
+// other method on RenderPass reports through the recorder, and a panic is the
+// one diagnostic a caller cannot handle, cannot attribute to a slot, and cannot
+// see alongside the rest of a build's errors.
+func TestAVertexSlotOutsideTheLayoutIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		slot int
+		says string
+	}{
+		{"negative", -1, "cannot be negative"},
+		{"at the ceiling", 16, "is the ceiling"},
+		{"far past the ceiling", 4096, "is the ceiling"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := openDevice(t)
+			target := newBuffer(t, d, "colour", 4*4*4,
+				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			vb := newBuffer(t, d, "vb", 9*4, accel.BufferVertex|accel.BufferCopyDst)
+
+			r := d.NewRecorder()
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: whole(t, target)}},
+				Width: 4, Height: 4, Label: "slots",
+			})
+			// No recover(): a panic here fails the test by taking it down, which
+			// is the behaviour being fixed.
+			p.SetVertexBuffer(c.slot, whole(t, vb))
+
+			_, err := r.Build()
+			if err == nil {
+				t.Fatalf("slot %d was accepted", c.slot)
+			}
+			if !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("the refusal should say %q, got %v", c.says, err)
+			}
+			// And it names the slot, so a caller with several knows which.
+			if !strings.Contains(err.Error(), fmt.Sprint(c.slot)) {
+				t.Errorf("the refusal should name slot %d: %v", c.slot, err)
+			}
+		})
 	}
 }

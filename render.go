@@ -9,6 +9,7 @@ import (
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
+	"golang.design/x/accel/internal/mslabi"
 )
 
 // The render API of specs/033-render-api.md: what consumes a graphics stage.
@@ -581,7 +582,27 @@ func (p *RenderPass) SetPipeline(pipe *RenderPipeline) {
 }
 
 // SetVertexBuffer binds a vertex buffer at one slot.
+//
+// The slot is checked rather than trusted, and that is worth a note because it
+// was not: a negative slot skipped the grow loop and indexed the slice, which
+// took the caller's process down from inside a recording call. Every other
+// method on this type reports through the recorder, and a panic is the one
+// diagnostic a caller cannot handle, cannot attribute to a slot, and cannot see
+// alongside the rest of a build's errors.
 func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
+	if slot < 0 {
+		p.r.fail("RenderPass %q: SetVertexBuffer at slot %d; a slot is an index into "+
+			"the pipeline's vertex layout and cannot be negative", p.desc.Label, slot)
+		p.failed = true
+		return
+	}
+	if slot >= mslabi.StageVertexBufferLimit {
+		p.r.fail("RenderPass %q: SetVertexBuffer at slot %d; %d is the ceiling, because "+
+			"a stage's uniforms begin there on Metal (specs/032-stage-abi.md section 2.2)",
+			p.desc.Label, slot, mslabi.StageVertexBufferLimit)
+		p.failed = true
+		return
+	}
 	for len(p.vertexBuffers()) <= slot {
 		p.buffers = append(p.buffers, BufferView{})
 	}
