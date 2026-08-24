@@ -108,7 +108,7 @@ fragment FOut fmain(VOut in [[stage_in]]) {
 	enc.End()
 
 	blit := cb.Blit()
-	blit.CopyTextureToBuffer(tex, out, 0)
+	blit.CopyTextureToBuffer(tex, out, 0, 0)
 	blit.End()
 	cb.Commit()
 	cb.Wait()

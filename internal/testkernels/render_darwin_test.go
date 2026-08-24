@@ -816,14 +816,12 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 // do with the format mapping this change made. Testing the two together would
 // have made a format test that fails for a reason it does not name.
 //
-// The extent is 16x16 and that is load-bearing: at 8x8 an RGBA32Float row is
-// 128 bytes and Metal returns the bottom half of the image blank, at 4x4 a
-// 64-byte row loses three quarters of it, and at 16x16 and 32x32 -- 256 and 512
-// byte rows -- it is exact. Metal aligns a texture readback row to 256 bytes
-// and the render path's write-back does not, which is a defect recorded in
-// specs/045-texture-attachments.md section 6.2 rather than fixed here. This
-// test would pass at any of those sizes for the format it is checking; it is
-// pinned at one that does not also fail for the other reason.
+// The extent is 4x4 and that is load-bearing. An RGBA32Float row is 64 bytes
+// there and an RGBA8Unorm row is 16, both far below the 256-byte alignment a
+// device reports for an attachment buffer -- so this is the extent at which
+// Metal's write-back used to put every row after the first in the wrong place,
+// losing three quarters of the image. A larger extent passes either way, which
+// is exactly why the small one is the one to keep.
 //
 // A full-screen triangle covers every pixel, so no pixel sits on an edge and
 // the fill rule cannot enter. The colour is what SolidFS writes, and each of
@@ -831,9 +829,11 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 // format fault rather than a rounding one -- a path still assuming RGBA32Float
 // reads four bytes of one f32 as four channels and returns nothing like it.
 func TestMetalRendersEachAttachmentFormat(t *testing.T) {
-	const w, h = 64, 64
-	// What SolidFS writes, and every component is exact in f32 and in 8-bit
-	// unorm, so a disagreement is a format fault rather than a rounding one.
+	const w, h = 4, 4
+	// What SolidFS writes. The oracle and Metal are compared against each
+	// other rather than against these numbers, because 0.25 is not exact in
+	// 8-bit unorm -- it quantises to 64/255 -- and asserting the literal would
+	// be asserting a rounding rule this test is not about.
 	solid := [4]float32{0.25, 0.5, 0.75, 1}
 
 	for _, f := range []accel.Format{accel.RGBA32Float, accel.RGBA8Unorm} {

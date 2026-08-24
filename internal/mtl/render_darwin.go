@@ -553,10 +553,12 @@ func setClearDepth(att objc.ID, d float64) {
 
 // copyTextureToBuffer encodes the blit, with the origin and size structs the
 // selector takes by value.
-func copyTextureToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset int) {
+func copyTextureToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset, rowBytes int) {
 	type origin struct{ X, Y, Z uint64 }
 	type size struct{ W, H, D uint64 }
-	rowBytes := src.width * src.bpp
+	if rowBytes <= 0 {
+		rowBytes = src.width * src.bpp
+	}
 	withPool(func() {
 		enc.Send(selCopyTextureToBuffer,
 			src.id, uintptr(0), uintptr(0),
@@ -588,14 +590,20 @@ func (e *RenderEncoder) SetFragmentBytes(b []byte, index int) {
 //
 // This is what LoadKeep costs on this backend: keeping prior contents means the
 // texture must start as what the buffer holds. Clear and DontCare skip it.
-func (b *BlitEncoder) CopyBufferToTexture(src *Buffer, offset int, dst *Texture) {
-	copyBufferToTexture(b.id, src, offset, dst)
+// CopyBufferToTexture blits a buffer into a whole texture at a row pitch.
+//
+// Zero means the texture's own tight pitch. See [BlitEncoder.CopyTextureToBuffer]
+// for why the caller's pitch and the texture's are not the same number.
+func (b *BlitEncoder) CopyBufferToTexture(src *Buffer, offset int, dst *Texture, rowBytes int) {
+	copyBufferToTexture(b.id, src, offset, dst, rowBytes)
 }
 
-func copyBufferToTexture(enc objc.ID, src *Buffer, offset int, dst *Texture) {
+func copyBufferToTexture(enc objc.ID, src *Buffer, offset int, dst *Texture, rowBytes int) {
 	type origin struct{ X, Y, Z uint64 }
 	type size struct{ W, H, D uint64 }
-	rowBytes := dst.width * dst.bpp
+	if rowBytes <= 0 {
+		rowBytes = dst.width * dst.bpp
+	}
 	withPool(func() {
 		enc.Send(selCopyBufferToTexture,
 			src.id, uintptr(offset), uintptr(rowBytes), uintptr(rowBytes*dst.height),
@@ -604,10 +612,21 @@ func copyBufferToTexture(enc objc.ID, src *Buffer, offset int, dst *Texture) {
 	})
 }
 
-// CopyTextureToBuffer blits a whole texture into a buffer, tightly packed.
+// CopyTextureToBuffer blits a whole texture into a buffer at a row pitch.
 //
 // This is how a render result reaches the caller's buffer, which is where
 // specs/033-render-api.md says an attachment lives.
-func (b *BlitEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, offset int) {
-	copyTextureToBuffer(b.id, src, dst, offset)
+//
+// The pitch is the destination's, not the texture's, and passing it is the
+// whole point: a caller's attachment buffer is sized to the pitch its device
+// reports, which is padded to an alignment, while a texture's rows are tight.
+// Writing at the tight pitch into a buffer laid out at the padded one puts
+// every row after the first in the wrong place -- which read back as an image
+// whose lower rows were blank, at every extent whose row was narrower than the
+// alignment.
+//
+// Zero means the texture's own tight pitch, which is what a copy between a
+// tightly packed buffer and a texture wants.
+func (b *BlitEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, offset, rowBytes int) {
+	copyTextureToBuffer(b.id, src, dst, offset, rowBytes)
 }

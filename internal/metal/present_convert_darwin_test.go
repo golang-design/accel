@@ -100,7 +100,7 @@ func TestThePresentConversionWritesTheRightBytes(t *testing.T) {
 	enc.Draw(3, 0, 3, 1, 0)
 	enc.End()
 	blit := cb.Blit()
-	blit.CopyTextureToBuffer(tex, out, 0)
+	blit.CopyTextureToBuffer(tex, out, 0, 0)
 	blit.End()
 	cb.Commit()
 	cb.Wait()

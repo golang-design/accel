@@ -64,7 +64,7 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		if err != nil {
 			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
 		}
-		p.blit().CopyBufferToTexture(op.buf, op.off, a.Texture)
+		p.blit().CopyBufferToTexture(op.buf, op.off, a.Texture, rp.ColorPitch[i])
 	}
 	p.end()
 
@@ -96,14 +96,18 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		if err != nil {
 			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
 		}
-		blit.CopyTextureToBuffer(a.Texture, op.buf, op.off)
+		// The destination's pitch, which the plan states and the CPU backend
+		// already honours. The texture's rows are tight and the buffer's are
+		// padded to the device's alignment, so writing at the texture's pitch
+		// puts every row after the first in the wrong place.
+		blit.CopyTextureToBuffer(a.Texture, op.buf, op.off, rp.ColorPitch[i])
 	}
 	if targets.depth != nil && rp.DepthStore != driver.StoreDiscard {
 		op, err := e.operand(*rp.Depth)
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
-		blit.CopyTextureToBuffer(targets.depth.Texture, op.buf, op.off)
+		blit.CopyTextureToBuffer(targets.depth.Texture, op.buf, op.off, rp.DepthPitch)
 	}
 	p.end()
 	return nil
