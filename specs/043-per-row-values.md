@@ -242,12 +242,50 @@ conflates two things.**
 | grows with context | yes | no — which is the entire appeal |
 | indexable at a position | yes, and `ScatterRows` does | **no**; resuming means restoring it, not indexing it |
 | pageable | yes, `Pages` addresses positions | there are no positions to address |
+| what sharing a prefix needs | a **page table**: two sequences name the same blocks | a **snapshot**: save at a branch point, restore when a request diverges |
+
+The last row was added after the consumer answered the question this table
+raised, and it is the one that settles the shape:
+
+> everything a cache does is **addressing**, and everything a recurrent state
+> does is **copying**.
+
+That is a sharper test than the four rows above it, because it predicts the
+operations rather than describing the differences. A cache wants `Pages` and
+`ScatterRows` — both address. A recurrent state wants **snapshot** and
+**restore**, which have no analogue in this library today and are copy-shaped:
+save a sequence's state where it can be kept, put it back into a slot when
+another request branches there. Neither is a `Slice` of anything.
+
+It is still a `State` rather than a transient, and the reason is the second use
+rather than the first: within one submission a recurrent state is carried
+between chunks and could be a transient; across submissions it must survive from
+token *t* to token *t+1*, caller-owned, exactly as a KV cache does.
 
 `State`, `ScatterRows` and `AttentionOptions.Pages` all assume the left column.
 A hybrid model — three linear-attention layers for every full-attention one — has
 **both kinds at once**, so its cache is not one thing and `Pages` covers only the
 quarter that is full attention. That is a type-level distinction this library
 does not currently have a name for, and naming it is prior to any kernel.
+
+**A hybrid model needs both kinds live in one graph, per layer** — not two
+models but two kinds of state in one forward pass, sixteen full-attention layers
+with a paged cache beside forty-eight recurrent layers with snapshots. That is
+the constraint to design the type distinction against, and it rules out the
+cheap answer of a second `State`-like type used in a separate plan.
+
+**One kernel this does not need.** The short depthwise causal convolution these
+layers carry composes from what exists: left-pad the input by `K-1` rows so
+causality is structural rather than masked, then `Slice`, `Contiguous`,
+`Broadcast` and a multiply-add per tap. The consumer verified it element by
+element. It costs `K` dispatches and `K-1` packing copies per layer where a
+kernel would take one, so it is *one less kernel to unblock* rather than one
+less to want — and folding the convolution into the chunked scan is probably
+right if that is ever built.
+
+Both `Contiguous` calls in that composition are load-bearing, which is the
+refusal working: `Slice` yields a strided view and elementwise `Mul` refuses one
+by name.
 
 **Neither is scheduled.** Both reports say no urgency and both asked for a scope
 answer rather than an implementation; [010](010-kernel-corpus.md) carries the
