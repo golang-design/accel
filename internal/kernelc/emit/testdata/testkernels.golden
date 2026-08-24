@@ -609,24 +609,29 @@ kernel void CountWorkgroups(
 // is a superset of the right answer and therefore correct, and a liveness
 // analysis can shrink it later without changing anything a caller sees.
 type attentionDecodeFrame struct {
-	pc       int
-	h0       uint32
-	kvLen1   uint32
-	lane2    uint32
-	group3   uint32
-	kvHead4  uint32
-	s5       float32
-	acc6     float32
-	i7       uint32
-	qi8      float32
-	ki9      float32
-	stride10 uint32
-	m11      float32
-	e12      float32
-	stride13 uint32
-	total14  float32
-	acc15    float32
-	j16      uint32
+	pc         int
+	h0         uint32
+	kvLen1     uint32
+	lane2      uint32
+	group3     uint32
+	kvHead4    uint32
+	capacity5  uint32
+	m6         float32
+	l7         float32
+	base8      uint32
+	pos9       uint32
+	s10        float32
+	phys11     uint32
+	dot12      float32
+	i13        uint32
+	stride14   uint32
+	blockMax15 float32
+	next16     float32
+	alpha17    float32
+	e18        float32
+	stride19   uint32
+	a20        float32
+	j21        uint32
 }
 
 // attentionDecodeCoop runs one invocation of AttentionDecode to its next suspension point.
@@ -635,7 +640,7 @@ type attentionDecodeFrame struct {
 // the scheduler stops calling it. Each case is one state; the assignment to
 // pc before continuing is the jump, which is explicit because a loop's states
 // do not run in numeric order.
-func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, f *attentionDecodeFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, acc *[128]float32, f *attentionDecodeFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
 	for {
 		switch f.pc {
 		case 0:
@@ -644,26 +649,12 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			f.lane2 = t.LocalID().X
 			f.group3 = (d.QHeads / d.KVHeads)
 			f.kvHead4 = (f.h0 / f.group3)
-			f.s5 = float32(0)
-			if f.lane2 < f.kvLen1 {
-				f.acc6 = float32(0)
-				{
-					f.i7 = uint32(0)
-					for ; f.i7 < d.HeadDim; f.i7 = (f.i7 + uint32(1)) {
-						f.qi8 = q[((f.h0 * d.HeadDim) + f.i7)]
-						f.ki9 = k[((((f.lane2 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim)) + f.i7)]
-						f.acc6 = float32(f.acc6 + float32(f.qi8*f.ki9))
-					}
-				}
-				f.s5 = float32(f.acc6 * d.Scale)
-			}
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.s5
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s5
-			if f.lane2 >= f.kvLen1 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.capacity5 = (uint32(int32(len(k))) / (d.KVHeads * d.HeadDim))
+			f.m6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.l7 = float32(0)
+			if f.lane2 < d.HeadDim {
+				tr.Write(2, int(f.lane2))
+				acc[f.lane2] = float32(0)
 			}
 			f.pc = 1
 			continue
@@ -672,13 +663,22 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: ""}
 			return true
 		case 2:
-			f.stride10 = uint32(64)
-			f.pc = 6
+			f.base8 = uint32(0)
+			f.pc = 23
 			continue
 		case 3:
-			if f.lane2 < f.stride10 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride10)))])
+			f.pos9 = (f.base8 + f.lane2)
+			f.s10 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			if f.pos9 < f.kvLen1 {
+				f.phys11 = (((f.pos9 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.dot12 = float32(0)
+				{
+					f.i13 = uint32(0)
+					for ; f.i13 < d.HeadDim; f.i13 = (f.i13 + uint32(1)) {
+						f.dot12 = float32(f.dot12 + float32(q[((f.h0*d.HeadDim)+f.i13)]*k[(f.phys11+f.i13)]))
+					}
+				}
+				f.s10 = float32(f.dot12 * d.Scale)
 			}
 			f.pc = 4
 			continue
@@ -687,47 +687,49 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: ""}
 			return true
 		case 5:
-			f.stride10 = (f.stride10 / uint32(2))
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.s10
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.s10
 			f.pc = 6
 			continue
 		case 6:
-			if f.stride10 > uint32(0) {
-				f.pc = 3
-				continue
-			}
 			f.pc = 7
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: ""}
+			return true
 		case 7:
-			f.m11 = red[tr.ReadAt(1, int(int32(0)))]
-			f.pc = 8
+			f.stride14 = uint32(64)
+			f.pc = 11
 			continue
 		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: ""}
-			return true
-		case 9:
-			f.e12 = float32(0)
-			if f.lane2 < f.kvLen1 {
-				f.e12 = kmath.Exp(float32(scores[tr.ReadAt(0, int(f.lane2))] - f.m11))
+			if f.lane2 < f.stride14 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride14)))])
 			}
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e12
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e12
-			f.pc = 10
+			f.pc = 9
 			continue
-		case 10:
-			f.pc = 11
-			frame.Barrier = kernelabi.BarrierID{Index: 10, Pos: ""}
+		case 9:
+			f.pc = 10
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: ""}
 			return true
+		case 10:
+			f.stride14 = (f.stride14 / uint32(2))
+			f.pc = 11
+			continue
 		case 11:
-			f.stride13 = uint32(64)
-			f.pc = 15
+			if f.stride14 > uint32(0) {
+				f.pc = 8
+				continue
+			}
+			f.pc = 12
 			continue
 		case 12:
-			if f.lane2 < f.stride13 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride13)))])
+			f.blockMax15 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next16 = kmath.Max(f.m6, f.blockMax15)
+			f.alpha17 = kmath.Exp(float32(f.m6 - f.next16))
+			f.e18 = float32(0)
+			if f.pos9 < f.kvLen1 {
+				f.e18 = kmath.Exp(float32(f.s10 - f.next16))
 			}
 			f.pc = 13
 			continue
@@ -736,27 +738,74 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: ""}
 			return true
 		case 14:
-			f.stride13 = (f.stride13 / uint32(2))
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e18
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e18
 			f.pc = 15
 			continue
 		case 15:
-			if f.stride13 > uint32(0) {
-				f.pc = 12
+			f.pc = 16
+			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: ""}
+			return true
+		case 16:
+			f.stride19 = uint32(64)
+			f.pc = 20
+			continue
+		case 17:
+			if f.lane2 < f.stride19 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride19)))])
+			}
+			f.pc = 18
+			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: ""}
+			return true
+		case 19:
+			f.stride19 = (f.stride19 / uint32(2))
+			f.pc = 20
+			continue
+		case 20:
+			if f.stride19 > uint32(0) {
+				f.pc = 17
 				continue
 			}
-			f.pc = 16
+			f.pc = 21
 			continue
-		case 16:
-			f.total14 = red[tr.ReadAt(1, int(int32(0)))]
+		case 21:
+			f.l7 = float32(float32(f.alpha17*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m6 = f.next16
 			if f.lane2 < d.HeadDim {
-				f.acc15 = float32(0)
+				f.a20 = (f.alpha17 * acc[tr.ReadAt(2, int(f.lane2))])
 				{
-					f.j16 = uint32(0)
-					for ; f.j16 < f.kvLen1; f.j16 = (f.j16 + uint32(1)) {
-						f.acc15 = float32(f.acc15 + float32(scores[tr.ReadAt(0, int(f.j16))]*v[((((f.j16*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+					f.j21 = uint32(0)
+					for ; f.j21 < uint32(128); f.j21 = (f.j21 + uint32(1)) {
+						if (f.base8 + f.j21) < f.kvLen1 {
+							f.a20 = float32(f.a20 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[(((((f.base8+f.j21)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
 					}
 				}
-				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.acc15 / f.total14)
+				tr.Write(2, int(f.lane2))
+				acc[f.lane2] = f.a20
+			}
+			f.pc = 22
+			continue
+		case 22:
+			f.base8 = (f.base8 + uint32(128))
+			f.pc = 23
+			continue
+		case 23:
+			if f.base8 < f.capacity5 {
+				f.pc = 3
+				continue
+			}
+			f.pc = 24
+			continue
+		case 24:
+			if f.lane2 < d.HeadDim {
+				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(acc[tr.ReadAt(2, int(f.lane2))] / f.l7)
 			}
 			return false
 		}
@@ -775,7 +824,7 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "0a07a0af6b79a784230110e9ff378e69",
+	Digest:    "dced04494104f851b148994d5dcc070b",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -804,67 +853,85 @@ kernel void AttentionDecode(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     threadgroup float scores[128];
     threadgroup float red[128];
+    threadgroup float acc[128];
     uint h = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
     uint group = (d.QHeads / d.KVHeads);
     uint kvHead = (h / group);
-    float s = float(0);
-    if ((lane < kvLen)) {
-        float acc = float(0);
-        for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-            float qi = q[((h * d.HeadDim) + i)];
-            float ki = k[((((lane * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
-            acc = (acc + (qi * ki));
-        }
-        s = (acc * d.Scale);
-    }
-    scores[lane] = s;
-    red[lane] = s;
-    if ((lane >= kvLen)) {
-        red[lane] = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
-        if ((lane < stride)) {
-            red[lane] = max(red[lane], red[(lane + stride)]);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    float m = red[int(0)];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float e = float(0);
-    if ((lane < kvLen)) {
-        e = precise::exp((scores[lane] - m));
-    }
-    scores[lane] = e;
-    red[lane] = e;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
-        if ((lane < stride)) {
-            red[lane] = (red[lane] + red[(lane + stride)]);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    float total = red[int(0)];
+    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    float l = float(0);
     if ((lane < d.HeadDim)) {
-        float acc = float(0);
-        for (uint j = uint(0); (j < kvLen); j = (j + uint(1))) {
-            acc = (acc + (scores[j] * v[((((j * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+        acc[lane] = float(0);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+        uint pos = (base + lane);
+        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        if ((pos < kvLen)) {
+            uint phys = (((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+            float dot = float(0);
+            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+                dot = (dot + (q[((h * d.HeadDim) + i)] * k[(phys + i)]));
+            }
+            s = (dot * d.Scale);
         }
-        out[((h * d.HeadDim) + lane)] = (acc / total);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = s;
+        red[lane] = s;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = max(red[lane], red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        float blockMax = red[int(0)];
+        float next = max(m, blockMax);
+        float alpha = precise::exp((m - next));
+        float e = float(0);
+        if ((pos < kvLen)) {
+            e = precise::exp((s - next));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = e;
+        red[lane] = e;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = (red[lane] + red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        l = ((alpha * l) + red[int(0)]);
+        m = next;
+        if ((lane < d.HeadDim)) {
+            float a = (alpha * acc[lane]);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
+                if (((base + j) < kvLen)) {
+                    a = (a + (scores[j] * v[(((((base + j) * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+            }
+            acc[lane] = a;
+        }
+    }
+    if ((lane < d.HeadDim)) {
+        out[((h * d.HeadDim) + lane)] = (acc[lane] / l);
     }
 }
 `,
-	Suspensions: 5,
-	SharedSizes: []int{128, 128},
-	SharedBytes: 1024,
+	Suspensions: 7,
+	SharedSizes: []int{128, 128, 128},
+	SharedBytes: 1536,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
 		var s1 [128]float32
 		kernelabi.Poison(s1[:])
-		return []any{&s0, &s1}
+		var s2 [128]float32
+		kernelabi.Poison(s2[:])
+		return []any{&s0, &s1, &s2}
 	},
 	Uniforms: []kernelabi.Uniform{
 		{Name: "d", Type: "AttnDims", Size: 16, Encode: func(dst []byte, v any) error {
@@ -877,7 +944,7 @@ kernel void AttentionDecode(
 			f = &attentionDecodeFrame{}
 			slot.State = f
 		}
-		return attentionDecodeCoop(t, kernelabi.UniformValue[AttnDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), f, slot, slot.Shared)
+		return attentionDecodeCoop(t, kernelabi.UniformValue[AttnDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), kernelabi.Shared[[128]float32](a, 2), f, slot, slot.Shared)
 	},
 }
 
@@ -887,24 +954,29 @@ kernel void AttentionDecode(
 // is a superset of the right answer and therefore correct, and a liveness
 // analysis can shrink it later without changing anything a caller sees.
 type attentionDecodeF16Frame struct {
-	pc       int
-	h0       uint32
-	kvLen1   uint32
-	lane2    uint32
-	group3   uint32
-	kvHead4  uint32
-	s5       float32
-	acc6     float32
-	i7       uint32
-	qi8      float32
-	ki9      float32
-	stride10 uint32
-	m11      float32
-	e12      float32
-	stride13 uint32
-	total14  float32
-	acc15    float32
-	j16      uint32
+	pc         int
+	h0         uint32
+	kvLen1     uint32
+	lane2      uint32
+	group3     uint32
+	kvHead4    uint32
+	capacity5  uint32
+	m6         float32
+	l7         float32
+	base8      uint32
+	pos9       uint32
+	s10        float32
+	phys11     uint32
+	dot12      float32
+	i13        uint32
+	stride14   uint32
+	blockMax15 float32
+	next16     float32
+	alpha17    float32
+	e18        float32
+	stride19   uint32
+	a20        float32
+	j21        uint32
 }
 
 // attentionDecodeF16Coop runs one invocation of AttentionDecodeF16 to its next suspension point.
@@ -913,7 +985,7 @@ type attentionDecodeF16Frame struct {
 // the scheduler stops calling it. Each case is one state; the assignment to
 // pc before continuing is the jump, which is explicit because a loop's states
 // do not run in numeric order.
-func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.Float16, v []accel.Float16, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, f *attentionDecodeF16Frame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.Float16, v []accel.Float16, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, acc *[128]float32, f *attentionDecodeF16Frame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
 	for {
 		switch f.pc {
 		case 0:
@@ -922,26 +994,12 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			f.lane2 = t.LocalID().X
 			f.group3 = (d.QHeads / d.KVHeads)
 			f.kvHead4 = (f.h0 / f.group3)
-			f.s5 = float32(0)
-			if f.lane2 < f.kvLen1 {
-				f.acc6 = float32(0)
-				{
-					f.i7 = uint32(0)
-					for ; f.i7 < d.HeadDim; f.i7 = (f.i7 + uint32(1)) {
-						f.qi8 = q[((f.h0 * d.HeadDim) + f.i7)]
-						f.ki9 = k[((((f.lane2 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim)) + f.i7)].F32()
-						f.acc6 = float32(f.acc6 + float32(f.qi8*f.ki9))
-					}
-				}
-				f.s5 = float32(f.acc6 * d.Scale)
-			}
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.s5
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s5
-			if f.lane2 >= f.kvLen1 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.capacity5 = (uint32(int32(len(k))) / (d.KVHeads * d.HeadDim))
+			f.m6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.l7 = float32(0)
+			if f.lane2 < d.HeadDim {
+				tr.Write(2, int(f.lane2))
+				acc[f.lane2] = float32(0)
 			}
 			f.pc = 1
 			continue
@@ -950,13 +1008,22 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: ""}
 			return true
 		case 2:
-			f.stride10 = uint32(64)
-			f.pc = 6
+			f.base8 = uint32(0)
+			f.pc = 23
 			continue
 		case 3:
-			if f.lane2 < f.stride10 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride10)))])
+			f.pos9 = (f.base8 + f.lane2)
+			f.s10 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			if f.pos9 < f.kvLen1 {
+				f.phys11 = (((f.pos9 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.dot12 = float32(0)
+				{
+					f.i13 = uint32(0)
+					for ; f.i13 < d.HeadDim; f.i13 = (f.i13 + uint32(1)) {
+						f.dot12 = float32(f.dot12 + float32(q[((f.h0*d.HeadDim)+f.i13)]*k[(f.phys11+f.i13)].F32()))
+					}
+				}
+				f.s10 = float32(f.dot12 * d.Scale)
 			}
 			f.pc = 4
 			continue
@@ -965,47 +1032,49 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: ""}
 			return true
 		case 5:
-			f.stride10 = (f.stride10 / uint32(2))
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.s10
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.s10
 			f.pc = 6
 			continue
 		case 6:
-			if f.stride10 > uint32(0) {
-				f.pc = 3
-				continue
-			}
 			f.pc = 7
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: ""}
+			return true
 		case 7:
-			f.m11 = red[tr.ReadAt(1, int(int32(0)))]
-			f.pc = 8
+			f.stride14 = uint32(64)
+			f.pc = 11
 			continue
 		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: ""}
-			return true
-		case 9:
-			f.e12 = float32(0)
-			if f.lane2 < f.kvLen1 {
-				f.e12 = kmath.Exp(float32(scores[tr.ReadAt(0, int(f.lane2))] - f.m11))
+			if f.lane2 < f.stride14 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride14)))])
 			}
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e12
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e12
-			f.pc = 10
+			f.pc = 9
 			continue
-		case 10:
-			f.pc = 11
-			frame.Barrier = kernelabi.BarrierID{Index: 10, Pos: ""}
+		case 9:
+			f.pc = 10
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: ""}
 			return true
+		case 10:
+			f.stride14 = (f.stride14 / uint32(2))
+			f.pc = 11
+			continue
 		case 11:
-			f.stride13 = uint32(64)
-			f.pc = 15
+			if f.stride14 > uint32(0) {
+				f.pc = 8
+				continue
+			}
+			f.pc = 12
 			continue
 		case 12:
-			if f.lane2 < f.stride13 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride13)))])
+			f.blockMax15 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next16 = kmath.Max(f.m6, f.blockMax15)
+			f.alpha17 = kmath.Exp(float32(f.m6 - f.next16))
+			f.e18 = float32(0)
+			if f.pos9 < f.kvLen1 {
+				f.e18 = kmath.Exp(float32(f.s10 - f.next16))
 			}
 			f.pc = 13
 			continue
@@ -1014,27 +1083,74 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: ""}
 			return true
 		case 14:
-			f.stride13 = (f.stride13 / uint32(2))
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e18
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e18
 			f.pc = 15
 			continue
 		case 15:
-			if f.stride13 > uint32(0) {
-				f.pc = 12
+			f.pc = 16
+			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: ""}
+			return true
+		case 16:
+			f.stride19 = uint32(64)
+			f.pc = 20
+			continue
+		case 17:
+			if f.lane2 < f.stride19 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride19)))])
+			}
+			f.pc = 18
+			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: ""}
+			return true
+		case 19:
+			f.stride19 = (f.stride19 / uint32(2))
+			f.pc = 20
+			continue
+		case 20:
+			if f.stride19 > uint32(0) {
+				f.pc = 17
 				continue
 			}
-			f.pc = 16
+			f.pc = 21
 			continue
-		case 16:
-			f.total14 = red[tr.ReadAt(1, int(int32(0)))]
+		case 21:
+			f.l7 = float32(float32(f.alpha17*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m6 = f.next16
 			if f.lane2 < d.HeadDim {
-				f.acc15 = float32(0)
+				f.a20 = (f.alpha17 * acc[tr.ReadAt(2, int(f.lane2))])
 				{
-					f.j16 = uint32(0)
-					for ; f.j16 < f.kvLen1; f.j16 = (f.j16 + uint32(1)) {
-						f.acc15 = float32(f.acc15 + float32(scores[tr.ReadAt(0, int(f.j16))]*v[((((f.j16*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+					f.j21 = uint32(0)
+					for ; f.j21 < uint32(128); f.j21 = (f.j21 + uint32(1)) {
+						if (f.base8 + f.j21) < f.kvLen1 {
+							f.a20 = float32(f.a20 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[(((((f.base8+f.j21)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
 					}
 				}
-				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.acc15 / f.total14)
+				tr.Write(2, int(f.lane2))
+				acc[f.lane2] = f.a20
+			}
+			f.pc = 22
+			continue
+		case 22:
+			f.base8 = (f.base8 + uint32(128))
+			f.pc = 23
+			continue
+		case 23:
+			if f.base8 < f.capacity5 {
+				f.pc = 3
+				continue
+			}
+			f.pc = 24
+			continue
+		case 24:
+			if f.lane2 < d.HeadDim {
+				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(acc[tr.ReadAt(2, int(f.lane2))] / f.l7)
 			}
 			return false
 		}
@@ -1053,7 +1169,7 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "e73b37d6c8a0a36359986175d648b00b",
+	Digest:    "6e994db28d9e1a30b128e2b65f4a4e9f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1082,67 +1198,85 @@ kernel void AttentionDecodeF16(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     threadgroup float scores[128];
     threadgroup float red[128];
+    threadgroup float acc[128];
     uint h = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
     uint group = (d.QHeads / d.KVHeads);
     uint kvHead = (h / group);
-    float s = float(0);
-    if ((lane < kvLen)) {
-        float acc = float(0);
-        for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-            float qi = q[((h * d.HeadDim) + i)];
-            float ki = float(k[((((lane * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]);
-            acc = (acc + (qi * ki));
-        }
-        s = (acc * d.Scale);
-    }
-    scores[lane] = s;
-    red[lane] = s;
-    if ((lane >= kvLen)) {
-        red[lane] = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
-        if ((lane < stride)) {
-            red[lane] = max(red[lane], red[(lane + stride)]);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    float m = red[int(0)];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float e = float(0);
-    if ((lane < kvLen)) {
-        e = precise::exp((scores[lane] - m));
-    }
-    scores[lane] = e;
-    red[lane] = e;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
-        if ((lane < stride)) {
-            red[lane] = (red[lane] + red[(lane + stride)]);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    float total = red[int(0)];
+    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    float l = float(0);
     if ((lane < d.HeadDim)) {
-        float acc = float(0);
-        for (uint j = uint(0); (j < kvLen); j = (j + uint(1))) {
-            acc = (acc + (scores[j] * float(v[((((j * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+        acc[lane] = float(0);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+        uint pos = (base + lane);
+        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        if ((pos < kvLen)) {
+            uint phys = (((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+            float dot = float(0);
+            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+                dot = (dot + (q[((h * d.HeadDim) + i)] * float(k[(phys + i)])));
+            }
+            s = (dot * d.Scale);
         }
-        out[((h * d.HeadDim) + lane)] = (acc / total);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = s;
+        red[lane] = s;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = max(red[lane], red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        float blockMax = red[int(0)];
+        float next = max(m, blockMax);
+        float alpha = precise::exp((m - next));
+        float e = float(0);
+        if ((pos < kvLen)) {
+            e = precise::exp((s - next));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = e;
+        red[lane] = e;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = (red[lane] + red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        l = ((alpha * l) + red[int(0)]);
+        m = next;
+        if ((lane < d.HeadDim)) {
+            float a = (alpha * acc[lane]);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
+                if (((base + j) < kvLen)) {
+                    a = (a + (scores[j] * float(v[(((((base + j) * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+            }
+            acc[lane] = a;
+        }
+    }
+    if ((lane < d.HeadDim)) {
+        out[((h * d.HeadDim) + lane)] = (acc[lane] / l);
     }
 }
 `,
-	Suspensions: 5,
-	SharedSizes: []int{128, 128},
-	SharedBytes: 1024,
+	Suspensions: 7,
+	SharedSizes: []int{128, 128, 128},
+	SharedBytes: 1536,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
 		var s1 [128]float32
 		kernelabi.Poison(s1[:])
-		return []any{&s0, &s1}
+		var s2 [128]float32
+		kernelabi.Poison(s2[:])
+		return []any{&s0, &s1, &s2}
 	},
 	Uniforms: []kernelabi.Uniform{
 		{Name: "d", Type: "AttnDims", Size: 16, Encode: func(dst []byte, v any) error {
@@ -1155,7 +1289,7 @@ kernel void AttentionDecodeF16(
 			f = &attentionDecodeF16Frame{}
 			slot.State = f
 		}
-		return attentionDecodeF16Coop(t, kernelabi.UniformValue[AttnDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[accel.Float16](a, 1), kernelabi.Slice[accel.Float16](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), f, slot, slot.Shared)
+		return attentionDecodeF16Coop(t, kernelabi.UniformValue[AttnDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[accel.Float16](a, 1), kernelabi.Slice[accel.Float16](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), kernelabi.Shared[[128]float32](a, 2), f, slot, slot.Shared)
 	},
 }
 

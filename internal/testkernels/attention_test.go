@@ -6,9 +6,11 @@ package testkernels_test
 
 import (
 	"fmt"
-	"golang.design/x/accel/kernelabi"
 	"math"
+	"math/rand/v2"
 	"testing"
+
+	"golang.design/x/accel/kernelabi"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/kernel"
@@ -250,12 +252,13 @@ func TestAuthoredAttentionDecode(t *testing.T) {
 	authored := make([]float32, qHeads*headDim)
 	size := kernel.ID3{X: 128, Y: 1, Z: 1}
 	for h := range uint32(qHeads) {
-		var scores, red [128]float32
+		var scores, red, acc [128]float32
 		kernelabi.Poison(scores[:])
 		kernelabi.Poison(red[:])
+		kernelabi.Poison(acc[:])
 		kernel.RunAuthored(size, kernel.ID3{X: h}, kernel.ID3{X: qHeads}, 128,
 			func(th kernel.Thread) {
-				testkernels.AttentionDecode(th, d, q, k, v, lengths, authored, &scores, &red)
+				testkernels.AttentionDecode(th, d, q, k, v, lengths, authored, &scores, &red, &acc)
 			})
 	}
 
@@ -287,18 +290,102 @@ func TestAuthoredAttentionDecode(t *testing.T) {
 // arrays and the suspension count.
 func TestTheAttentionKernelDeclaresItsShape(t *testing.T) {
 	k := &testkernels.AttentionDecodeKernel
-	if len(k.SharedSizes) != 2 {
-		t.Fatalf("it declares %v shared arrays, want two: the scores and the "+
-			"reduction scratch", k.SharedSizes)
+	if len(k.SharedSizes) != 3 {
+		t.Fatalf("it declares %v shared arrays, want three: the scores, the "+
+			"reduction scratch, and the output accumulator the block loop carries",
+			k.SharedSizes)
 	}
 	for i, n := range k.SharedSizes {
-		if n != testkernels.AttnMaxKV {
-			t.Errorf("shared array %d has extent %d, want %d", i, n, testkernels.AttnMaxKV)
+		if n != testkernels.AttnBlock {
+			t.Errorf("shared array %d has extent %d, want %d", i, n, testkernels.AttnBlock)
 		}
 	}
 	// Two trees and the barriers around them, counted in the source: a barrier
 	// inside a loop counts once however many rounds it runs.
-	if got := k.Suspensions; got != 5 {
-		t.Errorf("it has %d suspension points, want 5", got)
+	//
+	// Seven, and two of them are the block loop's. One publishes the zeroed
+	// accumulator before the first pass reads it. The other stands at the top
+	// of the loop body, where it separates a pass's writes to the shared arrays
+	// from the previous pass's reads of them -- the hazard a single-pass kernel
+	// did not have and the one nothing else would report, since the CPU
+	// backend's rendezvous check finds an invocation that fails to arrive and
+	// this would be a race between arrivals.
+	if got := k.Suspensions; got != 7 {
+		t.Errorf("it has %d suspension points, want 7", got)
 	}
 }
+
+// A cache longer than one workgroup, which is the whole point of the block
+// loop: before it, `Attention` refused any cache past 128 positions and no
+// model was servable (accel issue 8).
+//
+// # The tolerance is derived, not chosen
+//
+// The reference accumulates in float64 and the kernel in float32. Each output
+// element is a sum of kvLen products followed by one division, so the rounding
+// is bounded by the usual γₙ = nu/(1-nu) for n = kvLen + headDim + 1 terms at
+// u = 2⁻²⁴. The running softmax adds one multiply per block to each carried
+// term, which is at most ceil(kvLen/AttnBlock) more roundings. The scores are a
+// convex combination, so the result is bounded by max|v| and the absolute error
+// by that times γ.
+func TestAttentionDecodeScoresACacheLongerThanAWorkgroup(t *testing.T) {
+	for _, kvLen := range []uint32{129, 300, 512} {
+		t.Run(fmt.Sprint(kvLen), func(t *testing.T) {
+			const qHeads, kvHeads, headDim = 4, 2, 32
+			// Capacity is a whole number of blocks and longer than kvLen, so
+			// the last block is partly masked and one block is entirely past
+			// the end -- both of the cases the mask has to get right.
+			capacity := ((kvLen+AttnBlockT-1)/AttnBlockT + 1) * AttnBlockT
+
+			d := testkernels.AttnDims{
+				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+				Scale: 1 / float32(math.Sqrt(headDim)),
+			}
+			rng := rand.New(rand.NewPCG(9, 4))
+			fill := func(n int) []float32 {
+				s := make([]float32, n)
+				for i := range s {
+					s[i] = float32(rng.NormFloat64())
+				}
+				return s
+			}
+			q := fill(qHeads * headDim)
+			k := fill(int(capacity) * kvHeads * headDim)
+			v := fill(int(capacity) * kvHeads * headDim)
+			lengths := []uint32{kvLen}
+
+			got := make([]float32, qHeads*headDim)
+			if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
+				accel.ID3{X: qHeads},
+				kernelabi.Args{
+					Slices:   []any{q, k, v, lengths, got},
+					Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+
+			want := composedAttention(d, kvLen, q, k, v)
+
+			// The derived bound, evaluated for this case.
+			const u = 1.0 / (1 << 24)
+			n := float64(kvLen+headDim+1) + math.Ceil(float64(kvLen)/AttnBlockT)
+			gamma := n * u / (1 - n*u)
+			maxV := 0.0
+			for _, x := range v {
+				maxV = math.Max(maxV, math.Abs(float64(x)))
+			}
+			tol := maxV * gamma
+
+			for i := range got {
+				if diff := math.Abs(float64(got[i]) - want[i]); diff > tol {
+					t.Fatalf("element %d is %v, want %v: off by %g, and the derived "+
+						"bound for %d positions is %g", i, got[i], want[i], diff, kvLen, tol)
+				}
+			}
+		})
+	}
+}
+
+// AttnBlockT is [testkernels.AttnBlock] as an untyped constant, so the
+// arithmetic above reads as arithmetic.
+const AttnBlockT = testkernels.AttnBlock

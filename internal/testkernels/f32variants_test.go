@@ -220,10 +220,10 @@ func TestTheNewVariantsMatchTheirAuthoredForms(t *testing.T) {
 		size := kernel.ID3{X: 128, Y: 1, Z: 1}
 		groups := kernel.ID3{X: qHeads, Y: 1, Z: 1}
 		for g := range groups.X {
-			var scores, red [128]float32
+			var scores, red, acc [128]float32
 			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionDecodeF16(th, d, q, k16, v16, lengths, authored,
-					&scores, &red)
+					&scores, &red, &acc)
 			})
 		}
 
