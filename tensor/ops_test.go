@@ -494,9 +494,11 @@ func TestOperatorRefusals(t *testing.T) {
 		},
 		want: "x has 4 rows and positions holds 1",
 	}, {
-		name:  "a MatMul of f32 operands",
-		build: func(b *tensor.Builder) { tensor.MatMul(b, f32(b, "x", 4, 8), f32(b, "w", 8, 4)) },
-		want:  "010-kernel-corpus.md owns an f32 variant",
+		name: "a MatMul of mixed dtypes",
+		build: func(b *tensor.Builder) {
+			tensor.MatMul(b, f32(b, "x", 4, 8), f16(b, "w", 8, 4))
+		},
+		want: "one kernel reads both, so they share a dtype",
 	}, {
 		name:  "contracted axes that disagree",
 		build: func(b *tensor.Builder) { tensor.MatMul(b, f16(b, "x", 4, 8), f16(b, "w", 5, 4)) },

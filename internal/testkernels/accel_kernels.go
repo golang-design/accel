@@ -2680,6 +2680,219 @@ kernel void MatMulTiled(
 	},
 }
 
+// matMulTiledF32Frame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type matMulTiledF32Frame struct {
+	pc    int
+	lx0   uint32
+	ly1   uint32
+	tid2  uint32
+	row3  uint32
+	col4  uint32
+	acc5  float32
+	zero6 float32
+	k07   uint32
+	kk8   uint32
+	nn9   uint32
+	kk210 uint32
+	k11   uint32
+	av12  float32
+	bv13  float32
+}
+
+// matMulTiledF32Coop runs one invocation of MatMulTiledF32 to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func matMulTiledF32Coop(t accel.Thread, d GEMMDims, a []float32, b []float32, out []float32, tileA *[128]float32, tileB *[256]float32, f *matMulTiledF32Frame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lx0 = t.LocalID().X
+			f.ly1 = t.LocalID().Y
+			f.tid2 = ((f.ly1 * uint32(16)) + f.lx0)
+			f.row3 = ((t.GroupID().Y * uint32(8)) + f.ly1)
+			f.col4 = ((t.GroupID().X * uint32(16)) + f.lx0)
+			f.acc5 = float32(0)
+			f.zero6 = float32(0)
+			f.pc = 1
+			continue
+		case 1:
+			f.k07 = uint32(0)
+			f.pc = 7
+			continue
+		case 2:
+			if (f.row3 < d.M) && ((f.k07 + f.lx0) < d.K) {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = a[(((f.row3 * d.K) + f.k07) + f.lx0)]
+			} else {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = f.zero6
+			}
+			f.kk8 = (f.tid2 / uint32(16))
+			f.nn9 = (f.tid2 % uint32(16))
+			if ((f.k07 + f.kk8) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = b[((((f.k07 + f.kk8) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)]
+			} else {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = f.zero6
+			}
+			f.kk210 = (f.kk8 + uint32(8))
+			if ((f.k07 + f.kk210) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = b[((((f.k07 + f.kk210) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)]
+			} else {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = f.zero6
+			}
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "gemm.go:163:3"}
+			return true
+		case 4:
+			{
+				f.k11 = uint32(0)
+				for ; f.k11 < uint32(16); f.k11 = (f.k11 + uint32(1)) {
+					f.av12 = tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k11)))]
+					f.bv13 = tileB[tr.ReadAt(1, int(((f.k11*uint32(16))+f.lx0)))]
+					f.acc5 = float32(f.acc5 + float32(f.av12*f.bv13))
+				}
+			}
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "gemm.go:173:3"}
+			return true
+		case 6:
+			f.k07 = (f.k07 + uint32(16))
+			f.pc = 7
+			continue
+		case 7:
+			if f.k07 < d.K {
+				f.pc = 2
+				continue
+			}
+			f.pc = 8
+			continue
+		case 8:
+			if (f.row3 < d.M) && (f.col4 < d.N) {
+				out[((f.row3 * d.N) + f.col4)] = f.acc5
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// MatMulTiledF32Kernel is the compiled form of MatMulTiledF32.
+var MatMulTiledF32Kernel = kernelabi.Kernel{
+	Name:          "MatMulTiledF32",
+	WorkgroupSize: accel.ID3{X: 16, Y: 8, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "a", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "4943973cd85e4ba6eb67268c9557f29d",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GEMMDims {
+    uint M;
+    uint N;
+    uint K;
+    char _tail[4];
+};
+
+kernel void MatMulTiledF32(
+    const device float *a [[buffer(0)]],
+    const device float *b [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant GEMMDims &d [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float tileA[128];
+    threadgroup float tileB[256];
+    uint lx = _lid.x;
+    uint ly = _lid.y;
+    uint tid = ((ly * uint(16)) + lx);
+    uint row = ((_wid.y * uint(8)) + ly);
+    uint col = ((_wid.x * uint(16)) + lx);
+    float acc = float(0);
+    float zero = float(0);
+    for (uint k0 = uint(0); (k0 < d.K); k0 = (k0 + uint(16))) {
+        if (((row < d.M) && ((k0 + lx) < d.K))) {
+            tileA[tid] = a[(((row * d.K) + k0) + lx)];
+        } else {
+            tileA[tid] = zero;
+        }
+        uint kk = (tid / uint(16));
+        uint nn = (tid % uint(16));
+        if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[tid] = zero;
+        }
+        uint kk2 = (kk + uint(8));
+        if ((((k0 + kk2) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+            tileB[(tid + uint(128))] = b[((((k0 + kk2) * d.N) + (_wid.x * uint(16))) + nn)];
+        } else {
+            tileB[(tid + uint(128))] = zero;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
+            float av = tileA[((ly * uint(16)) + k)];
+            float bv = tileB[((k * uint(16)) + lx)];
+            acc = (acc + (av * bv));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (((row < d.M) && (col < d.N))) {
+        out[((row * d.N) + col)] = acc;
+    }
+}
+`,
+	Suspensions: 2,
+	SharedSizes: []int{128, 256},
+	SharedBytes: 1536,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		var s1 [256]float32
+		kernelabi.Poison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "GEMMDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, GEMMDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*matMulTiledF32Frame)
+		if f == nil {
+			f = &matMulTiledF32Frame{}
+			slot.State = f
+		}
+		return matMulTiledF32Coop(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[256]float32](a, 1), f, slot, slot.Shared)
+	},
+}
+
 // matVecFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -6444,6 +6657,7 @@ var Kernels = []*kernelabi.Kernel{
 	&ScatterRowsKernel,
 	&RoPEKernel,
 	&MatMulTiledKernel,
+	&MatMulTiledF32Kernel,
 	&MatVecKernel,
 	&LinearTiledKernel,
 	&RMSNormKernel,

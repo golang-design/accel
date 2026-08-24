@@ -254,6 +254,18 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The same shape with f32 operands. Bit-exact for the same reason
+			// the f16 one is: both accumulate f32 in the same order, and the
+			// tiles differ only in what they hold.
+			kernel:   &testkernels.MatMulTiledF32Kernel,
+			counts:   []int{9 * 23, 23 * 19, 9 * 19},
+			uniforms: []any{testkernels.GEMMDims{M: 9, N: 19, K: 23}},
+			groups: accel.WorkgroupCount{
+				X: (19 + testkernels.TileN - 1) / testkernels.TileN,
+				Y: (9 + testkernels.TileM - 1) / testkernels.TileM,
+			},
+		},
+		{
 			kernel: &testkernels.LinearTiledKernel, counts: []int{9 * 23, 23 * 19, 19, 9 * 19},
 			uniforms: []any{testkernels.GEMMDims{M: 9, N: 19, K: 23}},
 			groups: accel.WorkgroupCount{

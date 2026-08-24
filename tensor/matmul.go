@@ -41,10 +41,18 @@ func matShape(b *Builder, op string, x, w *Tensor) (m, n, k int, ok bool) {
 			x.shape, w.shape, x.shape[1], w.shape[0])
 		return 0, 0, 0, false
 	}
-	if x.dtype != accel.F16 || w.dtype != accel.F16 {
-		b.fail(2, op, "operands are %v and %v; the registered GEMM reads f16 and "+
-			"accumulates in f32, and specs/010-kernel-corpus.md owns an f32 variant",
-			x.dtype, w.dtype)
+	if x.dtype != w.dtype {
+		b.fail(2, op, "operands are %v and %v; one kernel reads both, so they share a "+
+			"dtype -- Cast one of them", x.dtype, w.dtype)
+		return 0, 0, 0, false
+	}
+	// Both widths, because a consumer reported the cost of only having f16:
+	// every other operator here is f32, so a transformer cast before each
+	// projection and back after -- seven casts per layer, each a full pass over
+	// the activations that existed only to satisfy this check.
+	if x.dtype != accel.F16 && x.dtype != accel.F32 {
+		b.fail(2, op, "operands are %v; the registered GEMMs read f16 or f32 and "+
+			"accumulate in f32", x.dtype)
 		return 0, 0, 0, false
 	}
 	return x.shape[0], w.shape[1], x.shape[1], true
@@ -80,7 +88,12 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 	// The one selection v0 makes. A matrix-vector product has one output row,
 	// so a tile eight rows tall would leave seven idle; the M=1 kernel gives
 	// each output column a workgroup instead.
-	if m == 1 {
+	//
+	// Only for f16, because the matrix-vector kernel is f16 and a second
+	// variant of it would be a kernel added for a shape the tiled one already
+	// computes correctly. The f32 path takes the tile and Selections says the
+	// rows are idle, which is the cost reported rather than hidden.
+	if m == 1 && x.dtype == accel.F16 {
 		return b.record(node{
 			op: "MatMul", inputs: []*Tensor{x, w}, kernel: &testkernels.MatVecKernel,
 			uniform: func(map[string]ScalarValue) any { return dims },
@@ -93,13 +106,25 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 				"rows idle", testkernels.TileM, testkernels.TileM-1)},
 		}, accel.F32, Shape{m, n})
 	}
+	gemm := &testkernels.MatMulTiledKernel
+	why := fmt.Sprintf("the portable tiled GEMM over a %dx%d output, in %dx%d tiles",
+		m, n, testkernels.TileM, testkernels.TileN)
+	rejected := []string{"the matrix-vector kernel: it applies only at M=1"}
+	if x.dtype == accel.F32 {
+		gemm = &testkernels.MatMulTiledF32Kernel
+		why = fmt.Sprintf("the tiled GEMM over f32 operands, a %dx%d output in %dx%d tiles",
+			m, n, testkernels.TileM, testkernels.TileN)
+		if m == 1 {
+			rejected = []string{fmt.Sprintf("the matrix-vector kernel: it reads f16, so "+
+				"%d of this tile's %d rows are idle", testkernels.TileM-1, testkernels.TileM)}
+		}
+	}
 	return b.record(node{
-		op: "MatMul", inputs: []*Tensor{x, w}, kernel: &testkernels.MatMulTiledKernel,
-		uniform: func(map[string]ScalarValue) any { return dims },
-		grid:    gemmGrid(m, n),
-		reason: fmt.Sprintf("the portable tiled GEMM over a %dx%d output, in %dx%d tiles",
-			m, n, testkernels.TileM, testkernels.TileN),
-		rejected: []string{"the matrix-vector kernel: it applies only at M=1"},
+		op: "MatMul", inputs: []*Tensor{x, w}, kernel: gemm,
+		uniform:  func(map[string]ScalarValue) any { return dims },
+		grid:     gemmGrid(m, n),
+		reason:   why,
+		rejected: rejected,
 	}, accel.F32, Shape{m, n})
 }
 
@@ -115,6 +140,12 @@ func Linear(b *Builder, x, w, bias *Tensor) *Tensor {
 	m, n, k, ok := matShape(b, "Linear", x, w)
 	if !ok {
 		return b.poison()
+	}
+	if x.dtype != accel.F16 {
+		return b.fail(1, "Linear", "operands are %v and the fused epilogue reads f16; the "+
+			"composed form -- MatMul then Add -- takes f32 and is the reference this "+
+			"kernel is checked against, so it is the right answer here rather than a "+
+			"second fused variant", x.dtype)
 	}
 	if bias.dtype != accel.F32 {
 		return b.fail(1, "Linear", "the bias is %v and the epilogue adds in f32", bias.dtype)
