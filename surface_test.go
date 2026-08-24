@@ -332,3 +332,82 @@ func TestAFramePresentsOnce(t *testing.T) {
 		t.Fatal("a frame was presented twice")
 	}
 }
+
+// A slot too small for the render area is refused, and refused at the
+// declaration rather than at execution.
+//
+// The build check was written as "check the size unless it is a slot" when
+// slots became attachable, which is the exemption shape
+// specs/009-sequencing.md records twice. It turns out the slot access
+// declaration catches this first, with a better message because it is closer to
+// the call -- so the build check is defence rather than the only guard. This
+// asserts the message a caller actually sees.
+func TestAnUndersizedSlotAttachmentIsRefused(t *testing.T) {
+	d := openDevice(t)
+	r := d.NewRecorder()
+	small := r.Slot(accel.SlotDescriptor{
+		Name: "too small", Kind: accel.BindingStorageBuffer,
+		DType: accel.F32, Access: accel.AccessWrite, MinCount: 4,
+	})
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{Slot: small, Load: accel.LoadClear}},
+		Width: 64, Height: 64, Label: "undersized",
+	})
+	p.SetPipeline(solidPipeline(t, d))
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err == nil {
+		_ = g.Close()
+		t.Fatal("a slot far too small for the render area was accepted")
+	}
+	if !strings.Contains(err.Error(), `slot "too small" is declared to hold at least`) {
+		t.Errorf("the error should compare what the slot promises with what the pass "+
+			"uses, got %v", err)
+	}
+}
+
+// An attachment names one resource or one slot, and neither or both is refused.
+func TestAnAttachmentNamesExactlyOneResource(t *testing.T) {
+	d := openDevice(t)
+	target := newBuffer(t, d, "target", 4*4*4,
+		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+
+	for _, c := range []struct {
+		name string
+		att  func(r *accel.Recorder) accel.ColorAttachment
+		says string
+	}{{
+		name: "neither",
+		att:  func(*accel.Recorder) accel.ColorAttachment { return accel.ColorAttachment{} },
+		says: "names no resource",
+	}, {
+		name: "both",
+		att: func(r *accel.Recorder) accel.ColorAttachment {
+			s := r.Slot(accel.SlotDescriptor{
+				Name: "s", Kind: accel.BindingStorageBuffer, DType: accel.F32,
+				Access: accel.AccessWrite, MinCount: 64,
+			})
+			return accel.ColorAttachment{View: whole(t, target), Slot: s}
+		},
+		says: "names both a resource and a slot",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			r := d.NewRecorder()
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{c.att(r)},
+				Width: 4, Height: 4, Label: "ambiguous",
+			})
+			p.SetPipeline(solidPipeline(t, d))
+			p.Draw(accel.Draw{VertexCount: 3})
+			g, err := r.Build()
+			if err == nil {
+				_ = g.Close()
+				t.Fatal("an ambiguous attachment was accepted")
+			}
+			if !strings.Contains(err.Error(), c.says) {
+				t.Errorf("the error should say %q, got %v", c.says, err)
+			}
+		})
+	}
+}

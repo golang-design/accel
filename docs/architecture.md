@@ -251,14 +251,17 @@ kernels with shared memory and barriers; a portable tiled GEMM; and the tensor
 layer above it, with quantized weights, sampling, a paged KV cache, and prefill
 and decode attention. Subgroup shuffles and scans are specified and not built.
 
-Graphics draws its first triangle. A render pipeline, a render pass node with
-load and store actions, and a draw go through the graph to the CPU reference
-rasterizer, and an offscreen target comes back with the right pixels in it. What
-is not there is most of the rest: a stage computes its own vertex positions
-because no vertex buffer reaches one, no stage takes a by-value parameter, there
-is no surface to present to, and Metal has no render path. If you need
-rasterization today, this is not it. Neither are the Vulkan, D3D12, OpenGL and
-WebGPU backends.
+Graphics runs a frame. A render pipeline, a pass node with load and store
+actions, vertex and index buffers, per-vertex and per-instance attributes,
+by-value stage parameters, depth testing and blending all go through the graph
+to the CPU reference rasterizer, and a headless surface rotates images through
+acquire, render and present.
+
+It runs only there. Metal has no render path, so nothing rasterizes on a GPU,
+and the surface has no window — enough to test the whole frame loop in CI, not
+enough to show anyone a picture. Indirect draws and multisampling are specified
+and unbuilt. If you need GPU rasterization today, this is not it. Neither are
+the Vulkan, D3D12, OpenGL and WebGPU backends.
 
 The row-by-row breakdown is the [status table in the
 README](../README.md#what-works-today). The order the work was done in, and the

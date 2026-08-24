@@ -1336,6 +1336,69 @@ stage declares either, naming the parameter and the deviation. Refused rather
 than passed an empty slice, because the generated adapter would index past its
 end and the diagnostic would come from the backend instead.
 
+#### A frame, end to end on the CPU backend — 2026-08-24
+
+Everything between the triangle and a frame, in one day and in this order:
+the vertex input layout, by-value stage parameters, the load-action edges,
+blend state, indexed draws, and the headless surface. What runs now is
+[034](034-surface-present.md) §1's loop, character for character:
+
+```
+ acquire ──▶ BindPresent ──▶ SubmitAfter(g, frame.Acquired) ──▶ Present(frame, fence)
+     ▲                                                                    │
+     └──────────────────── the image rotates back ────────────────────────┘
+```
+
+| Built | Where the design lives |
+| --- | --- |
+| vertex input layout, validated against the stage record | [033](033-render-api.md) §2, §2.2 |
+| by-value stage parameters, one slice per stage | [033](033-render-api.md) deviation 1 |
+| indexed draws with `BaseVertex` | [033](033-render-api.md) §4 |
+| blend state, fixed at pipeline creation | [033](033-render-api.md) §2.1 |
+| load-action edges asserted on the graph | [033](033-render-api.md) §3 |
+| headless surface, present slot, generation counter | [034](034-surface-present.md) §2, §5 |
+
+**Five bugs, and three of them share one shape.**
+
+1. **A guard written as an exemption, three times.** `Plan.Validate` demanded a
+   destination of "every op but a dispatch". `renderOperands` checked the extent
+   of "the colour attachments". `checkAttachment` checked a size "unless it is a
+   slot". Each was true when written and wrong at the first case outside its
+   shape. The rule, now stated twice in this file and worth stating once more:
+   **an exemption-shaped guard is wrong exactly once, silently, at the moment
+   something new is added.** State what the guard covers, not what it skips.
+
+2. **A field accepted and ignored, twice more.** A draw's `UniformValue.Index`
+   was dropped, and the CPU backend received `BaseVertex` and never applied it.
+   Both are the `ShuffleSeed` shape from M8: a value the caller supplies, the API
+   documents, and nothing reads. The second is the more instructive — the
+   parameter was *in the closure signature*, unused, and Go says nothing about an
+   unused function parameter.
+
+3. **A pass declared no reads for what its draws read.** §3's table requires
+   every vertex and index buffer bound by any draw to be declared; the pass node
+   declared only its attachments. The reason is structural and worth recording:
+   the node exists before any draw is recorded, so there is nothing to declare
+   when the node is made. Declaring at draw time fixed it. Until then a pass ran
+   unordered against whatever uploaded its geometry, and the picture would have
+   been right most of the time — which is the worst failure mode a hazard bug has.
+
+4. **The generator blanked its own output tree-wide.** The overlay that lets a
+   broken generated file be regenerated removed the generated declarations from
+   every *other* package too. Checking one package passed; the CI gate, which
+   checks `./...`, failed. The gap was that every local check was per-package, so
+   nothing exercised the shape the gate uses. That gate is now a test.
+
+5. **An unstaged file shipped in eight commits.** Recorded above under the
+   triangle. The guard — a clean `git status` before a push — held for every
+   batch after it.
+
+**What is not built, and why each is not merely unwritten.** Feedback rejection
+is *blocked*: a stage cannot read a texture until [032](032-stage-abi.md) §5's
+texel fetch exists, so there is no way to construct the case. The Metal render
+path waits on [032](032-stage-abi.md) §12.1's MSL stage target. Indirect draws
+and transient attachment aliasing are unbuilt with nothing in the way.
+
 #### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
 
 Two of the completed items name a follow-on, and both are already placed after

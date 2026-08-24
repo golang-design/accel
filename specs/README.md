@@ -21,9 +21,10 @@ transient aliasing; cooperative kernels with shared memory, barriers and
 atomics; a portable tiled GEMM; and the tensor layer above it, with quantized
 weights, sampling, a paged KV cache, and prefill and decode attention.
 
-Graphics is being built: its five child designs are written, and an offscreen
-triangle now renders through the public API on the CPU backend. Vertex buffers,
-by-value stage parameters, surfaces and the Metal render path are unbuilt.
+Graphics is being built: its five child designs are written, and the CPU backend
+now runs a whole frame — vertex and index buffers, attributes, by-value stage
+parameters, depth, blending, and a headless surface through acquire and present.
+The Metal render path, indirect draws and multisampling are unbuilt.
 [009](009-sequencing.md) records what has landed, in what order, and the
 deviations taken.
 
@@ -31,8 +32,8 @@ deviations taken.
 narrower than this directory: compute only, on the CPU backend and Metal.
 [005](005-graphics.md) is the parent of graphics; its five child designs are
 written — [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md), plus
-[041](041-msaa.md) — and an offscreen triangle renders on the CPU backend, which
-is the first of [035](035-cpu-rasterizer.md)'s six steps. [006](006-backends.md) specifies three remaining synchronous
+[041](041-msaa.md) — and the CPU backend renders a frame end to end, through a
+headless surface. No GPU rasterizes yet. [006](006-backends.md) specifies three remaining synchronous
 backends plus a deferred asynchronous WebGPU shape; all are unbuilt. A spec being
 here means its scope and current decisions are reviewable, not that its code is
 next.
@@ -56,7 +57,7 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 | | |
 | --- | --- |
 | Done | M0 through M7, and five of M8's seven items: quantization, sampling, the plan cache, paged KV with batching, and shared transients |
-| In progress | The CPU reference rasterizer ([035](035-cpu-rasterizer.md)), the render API that drives it ([033](033-render-api.md)), and the stage-ABI compiler work both need ([032](032-stage-abi.md)) |
+| In progress | The CPU reference rasterizer ([035](035-cpu-rasterizer.md)), the render API that drives it ([033](033-render-api.md)), the stage-ABI compiler work both need ([032](032-stage-abi.md)), and the headless half of surface/present ([034](034-surface-present.md)) |
 | Written, unbuilt | [037](037-vulkan-bringup.md) Vulkan, [038](038-spirv-target.md) SPIR-V, [039](039-sampling-policy.md) sampling policy, [040](040-batch-scheduler.md) the scheduler, [041](041-msaa.md) MSAA |
 | Not blocked, unscheduled | Vulkan — see 009's correction; it is verifiable in CI on lavapipe today |
 
@@ -80,7 +81,7 @@ numbered in.
 | [031-shared-transients.md](031-shared-transients.md) | Implemented | M8: one transient pool shared by several graphs, and the in-flight rule that makes it safe |
 | [032-stage-abi.md](032-stage-abi.md) | In progress | 005's first child: the vertex and fragment signatures, varyings, clip and depth ranges, texel fetch, and what the IR gains |
 | [033-render-api.md](033-render-api.md) | In progress | 005's second child: render pipelines, pass nodes, load/store actions, declared access, draws and indirect counts |
-| [034-surface-present.md](034-surface-present.md) | Drafted | 005's third child: swapchains, the typed present slot, resize, headless surfaces, and where the windowing line is |
+| [034-surface-present.md](034-surface-present.md) | In progress | 005's third child: swapchains, the typed present slot, resize, headless surfaces, and where the windowing line is |
 | [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | In progress | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
 | [037-vulkan-bringup.md](037-vulkan-bringup.md) | Drafted | The cgo-free Vulkan backend through purego: loader, device, memory, descriptors, submission and device loss |
 | [038-spirv-target.md](038-spirv-target.md) | Drafted | Emitting SPIR-V from the shared IR, and how a binary target with no source level is verified |

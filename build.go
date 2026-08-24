@@ -421,10 +421,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
-		if c.View.Buffer != nil {
-			if err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i), c.View, 4); err != nil {
-				return nil, err
-			}
+		if err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i),
+			c.View, c.Slot, 4); err != nil {
+			return nil, err
 		}
 		out.Color = append(out.Color, op)
 		out.ColorLoad = append(out.ColorLoad, c.Load)
@@ -435,10 +434,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
-		if p.desc.Depth.View.Buffer != nil {
-			if err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View, 1); err != nil {
-				return nil, err
-			}
+		if err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View,
+			p.desc.Depth.Slot, 1); err != nil {
+			return nil, err
 		}
 		out.Depth = &op
 		out.DepthLoad = p.desc.Depth.Load
@@ -657,12 +655,28 @@ func has(b bool) string {
 // attachment is a recording mistake and every backend would report it in its
 // own words at its own moment -- and a backend that did not check it would read
 // past the end of a buffer instead.
-func (g *Graph) checkAttachment(p *RenderPass, what string, v BufferView, components int) error {
+//
+// A slot is checked through its MinCount, which is the size check moved from
+// build to bind: whatever is bound is at least that large, so a MinCount big
+// enough for the area is a promise that every binding will be. Checking the
+// slot rather than skipping it is the point -- "check it unless it is a slot"
+// is the exemption shape that has already been wrong twice here, and a slot
+// declared four elements wide and used as a 64x64 attachment would otherwise
+// reach a backend.
+func (g *Graph) checkAttachment(p *RenderPass, what string, v BufferView, s Slot, components int) error {
 	want := p.desc.Width * p.desc.Height * components
-	if v.Count < want {
-		return fmt.Errorf("accel: Build: render pass %q %s holds %d elements and a %dx%d "+
+	have, where := v.Count, "holds"
+	if s != 0 {
+		if int(s) < 1 || int(s) > len(g.slots) {
+			return fmt.Errorf("accel: Build: render pass %q %s names slot %d of %d",
+				p.desc.Label, what, s, len(g.slots))
+		}
+		have, where = g.slots[s-1].MinCount, "declares a MinCount of"
+	}
+	if have < want {
+		return fmt.Errorf("accel: Build: render pass %q %s %s %d elements and a %dx%d "+
 			"area at %d components per pixel needs %d",
-			p.desc.Label, what, v.Count, p.desc.Width, p.desc.Height, components, want)
+			p.desc.Label, what, where, have, p.desc.Width, p.desc.Height, components, want)
 	}
 	return nil
 }

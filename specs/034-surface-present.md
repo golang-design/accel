@@ -1,6 +1,6 @@
 ---
 title: "Surfaces, acquisition, resize, and present"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -227,7 +227,27 @@ present verified on a display" are separate states in the status table. Metal's
 drawable path needs a real display session, which CI does not have, so it is
 honestly tracked as verified-on-a-machine rather than verified-in-CI.
 
-## 8. Done
+## 8. What is built — 2026-08-24
+
+The headless half, which section 5 says is the same code path: `Surface` with a
+generation counter and rotation, `Acquire` with a timeout, `PresentSlot`,
+`BindPresent` with all four of section 2's checks, `Present` taking the
+submission fence, and `Resize`. The frame loop of section 1 runs as written.
+
+**Not built:** Metal's `CAMetalLayer` drawable path, which section 7 makes its
+own claim and which waits on the Metal render path.
+
+**One behaviour this spec did not state, decided here.** `Resize` releases the
+old images while a caller may still hold a `Frame` for one, so `Frame.View`
+after a resize names a closed buffer. That is in contract rather than a defect:
+section 4.2 makes out-of-date an error at *acquire*, and a frame the caller
+already holds is one the caller was told to stop using by the resize it
+performed. A frame that outlived its generation is refused by `BindPresent`,
+which is where it would otherwise do damage, and `Present` drops it rather than
+showing it. The rule is: **a resize invalidates every frame acquired before it,
+and the loop of section 1 acquires again rather than reusing one.**
+
+## 9. Done
 
 - a graph built against a surface renders a frame and the readback matches what
   the same graph produces into an ordinary offscreen target;
@@ -246,7 +266,7 @@ honestly tracked as verified-on-a-machine rather than verified-in-CI.
 - Metal's `CAMetalLayer` drawable path presents on a machine with a display,
   tracked as its own claim.
 
-## 9. Open questions
+## 10. Open questions
 
 - **Present modes.** FIFO, mailbox, and immediate have different names and
   different availability on every backend, and the choice interacts with

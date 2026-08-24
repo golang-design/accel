@@ -397,12 +397,20 @@ backend — an offscreen triangle renders and its interior pixels match
 per instance and interpolated, `LoadClear` and `LoadKeep` differ, and a depth
 attachment is cleared, tested against and written through.
 
-**Outstanding**, and why this spec stays *in progress*: blended draw order, the
-`DontCare` edge assertions and the transient aliasing that follows from them,
-feedback rejection for an overlapping subresource, indexed draws, the N-object
-frame at recorded uniform offsets (§6), indirect draws with a device-written
-count, and the Metal render path. The list below is the whole criterion; those
-are the rows still unmet.
+Since then: the load-action edges are asserted on the graph, blended draw order
+is checked with two overlapping draws whose result depends on it, blend state is
+exposed and fixed at pipeline creation, and indexed draws with `BaseVertex` match
+the direct draw they replace.
+
+**Outstanding**, and why this spec stays *in progress*:
+
+| Row | Why it is not done |
+| --- | --- |
+| transient attachment aliasing under `DontCare` | the edges are asserted; the aliasing consequence is not |
+| feedback rejection for an overlapping subresource | **blocked**, not merely unwritten: a stage cannot read a texture at all until [032](032-stage-abi.md) §5's texel fetch exists, so there is no way to construct feedback |
+| the N-object frame at recorded uniform offsets (§6) | see deviation 1; the by-value channel answers the one-uniform case |
+| indirect draws with a device-written count (§4.2) | unbuilt |
+| the Metal render path | waits on [032](032-stage-abi.md) §12.1's MSL stage target |
 
 - a pipeline whose target count differs from its fragment stage's output field
   count is refused at creation, naming both numbers;
