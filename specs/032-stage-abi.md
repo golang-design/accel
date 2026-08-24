@@ -441,6 +441,17 @@ HLSL all do, and one spelling covers every format in 001's table. An
 integer-typed texture would be a second binding type with a second intrinsic, and
 nothing asks for one.
 
+**A short texel slice shortens the extent.** Not asked for by this section, and
+recorded because it is behaviour a caller can observe: `NewTexture2D` does not
+copy its texels — the point is that a fetch reads the pass's own attachment
+rather than a snapshot — so a slice shorter than `width*height*4` would make the
+last row index past the end. Whole rows are dropped instead, keeping the extent
+and the storage in agreement, and `Height()` reports what is actually there.
+Every coordinate past the shortened extent is out of range and returns zero,
+which is the rule this section already fixes rather than a second one. The
+alternative, letting the declared extent stand, turns a backend's bind-time
+mistake into a panic inside a fragment.
+
 **No capability.** A texel read from a float 2D texture is baseline on every
 target this project emits for. Per [020](020-cooperative-atomics.md) §3 a
 capability is inferred from the intrinsic table and never declared; this
