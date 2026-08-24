@@ -139,3 +139,137 @@ func TestTheF16AttentionMatchesTheF32OneExactly(t *testing.T) {
 			})
 	}
 }
+
+// The authored form of each new kernel agrees with its generated lowering.
+//
+// This is specs/012-kernel-pipeline.md's obligation on every kernel, and it is
+// what makes the CPU path an oracle rather than a second implementation: the
+// authored Go is the reference, the generated Go is what runs, and a
+// disagreement is a generator bug rather than a kernel one.
+//
+// Both were added as variants of kernels that already had this, and a variant
+// arriving without it would be the one kernel in the corpus whose lowering
+// nothing checks.
+func TestTheNewVariantsMatchTheirAuthoredForms(t *testing.T) {
+	t.Run("MatMulTiledF32", func(t *testing.T) {
+		// Dimensions with all three tails, so the guards are exercised rather
+		// than skipped.
+		const m, n, k = 9, 19, 23
+		a := make([]float32, m*k)
+		b := make([]float32, k*n)
+		for i := range a {
+			a[i] = float32((i%13)-6) / 4
+		}
+		for i := range b {
+			b[i] = float32((i%11)-5) / 2
+		}
+		d := testkernels.GEMMDims{M: m, N: n, K: k}
+		groups := kernel.ID3{
+			X: uint32((n + testkernels.TileN - 1) / testkernels.TileN),
+			Y: uint32((m + testkernels.TileM - 1) / testkernels.TileM),
+			Z: 1,
+		}
+		size := kernel.ID3{X: testkernels.TileN, Y: testkernels.TileM, Z: 1}
+
+		authored := make([]float32, m*n)
+		for gy := range groups.Y {
+			for gx := range groups.X {
+				var tileA [128]float32
+				var tileB [256]float32
+				kernel.RunAuthored(size, kernel.ID3{X: gx, Y: gy}, groups,
+					size.X*size.Y, func(th kernel.Thread) {
+						testkernels.MatMulTiledF32(th, d, a, b, authored, &tileA, &tileB)
+					})
+			}
+		}
+
+		generated := make([]float32, m*n)
+		err := kernel.DispatchCooperative(&testkernels.MatMulTiledF32Kernel,
+			accel.ID3{X: groups.X, Y: groups.Y, Z: 1},
+			kernelabi.Args{Slices: []any{a, b, generated}, Uniforms: []any{d}})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range authored {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d is %v authored and %v generated", i,
+					authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("AttentionDecodeF16", func(t *testing.T) {
+		const qHeads, kvHeads, headDim, kvLen = 4, 2, 8, 5
+		d := testkernels.AttnDims{
+			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+			Scale: float32(1 / math.Sqrt(headDim)),
+		}
+		lengths := []uint32{kvLen}
+		q := make([]float32, qHeads*headDim)
+		k16 := make([]accel.Float16, kvLen*kvHeads*headDim)
+		v16 := make([]accel.Float16, len(k16))
+		for i := range q {
+			q[i] = float32((i%9)-4) / 8
+		}
+		for i := range k16 {
+			k16[i] = accel.ToFloat16(float32((i%13)-6) / 4)
+			v16[i] = accel.ToFloat16(float32((i%7)-3) / 2)
+		}
+
+		authored := make([]float32, qHeads*headDim)
+		size := kernel.ID3{X: 128, Y: 1, Z: 1}
+		groups := kernel.ID3{X: qHeads, Y: 1, Z: 1}
+		for g := range groups.X {
+			var scores, red [128]float32
+			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
+				testkernels.AttentionDecodeF16(th, d, q, k16, v16, lengths, authored,
+					&scores, &red)
+			})
+		}
+
+		generated := make([]float32, qHeads*headDim)
+		err := kernel.DispatchCooperative(&testkernels.AttentionDecodeF16Kernel,
+			accel.ID3{X: qHeads},
+			kernelabi.Args{
+				Slices: []any{q, k16, v16, lengths, generated}, Uniforms: []any{d},
+			})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range authored {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d is %v authored and %v generated", i,
+					authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("Pack", func(t *testing.T) {
+		src := make([]float32, 24)
+		for i := range src {
+			src[i] = float32(i) * 1.5
+		}
+		p := testkernels.PackParams{Rank: 2, Count: 12, Offset: 2}
+		p.Extent[0], p.Extent[1] = 4, 3
+		p.Stride[0], p.Stride[1] = 1, 6
+
+		authored := make([]float32, 12)
+		for i := range uint32(12) {
+			testkernels.Pack(kernel.NewThread(
+				kernel.ID3{X: i}, kernel.ID3{X: i}, kernel.ID3{},
+				kernel.ID3{X: 12}, kernel.ID3{X: 1}), p, src, authored)
+		}
+		generated := make([]float32, 12)
+		err := kernel.Dispatch(&testkernels.PackKernel, accel.ID3{X: 12},
+			kernelabi.Args{Slices: []any{src, generated}, Uniforms: []any{p}})
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range authored {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d is %v authored and %v generated", i,
+					authored[i], generated[i])
+			}
+		}
+	})
+}
