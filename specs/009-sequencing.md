@@ -1597,6 +1597,24 @@ was not implementable, since the alias it forbids is how in-place work is
 expressed. A spec ahead of the code and a spec that overreached the code look
 identical from inside the code.
 
+**A refusal-based probe cannot see an accepted-and-wrong case, and most of these
+were that.** The consumer recorded what this library supports by building a
+graph and reading what it refused — a reasonable method, and the one that found
+five of the nine. It is blind to the largest class here: a field that is
+accepted and reaches nothing compiles, so it reads as supported. They changed
+their rule to assert a value against a host oracle and to check `Selections()`,
+and reported the method change alongside the bug, which is why it is recorded
+here rather than only in the issue.
+
+The answer on this side is `TestEveryAttentionOptionReachesTheKernelOrIsRefused`:
+setting a field must change the plan's identity or be refused, driven by
+reflection over the options struct so a field with no row fails the test. The
+reflection is the point — this defect is wrong exactly once, silently, when
+somebody adds the next field, and a hand-written list of today's fields would
+have passed on the day `Pages` was added. Its first run found a second instance
+nobody was looking for, and writing it found a third: the plan digest did not
+cover which layer of a cache a value addressed.
+
 **The wall was not the hardest report, and it was ranked last.** Issue 8 —
 `Attention` capping the cache at 128 positions — was worked after five others
 because those were the more interesting surface questions. The reporter's own
@@ -1612,6 +1630,8 @@ most orthogonal.
 | `ToFloat16` OR-ed the rounded mantissa into the exponent instead of adding it, so every value in a band below every power of two came back halved | building the f16 KV cache and seeing a 35% discrepancy | it reached weight conversion, the f16 GEMM corpus and quantization scales. The fix is an oracle over all 65536 halves, not a case |
 | the attention block loop's shared arrays are loop-carried, and a pass's writes race the previous pass's reads | reasoning, then confirmed by removing the barrier | 002 §3.4's rendezvous check finds an invocation that fails to *arrive*; this is a race between arrivals, so nothing would have reported it |
 | V23 unimplemented | binding one buffer to a read binding and a write binding of one dispatch, and watching it succeed | a check named in a spec's validation table is not evidence it exists |
+| `Attention` accepted a page table on a prefill, ignored it, and answered over the pool in order | a consumer comparing a value against a host oracle, after their refusal-based probe had recorded the case as working | the first accepted-and-silently-wrong report here. The checks lived inside the decode selection, below the prefill branch's return — a check inside one branch is a check the other branch does not have |
+| `BaseName` set on a decode was accepted and read by nothing | the generalized test written for the case above, on its first run | the same defect one field over, and it had been there since the field was added |
 | `LayerState` was refused for four milestones because "a slot binds a whole resource", which was never true — `accel.SlotBinding` takes a `BufferView` with an offset and a count | checking the claim instead of the code, when the consumer's report finally forced the question | a diagnosis nobody retests outlives the condition it described. This one was quoted into three specs and two refusal messages, and each quotation made it look better attested |
 | a timing test asserted `Elapsed > 0` for eight small dispatches, and failed on Windows only | CI, intermittently — the work finished inside one tick of a coarse monotonic clock | a duration assertion is an assertion about the *platform* unless the test knows the clock's resolution. `Elapsed == 0` also turned out to be overloaded: it means both "no timing collected" and "faster than the clock", and nothing above can tell them apart |
 | the attention block loop bounded `base` and not `base+lane`, so a length past the binding's reach was scored by the last block's lanes — reading the next sequence's page-table row, or off the end of the cache | writing the test for a claim that had already been written into two specs | a bound on a loop variable is not a bound on an index derived from it. Where a lane offsets the loop variable, the mask carries the bound |
