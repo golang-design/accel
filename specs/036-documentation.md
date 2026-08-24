@@ -208,7 +208,25 @@ types); and `tensor`, `quant`, `kmath` in full apart from §5.6's exclusions.
 "Provisional" is not a hedge. Each names the event, so a caller can decide
 whether it affects them.
 
-### 5.3 Fix before the freeze — **needs a decision**
+### 5.3 Fix before the freeze — **done 2026-08-24**
+
+All twelve landed. Three were not the naming questions they looked like:
+
+| Item | What it actually was |
+| --- | --- |
+| 10, `quant.Error` | it indexed `scales[i/Int8Block]`, a bound only where a dot product's terms are contiguous — true for a row, false for a column. The new signature takes one scale per term and panics when the counts disagree; it caught this repository's own test on the first run. |
+| 12, `AdapterID` | two open CPU devices reported equal `Info().ID` and disagreed about what they could run, because the token is a constant while `CPUStrict` resolves different capabilities. [007](007-tensor-layer.md) keys its plan cache on that identity. |
+| 7, `Buckets` | the literal `Buckets{512, 128, 256}` is unsorted and `For` searches, so a size-100 request returned 512. Sealed behind `NewBuckets`. |
+
+And item 1 exposed a migration hazard that was not on the list at all: the
+generator type-checks the package it compiles, and its own previous output is
+part of that package — so a generated file that no longer compiles after an ABI
+change makes the package fail to load, which makes the generator refuse, which
+is the one command that would have fixed it. Every downstream user of this
+release would have hit it. The file is now overlaid with its own package clause
+during the load: hidden from the type checker, left on disk, rewritten.
+
+
 
 Every one is breaking, and each costs a `go generate` or a `gofmt -r` today
 against a deprecation cycle and a tutorial rewrite later. The two that matter
