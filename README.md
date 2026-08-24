@@ -190,7 +190,7 @@ position.
 | Multiply matrices (tiled GEMM) | yes, on both backends |
 | Build a tensor graph and run inference | yes — decode and prefill, with a KV cache |
 | Use int8 quantized weights | yes |
-| Sample a token (argmax, categorical, top-k, top-p) | yes; temperature and repetition penalties are not built |
+| Sample a token (argmax, categorical, top-k, top-p) | not yet — the kernels are built and tested, and no operator reaches them |
 | Page a KV cache, and batch several sequences in one step | yes |
 | Draw triangles | yes, on both backends: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending, indexed and indirect draws |
 | Render a frame loop with acquire and present | yes, headless — the pixels come back in a buffer |
@@ -200,6 +200,12 @@ position.
 Every "yes" has tests that fail without it and an end-to-end case through the
 public API. Every kernel in the corpus runs on both backends and the two are
 compared, most of them bit for bit.
+
+That sentence is the standard this table is held to, and it has been wrong
+twice: two rows here claimed a capability whose *kernels* existed while no
+operator reached them, so nothing a caller could write would have exercised
+either. A kernel is not a capability, and this table is about what a caller can
+do.
 
 ## When it fits, and when it does not
 
