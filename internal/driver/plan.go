@@ -546,6 +546,24 @@ func (p *Plan) checkDispatch(node int, n *PlanNode) error {
 	return nil
 }
 
+// checkAttachmentFormat rejects an attachment a backend would have to decode
+// by guessing.
+//
+// A zero format and a non-positive pitch are both the shape of a struct
+// somebody half-filled, and both reach a backend as an image of the wrong size
+// in the wrong encoding rather than as an error.
+func checkAttachmentFormat(node int, which string, f Format, pitch int) error {
+	if f == FormatInvalid {
+		return fmt.Errorf("accel: plan node %d's %s names no format, so a backend would "+
+			"have to guess how to read its bytes", node, which)
+	}
+	if pitch <= 0 {
+		return fmt.Errorf("accel: plan node %d's %s has a row pitch of %d, and a pitch is "+
+			"the distance between two rows", node, which, pitch)
+	}
+	return nil
+}
+
 func (p *Plan) checkOperand(node int, which string, o Operand) error {
 	switch o.kind {
 	case OperandUnset:
@@ -577,6 +595,28 @@ type RenderPass struct {
 	// Color and Depth are the attachments, as operands.
 	Color []Operand
 	Depth *Operand
+
+	// ColorFormat and DepthFormat say how to read the bytes each operand
+	// names. Without them a backend decodes by assumption, which is what the
+	// CPU backend did -- []float32 whatever the caller declared -- and what
+	// made ColorTargetState.Format a field that reached nobody.
+	//
+	// ColorFormat is the same length as Color. DepthFormat is meaningful only
+	// when Depth is set.
+	ColorFormat []Format
+	DepthFormat Format
+
+	// ColorPitch and DepthPitch are the distance in bytes between the starts
+	// of two consecutive rows of each attachment.
+	//
+	// Carried rather than derived from the operand size and the height. A
+	// texture's rows are padded to the device's copy alignment, so the pitch
+	// is not width times bytes per pixel; and an attachment that names a
+	// subresource of a larger texture has an operand smaller than the
+	// allocation. Either one makes size/height the wrong stride, and the wrong
+	// stride shears the image rather than failing.
+	ColorPitch []int
+	DepthPitch int
 
 	// ColorLoad and DepthLoad are the load actions. The backend needs the
 	// distinction because clear is free on a tiler and a full-screen clear draw
@@ -777,13 +817,26 @@ func (p *Plan) checkRenderPass(node int, n *PlanNode) error {
 		return fmt.Errorf("accel: plan node %d is a render pass with no colour attachments",
 			node)
 	}
+	if len(r.ColorFormat) != len(r.Color) || len(r.ColorPitch) != len(r.Color) {
+		return fmt.Errorf("accel: plan node %d has %d colour attachments, %d formats and "+
+			"%d row pitches; each attachment carries one of each",
+			node, len(r.Color), len(r.ColorFormat), len(r.ColorPitch))
+	}
 	for i, c := range r.Color {
 		if err := p.checkOperand(node, fmt.Sprintf("colour attachment %d", i), c); err != nil {
+			return err
+		}
+		if err := checkAttachmentFormat(node, fmt.Sprintf("colour attachment %d", i),
+			r.ColorFormat[i], r.ColorPitch[i]); err != nil {
 			return err
 		}
 	}
 	if r.Depth != nil {
 		if err := p.checkOperand(node, "depth attachment", *r.Depth); err != nil {
+			return err
+		}
+		if err := checkAttachmentFormat(node, "depth attachment",
+			r.DepthFormat, r.DepthPitch); err != nil {
 			return err
 		}
 	}

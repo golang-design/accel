@@ -424,6 +424,12 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 	out := &driver.RenderPass{
 		Label: p.desc.Label, Width: p.desc.Width, Height: p.desc.Height,
 	}
+	// A buffer attachment's format is RGBA32Float and its rows are tight, and
+	// that is not a default: it is what a buffer attachment *is*. The view
+	// carries a dtype and the recorder sizes the access at four F32 per pixel,
+	// so the bytes are four little-endian float32 per texel with no padding,
+	// which is RGBA32Float spelled without the word. Naming it here is what
+	// lets a backend stop assuming it.
 	for i, c := range p.desc.Color {
 		op, err := g.operand(n, n.accesses[i])
 		if err != nil {
@@ -434,6 +440,8 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			return nil, err
 		}
 		out.Color = append(out.Color, op)
+		out.ColorFormat = append(out.ColorFormat, RGBA32Float.plan())
+		out.ColorPitch = append(out.ColorPitch, p.desc.Width*RGBA32Float.BytesPerPixel())
 		out.ColorLoad = append(out.ColorLoad, c.Load)
 		out.ColorStore = append(out.ColorStore, c.Store)
 		out.ColorClear = append(out.ColorClear, c.Clear)
@@ -448,6 +456,8 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			return nil, err
 		}
 		out.Depth = &op
+		out.DepthFormat = Depth32Float.plan()
+		out.DepthPitch = p.desc.Width * Depth32Float.BytesPerPixel()
 		out.DepthLoad = p.desc.Depth.Load
 		out.DepthStore = p.desc.Depth.Store
 		out.DepthClear = p.desc.Depth.Clear
