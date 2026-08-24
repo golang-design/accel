@@ -5,9 +5,11 @@
 package testkernels_test
 
 import (
-	"golang.design/x/accel/kernelabi"
 	"math"
+	"math/rand/v2"
 	"testing"
+
+	"golang.design/x/accel/kernelabi"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/kernel"
@@ -178,6 +180,89 @@ func TestTwoSequencesShareAPoolWithoutSeeingEachOther(t *testing.T) {
 				t.Fatalf("sequence B element %d is %v, and every value it cached is "+
 					"negative: it read A's blocks", i, v)
 			}
+		}
+	}
+}
+
+// A paged cache longer than one workgroup. The companion to
+// TestAttentionDecodeScoresACacheLongerThanAWorkgroup, and the case where the
+// loop bound is the one thing a paged kernel must not get from the pool: the
+// pool holds every sequence's blocks, so its extent is total concurrency rather
+// than this sequence's reach. The bound is the page table's extent times the
+// block size.
+//
+// The pool here is deliberately far larger than the sequence, and its unpaged
+// blocks hold values that would swamp the answer if they were ever read.
+func TestPagedDecodeScoresACacheLongerThanAWorkgroup(t *testing.T) {
+	const qHeads, kvHeads, headDim, block = 4, 2, 32, 8
+	const kvLen = 300
+	const pageCount = (kvLen + block - 1) / block // 38 pages -> 304 positions
+	const poolBlocks = 4 * pageCount              // the pool is much bigger
+
+	d := testkernels.PagedDims{
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, Block: block,
+		Scale: 1 / float32(math.Sqrt(headDim)),
+	}
+	rng := rand.New(rand.NewPCG(11, 7))
+	q := make([]float32, qHeads*headDim)
+	for i := range q {
+		q[i] = float32(rng.NormFloat64())
+	}
+	pk := make([]float32, poolBlocks*block*kvHeads*headDim)
+	pv := make([]float32, poolBlocks*block*kvHeads*headDim)
+	for i := range pk {
+		pk[i] = float32(rng.NormFloat64())
+		pv[i] = float32(rng.NormFloat64())
+	}
+	// Scattered and out of order, so a kernel that walked the pool linearly
+	// would read the wrong blocks rather than the right ones in the wrong
+	// order.
+	pages := make([]uint32, pageCount)
+	perm := rng.Perm(poolBlocks)
+	for i := range pages {
+		pages[i] = uint32(perm[i])
+	}
+	lengths := []uint32{kvLen}
+
+	got := make([]float32, qHeads*headDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
+		accel.ID3{X: qHeads},
+		kernelabi.Args{
+			Slices: []any{q, pk, pv, pages, lengths, got}, Uniforms: []any{d},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	// The reference reads the same positions through the same table, gathered
+	// into a contiguous cache: paging is an addressing, so the answer must be
+	// the contiguous one.
+	gk := make([]float32, kvLen*kvHeads*headDim)
+	gv := make([]float32, kvLen*kvHeads*headDim)
+	for j := 0; j < kvLen; j++ {
+		phys := int(pages[j/block])*block + j%block
+		copy(gk[j*kvHeads*headDim:(j+1)*kvHeads*headDim],
+			pk[phys*kvHeads*headDim:(phys+1)*kvHeads*headDim])
+		copy(gv[j*kvHeads*headDim:(j+1)*kvHeads*headDim],
+			pv[phys*kvHeads*headDim:(phys+1)*kvHeads*headDim])
+	}
+	want := composedAttention(testkernels.AttnDims{
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, Scale: d.Scale,
+	}, kvLen, q, gk, gv)
+
+	// The bound derived in TestAttentionDecodeScoresACacheLongerThanAWorkgroup.
+	const u = 1.0 / (1 << 24)
+	n := float64(kvLen+headDim+1) + math.Ceil(float64(kvLen)/AttnBlockT)
+	gamma := n * u / (1 - n*u)
+	maxV := 0.0
+	for _, x := range gv {
+		maxV = math.Max(maxV, math.Abs(float64(x)))
+	}
+	tol := maxV * gamma
+
+	for i := range got {
+		if diff := math.Abs(float64(got[i]) - want[i]); diff > tol {
+			t.Fatalf("element %d is %v, want %v: off by %g, tolerance %g",
+				i, got[i], want[i], diff, tol)
 		}
 	}
 }

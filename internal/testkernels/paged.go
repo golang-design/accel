@@ -44,8 +44,7 @@ type PagedDims struct {
 //accel:kernel workgroup=128
 func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	v []float32, pages []uint32, lengths []uint32, out []float32,
-	scores *[128]float32, red *[128]float32) {
-
+	scores *[AttnBlock]float32, red *[AttnBlock]float32, acc *[AttnBlock]float32) {
 	h := t.GroupID().X
 	// One sequence, so its length is the first entry. See AttentionDecode.
 	kvLen := lengths[0]
@@ -53,66 +52,90 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 
 	group := d.QHeads / d.KVHeads
 	kvHead := h / group
+	// How many positions the page table can address. From the table's extent
+	// rather than from the pool's: the pool holds every sequence's blocks and
+	// is sized for total concurrency, so looping over it would walk other
+	// sequences' caches. specs/002-compute-model.md section 3.3 makes both
+	// len() and a uniform field workgroup-uniform, which is what lets the loop
+	// below hold a barrier -- see [AttentionDecode] for why kvLen cannot.
+	capacity := uint32(len(pages)) * d.Block
 
-	// Each lane scores one cached position, reached through its page.
-	s := float32(0)
-	if lane < kvLen {
-		phys := pages[lane/d.Block]*d.Block + lane%d.Block
-		acc := float32(0)
-		for i := uint32(0); i < d.HeadDim; i++ {
-			qi := q[h*d.HeadDim+i]
-			ki := k[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
-			acc = acc + qi*ki
-		}
-		s = acc * d.Scale
-	}
-	scores[lane] = s
-
-	m := s
-	if lane >= kvLen {
-		m = float32(-3.4e38)
-	}
-	red[lane] = m
-	t.Barrier()
-
-	for stride := uint32(64); stride > 0; stride /= 2 {
-		if lane < stride {
-			a := red[lane]
-			b := red[lane+stride]
-			if b > a {
-				red[lane] = b
-			}
-		}
-		t.Barrier()
-	}
-	best := red[0]
-	t.Barrier()
-
-	e := float32(0)
-	if lane < kvLen {
-		e = kmath.Exp(scores[lane] - best)
-	}
-	scores[lane] = e
-	red[lane] = e
-	t.Barrier()
-
-	for stride := uint32(64); stride > 0; stride /= 2 {
-		if lane < stride {
-			red[lane] = red[lane] + red[lane+stride]
-		}
-		t.Barrier()
-	}
-	total := red[0]
-
-	// The weighted sum of V, parallel over the head's dimensions. Each lane
-	// owns one output element and walks every cached position, so the page
-	// lookup happens per position here rather than per lane.
+	// The running softmax, carried across blocks. See [AttentionDecode] for the
+	// recurrence and for why one block reproduces the single-pass form exactly.
+	m := float32(-3.4e38)
+	l := float32(0)
 	if lane < d.HeadDim {
-		acc := float32(0)
-		for j := uint32(0); j < kvLen; j++ {
-			phys := pages[j/d.Block]*d.Block + j%d.Block
-			acc = acc + scores[j]*v[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+		acc[lane] = 0
+	}
+	t.Barrier()
+
+	for base := uint32(0); base < capacity; base += AttnBlock {
+		pos := base + lane
+
+		// Each lane scores one cached position, reached through its page.
+		s := float32(-3.4e38)
+		if pos < kvLen {
+			phys := pages[pos/d.Block]*d.Block + pos%d.Block
+			dot := float32(0)
+			for i := uint32(0); i < d.HeadDim; i++ {
+				dot = dot + q[h*d.HeadDim+i]*k[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+			}
+			s = dot * d.Scale
 		}
-		out[h*d.HeadDim+lane] = acc / total
+
+		// The shared arrays are loop-carried, so this pass's writes have to be
+		// ordered against the previous pass's reads of them. See
+		// [AttentionDecode].
+		t.Barrier()
+		scores[lane] = s
+		red[lane] = s
+		t.Barrier()
+
+		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
+			if lane < stride {
+				red[lane] = kmath.Max(red[lane], red[lane+stride])
+			}
+			t.Barrier()
+		}
+		blockMax := red[0]
+
+		next := kmath.Max(m, blockMax)
+		alpha := kmath.Exp(m - next)
+
+		e := float32(0)
+		if pos < kvLen {
+			e = kmath.Exp(s - next)
+		}
+		t.Barrier()
+		scores[lane] = e
+		red[lane] = e
+		t.Barrier()
+
+		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
+			if lane < stride {
+				red[lane] = red[lane] + red[lane+stride]
+			}
+			t.Barrier()
+		}
+		l = alpha*l + red[0]
+		m = next
+
+		// The weighted sum of V, parallel over the head's dimensions. Each lane
+		// owns one output element and walks the block's positions, so the page
+		// lookup happens per position here rather than per lane.
+		if lane < d.HeadDim {
+			a := alpha * acc[lane]
+			for j := uint32(0); j < AttnBlock; j++ {
+				if base+j < kvLen {
+					phys := pages[(base+j)/d.Block]*d.Block + (base+j)%d.Block
+					a = a + scores[j]*v[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+				}
+			}
+			acc[lane] = a
+		}
+	}
+
+	if lane < d.HeadDim {
+		out[h*d.HeadDim+lane] = acc[lane] / l
 	}
 }
