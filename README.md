@@ -186,7 +186,8 @@ position.
 | Cross-compile with `CGO_ENABLED=0` | yes, every `GOOS` |
 | Test without a GPU | yes — the CPU backend is a full implementation, not a stub |
 | Use shared memory, barriers and atomics | yes |
-| Use subgroup shuffles and scans | not yet |
+| Use subgroup reductions, votes, broadcasts and shuffles | yes, on both backends |
+| Use subgroup scans | not yet |
 | Multiply matrices (tiled GEMM) | yes, on both backends |
 | Build a tensor graph and run inference | yes — decode and prefill, with a KV cache |
 | Use int8 quantized weights | yes |

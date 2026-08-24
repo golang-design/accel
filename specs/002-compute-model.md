@@ -8,21 +8,24 @@ depends_on:
 
 # Compute model
 
-**What is built — 2026-08-23.** §§1–5 are implemented on the CPU backend: the
+**What is built — 2026-08-24.** §§1–5 are implemented on the CPU backend: the
 execution hierarchy and built-in ids, workgroup-shared memory, barriers with
 §3.1's uniformity requirement enforced by the compiler and §3.4's non-uniform
 arrival detected at run time, the atomic set of §4, and the subgroup operations
-of §5 in uniform control flow.
+of §5 in uniform control flow — the reductions, the votes, `Elect`, `Ballot`,
+both broadcasts and all four shuffles. The five inactive-lane rules of §5.2 are
+implemented and tested one by one, including the read of an inactive lane that
+is reported rather than answered.
 
-**What is not.** §5's shuffles and scans, and every operation in divergent
-control flow. Each is defined in terms of *inactive* lanes — reading one is
-undefined, scans skip them rather than treating them as identity — and §5.1 says
-whether lanes reconverge after divergence is implementation-defined, so
-emulating it faithfully means modelling an active set no two backends agree on.
-The operations built are the ones §5.1 says are portable.
+**What is not.** §5's scans, and every operation in divergent control flow. A
+subgroup operation in a conditional is refused by the cooperative lowering,
+which has nowhere to resume inside a branch, and §5.1 says whether lanes
+reconverge after divergence is implementation-defined — so what an emulation
+would have to model is an active set no two backends agree on. The operations
+built are the ones §5.1 says are portable.
 
-This spec is therefore *in progress* rather than implemented, and §5's remaining
-rows are what remains.
+This spec is therefore *in progress* rather than implemented, and §5's scan rows
+are what remains.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 4. This spec exists because
 its subject was the predecessor project's central mistake, and the mistake is
@@ -835,6 +838,27 @@ The dtype set has no 64-bit integer, and Vulkan's ballot is 128 bits wide, so a
 | Inclusive scan | `t.SubgroupInclusiveAddF32(v float32) float32` | lane `i` receives the reduction over active lanes `j <= i` | inactive lanes are skipped, not treated as identity |
 | Exclusive scan | `t.SubgroupExclusiveAddF32(v float32) float32` | lane `i` receives the reduction over active lanes `j < i` | the lowest active lane receives the **identity** |
 
+**Spelling.** Every operation above is a `Subgroup`-prefixed method:
+`t.SubgroupElect()`, `t.SubgroupBroadcastF32(v, lane)`,
+`t.SubgroupShuffleXorF32(v, mask)`, and so on. The table keeps the short names
+because they are what the operation is called; the prefix is what keeps
+`accel.Thread` readable beside `t.GlobalID()` and `t.Barrier()`, and it is the
+convention the reductions shipped with.
+
+**Which capability each implies.** The lane-addressed reads — `Broadcast`,
+`Shuffle`, `ShuffleXor`, `ShuffleUp` and `ShuffleDown` — all infer
+`CapSubgroupShuffle`. Vulkan files `subgroupBroadcast` under its *ballot*
+feature and the relative shuffles under a third; accel's capability names what
+the operation does, which is read the value a lane an operand names holds. The
+practical reason is Metal: it spells every one of these and cannot spell a
+ballot, because `simd_ballot` returns a `simd_vote` rather than an integer
+([022](022-msl-target.md) §5). Grouping them under ballot would refuse a device
+that has all five. A backend whose own grouping is finer — SPIR-V's
+`OpGroupNonUniformBroadcast` needs `GroupNonUniformBallot` — requests the
+superset when it declares its features, which is a backend's business and not a
+kernel's. `BroadcastFirst` keeps `CapSubgroupBallot`, which is the one place the
+two groupings still disagree.
+
 **Inactive lanes are the part everyone gets wrong**, so the rules are collected:
 
 1. An inactive lane produces no value and consumes none. It is not zero, it is
@@ -844,10 +868,22 @@ The dtype set has no 64-bit integer, and Vulkan's ballot is 128 bits wide, so a
    occasionally a bug.
 3. Reading an inactive lane through `Broadcast`, `Shuffle`, `ShuffleXor`,
    `ShuffleUp`, or `ShuffleDown` yields an **undefined value**. It does not yield
-   zero, and it does not fault. The CPU oracle marks the result undefined through
-   the same definition tracking as 2.2, so strict mode reports it as an error
-   naming the reading lane and the requested lane rather than letting a plausible
-   number propagate.
+   zero, and it does not fault. The CPU oracle reports it through the same
+   developer-mode instrumentation that carries 2.2's definition bitmap
+   ([006](006-backends.md) §5), naming the reading lane and the requested lane
+   rather than letting a plausible number propagate. With the instrumentation
+   off the read produces a quiet NaN: still not a number a kernel could have
+   computed, and still not zero.
+   **Out of range is not the same as inactive, and the oracle draws the line
+   there.** A lane index outside the subgroup — past its width, or below zero
+   after a shuffle up — is undefined and is *not* reported. The idiomatic
+   shuffle-up has every lane at one end read out of range and discard the
+   answer, and it cannot avoid the call, since a subgroup operation inside a
+   conditional does not lower; reporting it would refuse the kernel the
+   operation exists for. What is reported is a lane that is *there* — inside the
+   width, in this subgroup — and is not taking part, which is the case this rule
+   is written about. The partly filled last subgroup of §5.1 is the reachable
+   witness.
 4. Scans skip inactive lanes rather than treating them as identity elements.
    These differ: an exclusive add-scan over active lanes `{0, 2, 3}` gives lane 3
    the sum of lanes 0 and 2, not the sum of lanes 0, 1, and 2 with lane 1 reading

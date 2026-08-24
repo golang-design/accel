@@ -6,9 +6,11 @@ package testkernels_test
 
 import (
 	"fmt"
-	"golang.design/x/accel/kernelabi"
 	"math"
+	"strings"
 	"testing"
+
+	"golang.design/x/accel/kernelabi"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/kernel"
@@ -230,6 +232,155 @@ func TestTheSubgroupKernelDeclaresItsCapabilities(t *testing.T) {
 	}
 	// And the fallback requires none, which is what makes it a fallback.
 	if got := testkernels.SubgroupReduceFallbackKernel.Caps; got != 0 {
+		t.Errorf("the fallback requires capabilities %d and should require none", got)
+	}
+}
+
+// The shuffles agree with a fallback that uses none of them, at every width in
+// spec 020 section 4's sweep.
+//
+// Exactly, not within a tolerance: every read moves a value between lanes
+// without arithmetic, and the two paths sum the same four terms in the same
+// order, so a difference of one bit is a difference in what was read.
+//
+// The width matters more here than for the reduction. A reversal is
+// `w-1-lane` and a butterfly is `lane^1`, so at width 1 both degenerate, at
+// width 4 the subgroup boundary is crossed sixteen times across the workgroup,
+// and at 64 the subgroup is the workgroup. A kernel that read the wrong
+// neighbour at a boundary passes at 64 and fails at 4.
+func TestTheShuffleSweepAgreesWithTheFallback(t *testing.T) {
+	const group = 64
+	in := make([]float32, group)
+	for i := range in {
+		// Dyadic and small, so every sum in either path is exact and the
+		// comparison is about which lane was read.
+		in[i] = float32(i)*0.25 - 8
+	}
+
+	for _, width := range []uint32{1, 4, 32, 64} {
+		t.Run(fmt.Sprintf("size=%d", width), func(t *testing.T) {
+			viaShuffle := make([]float32, group)
+			err := kernel.DispatchCooperativeWith(&testkernels.SubgroupShuffleMixKernel,
+				accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, viaShuffle}},
+				kernel.Options{SubgroupSize: width, Diagnostics: true})
+			if err != nil {
+				t.Fatalf("shuffle path: %v", err)
+			}
+
+			viaFallback := make([]float32, group)
+			err = kernel.Dispatch(&testkernels.SubgroupShuffleMixFallbackKernel,
+				accel.ID3{X: 1},
+				kernelabi.Args{Slices: []any{in, viaFallback, []uint32{width}}})
+			if err != nil {
+				t.Fatalf("fallback: %v", err)
+			}
+
+			for i := range viaShuffle {
+				if math.Float32bits(viaShuffle[i]) != math.Float32bits(viaFallback[i]) {
+					t.Fatalf("element %d: shuffle path %v, fallback %v (lane %d of subgroup %d)",
+						i, viaShuffle[i], viaFallback[i], uint32(i)%width, uint32(i)/width)
+				}
+			}
+		})
+	}
+}
+
+// A shuffle whose partner lane is not there is undefined, and the oracle says
+// so when the lane exists and is simply not taking part.
+//
+// The witness is a subgroup width that does not divide the workgroup, which is
+// spec 002 section 5.1's partly filled last subgroup: at width 24 a 64-wide
+// workgroup has two full subgroups and a tail of 16, so the tail's reversal
+// reads lanes 16 to 23, which no invocation occupies. That is the case rule 3
+// is written about, and it is reachable from the generated lowering rather than
+// only from a hand-driven scheduler.
+func TestTheTailSubgroupReportsItsMissingLanes(t *testing.T) {
+	const group = 64
+	in := make([]float32, group)
+	out := make([]float32, group)
+	err := kernel.DispatchCooperativeWith(&testkernels.SubgroupShuffleMixKernel,
+		accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, out}},
+		kernel.Options{SubgroupSize: 24, Diagnostics: true})
+	if err == nil {
+		t.Fatal("the last subgroup is 16 lanes wide out of 24, so its reversal reads eight " +
+			"lanes that hold no invocation, and that is an undefined read spec 002 " +
+			"section 5.2 rule 3 requires to be reported")
+	}
+	if !strings.Contains(err.Error(), "not active at that operation") {
+		t.Errorf("the report should name the inactive lane, and says:\n%v", err)
+	}
+}
+
+// The authored kernel and its generated lowering agree.
+//
+// At width 1, which is the width where the authored bodies are *correct*
+// rather than a stub: a subgroup of one has every lane read itself, which is
+// what `return v` computes. Every other read the kernel makes is out of range
+// at that width and its result is discarded, so the two paths have to produce
+// the same number for a reason rather than by luck.
+func TestAuthoredShuffleKernel(t *testing.T) {
+	const group = 64
+	in := make([]float32, group)
+	for i := range in {
+		in[i] = float32(i)*0.5 - 3
+	}
+
+	authored := make([]float32, group)
+	size := kernel.ID3{X: group, Y: 1, Z: 1}
+	for l := range uint32(group) {
+		th := kernel.NewThreadWithSubgroup(kernel.ID3{X: l}, kernel.ID3{X: l},
+			kernel.ID3{}, size, kernel.ID3{X: 1}, 1)
+		testkernels.SubgroupShuffleMix(th, in, authored)
+	}
+
+	generated := make([]float32, group)
+	err := kernel.DispatchCooperativeWith(&testkernels.SubgroupShuffleMixKernel,
+		accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, generated}},
+		kernel.Options{SubgroupSize: 1, Diagnostics: true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for i := range authored {
+		if math.Float32bits(authored[i]) != math.Float32bits(generated[i]) {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+		}
+	}
+	// And it is not the trivially-zero function, or the comparison above would
+	// hold for two kernels that both did nothing.
+	if authored[7] != 5*in[7] {
+		t.Fatalf("at a subgroup of one every read is the lane's own, so element 7 should "+
+			"be five times its input: got %v, want %v", authored[7], 5*in[7])
+	}
+}
+
+// The shuffle kernel's record requires the shuffle capability, inferred from
+// its body.
+//
+// accel groups the lane-addressed reads under one capability, including the
+// broadcast from a chosen lane that Vulkan files under its ballot feature. The
+// deviation is recorded in spec 002 section 5.2, and this is where it is
+// checked: a broadcast that inferred the ballot capability would make this
+// kernel unavailable on a device that has every operation it uses.
+func TestTheShuffleKernelDeclaresItsCapabilities(t *testing.T) {
+	caps := accel.Capability(testkernels.SubgroupShuffleMixKernel.Caps)
+	for _, want := range []struct {
+		cap  accel.Capability
+		name string
+		why  string
+	}{
+		{accel.CapSubgroupShuffle, "CapSubgroupShuffle", "it reads four lanes by index"},
+		{accel.CapSubgroupBasic, "CapSubgroupBasic", "it reads the lane index and the width"},
+	} {
+		if caps&want.cap == 0 {
+			t.Errorf("the record does not require %s, and %s", want.name, want.why)
+		}
+	}
+	if caps&accel.CapSubgroupBallot != 0 {
+		t.Error("the record requires CapSubgroupBallot, which no operation in the kernel " +
+			"produces: it would make the kernel unavailable on a device that has " +
+			"everything it uses")
+	}
+	if got := testkernels.SubgroupShuffleMixFallbackKernel.Caps; got != 0 {
 		t.Errorf("the fallback requires capabilities %d and should require none", got)
 	}
 }

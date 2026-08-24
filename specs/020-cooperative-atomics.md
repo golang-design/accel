@@ -121,7 +121,7 @@ becomes a wrong answer on hardware nobody in this project owns.
   [000](000-decisions.md) decision 6 and is checked against a profile rather
   than against hardware.
 
-## 6. Outcome — 2026-08-23
+## 6. Outcome — 2026-08-23, extended 2026-08-24
 
 §1 is built except the CPU mode wiring noted below, and §5's cases pass.
 
@@ -134,7 +134,8 @@ becomes a wrong answer on hardware nobody in this project owns.
 | Capability gating at pipeline creation | built |
 | `reduce_sum` against [008](008-numerics.md)'s budget | built |
 | arm64 and amd64 numeric probes | built |
-| Subgroup shuffles, scans, and `Broadcast` from a chosen lane | **not built** — see §6.3 |
+| `Broadcast` from a chosen lane, and the four shuffles | built 2026-08-24 — see §6.4 |
+| Subgroup scans | **not built** |
 
 ### 6.1 Three bugs, each a wrong answer that compiled
 
@@ -171,18 +172,15 @@ exercise.
 
 ### 6.3 What is deferred, and why
 
-**Subgroup shuffles, scans, and broadcast-from-a-chosen-lane.** Each is defined
-in terms of *inactive* lanes — reading one is undefined, scans skip them rather
-than treating them as identity — and emulating that faithfully means modelling
-an active set no two backends agree on. [002](002-compute-model.md) §5.1 says
-whether lanes reconverge after divergence is implementation-defined, so the
-portable subset is narrower than the operation list suggests. The operations
-built here are the ones whose result is portable in uniform control flow, which
-is where [002](002-compute-model.md) §5.1 says any of them are.
+**Subgroup scans.** Deferred with the shuffles and landing after them; the
+active-set machinery §6.4 built is what they need.
 
-**Subgroup operations in divergent control flow.** Same reason, and it is the
-boundary that makes the above tractable: the emulation is exactly the barrier
-machinery because every lane arrives.
+**Subgroup operations in divergent control flow.** [002](002-compute-model.md)
+§5.1 says whether lanes reconverge after divergence is implementation-defined,
+so the portable subset is narrower than the operation list suggests, and the
+cooperative lowering has nowhere to resume inside a branch. The boundary is what
+makes the rest tractable: in uniform control flow the emulation is exactly the
+barrier machinery, because every lane arrives.
 
 **The `CPUStrict` and `CPUMimic` modes are wired to capability inference.**
 `Device.Missing` checks the profile a mode reports, so a mimicked device refuses
@@ -194,6 +192,55 @@ computes `caps, lim = intersect(targets)` — which is
 > This paragraph said the opposite until 2026-08-24. The narrowing had shipped
 > and four documents still called it outstanding, which is the shape of staleness
 > that survives longest: a deferral nobody revisits because nothing fails.
+
+### 6.4 The shuffles, and the one rule that had to be narrowed — 2026-08-24
+
+`Broadcast` from a chosen lane, `Shuffle`, `ShuffleXor`, `ShuffleUp` and
+`ShuffleDown` are built on both backends. `Elect` and `BroadcastFirst` were
+already, and what they gained is a test against a *partial* active set, which is
+what [002](002-compute-model.md) §5.2 rule 1 is about and what nothing had
+exercised.
+
+**The active set is now a first-class thing the scheduler computes**, rather
+than a list whose order happened to be lane order. `combineSubgroups` maps lane
+number to frame, so an active set with a hole in it — lanes 0, 2 and 3 — is
+answered correctly by every operation rather than only by the ones that scan
+from the bottom.
+
+**Rule 3 is narrower than it reads, and the narrowing is forced.** The rule says
+a read of an inactive lane is reported. Applied to a lane index that is outside
+the subgroup entirely it refuses the operation it exists for: a shuffle up by
+one has lane 0 read below the bottom on every device, the kernel discards that
+lane's answer, and it cannot guard the *call* because a subgroup operation
+inside a conditional does not lower. So an index outside the width is undefined
+and silent, and an index inside the width whose lane is not taking part is
+reported by name. [002](002-compute-model.md) §5.2 rule 3 now says so.
+
+There is a second reason, and it is about what a test can prove: `ShuffleUp` and
+`ShuffleDown` are indistinguishable at delta 0, so the only differential that
+tells a swapped emit-table entry from a correct one uses a delta that reads out
+of range at one end. Making that an error would leave two of the five operations
+with no check on their Metal lowering at all.
+
+**A broadcast's lane operand is checked for uniformity.** [002](002-compute-model.md)
+§5.2 requires it to be dynamically uniform and no backend enforces it. The
+oracle reports a disagreement rather than picking a winner, because on hardware
+the winner is the device's, so a kernel whose output depends on it is already
+wrong and an oracle that resolved it would make one device's answer look right.
+
+**Metal now reports `SubgroupShuffle`.** It always spelled `simd_broadcast`,
+`simd_shuffle`, `simd_shuffle_xor`, `simd_shuffle_up` and `simd_shuffle_down`;
+the capability was absent because nothing emitted them. Ballot stays absent for
+the reason [022](022-msl-target.md) §5 gives, which is about `simd_vote`'s type
+and not about lanes.
+
+**One gate replaced four registrations.** A rendezvous opcode is spread over the
+intrinsic table, the frame carrier, the runtime constant and the Metal
+spelling, and missing any one of them compiles. The unmapped case used to lower
+to an ordinary barrier — a suspension that combined nothing and resumed reading
+the lane's own contribution, which is §6.1's third bug wearing a different hat.
+`TestEverySubgroupRendezvousIsRegistered` walks the opcode range instead, so an
+operation added later is covered before anyone remembers to add it to a list.
 
 ## 7. What it does not build
 

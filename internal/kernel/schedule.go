@@ -4,7 +4,10 @@
 
 package kernel
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // DispatchCooperative runs a cooperative kernel over a grid of workgroups.
 //
@@ -123,7 +126,8 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 				for i := range frames {
 					frames[i].Shared = tracker
 				}
-				if err := runWorkgroup(k, args, threads, frames, tracker, opts.ShuffleSeed); err != nil {
+				if err := runWorkgroup(k, args, threads, frames, tracker, opts.ShuffleSeed,
+					opts.Diagnostics); err != nil {
 					return err
 				}
 				// Reported per workgroup rather than accumulated, because the
@@ -158,7 +162,16 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 // specs/008-numerics.md section 7's budget is for, and it is why a *same
 // backend* determinism test is meaningful while a cross-backend exact one is
 // not.
-func combineSubgroups(threads []Thread, frames []Frame) {
+//
+// # The active set, and the lanes that are not in it
+//
+// A subgroup's active lanes at one rendezvous are the lanes suspended there.
+// Everything else -- a lane of the workgroup's last, partly filled subgroup, a
+// lane that finished, a lane somewhere else in the program -- is inactive, and
+// specs/002-compute-model.md section 5.2's five rules are about what those
+// contribute, which is nothing: not a zero, not an identity element, and not a
+// bit in a ballot.
+func combineSubgroups(kernel string, threads []Thread, frames []Frame, diag bool) Diagnostics {
 	// Group the suspended lanes by subgroup. Ascending lane order within each,
 	// which the invocation order already gives: fill visits x fastest and
 	// SubgroupLane is LocalIndex modulo the size.
@@ -185,13 +198,21 @@ func combineSubgroups(threads []Thread, frames []Frame) {
 
 	// In discovery order, which is invocation order, so a report or a
 	// floating-point sum is the same every run.
+	var ds Diagnostics
 	for _, id := range order {
-		combineOne(threads, frames, groups[id].op, groups[id].lanes)
+		ds = append(ds, combineOne(kernel, threads, frames, groups[id].op, groups[id].lanes, diag)...)
 	}
+	if len(ds) > 0 {
+		ds.sortStable()
+	}
+	return ds
 }
 
 // combineOne applies one operation across one subgroup's suspended lanes.
-func combineOne(threads []Thread, frames []Frame, op SubgroupOp, lanes []int) {
+func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, lanes []int, diag bool) Diagnostics {
+	if op >= SubBroadcastF32 {
+		return laneRead(kernel, threads, frames, op, lanes, diag)
+	}
 	switch op {
 	case SubAddF32:
 		var acc float32
@@ -266,6 +287,120 @@ func combineOne(threads []Thread, frames []Frame, op SubgroupOp, lanes []int) {
 			frames[i].SubMask = m
 		}
 	}
+	return nil
+}
+
+// laneRead applies one broadcast or shuffle across one subgroup.
+//
+// # Why every contribution is read before any result is written
+//
+// Both travel in the same field. Writing lane 0's result before lane 31 has
+// read lane 0's value would make a reversing shuffle return a copy of itself
+// for half the subgroup, which is a wrong answer that looks like a plausible
+// permutation. So the values are taken first, in one pass.
+func laneRead(kernel string, threads []Thread, frames []Frame, op SubgroupOp, lanes []int, diag bool) Diagnostics {
+	width := uint32(0)
+	if len(lanes) > 0 {
+		width = threads[lanes[0]].SubgroupSize()
+	}
+	values := make(map[uint32]float32, len(lanes))
+	for _, i := range lanes {
+		values[threads[i].SubgroupLane()] = frames[i].SubF32
+	}
+
+	var ds Diagnostics
+	if op == SubBroadcastF32 {
+		ds = append(ds, checkUniformLane(kernel, threads, frames, lanes)...)
+	}
+
+	for _, i := range lanes {
+		lane, operand := threads[i].SubgroupLane(), frames[i].SubLane
+		src, inRange := sourceLane(op, lane, operand, width)
+		if inRange {
+			if v, active := values[src]; active {
+				frames[i].SubF32 = v
+				continue
+			}
+			// In this subgroup and not taking part. The rule this reports is
+			// the one section 5.2 says everyone gets wrong: the result is
+			// undefined, and a plausible number propagating out of it is a
+			// wrong answer nothing else would catch.
+			if diag {
+				ds = append(ds, Diagnostic{
+					Kind: DiagUndefinedLane, Kernel: kernel, Workgroup: threads[i].GroupID(),
+					Invocation: threads[i].LocalID(), Element: -1,
+					Detail: fmt.Sprintf("lane %d read lane %d of its subgroup through %v, and "+
+						"lane %d is not active at that operation: an inactive lane holds no "+
+						"value, so the result is undefined rather than zero "+
+						"(specs/002-compute-model.md section 5.2 rule 3)",
+						lane, src, op, src),
+				})
+			}
+		}
+		// Undefined, and loud: a quiet NaN rather than a number, so a kernel
+		// that does depend on it produces something nobody mistakes for an
+		// answer. A lane index outside the subgroup entirely arrives here
+		// without a diagnostic -- see [Thread.SubgroupShuffleF32].
+		frames[i].SubF32 = math.Float32frombits(poisonBits)
+	}
+	return ds
+}
+
+// sourceLane is which lane a read addresses, and whether that lane is inside
+// the subgroup at all.
+//
+// Outside covers both ends: a shuffle up from a low lane underflows, and a
+// shuffle down from a high one runs past the width. Both are undefined by
+// specs/002-compute-model.md section 5.2, and neither is reported, because the
+// idiomatic scan has every lane at one end read out of range and discard the
+// answer.
+func sourceLane(op SubgroupOp, lane, operand, width uint32) (src uint32, inRange bool) {
+	switch op {
+	case SubBroadcastF32, SubShuffleF32:
+		src = operand
+	case SubShuffleXorF32:
+		src = lane ^ operand
+	case SubShuffleUpF32:
+		if operand > lane {
+			return 0, false
+		}
+		src = lane - operand
+	case SubShuffleDownF32:
+		src = lane + operand
+		if src < lane {
+			return 0, false
+		}
+	}
+	return src, src < width
+}
+
+// checkUniformLane reports a broadcast whose lane operand is not the same for
+// every active lane.
+//
+// specs/002-compute-model.md section 5.2 requires it to be dynamically uniform.
+// Picking a winner would be the wrong answer to give: on hardware the winner is
+// the device's, so a kernel whose output depends on it is already wrong, and
+// this backend exists to say so rather than to make one device's answer look
+// right.
+func checkUniformLane(kernel string, threads []Thread, frames []Frame, lanes []int) Diagnostics {
+	var ds Diagnostics
+	for _, i := range lanes[1:] {
+		if frames[i].SubLane == frames[lanes[0]].SubLane {
+			continue
+		}
+		ds = append(ds, Diagnostic{
+			Kind: DiagUndefinedLane, Kernel: kernel, Workgroup: threads[i].GroupID(),
+			Invocation: threads[i].LocalID(), Other: threads[lanes[0]].LocalID(),
+			HasOther: true, Element: -1,
+			Detail: fmt.Sprintf("lane %d asked BroadcastF32 for lane %d while lane %d asked "+
+				"for lane %d: the lane a broadcast reads must be dynamically uniform, and "+
+				"which of the two a device honours is not defined "+
+				"(specs/002-compute-model.md section 5.2)",
+				threads[i].SubgroupLane(), frames[i].SubLane,
+				threads[lanes[0]].SubgroupLane(), frames[lanes[0]].SubLane),
+		})
+	}
+	return ds
 }
 
 func broadcastF32(frames []Frame, lanes []int, v float32) {
@@ -392,7 +527,7 @@ func fill(threads []Thread, group, size, count ID3, subgroup uint32) {
 
 // runWorkgroup advances every invocation epoch by epoch until all have
 // finished.
-func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker, shuffleSeed uint64) error {
+func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker, shuffleSeed uint64, diag bool) error {
 	// The bound is a backstop against a generated program counter that does not
 	// advance, and it is deliberately loose.
 	//
@@ -439,7 +574,9 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 		// A subgroup rendezvous is combined before the arrival check, because
 		// lanes suspended at one are at the same suspension point by
 		// construction -- the check below is about barriers.
-		combineSubgroups(threads, frames)
+		if ds := combineSubgroups(k.Name, threads, frames, diag); len(ds) > 0 {
+			return ds
+		}
 		if err := checkArrival(k, threads, frames, tracker); err != nil {
 			return err
 		}

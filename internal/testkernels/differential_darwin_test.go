@@ -166,6 +166,25 @@ func diffCases() []diffCase {
 				return defaultSeed(b, i)
 			},
 		},
+		// The shuffles. Bit for bit: every one of them moves a value between
+		// lanes without arithmetic, and the combination each lane does
+		// afterwards is a sum of dyadic values that both backends round
+		// identically, so anything but equality is a lowering difference.
+		{kernel: &testkernels.SubgroupShuffleMixKernel, counts: []int{64, 64},
+			groups: accel.WorkgroupCount{X: 1}},
+		{
+			kernel: &testkernels.SubgroupShuffleMixFallbackKernel, counts: []int{64, 64, 1},
+			groups: accel.WorkgroupCount{X: 1},
+			// As above: the fallback's width binding has to be the width this
+			// device executes at, or the two are shuffling within different
+			// subgroups.
+			seed: func(b, i int) float32 {
+				if b == 2 {
+					return float32(subgroupWidth)
+				}
+				return defaultSeed(b, i)
+			},
+		},
 		{
 			kernel: &testkernels.NormalizeKernel, counts: []int{64, 64, 64},
 			groups: accel.WorkgroupCount{X: 2},

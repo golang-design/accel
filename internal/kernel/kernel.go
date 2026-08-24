@@ -424,6 +424,15 @@ type Frame struct {
 	SubBool bool
 	SubMask Mask
 
+	// SubLane is the second operand of a lane-addressed read: which lane to
+	// read for a broadcast or a shuffle, the mask for a butterfly shuffle, the
+	// delta for a shuffle up or down.
+	//
+	// It travels beside the value rather than being recomputed by the
+	// scheduler, because it is an expression the kernel wrote and only the
+	// generated lowering can evaluate it.
+	SubLane uint32
+
 	// Barrier is which suspension point this invocation stopped at, set by the
 	// generated lowering before it returns true. Every active invocation must
 	// report the same one at each rendezvous.

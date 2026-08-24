@@ -353,12 +353,17 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			// kernel be accepted and then refused at graph build.
 			Subgroups: true,
 			// Basic gives the size, lane index and group index; arithmetic
-			// gives simd_sum, simd_min and simd_max; vote gives simd_any,
-			// simd_all and simd_is_first. Ballot is absent because simd_ballot
-			// returns a simd_vote rather than an integer, and shuffles and
-			// scans are deferred by specs/020-cooperative-atomics.md on both
-			// backends.
-			SubgroupOps: driver.SubgroupBasic | driver.SubgroupArithmetic | driver.SubgroupVote,
+			// gives simd_sum, simd_min, simd_max and the prefix sums; vote
+			// gives simd_any, simd_all and simd_is_first; shuffle gives
+			// simd_broadcast, simd_shuffle, simd_shuffle_xor and the relative
+			// shuffles up and down.
+			//
+			// Ballot is absent because simd_ballot returns a simd_vote rather
+			// than an integer, and the conversion is family-dependent. It is
+			// the one subgroup bit this device has and cannot spell, and the
+			// emitter refuses the operation by name to match.
+			SubgroupOps: driver.SubgroupBasic | driver.SubgroupArithmetic |
+				driver.SubgroupVote | driver.SubgroupShuffle,
 
 			// Still absent. atomic<float> is a Metal *version* capability
 			// rather than a spelling, so it needs the family query this table

@@ -991,9 +991,6 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 	case ir.OpSubgroupID:
 		m.printf("_sgid")
 		return
-	case ir.OpElect:
-		m.printf("simd_is_first()")
-		return
 
 	// The narrow-float conversions. MSL has half natively, so these are casts
 	// rather than the bit-packing sequence a target without the format needs --
@@ -1038,6 +1035,11 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		return
 	}
 
+	if fn, ok := mslSubgroupNullary[v.Op]; ok {
+		m.printf("%s()", fn)
+		return
+	}
+
 	if fn, ok := mslSubgroup[v.Op]; ok {
 		if len(v.Args) != 1 {
 			m.fail("subgroup operation %v takes one value at %v", v.Op, v.Pos())
@@ -1046,6 +1048,19 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.printf("%s(", fn)
 		m.value(v.Args[0])
 		m.printf(")")
+		return
+	}
+
+	if fn, ok := mslLaneRead[v.Op]; ok {
+		if len(v.Args) != 2 {
+			m.fail("subgroup operation %v takes a value and a lane at %v", v.Op, v.Pos())
+			return
+		}
+		m.printf("%s(", fn)
+		m.value(v.Args[0])
+		m.printf(", ushort(")
+		m.value(v.Args[1])
+		m.printf("))")
 		return
 	}
 
@@ -1143,12 +1158,21 @@ var mslAtomic = map[ir.Opcode]string{
 	ir.OpAtomicExchangeI32: "atomic_exchange_explicit",
 }
 
-// mslSubgroup is each single-argument subgroup reduction's Metal spelling.
+// mslSubgroupNullary is each subgroup operation that takes no value.
+//
+// A map with one entry rather than a case in the switch above, so that the gate
+// walking the rendezvous opcodes can see it: a spelling reachable only from a
+// switch is one that test cannot tell apart from a missing one.
+var mslSubgroupNullary = map[ir.Opcode]string{
+	ir.OpElect: "simd_is_first",
+}
+
+// mslSubgroup is each single-argument subgroup operation's Metal spelling.
 //
 // Ballot is absent because simd_ballot returns a simd_vote rather than an
-// integer, and the conversion is family-dependent; specs/020-cooperative-atomics.md
-// already defers shuffles and scans for a related reason, that each is defined
-// in terms of inactive lanes and no two backends agree on the active set.
+// integer, and the conversion is family-dependent. That is a property of the
+// return type rather than of inactive lanes, which is why the shuffles below
+// are here and it is not.
 var mslSubgroup = map[ir.Opcode]string{
 	ir.OpSubgroupAddF32:    "simd_sum",
 	ir.OpSubgroupMinF32:    "simd_min",
@@ -1156,6 +1180,24 @@ var mslSubgroup = map[ir.Opcode]string{
 	ir.OpBroadcastFirstF32: "simd_broadcast_first",
 	ir.OpSubgroupAny:       "simd_any",
 	ir.OpSubgroupAll:       "simd_all",
+}
+
+// mslLaneRead is each lane-addressed read's Metal spelling.
+//
+// Metal takes the lane operand as a ushort, so the emitter casts: a u32
+// expression passed to a ushort parameter is a narrowing conversion, and MSL's
+// warning about one is the sort of thing that is turned into an error by a
+// build setting outside this repository's control.
+//
+// Metal leaves the same reads undefined that specs/002-compute-model.md
+// section 5.2 does -- an inactive lane, or an index past the SIMD width -- so
+// this is a spelling and not an emulation.
+var mslLaneRead = map[ir.Opcode]string{
+	ir.OpBroadcastF32:   "simd_broadcast",
+	ir.OpShuffleF32:     "simd_shuffle",
+	ir.OpShuffleXorF32:  "simd_shuffle_xor",
+	ir.OpShuffleUpF32:   "simd_shuffle_up",
+	ir.OpShuffleDownF32: "simd_shuffle_down",
 }
 
 // mslIntrinsic is each bounded scalar operation's Metal spelling.
