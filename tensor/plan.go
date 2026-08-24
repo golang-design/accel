@@ -153,11 +153,23 @@ func (p *Plan) bind(bindings Bindings) error {
 	}
 
 	// Applied only now that everything checked out.
-	batch := make([]accel.SlotBinding, 0, len(p.ports))
-	for _, d := range p.ports {
-		batch = append(batch, accel.SlotBinding{
-			Slot: p.slots[d.Name], Buffer: bindings.Buffers[d.Name],
-		})
+	// One binding per window rather than per port. A plan using no LayerState
+	// has exactly one window per port and this is the loop it always was; a
+	// per-layer cache has one per (port, layer) and the caller still binds the
+	// port once, which is the whole point of the view.
+	batch := make([]accel.SlotBinding, 0, len(p.windows))
+	for _, w := range p.windows {
+		parent := bindings.Buffers[w.port]
+		v := parent
+		if w.off != 0 || w.count != parent.Count {
+			sub, err := parent.Buffer.View(parent.Offset+w.off, w.count)
+			if err != nil {
+				return fmt.Errorf("accel/tensor: %q elements [%d,%d) of the %d bound: %w",
+					w.port, w.off, w.off+w.count, parent.Count, err)
+			}
+			v = sub
+		}
+		batch = append(batch, accel.SlotBinding{Slot: p.slots[w], Buffer: v})
 	}
 	if err := p.graph.Bind(batch...); err != nil {
 		return err

@@ -24,7 +24,7 @@ package tensor
 func (t *Tensor) view(shape Shape, strides []int, offset int) *Tensor {
 	return &Tensor{
 		b: t.b, dtype: t.dtype, shape: shape, strides: strides, offset: offset,
-		node: t.node, port: t.port,
+		node: t.node, port: t.port, win: t.win,
 	}
 }
 

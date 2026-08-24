@@ -110,15 +110,41 @@ func ReadState(b *Builder, s *State) *Tensor {
 // file, and frame counting through a helper is fragile because the compiler may
 // inline one away.
 func stale(b *Builder, s *State) bool {
-	latest, ok := b.stateVersion[s.desc.Name]
-	return ok && s.version < latest
+	return supersededBy(b, s) > s.version
+}
+
+// supersededBy is the highest version written to any range overlapping this
+// state's own, or its own version when nothing has.
+//
+// Overlap rather than name equality: a per-layer cache is one buffer whose
+// layers are disjoint, so a write to one layer says nothing about a reader of
+// another. A write to the whole cache does overlap every layer, and a write to
+// a layer overlaps the whole cache, so mixing the two is still caught.
+func supersededBy(b *Builder, s *State) int {
+	mine := s.window()
+	latest := s.version
+	for w, v := range b.stateVersion {
+		if w.port != mine.port || v <= latest {
+			continue
+		}
+		if w.off >= mine.off+mine.count || mine.off >= w.off+w.count {
+			continue
+		}
+		latest = v
+	}
+	return latest
+}
+
+// window is the range of the caller's buffer this state names.
+func (s *State) window() window {
+	return window{s.desc.Name, s.offset, s.shape.Elements()}
 }
 
 func staleMessage(b *Builder, s *State) string {
 	return fmt.Sprintf("version %d of %q, which has been written %d time(s) since; both "+
 		"versions live in one caller-owned buffer, so reading the older one would need its "+
 		"contents copied aside first, which v0 does not do",
-		s.version, s.desc.Name, b.stateVersion[s.desc.Name]-s.version)
+		s.version, s.desc.Name, supersededBy(b, s)-s.version)
 }
 
 // readState builds the tensor without checking the version, for a caller that
@@ -129,8 +155,13 @@ func readState(b *Builder, s *State) *Tensor {
 	}
 	t := &Tensor{
 		b: b, dtype: s.desc.DType, shape: s.shape,
-		strides: contiguous(s.shape), offset: s.offset,
-		node: s.producer, port: s.desc.Name,
+		strides: contiguous(s.shape),
+		node:    s.producer, port: s.desc.Name,
+		// The offset is the *window's*, not the view's: the binding starts at
+		// this layer, so the value is contiguous from element zero of what the
+		// kernel is given. Carrying it as a view offset instead would make
+		// every layer read look like a strided operand and be refused as one.
+		win: &window{s.desc.Name, s.offset, s.shape.Elements()},
 	}
 	// A version produced by a write reads that node's output; the initial
 	// version reads the bound buffer.
@@ -200,12 +231,6 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 		return &State{b: b, poison: true, producer: -1}
 	}
 
-	if s.offset != 0 {
-		b.fail(1, "ScatterRows", "%q is a layer view at offset %d, and a slot binds a whole "+
-			"resource rather than a range of one; a per-layer cache needs one state per "+
-			"layer until the device layer can bind a sub-range", s.desc.Name, s.offset)
-		return &State{b: b, poison: true, producer: -1}
-	}
 	if stale(b, s) {
 		b.fail(1, "ScatterRows", "%s", staleMessage(b, s))
 		return &State{b: b, poison: true, producer: -1}
@@ -214,6 +239,7 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 		op: "ScatterRows", inputs: []*Tensor{rows, ids},
 		kernel:  &testkernels.ScatterRowsKernel,
 		outPort: s.desc.Name,
+		outOff:  s.offset,
 		uniform: func(map[string]ScalarValue) any {
 			return testkernels.RowParams{
 				Rows: uint32(count), Width: uint32(width), Capacity: uint32(s.shape[0]),
@@ -232,8 +258,8 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 	next.version = s.version + 1
 	next.producer = out.node
 	if b.stateVersion == nil {
-		b.stateVersion = map[string]int{}
+		b.stateVersion = map[window]int{}
 	}
-	b.stateVersion[s.desc.Name] = next.version
+	b.stateVersion[s.window()] = next.version
 	return &next
 }

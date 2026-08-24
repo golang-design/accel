@@ -131,6 +131,20 @@ type Tensor struct {
 	// port names the external buffer this value comes from, when it has one.
 	port string
 
+	// win is the range of that port this value occupies, or nil for the whole
+	// of it.
+	//
+	// Set in exactly one place -- readState, from a LayerState's offset -- and
+	// carried by views of that value. It is deliberately not the same thing as
+	// `offset` above: an offset from Slice or Reshape is addressing the *kernel*
+	// performs, reading the whole binding and indexing into it, while a window
+	// is addressing the *binding* performs, because the kernel of a per-layer
+	// cache indexes its layer from zero and has no idea which layer it is.
+	//
+	// Conflating the two is what made a first attempt bind a reshaped query to
+	// its element count rather than to its port.
+	win *window
+
 	// poison marks a value that could not be built. It flows through operators
 	// without producing further errors, so one mistake yields one diagnostic.
 	poison bool

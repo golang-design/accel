@@ -38,6 +38,18 @@ type uniformNode struct {
 
 // Plan is a compiled tensor graph, ready to submit.
 //
+// window is a contiguous range of one port, in elements.
+//
+// The whole port is the window with off 0 and the port's own count, so a plan
+// that uses no layer view has exactly one window per port and the slot
+// arithmetic below is the identity. That is what keeps LayerState from being a
+// second binding path.
+type window struct {
+	port  string
+	off   int
+	count int
+}
+
 // It owns one device graph and the transient memory the planner chose; the
 // caller owns every buffer they named. Immutable, and with the graph's
 // one-submission-in-flight restriction.
@@ -46,8 +58,20 @@ type Plan struct {
 	graph      *accel.Graph
 	label      string
 	ports      []PortDesc
-	slots      map[string]accel.Slot
 	selections []KernelSelection
+
+	// slots maps a window of a port to the graph slot that binds it.
+	//
+	// A window rather than a port, because specs/007-tensor-layer.md's
+	// LayerState is a range of one state and a node reading layer 7 must bind
+	// those bytes rather than the whole cache. A whole port is the window
+	// covering all of it, so there is one path here and not two.
+	slots map[window]accel.Slot
+
+	// windows is every window in declaration order, so a submission builds its
+	// binding batch deterministically and a diagnostic names them in a stable
+	// order.
+	windows []window
 
 	scalars   []ScalarDesc
 	scalarPos map[string]int
@@ -113,7 +137,7 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		label = b.label
 	}
 	p := &Plan{
-		rt: rt, label: label, ports: b.ports, slots: map[string]accel.Slot{},
+		rt: rt, label: label, ports: b.ports, slots: map[window]accel.Slot{},
 		scalars: b.scalars, scalarPos: b.scalarPos,
 	}
 
@@ -145,6 +169,8 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		}
 	}
 
+	portAccess := map[string]accel.Access{}
+	portDType := map[string]DType{}
 	for _, d := range b.ports {
 		access := accel.AccessRead
 		switch {
@@ -155,10 +181,46 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		case d.Kind == PortState:
 			access = accel.AccessReadWrite
 		}
-		p.slots[d.Name] = r.Slot(accel.SlotDescriptor{
-			Name: d.Name, Kind: accel.BindingStorageBuffer,
-			DType: d.DType, Access: access, MinCount: d.Shape.Elements(),
-		})
+		portAccess[d.Name] = access
+		portDType[d.Name] = d.DType
+	}
+
+	// A slot per window a node actually names, rather than one per port.
+	//
+	// Only what is used, which matters rather than merely tidying: a port whose
+	// layers are read through LayerState would otherwise get a whole-port slot
+	// as well, and specs/003-command-graph.md's check V24 rejects the graph --
+	// correctly, since the whole-port slot and every layer slot name the same
+	// bytes and at least one of them writes.
+	//
+	// Declared before any node is lowered so that slot ids are a function of
+	// the graph rather than of the order nodes happen to be visited, and so a
+	// missing slot is impossible rather than merely unlikely.
+	//
+	// A window takes its parent's access, because a view of a state is that
+	// state: a layer a node writes is read-write for the reason the whole cache
+	// is.
+	declareOperand := func(t *Tensor) {
+		if t == nil || t.node >= 0 || t.port == "" {
+			return
+		}
+		w := p.whole(t.port)
+		if t.win != nil {
+			w = *t.win
+		}
+		p.declare(r, w, portDType[t.port], portAccess[t.port])
+	}
+	for _, n := range b.nodes {
+		for _, in := range n.inputs {
+			declareOperand(in)
+		}
+		if n.outPort != "" {
+			p.declare(r, window{n.outPort, n.outOff, n.out.shape.Elements()},
+				portDType[n.outPort], portAccess[n.outPort])
+		}
+	}
+	for _, o := range b.outputs {
+		p.declare(r, p.whole(o.name), portDType[o.name], portAccess[o.name])
 	}
 
 	// Intermediates are transients, so the graph's aliasing and barrier
@@ -245,11 +307,11 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		// buffer rather than into a transient, which is what makes the write
 		// visible after the submission and what lets the graph order a later
 		// read against it.
-		result = accel.Binding{Slot: p.slots[n.outPort]}
+		result = accel.Binding{Slot: p.slots[window{n.outPort, n.outOff, n.out.shape.Elements()}]}
 		wroteSlot[i] = result.Slot
 	} else if name, wanted := outputOf[n.out]; wanted {
-		wroteSlot[i] = p.slots[name]
-		result = accel.Binding{Slot: p.slots[name]}
+		wroteSlot[i] = p.slots[p.whole(name)]
+		result = accel.Binding{Slot: wroteSlot[i]}
 	} else {
 		v := r.Transient(accel.BufferDescriptor{
 			DType: n.out.dtype, Count: n.out.shape.Elements(),
@@ -370,14 +432,50 @@ func (p *Plan) copyInto(r *accel.Recorder, dst, src accel.Binding, count int) er
 
 // operand resolves one operand to a binding.
 //
+// declare allocates the graph slot for one window of a port, once.
+//
+// Idempotent because several nodes read the same layer and a slot per node
+// would make the overlap check compare a view with itself.
+func (p *Plan) declare(r *accel.Recorder, w window, dt DType, access accel.Access) accel.Slot {
+	if s, ok := p.slots[w]; ok {
+		return s
+	}
+	name := w.port
+	if w.count != p.whole(w.port).count || w.off != 0 {
+		name = fmt.Sprintf("%s[%d:%d]", w.port, w.off, w.off+w.count)
+	}
+	s := r.Slot(accel.SlotDescriptor{
+		Name: name, Kind: accel.BindingStorageBuffer,
+		DType: dt, Access: access, MinCount: w.count,
+	})
+	p.slots[w] = s
+	p.windows = append(p.windows, w)
+	return s
+}
+
+// whole is the window covering all of a port.
+func (p *Plan) whole(name string) window {
+	for _, d := range p.ports {
+		if d.Name == name {
+			return window{name, 0, d.Shape.Elements()}
+		}
+	}
+	return window{port: name}
+}
+
 // An external port becomes a slot, so the same plan serves many submissions; a
 // computed value becomes the transient its producer wrote.
 func (p *Plan) operand(t *Tensor, views []accel.BufferView,
 	wroteSlot []accel.Slot) (accel.Binding, error) {
 	if t.node < 0 {
-		slot, ok := p.slots[t.port]
+		w := p.whole(t.port)
+		if t.win != nil {
+			w = *t.win
+		}
+		slot, ok := p.slots[w]
 		if !ok {
-			return accel.Binding{}, fmt.Errorf("the port %q has no slot", t.port)
+			return accel.Binding{}, fmt.Errorf("the port %q has no slot for elements "+
+				"[%d,%d)", w.port, w.off, w.off+w.count)
 		}
 		return accel.Binding{Slot: slot}, nil
 	}

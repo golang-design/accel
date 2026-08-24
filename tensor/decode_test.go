@@ -5,6 +5,7 @@
 package tensor_test
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -277,13 +278,6 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "Lengths is f32",
 	}, {
-		name: "a layer view",
-		build: func(b *tensor.Builder) {
-			c := cache(b, "c", 2, 8, 4)
-			tensor.ScatterRows(b, tensor.LayerState(b, c, 1), f32(b, "r", 1, 4), u32(b, "i", 1))
-		},
-		want: "one state per layer",
-	}, {
 		name: "a layer that does not exist",
 		build: func(b *tensor.Builder) {
 			tensor.LayerState(b, cache(b, "c", 2, 8, 4), 5)
@@ -486,6 +480,302 @@ func TestADecodeStepOverALongCache(t *testing.T) {
 			}
 			if g := float64(got[h*headDim+i]); math.Abs(g-acc) > 1e-4*(1+math.Abs(acc)) {
 				t.Fatalf("head %d element %d is %v, want about %v", h, i, g, acc)
+			}
+		}
+	}
+}
+
+// A cache holding every layer, bound once.
+//
+// This is accel issue 9: Attention refused a LayerState view, so a 36-layer
+// model needed 72 states and 72 bindings for what is one allocation. The view
+// arithmetic was built and tested the whole time -- what was missing is that
+// LayerState computed an offset and the compiler never read it, so the refusal
+// was honest.
+//
+// A window of a port is now its own graph slot, derived from the one view the
+// caller binds. Each layer's kernel indexes its own layer from zero and has no
+// idea which layer it is, which is why the offset has to be the binding's and
+// cannot be the kernel's.
+func TestALayeredCacheBindsOnce(t *testing.T) {
+	const (
+		layers   = 6
+		qHeads   = 4
+		kvHeads  = 2
+		headDim  = 8
+		capacity = 16
+		perLayer = capacity * kvHeads * headDim
+	)
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("layered")
+
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+	})
+	slot := tensor.Input(b, tensor.ValueDesc{
+		Name: "slot", DType: accel.U32, Shape: tensor.Shape{1},
+	})
+	// One state for every layer's keys and one for every layer's values, which
+	// is two buffers rather than 2*layers.
+	kc := tensor.NewState(b, tensor.StateDesc{
+		Name: "kcache", DType: accel.F32,
+		Shape: tensor.Shape{layers, capacity, kvHeads, headDim},
+	})
+	vc := tensor.NewState(b, tensor.StateDesc{
+		Name: "vcache", DType: accel.F32,
+		Shape: tensor.Shape{layers, capacity, kvHeads, headDim},
+	})
+
+	for l := range layers {
+		q := tensor.Input(b, tensor.ValueDesc{
+			Name: fmt.Sprintf("q%d", l), DType: accel.F32,
+			Shape: tensor.Shape{qHeads, headDim},
+		})
+		newK := tensor.Input(b, tensor.ValueDesc{
+			Name: fmt.Sprintf("k%d", l), DType: accel.F32,
+			Shape: tensor.Shape{1, kvHeads * headDim},
+		})
+		newV := tensor.Input(b, tensor.ValueDesc{
+			Name: fmt.Sprintf("v%d", l), DType: accel.F32,
+			Shape: tensor.Shape{1, kvHeads * headDim},
+		})
+		lk := tensor.ScatterRows(b, tensor.LayerState(b, kc, l), newK, slot)
+		lv := tensor.ScatterRows(b, tensor.LayerState(b, vc, l), newV, slot)
+		tensor.Output(b, fmt.Sprintf("out%d", l),
+			tensor.Attention(b, q, lk, lv, tensor.AttentionOptions{
+				Lengths: lengths, ScaleName: "scale",
+			}))
+	}
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "layered"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	kBuf := f32Buffer(t, d, "kcache", make([]float32, layers*perLayer))
+	vBuf := f32Buffer(t, d, "vcache", make([]float32, layers*perLayer))
+	scale := float32(1 / math.Sqrt(headDim))
+
+	// A host model of every layer's cache, stepped alongside.
+	keys := make([][][]float32, layers)
+	vals := make([][][]float32, layers)
+
+	for step := range 3 {
+		bufs := map[string]accel.BufferView{
+			"kcache": kBuf, "vcache": vBuf,
+			"len":  u32Buffer(t, d, "len", []uint32{uint32(step + 1)}),
+			"slot": u32Buffer(t, d, "slot", []uint32{uint32(step)}),
+		}
+		outs := map[string]accel.BufferView{}
+		qs := make([][]float32, layers)
+		for l := range layers {
+			q := make([]float32, qHeads*headDim)
+			ks := make([]float32, kvHeads*headDim)
+			vs := make([]float32, kvHeads*headDim)
+			for i := range q {
+				q[i] = float32(math.Sin(float64(step*31 + l*7 + i)))
+			}
+			for i := range ks {
+				// Distinct per layer, so a layer reading another layer's slice
+				// is a wrong answer rather than a coincidence.
+				ks[i] = float32(math.Cos(float64(l*100 + step*7 + i)))
+				vs[i] = float32(l*10) + float32(step) + float32(i)/8
+			}
+			qs[l] = q
+			keys[l] = append(keys[l], ks)
+			vals[l] = append(vals[l], vs)
+			bufs[fmt.Sprintf("q%d", l)] = f32Buffer(t, d, "q", q)
+			bufs[fmt.Sprintf("k%d", l)] = f32Buffer(t, d, "k", ks)
+			bufs[fmt.Sprintf("v%d", l)] = f32Buffer(t, d, "v", vs)
+			o := f32Buffer(t, d, "out", make([]float32, qHeads*headDim))
+			outs[fmt.Sprintf("out%d", l)] = o
+			bufs[fmt.Sprintf("out%d", l)] = o
+		}
+
+		f := plan.Submit(d.Queue(), tensor.Bindings{
+			Buffers: bufs,
+			Scalars: map[string]tensor.ScalarValue{"scale": tensor.F32(scale)},
+		})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+
+		for l := range layers {
+			got := make([]float32, qHeads*headDim)
+			if err := d.Queue().ReadBuffer(outs[fmt.Sprintf("out%d", l)].Buffer, 0, got); err != nil {
+				t.Fatalf("readback: %v", err)
+			}
+			want := attentionReference(qs[l], keys[l], vals[l],
+				qHeads, kvHeads, headDim, float64(scale))
+			for i := range got {
+				if diff := math.Abs(float64(got[i]) - want[i]); diff > 1e-4*(1+math.Abs(want[i])) {
+					t.Fatalf("step %d layer %d element %d is %v, want about %v",
+						step, l, i, got[i], want[i])
+				}
+			}
+		}
+	}
+
+	// Every layer's slice holds its own keys and no other layer's, which a
+	// per-step output check cannot see: a wrong offset that is consistent
+	// between the scatter and the attention would agree with itself.
+	gotK := make([]float32, layers*perLayer)
+	if err := d.Queue().ReadBuffer(kBuf.Buffer, 0, gotK); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	for l := range layers {
+		base := l * perLayer
+		for pos := range keys[l] {
+			for i := range kvHeads * headDim {
+				want := keys[l][pos][i]
+				if g := gotK[base+pos*kvHeads*headDim+i]; g != want {
+					t.Fatalf("layer %d position %d element %d is %v, want %v",
+						l, pos, i, g, want)
+				}
+			}
+		}
+	}
+}
+
+// attentionReference is one decode step in f64.
+func attentionReference(q []float32, keys, vals [][]float32,
+	qHeads, kvHeads, headDim int, scale float64) []float64 {
+
+	out := make([]float64, qHeads*headDim)
+	group := qHeads / kvHeads
+	for h := range qHeads {
+		kvHead := h / group
+		scores := make([]float64, len(keys))
+		best := math.Inf(-1)
+		for pos := range keys {
+			var acc float64
+			for i := range headDim {
+				acc += float64(q[h*headDim+i]) * float64(keys[pos][kvHead*headDim+i])
+			}
+			scores[pos] = acc * scale
+			best = math.Max(best, scores[pos])
+		}
+		var sum float64
+		for i := range scores {
+			scores[i] = math.Exp(scores[i] - best)
+			sum += scores[i]
+		}
+		for i := range headDim {
+			var acc float64
+			for pos := range keys {
+				acc += scores[pos] / sum * float64(vals[pos][kvHead*headDim+i])
+			}
+			out[h*headDim+i] = acc
+		}
+	}
+	return out
+}
+
+// Attention over a layer this plan did not write.
+//
+// The companion to TestALayeredCacheBindsOnce, and not a duplicate of it: there
+// every layer was scattered first, so Attention read the State that ScatterRows
+// produced and the binding came from the slot that node wrote. The read window
+// was never consulted. This reads a cache filled by an earlier submission,
+// which is what a decode plan does on every step after the first, and it is the
+// only path where a layer view's offset reaches the binding through the *read*.
+func TestAttentionReadsALayerItDidNotWrite(t *testing.T) {
+	const (
+		layers   = 4
+		qHeads   = 2
+		kvHeads  = 1
+		headDim  = 8
+		capacity = 4
+		perLayer = capacity * kvHeads * headDim
+	)
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("readlayer")
+
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+	})
+	kc := tensor.NewState(b, tensor.StateDesc{
+		Name: "kcache", DType: accel.F32,
+		Shape: tensor.Shape{layers, capacity, kvHeads, headDim},
+	})
+	vc := tensor.NewState(b, tensor.StateDesc{
+		Name: "vcache", DType: accel.F32,
+		Shape: tensor.Shape{layers, capacity, kvHeads, headDim},
+	})
+	for l := range layers {
+		q := tensor.Input(b, tensor.ValueDesc{
+			Name: fmt.Sprintf("q%d", l), DType: accel.F32,
+			Shape: tensor.Shape{qHeads, headDim},
+		})
+		tensor.Output(b, fmt.Sprintf("out%d", l),
+			tensor.Attention(b, q, tensor.LayerState(b, kc, l), tensor.LayerState(b, vc, l),
+				tensor.AttentionOptions{Lengths: lengths, ScaleName: "scale"}))
+	}
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "readlayer"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	// Each layer's slice holds values only that layer should see.
+	ks := make([]float32, layers*perLayer)
+	vs := make([]float32, layers*perLayer)
+	for l := range layers {
+		for i := range perLayer {
+			ks[l*perLayer+i] = float32(math.Cos(float64(l*50 + i)))
+			vs[l*perLayer+i] = float32(l*10) + float32(i)/4
+		}
+	}
+	scale := float32(1 / math.Sqrt(headDim))
+
+	bufs := map[string]accel.BufferView{
+		"kcache": f32Buffer(t, d, "kcache", ks),
+		"vcache": f32Buffer(t, d, "vcache", vs),
+		"len":    u32Buffer(t, d, "len", []uint32{capacity}),
+	}
+	outs := map[string]accel.BufferView{}
+	qs := make([][]float32, layers)
+	for l := range layers {
+		q := make([]float32, qHeads*headDim)
+		for i := range q {
+			q[i] = float32(math.Sin(float64(l*3 + i)))
+		}
+		qs[l] = q
+		bufs[fmt.Sprintf("q%d", l)] = f32Buffer(t, d, "q", q)
+		o := f32Buffer(t, d, "out", make([]float32, qHeads*headDim))
+		outs[fmt.Sprintf("out%d", l)] = o
+		bufs[fmt.Sprintf("out%d", l)] = o
+	}
+	f := plan.Submit(d.Queue(), tensor.Bindings{
+		Buffers: bufs,
+		Scalars: map[string]tensor.ScalarValue{"scale": tensor.F32(scale)},
+	})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	for l := range layers {
+		got := make([]float32, qHeads*headDim)
+		if err := d.Queue().ReadBuffer(outs[fmt.Sprintf("out%d", l)].Buffer, 0, got); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		keys := make([][]float32, capacity)
+		vals := make([][]float32, capacity)
+		for pos := range capacity {
+			base := l*perLayer + pos*kvHeads*headDim
+			keys[pos] = ks[base : base+kvHeads*headDim]
+			vals[pos] = vs[base : base+kvHeads*headDim]
+		}
+		want := attentionReference(qs[l], keys, vals, qHeads, kvHeads, headDim, float64(scale))
+		for i := range got {
+			if diff := math.Abs(float64(got[i]) - want[i]); diff > 1e-4*(1+math.Abs(want[i])) {
+				t.Fatalf("layer %d element %d is %v, want about %v: a layer read must "+
+					"bind that layer's slice", l, i, got[i], want[i])
 			}
 		}
 	}

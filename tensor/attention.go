@@ -118,6 +118,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		q = &Tensor{
 			b: b, dtype: q.dtype, shape: Shape{q.shape[1], q.shape[2]},
 			strides: contiguous(Shape{q.shape[1], q.shape[2]}), node: q.node, port: q.port,
+			win: q.win,
 		}
 	default:
 		return b.fail(1, "Attention", "q is %v; it is [qHeads, headDim] for one token or "+
@@ -155,10 +156,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	}
 	if stale(b, v) {
 		return b.fail(1, "Attention", "the value cache is %s", staleMessage(b, v))
-	}
-	if k.offset != 0 || v.offset != 0 {
-		return b.fail(1, "Attention", "a layer view binds a range of a resource, which a "+
-			"slot cannot express yet; use one state per layer")
 	}
 
 	out := Shape{qHeads, headDim}

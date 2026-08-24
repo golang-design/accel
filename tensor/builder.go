@@ -134,10 +134,13 @@ type Builder struct {
 	scalars   []ScalarDesc
 	scalarPos map[string]int
 
-	// stateVersion is the latest version of each persistent binding. Reading an
-	// older one is refused rather than silently reading the newer contents: see
-	// ReadState.
-	stateVersion map[string]int
+	// stateVersion is the latest version written to each window of a persistent
+	// binding. Keyed by window rather than by name because two layers of one
+	// cache are disjoint ranges of one buffer: writing layer 0 does not
+	// supersede a reader of layer 1, and a version keyed by name said it did.
+	// A write supersedes a reader when their ranges overlap, which is what
+	// stale() tests.
+	stateVersion map[window]int
 
 	outputs []output
 	errs    []error
@@ -196,6 +199,11 @@ type node struct {
 	// node's result *is* that buffer, so a later reader of the next version
 	// binds the same slot and the graph orders the two by their byte ranges.
 	outPort string
+
+	// outOff is where this node's write lands within that port, in elements.
+	// Non-zero for a write through a LayerState view, which is a range of the
+	// parent rather than the whole of it.
+	outOff int
 
 	// inPlace marks a kernel that rewrites the buffer it reads. Its operand is
 	// copied into the result's storage first, because a tensor is an immutable
