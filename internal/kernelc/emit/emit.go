@@ -252,6 +252,42 @@ func (e *emitter) stage(k *ir.Func) {
 	e.printf(" {\n")
 	e.block(k.Body, 1)
 	e.printf("}\n\n")
+
+	// The record a render pipeline takes. specs/033-render-api.md checks a
+	// descriptor against it, which is what makes a mismatched attachment count
+	// a pipeline-creation error rather than an undefined draw.
+	rec := k.Name + "Stage"
+	e.printf("// %s is the compiled form of %s.\n", rec, k.Name)
+	e.printf("var %s = accel.Stage{\n", rec)
+	e.printf("\tName: %q,\n", k.Name)
+	if k.Stage == ir.StageVertex {
+		e.printf("\tKind: accel.StageVertex,\n")
+	} else {
+		e.printf("\tKind: accel.StageFragment,\n")
+	}
+	if k.Varyings != nil {
+		e.printf("\tVaryings: %q,\n", k.Varyings.Name)
+	}
+	if len(k.Attributes) > 0 {
+		e.printf("\tAttributes: []accel.StageAttribute{\n")
+		for _, a := range k.Attributes {
+			e.printf("\t\t{Name: %q, Index: %d, Components: %d},\n", a.Name, a.Index, a.Type.Len)
+		}
+		e.printf("\t},\n")
+	}
+	if len(k.Outputs) > 0 {
+		e.printf("\tOutputs: []accel.StageOutput{\n")
+		for _, o := range k.Outputs {
+			e.printf("\t\t{Name: %q, Index: %d},\n", o.Name, o.Index)
+		}
+		e.printf("\t},\n")
+	}
+	if k.Discards {
+		e.printf("\tDiscards: true,\n")
+	}
+	e.printf("\tDigest: %q,\n", Digest(k))
+	e.printf("\tGenerator: kernelabi.Version,\n")
+	e.printf("}\n\n")
 }
 
 // stageResultName is the authored name of a fragment stage's result struct.

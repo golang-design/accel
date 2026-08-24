@@ -115,9 +115,24 @@ package accel
 import (
 	"encoding/hex"
 	"errors"
+	"golang.design/x/accel/internal/kernel"
 	"sync"
 
 	"golang.design/x/accel/internal/driver"
+)
+
+// StageKind, StageAttribute and StageOutput describe a compiled graphics stage.
+// A caller reads them from a generated [Stage] and never builds one.
+type (
+	StageKind      = kernel.StageKind
+	StageAttribute = kernel.StageAttribute
+	StageOutput    = kernel.StageOutput
+)
+
+// The two graphics stages a [Stage] can be.
+const (
+	StageVertex   = kernel.StageVertex
+	StageFragment = kernel.StageFragment
 )
 
 // ErrNotImplemented marks a declaration that exists so its shape is fixed but

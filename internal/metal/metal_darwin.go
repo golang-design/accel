@@ -427,6 +427,11 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			// property of the API rather than of the device.
 			MaxBindingsPerKind: 31,
 
+			// Eight colour attachments, which every Metal family reports and
+			// which the API caps at regardless of device. A constant rather
+			// than a query because Metal exposes no counterpart to ask.
+			MaxColorAttachments: 8,
+
 			// The constant address space is not separately bounded on Apple
 			// silicon. 64 KiB is what every backend in the target set
 			// guarantees, and under-reporting a ceiling costs nothing here.

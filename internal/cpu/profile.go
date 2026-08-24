@@ -118,6 +118,12 @@ var portableFloor = driver.Limits{
 	MaxStorageBufferBindingBytes: 128 << 20,
 	MaxBindingsPerKind:           4,
 
+	// Four colour attachments is the portable floor: GLES 3.1 guarantees four,
+	// and a deferred renderer's albedo, normal and position fit in it. Metal
+	// and Vulkan report more, which is what the developer profile below
+	// reflects.
+	MaxColorAttachments: 4,
+
 	// Spec 001 section 1.1: a device without subgroups reports 1/1 rather than
 	// zero, so an opened device never has a zero-valued limit. Under the
 	// conservative rule below no target's subgroup support is guaranteed, so the
@@ -169,6 +175,12 @@ var developerLimits = driver.Limits{
 
 	MaxStorageBufferBindingBytes: maxDeveloperBytes,
 	MaxBindingsPerKind:           64,
+
+	// Eight, which is Metal's and a common Vulkan figure. The CPU rasterizer
+	// has no limit of its own -- a Framebuffer holds a slice -- so this is a
+	// portability ceiling rather than a capacity one, and reporting no limit
+	// would let a kernel that works here fail on every real device.
+	MaxColorAttachments: 8,
 
 	MinSubgroupSize: defaultSubgroupSize,
 	MaxSubgroupSize: defaultSubgroupSize,

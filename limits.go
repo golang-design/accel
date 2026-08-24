@@ -67,6 +67,12 @@ type Limits struct {
 	MaxStorageBufferBindingBytes int
 	MaxBindingsPerKind           int
 
+	// MaxColorAttachments is how many colour targets one render pass may have.
+	// Zero means the backend does not report one, which at v0 means it has no
+	// render path — a limit of zero and "no limit" are the same answer for a
+	// backend that cannot draw.
+	MaxColorAttachments int
+
 	// Devices without subgroups report 1/1 while Capabilities.Subgroups is false,
 	// so every opened device still has positive numeric limits.
 	MinSubgroupSize int
