@@ -383,11 +383,17 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			// not a staging copy of it.
 			SharedMemoryKind: true,
 
-			// Graphics is out of v0 scope entirely (specs/005-graphics.md), and
-			// a command buffer is single-submit so there is no native replay
-			// (specs/006-backends.md section 4.3).
-			Graphics:                false,
-			Presentation:            false,
+			// Graphics and Presentation are true since 2026-08-24: this backend
+			// runs render passes and presents to a CAMetalLayer. They read
+			// false until then, which made Capabilities disagree with what
+			// NewRenderPipeline and NewWindowSurface actually accept -- the
+			// inverse of specs/006-backends.md decision 6, where absence is
+			// reported: presence was not.
+			//
+			// A command buffer is single-submit, so there is still no native
+			// replay (specs/006-backends.md section 4.3).
+			Graphics:                true,
+			Presentation:            true,
 			Multisampling:           false,
 			RasterizerOrderedAccess: false,
 			NativeGraphReplay:       false,
