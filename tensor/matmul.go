@@ -194,11 +194,18 @@ func Linear(b *Builder, x, w, bias *Tensor) *Tensor {
 	if !ok {
 		return b.poison()
 	}
-	if x.dtype != accel.F16 || w.dtype != accel.F16 {
-		return b.fail(1, "Linear", "operands are %v and the fused epilogue reads f16; the "+
-			"composed form -- MatMul then Add -- takes f32 and is the reference this "+
-			"kernel is checked against, so it is the right answer here rather than a "+
-			"second fused variant", x.dtype)
+	// x alone decides, and the message still names both. Of the three pairs
+	// [gemmPair] admits, the only one whose activation is f16 is (f16, f16), so
+	// an f16 x means an f16 w and testing w as well would be a branch nothing
+	// can reach. What changed is the diagnostic: MatMul now admits f32
+	// activations against f16 weights and the fused epilogue has no such
+	// variant, so a caller can arrive here with a pair that is half right, and
+	// a message naming only x would point at the operand that is fine.
+	if x.dtype != accel.F16 {
+		return b.fail(1, "Linear", "operands are %v and %v and the fused epilogue reads "+
+			"f16 on both; the composed form -- MatMul then Add -- takes every pair "+
+			"MatMul does and is the reference this kernel is checked against, so it is "+
+			"the right answer here rather than a second fused variant", x.dtype, w.dtype)
 	}
 	if bias.dtype != accel.F32 {
 		return b.fail(1, "Linear", "the bias is %v and the epilogue adds in f32", bias.dtype)

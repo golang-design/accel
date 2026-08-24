@@ -523,6 +523,19 @@ func TestOperatorRefusals(t *testing.T) {
 			tensor.Linear(b, f16(b, "x", 4, 8), f16(b, "w", 8, 6), f16(b, "c", 6))
 		},
 		want: "the epilogue adds in f32",
+	}, {
+		// The pair MatMul now admits and the fused epilogue still cannot read.
+		// matShape accepts it, so Linear has to check the operands itself --
+		// and the message names both, because the activation is not the one
+		// with the problem.
+		name: "a Linear over f32 activations and an f16 weight",
+		build: func(b *tensor.Builder) {
+			x := tensor.Input(b, tensor.ValueDesc{
+				Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 8},
+			})
+			tensor.Linear(b, x, f16(b, "w", 8, 6), f32(b, "c", 6))
+		},
+		want: "operands are f32 and f16 and the fused epilogue reads f16 on both",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := rt.NewBuilder(tc.name)
