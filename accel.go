@@ -75,10 +75,21 @@
 // Graphics runs on the CPU backend and on Metal, and the two are compared pixel
 // by pixel: render pipelines, passes, vertex and index buffers, by-value stage
 // parameters, depth, blending, indexed and indirect draws, and a surface that
-// presents to a window the caller owns. It is newer than the compute half and
-// is not covered by specs/036-documentation.md's freeze record, so treat its
-// shape as provisional. The sampler family is still withdrawn: a stage cannot
-// read a texture until specs/032-stage-abi.md section 5's texel fetch exists.
+// presents to a window the caller owns.
+//
+// It is outside specs/036-documentation.md's freeze record, and the reason is
+// specific rather than "it is newer": a review of this surface
+// (specs/042-surface-completion.md section 5.2) found that its attachment model
+// has to change in a way that is not additive. An attachment is a buffer view
+// today and becomes a texture view, which a buffer view cannot express because
+// it names no mip level, array layer or format. Code written against today's
+// shape will need rewriting; specs/045-texture-attachments.md is the change.
+//
+// A stage can fetch a texel (specs/032-stage-abi.md section 5), which is the
+// half that lets a pass read what an earlier pass drew. There is no sampler and
+// there is not going to be one soon: a filtered sampler cannot be reproduced
+// exactly by the CPU reference, so it is a feature the oracle could not check.
+// A stage that wants filtering builds it from fetches.
 //
 // # The model
 //

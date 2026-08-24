@@ -187,6 +187,20 @@ The freeze covers the compute half: `accel`, `tensor`, `quant`, `kmath`.
 Graphics is not in it — there is no render API in code, and §5.3 removes the
 stage types until there is.
 
+> **Correction, 2026-08-24.** The reason above expired. There is a render API in
+> code — pipelines, passes, attachments, draws — and Metal runs it, compared
+> against the CPU rasterizer pixel by pixel. Graphics is still outside the
+> freeze, and now for a reason that is written down rather than assumed:
+> [042](042-surface-completion.md) §5.2 reviewed it and found the attachment
+> model must change **non-additively**, so anything built on today's shape is
+> built to be rebuilt. [045](045-texture-attachments.md) is that change.
+>
+> This matters for a release rather than only for tidiness. "Not frozen because
+> it does not exist" and "not frozen because it is being replaced" are different
+> promises to a caller, and only the second one lets them decide whether to
+> wait. §5.2's own rule — *provisional names the event* — applies to the whole
+> half: the event is 045.
+
 ### 5.1 Frozen
 
 Devices and selection (`OpenCPU`, `OpenDevice`, `OpenBest`, `Policy`, `Backend`,

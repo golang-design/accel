@@ -20,9 +20,23 @@ it on whichever backend the machine has — today the CPU or Metal — with
 `CGO_ENABLED=0` the whole way.
 
 > [!IMPORTANT]
-> **Early. The API will change.** Compute works end to end and is tested on
-> every push. Graphics runs on the CPU backend and on Metal, compared pixel by
-> pixel, and presents to a window you create. accel does not create windows.
+> **The two halves of accel are at different stages, and one hedge for both
+> would mislead you either way.**
+>
+> **Compute and tensors are settled.** The surface is frozen — names, shapes and
+> behaviour are the contract — and an inference framework is built on it and
+> files what it finds. Changing something here costs an argument, a deprecation
+> and a release note. `specs/036-documentation.md` §5 is the record, symbol by
+> symbol, including the few marked provisional and the event that moves each.
+>
+> **Graphics works and is changing shape.** It runs on the CPU backend and on
+> Metal, compared pixel by pixel, and presents to a window you create; accel
+> does not create windows. But a review of that surface found its attachment
+> model has to change in a way that is not additive — attachments become
+> textures — so code written against today's shape will need rewriting.
+> `specs/045-texture-attachments.md` is the change. If you are starting
+> something on the graphics half, that is the thing to read first.
+>
 > Vulkan, D3D12, OpenGL and WebGPU are designed and not started. The
 > [status table](#what-works-today) says which is which.
 
