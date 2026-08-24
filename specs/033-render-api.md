@@ -388,19 +388,21 @@ of these names the node, the slot, and the recording call's source position.
 
 ## 7. Done
 
-**Built as of 2026-08-24**: the pipeline object with its nine creation-time
-refusals, the pass node with declared access, load and store actions, draws in
-recorded order, and execution on the CPU backend — an offscreen triangle renders
-and its interior pixels match ([035](035-cpu-rasterizer.md) §8 step 1),
-`LoadClear` and `LoadKeep` differ, and a depth attachment is cleared, tested
-against and written through.
+**Built as of 2026-08-24**: the pipeline object with its creation-time refusals,
+the vertex input layout of §2 with §2.2's validation against the stage record,
+by-value stage parameters as pass state, the pass node with declared access,
+load and store actions, draws in recorded order, and execution on the CPU
+backend — an offscreen triangle renders and its interior pixels match
+([035](035-cpu-rasterizer.md) §8 step 1), attributes are fetched per vertex and
+per instance and interpolated, `LoadClear` and `LoadKeep` differ, and a depth
+attachment is cleared, tested against and written through.
 
 **Outstanding**, and why this spec stays *in progress*: blended draw order, the
 `DontCare` edge assertions and the transient aliasing that follows from them,
-feedback rejection for an overlapping subresource, the N-object frame at
-recorded uniform offsets (§6, and see deviation 1), indirect draws with a
-device-written count, and the Metal render path. The list below is the whole
-criterion; those are the rows still unmet.
+feedback rejection for an overlapping subresource, indexed draws, the N-object
+frame at recorded uniform offsets (§6), indirect draws with a device-written
+count, and the Metal render path. The list below is the whole criterion; those
+are the rows still unmet.
 
 - a pipeline whose target count differs from its fragment stage's output field
   count is refused at creation, naming both numbers;
@@ -467,19 +469,37 @@ and no render path supplies one yet (specs/033-render-api.md deviation 1)
 Refused rather than passed an empty slice, because the generated adapter would
 then index past its end and the diagnostic would come from a backend.
 
-**When the gap closes.** With section 6's uniform-buffer mechanism and the vertex
-layout, which are the same milestone: both are channels from a bound buffer into
-a stage's parameters, and building one without the other leaves a stage that can
-be created and not drawn. The open design question is recorded in section 9.
+**Closed 2026-08-24.** Both channels are built, and the by-value one took the
+shape section 9 left open: **pass state, one call per stage**.
+
+```go
+pass.SetVertexUniform(0, Transform{Scale: 0.5})
+pass.SetFragmentUniform(0, Tint{Colour: ...})
+```
+
+Two calls rather than one because the index spaces are per stage — the
+inequality above is why a single indexed call would have to guess which stage a
+value was for. Pass state rather than a `Draw` field because it matches
+`SetPipeline` and `SetVertexBuffer`, and a value shared by several draws is
+written once; a draw captures what is set when it is recorded, so a later call
+does not reach back.
+
+Section 6's recorded-offset mechanism is still the answer for a thousand-object
+frame and is still unbuilt. It is a different problem: rewriting a thousand Go
+values per frame costs what the offsets exist to avoid.
+
+Build checks each stage against its record — every declared parameter has a
+value, no value is set for a stage that declares none, and the type matches by
+name. The vertex layout of section 2 is built with it, so a stage now reads both
+its attributes and its parameters.
 
 ## 9. Open questions
 
-- **Whether by-value uniforms belong on a draw at all.** Section 6 says a uniform
-  buffer at a recorded offset, which is what an N-object frame needs. A by-value
-  channel is a convenience for the one-uniform case, and if it arrives it needs an
-  index space the two stages share — either assigned per pipeline at creation, or
-  split into two slices with the draw naming which stage each value is for. See
-  deviation 1.
+- **Whether section 6's recorded uniform offsets are still needed.** The by-value
+  channel answers the one-uniform case. A thousand-object frame is a different
+  problem — rewriting a thousand Go values per frame costs what the offsets exist
+  to avoid — so the mechanism is expected, but the first renderer to need it
+  should say what shape it wants.
 
 - **Whether a resize can avoid a graph rebuild.** Carried from 005 and owned by
   [034](034-surface-present.md), because the answer depends on whether attachment
