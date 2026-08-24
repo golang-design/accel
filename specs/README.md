@@ -21,8 +21,9 @@ transient aliasing; cooperative kernels with shared memory, barriers and
 atomics; a portable tiled GEMM; and the tensor layer above it, with quantized
 weights, sampling, a paged KV cache, and prefill and decode attention.
 
-Graphics is being built: its five child designs are written and the CPU
-reference rasterizer is under way, but nothing graphics is callable.
+Graphics is being built: its five child designs are written, and an offscreen
+triangle now renders through the public API on the CPU backend. Vertex buffers,
+by-value stage parameters, surfaces and the Metal render path are unbuilt.
 [009](009-sequencing.md) records what has landed, in what order, and the
 deviations taken.
 
@@ -30,8 +31,8 @@ deviations taken.
 narrower than this directory: compute only, on the CPU backend and Metal.
 [005](005-graphics.md) is the parent of graphics; its five child designs are
 written — [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md), plus
-[041](041-msaa.md) — and the CPU reference rasterizer is being built, but
-nothing graphics is callable yet. [006](006-backends.md) specifies three remaining synchronous
+[041](041-msaa.md) — and an offscreen triangle renders on the CPU backend, which
+is the first of [035](035-cpu-rasterizer.md)'s six steps. [006](006-backends.md) specifies three remaining synchronous
 backends plus a deferred asynchronous WebGPU shape; all are unbuilt. A spec being
 here means its scope and current decisions are reviewable, not that its code is
 next.

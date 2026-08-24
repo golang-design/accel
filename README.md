@@ -21,7 +21,8 @@ it on whichever backend the machine has — today the CPU or Metal — with
 
 > [!IMPORTANT]
 > **Early. The API will change.** Compute works end to end and is tested on
-> every push. Graphics is partly built and has no public render API yet.
+> every push. Graphics renders an offscreen triangle on the CPU backend and
+> nothing more: no vertex buffers, no surface, no GPU render path.
 > Vulkan, D3D12, OpenGL and WebGPU are designed and not started. The
 > [status table](#what-works-today) says which is which.
 
@@ -191,7 +192,7 @@ position.
 | Use int8 quantized weights | yes |
 | Sample a token (argmax, categorical, top-k, top-p) | yes; temperature and repetition penalties are not built |
 | Page a KV cache, and batch several sequences in one step | yes |
-| Draw triangles | not yet — no public render API |
+| Draw triangles | offscreen on the CPU backend only, from stage-computed positions — no vertex buffers, no window, no GPU |
 | Use Vulkan, D3D12, OpenGL or WebGPU | not yet |
 
 Every "yes" has tests that fail without it and an end-to-end case through the
@@ -212,8 +213,9 @@ runs anywhere.
 - **You need peak throughput.** cgo-free rules out cuBLAS, cuDNN and GGML. Every
   kernel is written here, and it will not beat vendor libraries for a long time,
   possibly ever.
-- **You need rasterization today.** Graphics is designed and partly built; the
-  render API is not exposed.
+- **You need rasterization today.** A triangle renders offscreen on the CPU
+  backend. There is no vertex buffer, no surface to present to, and no GPU
+  render path.
 - **You expected `wgpu`.** The submission model is deliberately different and the
   API does not aim to match it.
 

@@ -388,6 +388,20 @@ of these names the node, the slot, and the recording call's source position.
 
 ## 7. Done
 
+**Built as of 2026-08-24**: the pipeline object with its nine creation-time
+refusals, the pass node with declared access, load and store actions, draws in
+recorded order, and execution on the CPU backend — an offscreen triangle renders
+and its interior pixels match ([035](035-cpu-rasterizer.md) §8 step 1),
+`LoadClear` and `LoadKeep` differ, and a depth attachment is cleared, tested
+against and written through.
+
+**Outstanding**, and why this spec stays *in progress*: blended draw order, the
+`DontCare` edge assertions and the transient aliasing that follows from them,
+feedback rejection for an overlapping subresource, the N-object frame at
+recorded uniform offsets (§6, and see deviation 1), indirect draws with a
+device-written count, and the Metal render path. The list below is the whole
+criterion; those are the rows still unmet.
+
 - a pipeline whose target count differs from its fragment stage's output field
   count is refused at creation, naming both numbers;
 - a pipeline used in a pass with mismatched attachment formats is refused at

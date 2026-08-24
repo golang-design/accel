@@ -251,11 +251,14 @@ kernels with shared memory and barriers; a portable tiled GEMM; and the tensor
 layer above it, with quantized weights, sampling, a paged KV cache, and prefill
 and decode attention. Subgroup shuffles and scans are specified and not built.
 
-Graphics is not callable yet. The design is finished, the vertex and fragment
-stage types are already in the public API, and the CPU reference rasterizer is
-being written — but there is no render pipeline, no render pass and no surface.
-If you need rasterization today, this is not it. Neither are the Vulkan, D3D12,
-OpenGL and WebGPU backends.
+Graphics draws its first triangle. A render pipeline, a render pass node with
+load and store actions, and a draw go through the graph to the CPU reference
+rasterizer, and an offscreen target comes back with the right pixels in it. What
+is not there is most of the rest: a stage computes its own vertex positions
+because no vertex buffer reaches one, no stage takes a by-value parameter, there
+is no surface to present to, and Metal has no render path. If you need
+rasterization today, this is not it. Neither are the Vulkan, D3D12, OpenGL and
+WebGPU backends.
 
 The row-by-row breakdown is the [status table in the
 README](../README.md#what-works-today). The order the work was done in, and the

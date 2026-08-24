@@ -566,6 +566,21 @@ gained `Composite`, and the front end expands a keyed literal and fills every
 omitted field with its zero, so an emitter never has to know which spelling the
 author used and a half-initialised literal cannot reach a target as a hole.
 
+**The record carries the stage's by-value parameters.** `Stage.Uniforms` is a
+`[]StageUniform` of `{Name, Type, Index}`, one per by-value parameter, in the
+order the generated adapter indexes them. It is what `Kernel.Uniforms` is for a
+compute kernel, and it is here for the same reason: a caller supplies a uniform
+by index, and without the list the consumer has nothing to place against.
+[033](033-render-api.md) deviation 1 is what happens without it — the render
+path appended values in the order the caller wrote them, so two uniforms passed
+out of order bound to each other's parameters.
+
+`Index` is the position in the uniforms slice, not the parameter position: the
+receiver and any attributes are interleaved with the uniforms in the authored
+signature. It is per stage, and the two stages of one pipeline each count from
+zero, so a consumer holding one slice for both is holding two index spaces at
+once. That is the open question 033 deviation 1 records.
+
 **An array-typed parameter is not automatically workgroup-shared.** The emitter
 decided "shared" from the type alone, which was sound while the only array
 parameters were `*[N]T`. A vertex attribute is a by-value array, so indexing one
