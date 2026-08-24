@@ -411,7 +411,7 @@ compared against the CPU rasterizer pixel by pixel over seven cases.
 | transient attachment aliasing under `DontCare` | the edges are asserted and so is the aliasing; what is untested is `DontCare` specifically *widening* it beyond what `Clear` already allows, and the two declare the same access so it may not |
 | feedback rejection for an overlapping subresource | **blocked**, not merely unwritten: a stage cannot read a texture at all until [032](032-stage-abi.md) §5's texel fetch exists, so there is no way to construct feedback |
 | the N-object frame at recorded uniform offsets (§6) | see deviation 1; the by-value channel answers the one-uniform case |
-| a windowed surface | [034](034-surface-present.md) §7's `CAMetalLayer` drawable path, which is its own claim |
+| a windowed surface reaching a screen | the `CAMetalLayer` drawable path is built ([034](034-surface-present.md) §8.1); the compositor handoff needs a display |
 
 - a pipeline whose target count differs from its fragment stage's output field
   count is refused at creation, naming both numbers;

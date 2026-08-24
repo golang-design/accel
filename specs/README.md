@@ -25,7 +25,8 @@ Graphics is being built: its five child designs are written, and the CPU backend
 now runs a whole frame — vertex and index buffers, attributes, by-value stage
 parameters, depth, blending, and a headless surface through acquire and present.
 Metal runs the same passes and is compared against the CPU rasterizer pixel by
-pixel. What is unbuilt is a windowed surface and multisampling.
+pixel, and presents to a `CAMetalLayer` the caller owns. What is unbuilt is the
+compositor handoff, which needs a display, and multisampling.
 [009](009-sequencing.md) records what has landed, in what order, and the
 deviations taken.
 

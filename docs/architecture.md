@@ -261,11 +261,17 @@ Metal runs the same passes, and the two are compared pixel by pixel — which
 makes the CPU rasterizer an oracle for graphics the way it already was for
 compute, rather than the only implementation.
 
-What is missing is a window. The surface is headless: a frame comes back in a
-buffer you read, which is enough for offscreen rendering and for testing the
-whole acquire-render-present loop in CI, and not enough to show anyone a
-picture. Multisampling is specified and unbuilt, and so are the Vulkan, D3D12,
-OpenGL and WebGPU backends.
+There is a windowed path on Metal: you create the window, hand accel the
+`CAMetalLayer`, and it owns the swapchain inward. accel does not create windows,
+and the reason is a boundary rather than laziness — window creation is input,
+focus, DPI and event loops, none of which is GPU work, and absorbing it would
+drag a windowing library and an opinion about event loops into a library about
+device work.
+
+The frame loop is the same whether it presents to a screen or to a buffer you
+read back, which is what the headless surface was built to make true.
+Multisampling is specified and unbuilt, and so are the Vulkan, D3D12, OpenGL and
+WebGPU backends.
 
 The row-by-row breakdown is the [status table in the
 README](../README.md#what-works-today). The order the work was done in, and the

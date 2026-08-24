@@ -1486,6 +1486,60 @@ initialization is zero, because the framework is not loaded yet — and a messag
 to nil is answered with zero rather than crashing, so the symptom was a
 descriptor that "could not be created" from a call that never reached Metal.
 
+#### The Metal drawable path — 2026-08-24
+
+[034](034-surface-present.md) §7 called this the risk, because the predecessor
+implemented on-screen present for X11/EGL and Win32/ANGLE and **never
+implemented it on Metal**, so present worked everywhere except the backend where
+it differs most. It is built.
+
+`NewWindowSurface` takes a `CAMetalLayer*` the caller owns and reuses the entire
+headless state machine. That is the payoff the headless surface was built for:
+the frame loop does not change when the pixels start going to a screen.
+
+**A measurement that corrected the spec.** §7 said the drawable path needs a
+display session, so it could only ever be a machine claim. Measured: a
+`CAMetalLayer` attached to no window hands out drawables and presents them. So
+there are **three** claims, not two, and the middle one runs anywhere Metal
+does:
+
+| Claim | Where it can be checked |
+| --- | --- |
+| headless render | anywhere |
+| the drawable lifetime — acquire, render, present on the command buffer, release | anywhere Metal runs |
+| the compositor handoff — bounded pool, blocking acquire, vsync | a display session only |
+
+The third is still a machine claim, and the measurement is why: an unattached
+layer handed out **eight** drawables without presenting any, and
+`maximumDrawableCount` did not bound it. So an unattached layer agrees with the
+interface and disagrees with the state machine — which is the argument
+`surface.go` already makes about why the headless surface is not a mock, met
+from the other direction. **A measurement's scope is part of the measurement**,
+recorded on day one and applied here to avoid claiming the pool was tested.
+
+**Two bugs, both the shapes already on this page.**
+
+1. **`NewRenderTarget` computed bytes per pixel as "sixteen unless it is
+   depth".** True while every render target was `RGBA32Float`; the first
+   `BGRA8Unorm` one took a stride four times too large and the blit reading it
+   back wrote past the end of its destination. The **exemption-shaped guard**,
+   for the fourth time. It is a table now, and an unlisted format is refused
+   rather than guessed.
+
+2. **An acquired frame that was never presented leaked its drawable.**
+   `Present` released it and nothing else did, so a caller who abandoned a frame
+   — a graph that failed to build, a resize noticed after acquire — lost one
+   from the pool. The symptom is a frame loop that *stops*: no error, no stack,
+   nothing to bisect. `Surface.Discard` is the counterpart the API was missing.
+
+**And one thing deliberately not built.** `NativeNSView` is refused rather than
+implemented, because reaching a view's layer needs AppKit and AppKit will not
+load without a display session — so the branch could not be tested at all. An
+untestable branch a caller can reach is the **field-that-reaches-nothing** shape
+this page records four times, arrived at from a new direction: not a value
+nobody reads, but a path nobody can prove. It also saves the caller nothing,
+since they have AppKit loaded already. The refusal says what to pass instead.
+
 #### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
 
 Two of the completed items name a follow-on, and both are already placed after

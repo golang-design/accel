@@ -227,6 +227,15 @@ present verified on a display" are separate states in the status table. Metal's
 drawable path needs a real display session, which CI does not have, so it is
 honestly tracked as verified-on-a-machine rather than verified-in-CI.
 
+> **Correction, 2026-08-24: there are three claims, not two, and the middle one
+> does not need a display.** A `CAMetalLayer` attached to no window hands out
+> drawables and presents them, which was measured rather than assumed. So the
+> drawable *lifetime* — acquire, render, present on the command buffer, release
+> — runs anywhere Metal does. What an unattached layer does **not** provide is
+> the bounded pool: it handed out eight drawables without presenting any, and
+> `maximumDrawableCount` did not bound it. The blocking acquire and the
+> unavailable-image path therefore still need a window. See §8.1.
+
 ## 8. What is built — 2026-08-24
 
 The headless half, which section 5 says is the same code path: `Surface` with a
@@ -234,8 +243,61 @@ generation counter and rotation, `Acquire` with a timeout, `PresentSlot`,
 `BindPresent` with all four of section 2's checks, `Present` taking the
 submission fence, and `Resize`. The frame loop of section 1 runs as written.
 
-**Not built:** Metal's `CAMetalLayer` drawable path, which section 7 makes its
-own claim and which waits on the Metal render path.
+**And the windowed half on Metal**, later the same day — see §8.1.
+
+### 8.1 The Metal drawable path
+
+`NewWindowSurface` takes a platform-tagged native handle and reuses the whole
+headless state machine, which is what the headless surface existed to make
+possible: **the frame loop of §1 does not change when the pixels start going to
+a screen.**
+
+The rotating images stay buffers, because [033](033-render-api.md) makes an
+attachment a buffer view either way. Presenting converts one into the drawable:
+
+```
+ Acquire ──▶ nextDrawable ──┐
+                            │   graph renders into the frame's buffer
+                            ▼
+ Present ──▶ render pass: buffer ──▶ drawable ──▶ presentDrawable: ──▶ commit
+```
+
+**Why a render pass and not a blit or a compute kernel.** A drawable is
+`BGRA8Unorm` and the render path works in `RGBA32Float`, so presenting is a
+conversion and a blit cannot convert. A compute kernel writing the texture would
+need `framebufferOnly = NO`, which is a property of a layer *the caller created*
+— §6 does not obviously put its flags on accel's side of the line. A render pass
+works either way, so accel does not touch a flag that is arguably not its to
+touch. The fragment stage reads the float buffer indexed by its own window
+position, so there is no sampler and no second texture.
+
+**The drawable is taken at `Acquire`, not at `Present`**, because that is where
+a compositor makes a caller wait. Taking it later would move the wait to a point
+the loop cannot act on, and §3 is explicit that `Acquire` is the call that can
+block.
+
+**`Surface.Discard` is new and §1 did not have it.** Every acquired frame is
+presented or discarded. A windowed frame holds a drawable the compositor lent
+it; one abandoned rather than returned exhausts the pool, and the symptom is a
+frame loop that stops with no error and no stack pointing at the cause. A caller
+reaches it when a frame cannot be rendered after all — a graph that failed to
+build, a resize noticed between acquire and submit, a frame skipped for timing.
+
+**`NativeNSView` is refused, not implemented.** Reaching a view's layer needs
+AppKit, which will not load in a process with no display session, so the branch
+could not be tested at all — and an untestable branch a caller can reach is the
+shape [009](009-sequencing.md) records four times. It also saves the caller
+nothing: they have AppKit loaded, because they made the window, and `view.layer`
+is one line on their side. The error says exactly that.
+
+### 8.2 Not built
+
+A **compositor handoff**: a drawable reaching a screen, with the bounded pool,
+the blocking acquire and the vsync that come with it. That needs a display
+session and is the third of §7's claims.
+
+Every **non-Metal** on-screen backend. §6's table lists the handles they would
+take; none of them exists.
 
 **One behaviour this spec did not state, decided here.** `Resize` releases the
 old images while a caller may still hold a `Frame` for one, so `Frame.View`
