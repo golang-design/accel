@@ -222,8 +222,10 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 		for n, i := range lanes {
 			if n == 0 {
 				// The first lane's value rather than zero plus it: a reduction
-				// over an active set of one returns that lane's value, and for
-				// non-associative f32 those differ in the last bit. See
+				// over an active set of one returns that lane's value. The two
+				// differ on exactly one input, which is why the rule needs a
+				// witness rather than an assertion -- 0 + v is exactly v for
+				// every finite v, and 0 + (-0) is +0. See
 				// specs/002-compute-model.md section 5.2, rule 5.
 				acc = frames[i].SubF32
 				continue
@@ -334,8 +336,14 @@ func laneRead(kernel string, threads []Thread, frames []Frame, op SubgroupOp, la
 		values[threads[i].SubgroupLane()] = frames[i].SubF32
 	}
 
+	// Both checks below belong to the developer mode: they are what make this
+	// backend an oracle rather than an executor, and specs/006-backends.md
+	// section 5 says the instrumentation is what a caller turns off when it
+	// wants the speed. Two sibling checks in one function that disagreed about
+	// which mode they live in would make the same kernel pass or fail on a
+	// switch neither of them names.
 	var ds Diagnostics
-	if op == SubBroadcastF32 {
+	if diag && op == SubBroadcastF32 {
 		ds = append(ds, checkUniformLane(kernel, threads, frames, lanes)...)
 	}
 

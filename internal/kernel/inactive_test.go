@@ -253,6 +253,19 @@ func TestABroadcastLaneMustBeUniform(t *testing.T) {
 	if !strings.Contains(err.Error(), "dynamically uniform") {
 		t.Errorf("the report should say the lane must be dynamically uniform, and says:\n%v", err)
 	}
+
+	// And it is instrumentation, so it is off with the rest of it. Every check
+	// in the combination step lives in the developer mode together: one that
+	// stayed on would make the same kernel pass or fail on a switch it does not
+	// name, which is worse than either answer.
+	got, err := runPartial(t, 4, []uint32{0, 1, 2, 3}, kernel.SubBroadcastF32, give, false)
+	if err != nil {
+		t.Fatalf("with the instrumentation off the dispatch should run: %v", err)
+	}
+	if v := got[0].f; v != 100 {
+		t.Errorf("lane 0 asked for lane 0 and read %v, want 100: with the check off, each "+
+			"lane still reads the lane it named", v)
+	}
 }
 
 // A shuffle moves bits, so it is compared as bits.

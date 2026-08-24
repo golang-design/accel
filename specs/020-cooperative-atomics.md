@@ -224,6 +224,19 @@ with no check on their Metal lowering at all.
 oracle reports a disagreement rather than picking a winner, because on hardware
 the winner is the device's, so a kernel whose output depends on it is already
 wrong and an oracle that resolved it would make one device's answer look right.
+It is developer-mode instrumentation like the rest of the combination step's
+checks, off with them, and tested in both positions — two checks in one function
+that disagreed about which mode they live in would make a kernel pass or fail on
+a switch neither of them names.
+
+**Neither check is 2.2's shadow bit, and [002](002-compute-model.md) §5.2 rule 3
+now says which mechanism it is.** A definition bitmap answers a question about a
+*location*; a lane's contribution is a value in flight. Reaching for the shared
+tracker would also have meant creating one for kernels with no shared memory,
+which turns on the barrier arrival check for every kernel that previously had it
+nil — and that check refuses exactly the partial active sets rule 4's test needs,
+because a lane not at a subgroup operation is reported as a lane that failed to
+arrive. The reports come from the combination step instead, in the same mode.
 
 **Metal now reports `SubgroupShuffle`.** It always spelled `simd_broadcast`,
 `simd_shuffle`, `simd_shuffle_xor`, `simd_shuffle_up` and `simd_shuffle_down`;

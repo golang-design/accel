@@ -890,12 +890,16 @@ two groupings still disagree.
    occasionally a bug.
 3. Reading an inactive lane through `Broadcast`, `Shuffle`, `ShuffleXor`,
    `ShuffleUp`, or `ShuffleDown` yields an **undefined value**. It does not yield
-   zero, and it does not fault. The CPU oracle reports it through the same
-   developer-mode instrumentation that carries 2.2's definition bitmap
+   zero, and it does not fault. The CPU oracle reports it in the same
+   *developer mode* that carries 2.2's definition bitmap
    ([006](006-backends.md) §5), naming the reading lane and the requested lane
-   rather than letting a plausible number propagate. With the instrumentation
-   off the read produces a quiet NaN: still not a number a kernel could have
-   computed, and still not zero.
+   rather than letting a plausible number propagate. The **mechanism** is not
+   2.2's shadow bit: a lane's contribution is a value in flight rather than a
+   location, so the scheduler answers the question where it is asked, in the
+   step that combines one rendezvous. Same mode, and nothing carries a
+   definition bit for a register. With the instrumentation off the read produces
+   a quiet NaN: still not a number a kernel could have computed, and still not
+   zero.
    **Out of range is not the same as inactive, and the oracle draws the line
    there.** A lane index outside the subgroup — past its width, or below zero
    after a shuffle up — is undefined and is *not* reported. The idiomatic
@@ -911,7 +915,14 @@ two groupings still disagree.
    the sum of lanes 0 and 2, not the sum of lanes 0, 1, and 2 with lane 1 reading
    zero.
 5. A reduction over an active set of one returns that lane's value, not `v + 0`.
-   For non-associative f32 arithmetic those differ in the last bit.
+   **The witness is a signed zero, and nothing else.** This rule read "for
+   non-associative f32 arithmetic those differ in the last bit" until
+   2026-08-24, which is wrong in the same way rule 4's wording was: `0 + v` is
+   exactly `v` for every finite `v`, whatever the rounding mode, so an
+   accumulator seeded with zero passes every test written with ordinary values.
+   What it does not survive is `-0`, since `0 + (-0)` is `+0`, and a sign that
+   flips changes the sign of a later division. Associativity is not what is at
+   stake; an identity element that is not one for the whole domain is.
 
 ### 5.3 Subgroup operations do not require uniform control flow, barriers do
 
