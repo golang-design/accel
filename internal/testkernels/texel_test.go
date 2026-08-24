@@ -1,0 +1,137 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+package testkernels
+
+import (
+	"testing"
+
+	"golang.design/x/accel"
+)
+
+// The texel fetch of specs/032-stage-abi.md section 5, checked the way every
+// other corpus entry is: the generated lowering is run against the authored
+// source it was generated from.
+//
+// The lowerings are unexported, so this test is in the package rather than
+// beside the others in package testkernels_test.
+
+// checker3x2 is three columns by two rows, each texel naming its own position.
+//
+// Distinct values per channel and per texel, so a fetch that reads the wrong
+// texel, transposes x and y, or returns a constant is a different number rather
+// than the same one.
+func checker3x2() accel.Texture2D {
+	texels := make([]float32, 3*2*4)
+	for y := range 2 {
+		for x := range 3 {
+			i := (y*3 + x) * 4
+			texels[i] = float32(10*y + x)
+			texels[i+1] = float32(100 + 10*y + x)
+			texels[i+2] = float32(200 + 10*y + x)
+			texels[i+3] = 1
+		}
+	}
+	return accel.NewTexture2D(3, 2, texels)
+}
+
+// The generated fragment lowering agrees with its authored source, at every
+// texel of the texture and at every coordinate just outside it.
+func TestGeneratedFetchingStagesAgreeWithTheirSource(t *testing.T) {
+	tex := checker3x2()
+	f := accel.NewFragmentForTest(accel.Vec4{0.5, 0.5, 0.25, 1}, true)
+
+	t.Run("fragment", func(t *testing.T) {
+		for y := -1; y <= 2; y++ {
+			for x := -1; x <= 3; x++ {
+				in := TexelVaryings{Texel: accel.Vec2{float32(x), float32(y)}}
+				want := SampledFS(f, in, tex)
+				got := sampledFSFlat(f, in, tex)
+				if got != want {
+					t.Errorf("texel (%d, %d): generated %+v, authored %+v",
+						x, y, got, want)
+				}
+			}
+		}
+	})
+
+	t.Run("vertex", func(t *testing.T) {
+		// Vertex 3 is past the last column, so its fetch is out of range and
+		// its position is the origin with w = 1.
+		for i := range uint32(4) {
+			v := accel.NewVertexForTest(i, 0)
+			wantPos, wantVary := DisplacedVS(v, tex)
+			gotPos, gotVary := displacedVSFlat(v, tex)
+			if gotPos != wantPos {
+				t.Errorf("vertex %d: position generated %v, authored %v", i, gotPos, wantPos)
+			}
+			if gotVary != wantVary {
+				t.Errorf("vertex %d: varyings generated %v, authored %v", i, gotVary, wantVary)
+			}
+		}
+	})
+}
+
+// A fetch in range returns that texel, and the neighbour fetch at column zero
+// returns zero because x = -1 is outside the texture.
+//
+// The agreement test above would pass if both halves fetched nothing, since
+// both call the same oracle. This says what the values are.
+func TestAFetchingStageReadsTheTextureAndZeroOutsideIt(t *testing.T) {
+	tex := checker3x2()
+	f := accel.NewFragmentForTest(accel.Vec4{0.5, 0.5, 0.25, 1}, true)
+
+	// Column one of row one: in range, and its left neighbour is in range too.
+	got := sampledFSFlat(f, TexelVaryings{Texel: accel.Vec2{1, 1}}, tex)
+	want := accel.Vec4{10 + 1, 100 + 10 + 1, 200 + 10 + 1, 10 + 0}
+	if got.Colour != want {
+		t.Errorf("texel (1, 1) = %v, want %v", got.Colour, want)
+	}
+
+	// Column zero: in range, and its left neighbour is at x = -1.
+	got = sampledFSFlat(f, TexelVaryings{Texel: accel.Vec2{0, 1}}, tex)
+	want = accel.Vec4{10, 110, 210, 0}
+	if got.Colour != want {
+		t.Errorf("texel (0, 1) = %v, want %v: the alpha carries the fetch at x = -1, "+
+			"which specs/032-stage-abi.md section 5 fixes at zero", got.Colour, want)
+	}
+
+	// A row past the last one: both fetches are out of range.
+	got = sampledFSFlat(f, TexelVaryings{Texel: accel.Vec2{1, 2}}, tex)
+	if got.Colour != (accel.Vec4{}) {
+		t.Errorf("texel (1, 2) = %v, want the zero vector: row 2 is outside a "+
+			"two-row texture", got.Colour)
+	}
+}
+
+// A stage that declares a texture carries the texture in its record and carries
+// no flat adapter.
+//
+// The two halves are one statement. The flat form specs/035-cpu-rasterizer.md
+// calls takes a uniform slice and interpolated floats and has nowhere to put a
+// texture, so a stage that fetches cannot be run through it. Emitting one
+// anyway would pass an empty texture, every fetch would be out of range, and
+// the pass would produce black without failing anything.
+func TestAStageWithATextureHasNoFlatAdapter(t *testing.T) {
+	for _, s := range Stages {
+		if len(s.Textures) == 0 {
+			if s.RunVertex == nil && s.RunFragment == nil {
+				t.Errorf("%s declares no texture and has no flat adapter", s.Name)
+			}
+			continue
+		}
+		if s.RunVertex != nil || s.RunFragment != nil {
+			t.Errorf("%s declares %d textures and still carries a flat adapter, which "+
+				"would run it against an unbound texture", s.Name, len(s.Textures))
+		}
+		for i, tx := range s.Textures {
+			if tx.Index != i {
+				t.Errorf("%s: texture %q is at index %d, want %d", s.Name, tx.Name, tx.Index, i)
+			}
+			if !tx.Reads {
+				t.Errorf("%s: texture %q is declared and never read", s.Name, tx.Name)
+			}
+		}
+	}
+}
