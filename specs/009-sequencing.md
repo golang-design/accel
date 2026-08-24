@@ -1592,6 +1592,153 @@ a policy layer is a caller of this API and not a change to it. That is the
 property worth having at the boundary, and it is why deferring them costs
 nothing that has to be undone.
 
+### M9. Two consumers, and the asymmetry between them — planned 2026-08-24
+
+M8 closed against a consumer. This milestone starts by asking whether that is
+true of both halves of the library, and the answer decides the order below.
+
+#### Readiness, assessed rather than assumed
+
+**The inference side is unblocked.** `tgo` filed sixteen issues; fifteen are
+closed and the consumer verified the closures by value against their own oracle
+rather than by reading refusals. Their scheduler spec carried `status: blocked`
+and no longer does. What remains open on their register is throughput work
+([#6](https://github.com/golang-design/accel/issues/6), on-device sampling
+policy) and one capability they explicitly say is not urgent
+([#16](https://github.com/golang-design/accel/issues/16), a batched *prefill*
+and a dispatch mixing prefill chunks with decode steps). Neither stops them
+building.
+
+**The graphics side has no consumer at all, and this is the finding that orders
+M9.** `polyred` is named throughout this project as the graphics consumer. It
+does not depend on accel: no entry in its `go.mod`, and it carries its own
+GL, Vulkan and darwin backends under `gpu/`. Its specs' references to `accel/`
+are to a BVH package of its own, not to this library.
+
+**polyred is a lesson of practice, not a specification.** It is one renderer,
+with its own history and its own dated choices, and designing this surface to
+fit it would trade one kind of blindness for another. What it is good for is
+evidence: where it works around something, reimplements a concept three times,
+or carries an idea accel has no name for, the *underlying need* is real even
+when its spelling is not. Its Vulkan and GL backends are worth more than its
+Metal one here, precisely because they are not the backend accel already has.
+
+So the graphics surface — 124 exported declarations, never reviewed
+([042](042-surface-completion.md) §5) — is in exactly the condition the compute
+surface was in before `tgo` arrived. Every defect class that consumer found was
+invisible from inside: a field accepted that reaches nothing (**seven** of
+those), a kernel with tests and no operator reaching it, a check named in a
+validation table and never implemented, a spec sentence saying a feature landed
+when only its kernel had. **None of them failed a gate.** There is no reason to
+believe the graphics half is different in kind, and one strong reason to believe
+it is worse: nothing has ever tried to draw a real frame with it.
+
+The conclusion is not "stop building graphics". It is that **the first graphics
+work is a review, not another feature** — and the review asks a larger question
+than "does it compile for a caller".
+
+Three questions, in increasing order of what they are worth:
+
+1. **Does every declaration reach something?** The defect class above, applied
+   to a surface nobody has swept. Cheapest to answer and certain to find
+   something.
+2. **Is the surface narrower than the abstraction it claims to be?** accel means
+   to span Metal, Vulkan, GL and D3D-shaped backends. That is a claim about
+   resource state, pass structure, binding models, synchronisation and format
+   handling — and it is checkable against those APIs rather than against any
+   consumer.
+3. **Is the surface accidentally shaped by its one implemented backend?** There
+   is a CPU rasterizer and there is Metal. A concept that exists because Metal
+   spells it that way, or that a Vulkan or D3D backend could not implement as
+   specified, is a design defect worth more than a missing feature — because a
+   missing feature is added and a wrong shape is *migrated*.
+
+Adding features to an unaudited surface is how 124 declarations happened, and
+answering only question 1 is how a surface stays parochial while passing every
+test.
+
+#### The waves
+
+Sequential where something genuinely blocks something else, parallel otherwise.
+The blocking edges are few, and naming them is most of the value of this
+section.
+
+```mermaid
+flowchart TD
+  subgraph W0["Wave 0 — investigate, decide nothing yet"]
+    A["graphics surface review<br/>vs a real renderer's needs"]
+    B["line/point rasterization:<br/>measure what Metal does"]
+  end
+  subgraph W1["Wave 1 — independent, parallel"]
+    C["sampling operators<br/>at the tensor layer"]
+    D["UniformBuffer dispatch path"]
+    E["subgroup shuffles and scans"]
+  end
+  subgraph W2["Wave 2 — gated by Wave 0"]
+    F["texel fetch in a stage"]
+    G["texture attachments"]
+    H["render-feedback rejection"]
+    I["line/point rasterization"]
+  end
+  subgraph W3["Wave 3 — consumer-paced"]
+    J["per-row query extents<br/>(batched + chunked prefill)"]
+    K["on-device sampling policy"]
+    L["Vulkan and the SPIR-V emitter"]
+  end
+  A --> F
+  A --> G
+  B --> I
+  F --> G
+  G --> H
+```
+
+**Wave 0 — two investigations.** Both produce a decision and no code. The
+graphics review is the gate on Wave 2: it decides whether that surface is fit to
+build on, and by the three questions above rather than by a consumer's feature
+list. The rasterization measurement exists because
+[035](035-cpu-rasterizer.md) §10 deliberately leaves a rule open, and a rule the
+CPU states that Metal does not follow makes the differential fail on lines
+forever — so the hardware is asked first.
+
+**Wave 1 — three independent items**, none touching the others' files.
+
+| Item | Owner | Why it is not blocked |
+| --- | --- | --- |
+| Sampling operators | [028](028-sampling.md) | the kernels exist and are tested; only the operator is missing, which is `tgo`'s C3 |
+| `UniformBuffer` dispatch path | [042](042-surface-completion.md) §3.1 | the type is exported and connects to nothing — the seventh instance of the defect class, and the one this project shipped itself |
+| Subgroup shuffles and scans | [020](020-atomics-subgroups.md) | intrinsics a kernel author cannot call; compute-side, both backends |
+
+**Wave 2 — the graphics chain, and it is a chain.** Texel fetch
+([032](032-stage-abi.md) §5) unblocks both texture attachments
+([033](033-render-api.md)) and 033's feedback rejection, which cannot be stated
+until a stage can read a texture. Attachments are buffer views "at this
+milestone" today. Line and point rasterization joins this wave once Wave 0's
+measurement says what rule to state.
+
+**Wave 3 — paced by a consumer rather than by this list.** Per-row query
+extents are the last per-dispatch value in the batching story and the same move
+[043](043-per-row-values.md) made for lengths, pages and positions; the consumer
+has asked for the *shape* before building admission around it, which is cheaper
+to give than the feature. On-device sampling policy is throughput over a working
+host path. Vulkan is unscheduled rather than blocked — `polyred` already runs
+cgo-free Vulkan on lavapipe in CI, so the prior art exists.
+
+#### What this milestone must not repeat
+
+Every M9 item lands with the checks M8 learned the hard way, because each was
+added after a miss:
+
+- an exported declaration that reaches nothing fails a test, not a review —
+  `tensor/reaches_test.go` is the pattern, driven by reflection so a *new* field
+  fails until someone says which it is;
+- a capability is closed against a **value asserted through the public surface**
+  and a `Selections()` reading, never against a graph that compiles;
+- a kernel is not a capability: a corpus entry with no operator reaching it is
+  recorded as unreachable in [010](010-kernel-corpus.md), not as done;
+- the Linux coverage number is checked locally before pushing, because the Metal
+  differential inflates it on darwin and the gate is the slowest useful signal
+  there is.
+
 ## The consumer reports, and what they were actually about — 2026-08-24
 
 A consumer building an inference framework on this library filed nine issues.
