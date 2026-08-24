@@ -7,6 +7,7 @@ package tensor_test
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -278,24 +279,11 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "Lengths is f32",
 	}, {
-		// accel issue 10: this compiled, ignored Pages, and returned a
-		// plausible wrong answer -- the first accepted-and-silently-wrong case
-		// reported here rather than a refusal.
-		name: "a page table on a prefill",
-		build: func(b *tensor.Builder) {
-			scalars(b)
-			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
-			o := opts(b)
-			o.Pages = u32(b, "pages", 2)
-			o.Block = 2
-			o.BaseName = "base"
-			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 4, 2, 8),
-				cache(b, "v", 4, 2, 8), o)
-		},
-		want: "only the decode kernels read a page table",
-	}, {
-		// The Block guard lived inside the decode switch, so a prefill reached
-		// neither it nor the page table.
+		// accel issue 10: a prefill compiled with Pages, ignored it, and
+		// returned a plausible wrong answer. The Block guard lived inside the
+		// decode switch, so a prefill reached neither it nor the page table;
+		// both checks are above the shape split now, and this is the one that
+		// is still a refusal after the paged prefill kernel landed.
 		name: "a page table with no block size, on a prefill",
 		build: func(b *tensor.Builder) {
 			scalars(b)
@@ -806,6 +794,128 @@ func TestAttentionReadsALayerItDidNotWrite(t *testing.T) {
 			if diff := math.Abs(float64(got[i]) - want[i]); diff > 1e-4*(1+math.Abs(want[i])) {
 				t.Fatalf("layer %d element %d is %v, want about %v: a layer read must "+
 					"bind that layer's slice", l, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// A paged prefill writes blocks and a paged decode reads them, in one plan.
+//
+// This is the workflow accel issue 10 says was inexpressible: a paged decode is
+// only useful over blocks a paged prefill wrote, and until the paged prefill
+// kernel existed, `Attention` accepted a page table on a prefill and ignored
+// it. The reporter's point was that this is not a corner but the first
+// operation of every request in a paged design.
+//
+// The pool is larger than the sequence and the table is scattered and out of
+// order, so a prefill that walked the pool in order reads the wrong blocks --
+// which is what the bug did.
+func TestAPagedPrefillFeedsAPagedDecode(t *testing.T) {
+	const (
+		qHeads, kvHeads, headDim = 4, 2, 16
+		block                    = 4
+		qSeq                     = 9
+		pageCount                = 4 // 16 positions, enough for the prompt and a step
+		poolBlocks               = 12
+		width                    = kvHeads * headDim
+	)
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("pagedprefill")
+
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+	pages := tensor.Input(b, tensor.ValueDesc{
+		Name: "pages", DType: accel.U32, Shape: tensor.Shape{pageCount},
+	})
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+	})
+	q := tensor.Input(b, tensor.ValueDesc{
+		Name: "q", DType: accel.F32, Shape: tensor.Shape{qSeq, qHeads, headDim},
+	})
+	kc := tensor.NewState(b, tensor.StateDesc{
+		Name: "kpool", DType: accel.F32,
+		Shape: tensor.Shape{poolBlocks * block, kvHeads, headDim},
+	})
+	vc := tensor.NewState(b, tensor.StateDesc{
+		Name: "vpool", DType: accel.F32,
+		Shape: tensor.Shape{poolBlocks * block, kvHeads, headDim},
+	})
+	tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+		Lengths: lengths, Pages: pages, Block: block,
+		ScaleName: "scale", BaseName: "base",
+	}))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "pagedprefill"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	// The selection is reported, which is what makes the choice reviewable --
+	// the bug's worst property was that Selections named the contiguous kernel
+	// while a page table was bound.
+	sel := plan.Selections()
+	if len(sel) != 1 || sel[0].Kernel != "AttentionPrefillPaged" {
+		t.Fatalf("selections are %+v, want the paged prefill kernel", sel)
+	}
+
+	rng := rand.New(rand.NewPCG(41, 3))
+	pool := func() []float32 {
+		s := make([]float32, poolBlocks*block*width)
+		for i := range s {
+			s[i] = float32(rng.NormFloat64())
+		}
+		return s
+	}
+	pk, pv := pool(), pool()
+	qs := make([]float32, qSeq*qHeads*headDim)
+	for i := range qs {
+		qs[i] = float32(rng.NormFloat64())
+	}
+	// Scattered and out of order.
+	table := []uint32{7, 2, 10, 5}
+	scale := float32(1 / math.Sqrt(headDim))
+
+	out := f32Buffer(t, d, "out", make([]float32, qSeq*qHeads*headDim))
+	f := plan.Submit(d.Queue(), tensor.Bindings{
+		Buffers: map[string]accel.BufferView{
+			"q": f32Buffer(t, d, "q", qs), "kpool": f32Buffer(t, d, "kpool", pk),
+			"vpool": f32Buffer(t, d, "vpool", pv),
+			"pages": u32Buffer(t, d, "pages", table),
+			"len":   u32Buffer(t, d, "len", []uint32{qSeq}),
+			"out":   out,
+		},
+		Scalars: map[string]tensor.ScalarValue{
+			"scale": tensor.F32(scale), "base": tensor.U32(0),
+		},
+	})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, qSeq*qHeads*headDim)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+
+	// The reference gathers the same positions through the same table and
+	// attends causally in f64.
+	gk := make([][]float32, qSeq)
+	gv := make([][]float32, qSeq)
+	for j := range qSeq {
+		phys := int(table[j/block])*block + j%block
+		gk[j] = pk[phys*width : (phys+1)*width]
+		gv[j] = pv[phys*width : (phys+1)*width]
+	}
+	for s := range qSeq {
+		want := attentionReference(qs[s*qHeads*headDim:(s+1)*qHeads*headDim],
+			gk[:s+1], gv[:s+1], qHeads, kvHeads, headDim, float64(scale))
+		for i := range qHeads * headDim {
+			g := float64(got[s*qHeads*headDim+i])
+			if math.Abs(g-want[i]) > 1e-4*(1+math.Abs(want[i])) {
+				t.Fatalf("query %d element %d is %v, want about %v: a paged prefill "+
+					"attends over the blocks its table names", s, i, g, want[i])
 			}
 		}
 	}

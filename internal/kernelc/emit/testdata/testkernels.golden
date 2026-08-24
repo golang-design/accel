@@ -234,6 +234,30 @@ func (PrefillDimsCodec) Encode(dst []byte, value PrefillDims) error {
 	return w.Err()
 }
 
+// PagedPrefillDimsCodec is the generated std140 codec for PagedPrefillDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type PagedPrefillDimsCodec struct{}
+
+// PagedPrefillDimsBlockSize is the encoded size of a PagedPrefillDims block, in bytes.
+const PagedPrefillDimsBlockSize = 32
+
+// EncodedSize reports the std140 block size.
+func (PagedPrefillDimsCodec) EncodedSize() int { return PagedPrefillDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (PagedPrefillDimsCodec) Encode(dst []byte, value PagedPrefillDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.QHeads)
+	w.U32(4, value.KVHeads)
+	w.U32(8, value.HeadDim)
+	w.U32(12, value.QSeq)
+	w.U32(16, value.Base)
+	w.U32(20, value.Block)
+	w.F32(24, value.Scale)
+	return w.Err()
+}
+
 // SampleDimsCodec is the generated std140 codec for SampleDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -4813,6 +4837,374 @@ kernel void AttentionPrefill(
 	},
 }
 
+// attentionPrefillPagedFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type attentionPrefillPagedFrame struct {
+	pc         int
+	group0     uint32
+	kvLen1     uint32
+	lane2      uint32
+	s3         uint32
+	h4         uint32
+	kvHead5    uint32
+	limit6     uint32
+	capacity7  uint32
+	bound8     uint32
+	m9         float32
+	l10        float32
+	o11        float32
+	base12     uint32
+	pos13      uint32
+	score14    float32
+	visible15  bool
+	phys16     uint32
+	dot17      float32
+	i18        uint32
+	qi19       float32
+	ki20       float32
+	stride21   uint32
+	blockMax22 float32
+	next23     float32
+	alpha24    float32
+	e25        float32
+	stride26   uint32
+	j27        uint32
+	phys28     uint32
+}
+
+// attentionPrefillPagedCoop runs one invocation of AttentionPrefillPaged to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func attentionPrefillPagedCoop(t accel.Thread, d PagedPrefillDims, q []float32, k []float32, v []float32, pages []uint32, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, f *attentionPrefillPagedFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.group0 = t.GroupID().X
+			f.kvLen1 = lengths[int32(0)]
+			f.lane2 = t.LocalID().X
+			f.s3 = (f.group0 / d.QHeads)
+			f.h4 = (f.group0 % d.QHeads)
+			f.kvHead5 = (f.h4 / (d.QHeads / d.KVHeads))
+			f.limit6 = (d.Base + f.s3)
+			f.capacity7 = (uint32(int32(len(pages))) * d.Block)
+			f.bound8 = (f.limit6 + uint32(1))
+			if f.bound8 > f.capacity7 {
+				f.bound8 = f.capacity7
+			}
+			if f.kvLen1 > f.capacity7 {
+				f.kvLen1 = f.capacity7
+			}
+			f.m9 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.l10 = float32(0)
+			f.o11 = float32(0)
+			f.pc = 1
+			continue
+		case 1:
+			f.base12 = uint32(0)
+			f.pc = 22
+			continue
+		case 2:
+			f.pos13 = (f.base12 + f.lane2)
+			f.score14 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.visible15 = ((f.pos13 <= f.limit6) && (f.pos13 < f.kvLen1))
+			if f.visible15 {
+				f.phys16 = ((pages[(f.pos13/d.Block)] * d.Block) + (f.pos13 % d.Block))
+				f.dot17 = float32(0)
+				{
+					f.i18 = uint32(0)
+					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + uint32(1)) {
+						f.qi19 = q[((((f.s3 * d.QHeads) + f.h4) * d.HeadDim) + f.i18)]
+						f.ki20 = k[((((f.phys16 * d.KVHeads) * d.HeadDim) + (f.kvHead5 * d.HeadDim)) + f.i18)]
+						f.dot17 = float32(f.dot17 + float32(f.qi19*f.ki20))
+					}
+				}
+				f.score14 = float32(f.dot17 * d.Scale)
+			}
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: ""}
+			return true
+		case 4:
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.score14
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.score14
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: ""}
+			return true
+		case 6:
+			f.stride21 = uint32(64)
+			f.pc = 10
+			continue
+		case 7:
+			if f.lane2 < f.stride21 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride21)))])
+			}
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: ""}
+			return true
+		case 9:
+			f.stride21 = (f.stride21 / uint32(2))
+			f.pc = 10
+			continue
+		case 10:
+			if f.stride21 > uint32(0) {
+				f.pc = 7
+				continue
+			}
+			f.pc = 11
+			continue
+		case 11:
+			f.blockMax22 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next23 = kmath.Max(f.m9, f.blockMax22)
+			f.alpha24 = kmath.Exp(float32(f.m9 - f.next23))
+			f.e25 = float32(0)
+			if f.visible15 {
+				f.e25 = kmath.Exp(float32(f.score14 - f.next23))
+			}
+			f.pc = 12
+			continue
+		case 12:
+			f.pc = 13
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: ""}
+			return true
+		case 13:
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e25
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e25
+			f.pc = 14
+			continue
+		case 14:
+			f.pc = 15
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: ""}
+			return true
+		case 15:
+			f.stride26 = uint32(64)
+			f.pc = 19
+			continue
+		case 16:
+			if f.lane2 < f.stride26 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride26)))])
+			}
+			f.pc = 17
+			continue
+		case 17:
+			f.pc = 18
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: ""}
+			return true
+		case 18:
+			f.stride26 = (f.stride26 / uint32(2))
+			f.pc = 19
+			continue
+		case 19:
+			if f.stride26 > uint32(0) {
+				f.pc = 16
+				continue
+			}
+			f.pc = 20
+			continue
+		case 20:
+			f.l10 = float32(float32(f.alpha24*f.l10) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m9 = f.next23
+			if f.lane2 < d.HeadDim {
+				f.o11 = float32(f.alpha24 * f.o11)
+				{
+					f.j27 = uint32(0)
+					for ; f.j27 < uint32(128); f.j27 = (f.j27 + uint32(1)) {
+						if ((f.base12 + f.j27) <= f.limit6) && ((f.base12 + f.j27) < f.kvLen1) {
+							f.phys28 = ((pages[((f.base12+f.j27)/d.Block)] * d.Block) + ((f.base12 + f.j27) % d.Block))
+							f.o11 = float32(f.o11 + float32(scores[tr.ReadAt(0, int(f.j27))]*v[((((f.phys28*d.KVHeads)*d.HeadDim)+(f.kvHead5*d.HeadDim))+f.lane2)]))
+						}
+					}
+				}
+			}
+			f.pc = 21
+			continue
+		case 21:
+			f.base12 = (f.base12 + uint32(128))
+			f.pc = 22
+			continue
+		case 22:
+			if f.base12 < f.bound8 {
+				f.pc = 2
+				continue
+			}
+			f.pc = 23
+			continue
+		case 23:
+			if f.lane2 < d.HeadDim {
+				out[((((f.s3 * d.QHeads) + f.h4) * d.HeadDim) + f.lane2)] = float32(f.o11 / f.l10)
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// AttentionPrefillPagedKernel is the compiled form of AttentionPrefillPaged.
+var AttentionPrefillPagedKernel = kernelabi.Kernel{
+	Name:          "AttentionPrefillPaged",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "q", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "634167463c35229d80b186a90ebd45fe",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PagedPrefillDims {
+    uint QHeads;
+    uint KVHeads;
+    uint HeadDim;
+    uint QSeq;
+    uint Base;
+    uint Block;
+    float Scale;
+    char _tail[4];
+};
+
+kernel void AttentionPrefillPaged(
+    const device float *q [[buffer(0)]],
+    const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]],
+    const device uint *pages [[buffer(3)]],
+    const device uint *lengths [[buffer(4)]],
+    device float *out [[buffer(5)]],
+    constant uint *_lens [[buffer(6)]],
+    constant PagedPrefillDims &d [[buffer(7)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float scores[128];
+    threadgroup float red[128];
+    uint group = _wid.x;
+    uint kvLen = lengths[int(0)];
+    uint lane = _lid.x;
+    uint s = (group / d.QHeads);
+    uint h = (group % d.QHeads);
+    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint limit = (d.Base + s);
+    uint capacity = (uint(int(_lens[3])) * d.Block);
+    uint bound = (limit + uint(1));
+    if ((bound > capacity)) {
+        bound = capacity;
+    }
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
+    }
+    float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    float l = float(0);
+    float o = float(0);
+    for (uint base = uint(0); (base < bound); base = (base + uint(128))) {
+        uint pos = (base + lane);
+        float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        bool visible = ((pos <= limit) && (pos < kvLen));
+        if (visible) {
+            uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
+            float dot = float(0);
+            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+                float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
+                float ki = k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
+                dot = (dot + (qi * ki));
+            }
+            score = (dot * d.Scale);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = score;
+        red[lane] = score;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = max(red[lane], red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        float blockMax = red[int(0)];
+        float next = max(m, blockMax);
+        float alpha = precise::exp((m - next));
+        float e = float(0);
+        if (visible) {
+            e = precise::exp((score - next));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = e;
+        red[lane] = e;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = (red[lane] + red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        l = ((alpha * l) + red[int(0)]);
+        m = next;
+        if ((lane < d.HeadDim)) {
+            o = (alpha * o);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
+                if ((((base + j) <= limit) && ((base + j) < kvLen))) {
+                    uint phys = ((pages[((base + j) / d.Block)] * d.Block) + ((base + j) % d.Block));
+                    o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+            }
+        }
+    }
+    if ((lane < d.HeadDim)) {
+        out[((((s * d.QHeads) + h) * d.HeadDim) + lane)] = (o / l);
+    }
+}
+`,
+	Suspensions: 6,
+	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		var s1 [128]float32
+		kernelabi.Poison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "PagedPrefillDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, PagedPrefillDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*attentionPrefillPagedFrame)
+		if f == nil {
+			f = &attentionPrefillPagedFrame{}
+			slot.State = f
+		}
+		return attentionPrefillPagedCoop(t, kernelabi.UniformValue[PagedPrefillDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[uint32](a, 4), kernelabi.Slice[float32](a, 5), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), f, slot, slot.Shared)
+	},
+}
+
 // quantMatMulFlat is the generated flat lowering of QuantMatMul.
 //
 // It is what the CPU backend runs. The authored QuantMatMul is never registered as
@@ -7161,6 +7553,7 @@ var Kernels = []*kernelabi.Kernel{
 	&PackKernel,
 	&AttentionDecodePagedKernel,
 	&AttentionPrefillKernel,
+	&AttentionPrefillPagedKernel,
 	&QuantMatMulKernel,
 	&QuantRowsKernel,
 	&SegmentSumKernel,

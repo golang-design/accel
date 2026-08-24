@@ -186,13 +186,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	}
 	if prefill {
 		out = Shape{qSeq, qHeads, headDim}
-		if opts.Pages != nil {
-			return b.fail(1, "Attention", "Pages is set on a prefill and only the decode "+
-				"kernels read a page table; specs/010-kernel-corpus.md owns the paged "+
-				"prefill variant. Refused rather than run against the contiguous kernel, "+
-				"which would read the pool in order and answer over another sequence's "+
-				"blocks")
-		}
 		if opts.BaseName == "" {
 			return b.fail(1, "Attention", "a prefill needs BaseName: the position of its "+
 				"first query within the cache, which decides what the causal mask hides")
@@ -200,25 +193,56 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		if kind, ok := b.scalarKind(opts.BaseName); !ok || kind != ScalarU32 {
 			return b.fail(1, "Attention", "%q is not a declared u32 scalar", opts.BaseName)
 		}
-		return b.record(node{
-			op:     "Attention",
-			inputs: []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths},
-			kernel: &testkernels.AttentionPrefillKernel,
-			reads:  []string{opts.ScaleName, opts.BaseName},
-			uniform: func(vals map[string]ScalarValue) any {
-				return testkernels.PrefillDims{
+		// Paging is not a second kind of prefill. The causal bound, the running
+		// softmax and the masking are the same; what differs is the binding, so
+		// this is a selection and Selections reports it -- the shape every
+		// other choice here takes.
+		prefillKernel := &testkernels.AttentionPrefillKernel
+		prefillInputs := []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths}
+		prefillWhy := fmt.Sprintf("the causal prefill kernel: one workgroup per query "+
+			"position and head, %d of them", qSeq*qHeads)
+		prefillRejected := []string{"the decode kernel: it takes one query token"}
+		prefillDims := func(vals map[string]ScalarValue) any {
+			return testkernels.PrefillDims{
+				QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
+				HeadDim: uint32(headDim), QSeq: uint32(qSeq),
+				Base:  vals[opts.BaseName].U32,
+				Scale: vals[opts.ScaleName].F32,
+			}
+		}
+		if opts.Pages != nil {
+			prefillKernel = &testkernels.AttentionPrefillPagedKernel
+			// Pages before lengths, which is the kernel's binding order.
+			prefillInputs = []*Tensor{
+				q, readState(b, k), readState(b, v), opts.Pages, opts.Lengths,
+			}
+			prefillWhy = fmt.Sprintf("the paged causal prefill kernel: blocks of %d "+
+				"addressed through a page table, one workgroup per query position and "+
+				"head, %d of them", opts.Block, qSeq*qHeads)
+			prefillRejected = append(prefillRejected,
+				"the contiguous prefill kernel: a page table was supplied, and it would "+
+					"read the pool in order")
+			prefillDims = func(vals map[string]ScalarValue) any {
+				return testkernels.PagedPrefillDims{
 					QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 					HeadDim: uint32(headDim), QSeq: uint32(qSeq),
 					Base:  vals[opts.BaseName].U32,
+					Block: uint32(opts.Block),
 					Scale: vals[opts.ScaleName].F32,
 				}
-			},
+			}
+		}
+		return b.record(node{
+			op:      "Attention",
+			inputs:  prefillInputs,
+			kernel:  prefillKernel,
+			reads:   []string{opts.ScaleName, opts.BaseName},
+			uniform: prefillDims,
 			grid: func(*Tensor) accel.WorkgroupCount {
 				return accel.WorkgroupCount{X: qSeq * qHeads}
 			},
-			reason: fmt.Sprintf("the causal prefill kernel: one workgroup per query "+
-				"position and head, %d of them", qSeq*qHeads),
-			rejected: []string{"the decode kernel: it takes one query token"},
+			reason:   prefillWhy,
+			rejected: prefillRejected,
 		}, accel.F32, out)
 	}
 

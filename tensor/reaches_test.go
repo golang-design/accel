@@ -102,16 +102,11 @@ func TestEveryAttentionOptionReachesTheKernelOrIsRefused(t *testing.T) {
 		// only if the operator binds the one it was given.
 		"Lengths": {set: func(s *setup) { s.opts.Lengths = s.alt }},
 
-		// No paged prefill kernel exists, so a prefill refuses it rather than
-		// reading the pool in order (accel issue 10).
-		"Pages": {
-			set:              func(s *setup) { s.opts.Pages, s.opts.Block = s.pages, 2 },
-			refusedOnPrefill: true,
-		},
-		"Block": {
-			set:              func(s *setup) { s.opts.Pages, s.opts.Block = s.pages, 4 },
-			refusedOnPrefill: true,
-		},
+		// Reaches a kernel on both shapes since the paged prefill landed. It
+		// was refused on a prefill before that, and silently ignored before
+		// *that* -- which is the case this test exists for (accel issue 10).
+		"Pages": {set: func(s *setup) { s.opts.Pages, s.opts.Block = s.pages, 2 }},
+		"Block": {set: func(s *setup) { s.opts.Pages, s.opts.Block = s.pages, 4 }},
 
 		"ScaleName": {set: func(s *setup) { s.opts.ScaleName = "other" }},
 

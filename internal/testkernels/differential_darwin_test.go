@@ -457,6 +457,28 @@ func diffCases() []diffCase {
 			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
 		},
 		{
+			// The same prefill through a page table, with the pages out of
+			// order so the two backends must agree about the addressing and
+			// not only about the attention.
+			kernel: &testkernels.AttentionPrefillPagedKernel,
+			counts: []int{4 * 2 * 8, 8 * 1 * 8, 8 * 1 * 8, 2, 1, 4 * 2 * 8},
+			uniforms: []any{testkernels.PagedPrefillDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, QSeq: 4, Base: 0, Block: 2,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 4 * 2},
+			seed: func(b, i int) float32 {
+				if b == 3 { // the page table: blocks 3 and 1, out of order
+					return float32([]int{3, 1}[i])
+				}
+				if b == 4 { // the cache length
+					return 4
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over a masked row, per section 8's propagation",
+		},
+		{
 			// A batch of three sequences of different lengths over interleaved
 			// pages: the two backends must agree about which sequence reads
 			// which blocks and stops where, not merely about the attention.

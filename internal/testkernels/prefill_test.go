@@ -700,3 +700,86 @@ func TestPrefillScoresASequenceLongerThanAWorkgroup(t *testing.T) {
 		})
 	}
 }
+
+// A paged prefill produces what the contiguous one does over the same logical
+// positions, and its sequence is longer than one block.
+//
+// accel issue 10: this kernel did not exist, and `Attention` accepted a page
+// table on a prefill and ignored it. A paged decode is only useful over blocks
+// a paged prefill wrote, so its absence made cross-request prefix sharing
+// inexpressible.
+//
+// The pool is four times the sequence and the table is scattered, so a kernel
+// that walked the pool in order reads the wrong blocks rather than the right
+// ones in a different order -- which is exactly what the ignored-Pages bug did.
+func TestPagedPrefillMatchesTheContiguousOne(t *testing.T) {
+	const qHeads, kvHeads, headDim, block = 4, 2, 16, 8
+	const qSeq, base = 300, 0
+	const kvLen = base + qSeq
+	const pageCount = (kvLen + block - 1) / block
+	const poolBlocks = 4 * pageCount
+
+	rng := rand.New(rand.NewPCG(77, 5))
+	fill := func(n int) []float32 {
+		s := make([]float32, n)
+		for i := range s {
+			s[i] = float32(rng.NormFloat64())
+		}
+		return s
+	}
+	q := fill(qSeq * qHeads * headDim)
+	pk := fill(poolBlocks * block * kvHeads * headDim)
+	pv := fill(poolBlocks * block * kvHeads * headDim)
+	pages := make([]uint32, pageCount)
+	for i, p := range rng.Perm(poolBlocks)[:pageCount] {
+		pages[i] = uint32(p)
+	}
+	lengths := []uint32{kvLen}
+	scale := float32(1 / math.Sqrt(headDim))
+
+	paged := make([]float32, len(q))
+	if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillPagedKernel,
+		accel.ID3{X: qSeq * qHeads},
+		kernelabi.Args{
+			Slices: []any{q, pk, pv, pages, lengths, paged},
+			Uniforms: []any{testkernels.PagedPrefillDims{
+				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, QSeq: qSeq,
+				Base: base, Block: block, Scale: scale,
+			}},
+		}); err != nil {
+		t.Fatalf("paged dispatch: %v", err)
+	}
+
+	// The same positions gathered into a contiguous cache, through the
+	// contiguous kernel. Exactly equal, not within a budget: paging is an
+	// addressing change, so the two read the same values in the same order and
+	// compute the same sums.
+	gk := make([]float32, kvLen*kvHeads*headDim)
+	gv := make([]float32, kvLen*kvHeads*headDim)
+	w := kvHeads * headDim
+	for j := range kvLen {
+		phys := int(pages[j/block])*block + j%block
+		copy(gk[j*w:(j+1)*w], pk[phys*w:(phys+1)*w])
+		copy(gv[j*w:(j+1)*w], pv[phys*w:(phys+1)*w])
+	}
+	contiguous := make([]float32, len(q))
+	if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
+		accel.ID3{X: qSeq * qHeads},
+		kernelabi.Args{
+			Slices: []any{q, gk, gv, lengths, contiguous},
+			Uniforms: []any{testkernels.PrefillDims{
+				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, QSeq: qSeq,
+				Base: base, Scale: scale,
+			}},
+		}); err != nil {
+		t.Fatalf("contiguous dispatch: %v", err)
+	}
+
+	for i := range paged {
+		if paged[i] != contiguous[i] {
+			t.Fatalf("element %d is %v paged and %v contiguous; a page table is an "+
+				"addressing, so the two answers are the same answer", i, paged[i],
+				contiguous[i])
+		}
+	}
+}
