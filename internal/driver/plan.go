@@ -554,12 +554,12 @@ type RenderPass struct {
 	Color []Operand
 	Depth *Operand
 
-	// ColorLoad and DepthLoad are 0 for clear, 1 for keep, 2 for don't-care,
-	// mirroring the public LoadOp. The backend needs the distinction because
-	// clear is free on a tiler and a full-screen clear draw is not.
-	ColorLoad  []uint8
+	// ColorLoad and DepthLoad are the load actions. The backend needs the
+	// distinction because clear is free on a tiler and a full-screen clear draw
+	// is not.
+	ColorLoad  []LoadOp
 	ColorClear [][4]float32
-	DepthLoad  uint8
+	DepthLoad  LoadOp
 	DepthClear float32
 
 	Width, Height int
@@ -593,6 +593,44 @@ type RenderDraw struct {
 	// Vertex is the attribute source, one operand per bound slot.
 	VertexBuffers []Operand
 }
+
+// LoadOp is what happens to an attachment at the start of a render pass.
+//
+// It lives here rather than in the public package because a backend acts on the
+// value and cannot import that package. accel aliases it.
+type LoadOp uint8
+
+const (
+	// LoadClear clears to a stated value. On a tiler this costs nothing, where
+	// a full-screen clear draw costs a full write of tile memory.
+	LoadClear LoadOp = iota
+
+	// LoadKeep preserves existing contents, which makes the attachment a read
+	// as well as a write.
+	LoadKeep
+
+	// LoadDontCare leaves the contents undefined, and carries no data
+	// dependency on whatever wrote the attachment last — so the
+	// read-after-write edge disappears. The write-after-write edge does not.
+	//
+	// A backend cannot tell it from LoadKeep by its effect: both leave the
+	// bytes alone. What it buys is the missing edge, and that is spent at graph
+	// build. This is why the constant is defined once rather than mirrored --
+	// a swap between the two is silent everywhere a test could look.
+	LoadDontCare
+)
+
+// StoreOp is what happens to an attachment at the end of a render pass.
+type StoreOp uint8
+
+const (
+	// StoreKeep makes the contents readable after the pass.
+	StoreKeep StoreOp = iota
+
+	// StoreDiscard leaves them undefined. On a tiler this saves writing a whole
+	// depth buffer out to memory every frame.
+	StoreDiscard
+)
 
 // checkRenderPass reports why a render pass node cannot be compiled.
 //

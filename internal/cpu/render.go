@@ -92,22 +92,14 @@ func framebufferFor(n *resolvedNode) (*raster.Framebuffer, error) {
 // happened at build.
 func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 	for i, t := range fb.Color {
-		if i < len(rp.ColorLoad) && rp.ColorLoad[i] == uint8(loadClear) {
+		if i < len(rp.ColorLoad) && rp.ColorLoad[i] == driver.LoadClear {
 			t.Clear(rp.ColorClear[i])
 		}
 	}
-	if fb.Depth != nil && rp.DepthLoad == uint8(loadClear) {
+	if fb.Depth != nil && rp.DepthLoad == driver.LoadClear {
 		fb.Depth.Clear(rp.DepthClear, 0)
 	}
 }
-
-// The load actions, mirroring the public LoadOp. Named here rather than shared,
-// because the public package cannot be imported from a backend.
-const (
-	loadClear uint8 = iota
-	loadKeep
-	loadDontCare
-)
 
 // drawOne rasterizes one draw.
 func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw) error {

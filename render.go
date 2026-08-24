@@ -7,6 +7,7 @@ package accel
 import (
 	"fmt"
 
+	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
 )
 
@@ -276,34 +277,24 @@ func (p *RenderPipeline) Close() error {
 	return nil
 }
 
-// LoadOp is what happens to an attachment at the start of a pass.
-type LoadOp uint8
-
-const (
-	// LoadClear clears to a stated value. On a tiler this costs nothing, where
-	// a full-screen clear draw costs a full write of tile memory.
-	LoadClear LoadOp = iota
-
-	// LoadKeep preserves existing contents, which makes the attachment a read
-	// as well as a write.
-	LoadKeep
-
-	// LoadDontCare leaves the contents undefined, and carries no data
-	// dependency on whatever wrote the attachment last — so the
-	// read-after-write edge disappears. The write-after-write edge does not.
-	LoadDontCare
+// LoadOp and StoreOp are what happens to an attachment at the start and the end
+// of a pass. They are [driver.LoadOp] and [driver.StoreOp]: a backend acts on
+// the value and cannot import this package, so one definition lives where both
+// sides reach it. Two definitions with nothing pinning them together is how
+// LoadKeep and LoadDontCare -- which a backend cannot tell apart by their
+// effect -- would swap silently.
+type (
+	LoadOp  = driver.LoadOp
+	StoreOp = driver.StoreOp
 )
 
-// StoreOp is what happens to an attachment at the end of a pass.
-type StoreOp uint8
-
 const (
-	// StoreKeep makes the contents readable after the pass.
-	StoreKeep StoreOp = iota
+	LoadClear    = driver.LoadClear
+	LoadKeep     = driver.LoadKeep
+	LoadDontCare = driver.LoadDontCare
 
-	// StoreDiscard leaves them undefined. On a tiler this saves writing a whole
-	// depth buffer out to memory every frame.
-	StoreDiscard
+	StoreKeep    = driver.StoreKeep
+	StoreDiscard = driver.StoreDiscard
 )
 
 // ColorAttachment is one colour target of a render pass.
