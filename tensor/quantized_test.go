@@ -18,7 +18,7 @@ func i8Buffer(t *testing.T, d *accel.Device, label string, vals []int8) accel.Bu
 	t.Helper()
 	b, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.I8, Count: len(vals), Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("buffer %s: %v", label, err)
@@ -53,7 +53,7 @@ func TestAPlanMixesQuantizedAndUnquantized(t *testing.T) {
 		big[i] = float32(math.Cos(float64(i)*0.23)) * 1.5
 		small[i] = float32(math.Sin(float64(i)*0.41)) * 0.5
 	}
-	bq, bs := quant.Int8(big)
+	bq, bs := quant.Int8Quantize(big)
 
 	rt := newRuntime(t)
 	d := rt.Device()
@@ -167,7 +167,7 @@ func f16BitsBuffer(t *testing.T, d *accel.Device, label string, vals []accel.Flo
 	}
 	b, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.F16, Count: len(vals), Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("buffer %s: %v", label, err)
@@ -261,7 +261,7 @@ func TestQuantizedRefusals(t *testing.T) {
 	}, {
 		name: "a quantized table that is not a matrix",
 		build: func(b *tensor.Builder) {
-			tensor.QuantRows(b, tensor.Quantized{
+			tensor.QuantGatherRows(b, tensor.Quantized{
 				Quants: i8(b, "q", 64), Scales: f16(b, "s", 2),
 			}, u32(b, "i", 2))
 		},
@@ -269,7 +269,7 @@ func TestQuantizedRefusals(t *testing.T) {
 	}, {
 		name: "ids that are not u32",
 		build: func(b *tensor.Builder) {
-			tensor.QuantRows(b, tensor.Quantized{
+			tensor.QuantGatherRows(b, tensor.Quantized{
 				Quants: i8(b, "q", 8, 8), Scales: f16(b, "s", 2),
 			}, f16(b, "i", 2))
 		},
@@ -295,7 +295,7 @@ func TestQuantizedRefusals(t *testing.T) {
 	})
 	before := b.Err().Error()
 	tensor.QuantMatMul(b, bad, tensor.Quantized{Quants: bad, Scales: bad})
-	tensor.QuantRows(b, tensor.Quantized{Quants: bad, Scales: bad}, bad)
+	tensor.QuantGatherRows(b, tensor.Quantized{Quants: bad, Scales: bad}, bad)
 	if b.Err().Error() != before {
 		t.Errorf("a quantized operator on a poisoned tensor recorded a diagnostic:\n%v",
 			b.Err())

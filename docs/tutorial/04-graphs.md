@@ -56,7 +56,7 @@ A value that only exists between two nodes should be a **transient**:
 ```go
 mid := r.Transient(accel.BufferDescriptor{
 	DType: accel.F32, Count: n,
-	Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+	Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	Label: "mid",
 })
 ```

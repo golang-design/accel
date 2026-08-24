@@ -406,11 +406,11 @@ for a cursor at $p$, which in code is:
 
 ```
 required = 4                                             // dtype floor, always
-if usage & UsageStorage:  required = max(required, lim.MinStorageBufferOffsetAlignment)
-if usage & UsageUniform:  required = max(required, lim.MinUniformBufferOffsetAlignment)
-if usage & (UsageCopySrc|UsageCopyDst):
+if usage & BufferStorage:  required = max(required, lim.MinStorageBufferOffsetAlignment)
+if usage & BufferUniform:  required = max(required, lim.MinUniformBufferOffsetAlignment)
+if usage & (BufferCopySrc|BufferCopyDst):
                           required = max(required, lim.MinBufferCopyOffsetAlignment)
-if usage & UsageIndirect: required = max(required, 4)    // indirect args are u32 triples
+if usage & BufferIndirect: required = max(required, 4)    // indirect args are u32 triples
 ```
 
 This is a second reason usage is declared at creation and not inferred. The
@@ -576,7 +576,7 @@ the same exception a vertex buffer takes in 3.2, and there are exactly two.
 params, err := pool.Alloc(accel.BufferDescriptor{
 	DType: accel.U8,
 	Count: kernels.ParamsBlockSize, // generated constant, 96 above
-	Usage: accel.UsageUniform | accel.UsageCopyDst,
+	Usage: accel.BufferUniform | accel.BufferCopyDst,
 	Label: "params",
 })
 ```
@@ -1089,13 +1089,13 @@ decides alignment, and alignment is decided before placement.
 
 | Usage | Implies | Alignment contribution |
 | --- | --- | --- |
-| `UsageStorage` | bound to a `BindingStorageBuffer` slot | `MinStorageBufferOffsetAlignment` |
-| `UsageUniform` | bound to a `BindingUniformBuffer` slot, contents std140 | `MinUniformBufferOffsetAlignment` |
-| `UsageIndex` | index buffer for `DrawIndexed` (005) | index width, 2 or 4 |
-| `UsageVertex` | vertex buffer, interpreted by 005's vertex layout | 4 |
-| `UsageIndirect` | source of dispatch or draw arguments | 4 |
-| `UsageCopySrc` | source of a transfer | `MinBufferCopyOffsetAlignment` |
-| `UsageCopyDst` | destination of a transfer, and of `Queue.WriteBuffer` | `MinBufferCopyOffsetAlignment` |
+| `BufferStorage` | bound to a `BindingStorageBuffer` slot | `MinStorageBufferOffsetAlignment` |
+| `BufferUniform` | bound to a `BindingUniformBuffer` slot, contents std140 | `MinUniformBufferOffsetAlignment` |
+| `BufferIndex` | index buffer for `DrawIndexed` (005) | index width, 2 or 4 |
+| `BufferVertex` | vertex buffer, interpreted by 005's vertex layout | 4 |
+| `BufferIndirect` | source of dispatch or draw arguments | 4 |
+| `BufferCopySrc` | source of a transfer | `MinBufferCopyOffsetAlignment` |
+| `BufferCopyDst` | destination of a transfer, and of `Queue.WriteBuffer` | `MinBufferCopyOffsetAlignment` |
 
 A buffer reports what it was made from, since every later validation error
 quotes those numbers back at the caller:
@@ -1576,12 +1576,12 @@ rec := dev.NewRecorder()
 for _, t := range chunk {
 	dst, _ := weights.Alloc(accel.BufferDescriptor{
 		DType: t.DType, Count: t.Count,
-		Usage: accel.UsageStorage | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopyDst,
 		Label: t.Name,
 	})
 	src, _ := staging.Alloc(accel.BufferDescriptor{
 		DType: t.DType, Count: t.Count,
-		Usage: accel.UsageCopySrc,
+		Usage: accel.BufferCopySrc,
 		Label: t.Name + ".staging",
 	})
 	dev.Queue().WriteBuffer(src, 0, t.Data) // memcpy into the mapping, no device work
@@ -1688,7 +1688,7 @@ accel: view offset of "kv_cache.k" (byte 8, element 4 of f16) is not a multiple
        offset as buffer contents (spec 003).
 
 accel: node 41 slot 2 ("scores") binds buffer "logits" declared
-       UsageStorage|UsageCopySrc but needs UsageCopyDst.
+       BufferStorage|BufferCopySrc but needs BufferCopyDst.
        Recorded at model/attention.go:118.
 
 accel: node 12 binds overlapping views of "kv_cache.k" to slots 1 (read) and 3

@@ -59,7 +59,7 @@ func TestQuantMatMulMeetsItsBudget(t *testing.T) {
 				w[i] = float32(math.Cos(float64(i)*0.31)) * 1.5
 			}
 
-			bq, bs := quant.Int8(w)
+			bq, bs := quant.Int8Quantize(w)
 			af16 := make([]accel.Float16, len(a))
 			for i := range a {
 				af16[i] = accel.ToFloat16(a[i])
@@ -134,8 +134,8 @@ func TestQuantRowsGathers(t *testing.T) {
 	for i := range table {
 		table[i] = float32(math.Sin(float64(i)*0.11)) * 4
 	}
-	tq, ts := quant.Int8(table)
-	back := quant.Dequantize(tq, ts)
+	tq, ts := quant.Int8Quantize(table)
+	back := quant.Int8Dequantize(tq, ts)
 
 	ids := []uint32{5, 0, vocab + 3}
 	out := make([]float32, rows*width)

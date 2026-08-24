@@ -21,7 +21,7 @@ func f16Buffer(t *testing.T, d *accel.Device, label string, vals []float32) acce
 	}
 	b, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.F16, Count: len(vals), Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("buffer %s: %v", label, err)
@@ -41,7 +41,7 @@ func u32Buffer(t *testing.T, d *accel.Device, label string, vals []uint32) accel
 	t.Helper()
 	b, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.U32, Count: len(vals), Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("buffer %s: %v", label, err)
@@ -258,7 +258,7 @@ func TestIndexingNormalizationAndRotation(t *testing.T) {
 		ids := tensor.Input(b, tensor.ValueDesc{
 			Name: "ids", DType: accel.U32, Shape: tensor.Shape{n},
 		})
-		out := tensor.Rows(b, table, ids)
+		out := tensor.GatherRows(b, table, ids)
 		if !out.Shape().Equal(tensor.Shape{n, width}) {
 			t.Fatalf("Rows inferred %v, want [3 4]", out.Shape())
 		}
@@ -424,15 +424,15 @@ func TestOperatorRefusals(t *testing.T) {
 		want  string
 	}{{
 		name:  "a table that is not a matrix",
-		build: func(b *tensor.Builder) { tensor.Rows(b, f32(b, "t", 8), u32(b, "i", 2)) },
+		build: func(b *tensor.Builder) { tensor.GatherRows(b, f32(b, "t", 8), u32(b, "i", 2)) },
 		want:  "must be [vocab, width]",
 	}, {
 		name:  "ids that are not u32",
-		build: func(b *tensor.Builder) { tensor.Rows(b, f32(b, "t", 8, 4), f32(b, "i", 2)) },
+		build: func(b *tensor.Builder) { tensor.GatherRows(b, f32(b, "t", 8, 4), f32(b, "i", 2)) },
 		want:  "ids are f32",
 	}, {
 		name:  "an f16 table",
-		build: func(b *tensor.Builder) { tensor.Rows(b, f16(b, "t", 8, 4), u32(b, "i", 2)) },
+		build: func(b *tensor.Builder) { tensor.GatherRows(b, f16(b, "t", 8, 4), u32(b, "i", 2)) },
 		want:  "010-kernel-corpus.md owns the f16 variant",
 	}, {
 		name:  "a gain that is not one per feature",
@@ -526,7 +526,7 @@ func TestOperatorRefusals(t *testing.T) {
 	b := rt.NewBuilder("poison")
 	bad := tensor.MatMul(b, f16(b, "x", 4, 8), f16(b, "w", 5, 4))
 	before := b.Err().Error()
-	tensor.Rows(b, bad, u32(b, "i", 2))
+	tensor.GatherRows(b, bad, u32(b, "i", 2))
 	tensor.RMSNorm(b, bad, bad, 1e-5)
 	tensor.Softmax(b, bad, tensor.SoftmaxOptions{})
 	tensor.RoPE(b, bad, 2, "base", "pos")

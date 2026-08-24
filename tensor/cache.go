@@ -152,26 +152,34 @@ func (c *PlanCache) Close() error {
 // The trade is arithmetic for compilation. Fewer buckets waste more work per
 // request; more buckets hold more plans and more memory. That is a policy, which
 // is why it is a caller's list rather than a rule here.
-type Buckets []int
+// The sizes are unexported so a literal cannot bypass [NewBuckets]. A
+// `Buckets{512, 128, 256}` written by hand is unsorted, and [Buckets.For]
+// searches — so a size-100 request returned 512, the first element, rather than
+// 128. Silently, with a plausible answer.
+type Buckets struct{ sizes []int }
 
-// NewBuckets sorts and de-duplicates a bucket set.
+// NewBuckets sorts and de-duplicates a bucket set. It is the only way to build
+// one; see [Buckets].
 func NewBuckets(sizes ...int) (Buckets, error) {
 	if len(sizes) == 0 {
-		return nil, errors.New("accel/tensor: a bucket set needs at least one size")
+		return Buckets{}, errors.New("accel/tensor: a bucket set needs at least one size")
 	}
-	out := append(Buckets(nil), sizes...)
+	out := append([]int(nil), sizes...)
 	sort.Ints(out)
 	for i, s := range out {
 		if s <= 0 {
-			return nil, fmt.Errorf("accel/tensor: bucket %d is %d, and a length is positive",
+			return Buckets{}, fmt.Errorf("accel/tensor: bucket %d is %d, and a length is positive",
 				i, s)
 		}
 		if i > 0 && out[i] == out[i-1] {
-			return nil, fmt.Errorf("accel/tensor: bucket size %d appears twice", s)
+			return Buckets{}, fmt.Errorf("accel/tensor: bucket size %d appears twice", s)
 		}
 	}
-	return out, nil
+	return Buckets{sizes: out}, nil
 }
+
+// Sizes reports the bucket set, smallest first.
+func (b Buckets) Sizes() []int { return append([]int(nil), b.sizes...) }
 
 // For returns the smallest bucket that holds n tokens.
 //
@@ -182,11 +190,11 @@ func (b Buckets) For(n int) (int, error) {
 	if n <= 0 {
 		return 0, fmt.Errorf("accel/tensor: a prompt of %d tokens", n)
 	}
-	i := sort.SearchInts(b, n)
-	if i == len(b) {
+	i := sort.SearchInts(b.sizes, n)
+	if i == len(b.sizes) {
 		return 0, fmt.Errorf("accel/tensor: a prompt of %d tokens exceeds the largest "+
 			"bucket, %d; add a bucket or split the prompt, because truncating it would "+
-			"answer a different question", n, b[len(b)-1])
+			"answer a different question", n, b.sizes[len(b.sizes)-1])
 	}
-	return b[i], nil
+	return b.sizes[i], nil
 }

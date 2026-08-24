@@ -79,7 +79,7 @@ func (p *Plan) materialize(r *accel.Recorder, op string, t *Tensor, want Shape,
 
 	dst := r.Transient(accel.BufferDescriptor{
 		DType: t.dtype, Count: want.Elements(),
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 		Label: label,
 	})
 	// A BufferView is a range rather than a resource, so each repeat is the

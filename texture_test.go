@@ -156,7 +156,7 @@ func TestATextureRoundTripsTightlyPacked(t *testing.T) {
 	const w, h = 100, 7 // 400-byte rows, not a multiple of 256, so it repacks
 
 	d := openDevice(t)
-	p, err := d.NewPoolWith(accel.PoolDescriptor{
+	p, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "images",
 	})
 	if err != nil {
@@ -210,7 +210,7 @@ func TestTextureValidationRows(t *testing.T) {
 	d := openDevice(t)
 	pool := func(t *testing.T, textures bool) *accel.Pool {
 		t.Helper()
-		p, err := d.NewPoolWith(accel.PoolDescriptor{
+		p, err := d.NewPool(accel.PoolDescriptor{
 			Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: textures, Label: "p",
 		})
 		if err != nil {
@@ -287,7 +287,7 @@ func TestTextureValidationRows(t *testing.T) {
 // one enforces so the rule is not discovered in production.
 func TestADepthTextureIsNotHostReadable(t *testing.T) {
 	d := openDevice(t)
-	p, err := d.NewPoolWith(accel.PoolDescriptor{
+	p, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "depth",
 	})
 	if err != nil {
@@ -318,7 +318,7 @@ func TestADepthTextureIsNotHostReadable(t *testing.T) {
 // turns a leak into a use-after-free.
 func TestAPoolWillNotCloseUnderALiveTexture(t *testing.T) {
 	d := openDevice(t)
-	p, err := d.NewPoolWith(accel.PoolDescriptor{
+	p, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "p",
 	})
 	if err != nil {
@@ -370,7 +370,7 @@ func TestATextureRoundTripsThroughAGraph(t *testing.T) {
 		t.Skip("this device does not pad a 400-byte row, so the two pitches agree")
 	}
 
-	p, err := d.NewPoolWith(accel.PoolDescriptor{
+	p, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "images",
 	})
 	if err != nil {
@@ -443,7 +443,7 @@ func newBytes(t *testing.T, d *accel.Device, label string, n int) *accel.Buffer 
 	t.Helper()
 	b, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.U8, Count: n, Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("buffer %q: %v", label, err)
@@ -455,7 +455,7 @@ func newBytes(t *testing.T, d *accel.Device, label string, n int) *accel.Buffer 
 // The validation rows a texture copy adds.
 func TestTextureCopyValidationRows(t *testing.T) {
 	d := openDevice(t)
-	p, err := d.NewPoolWith(accel.PoolDescriptor{
+	p, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryShared, Bytes: 1 << 20, Textures: true, Label: "images",
 	})
 	if err != nil {

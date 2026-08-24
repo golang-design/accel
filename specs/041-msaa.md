@@ -102,8 +102,8 @@ error to build — which [033](033-render-api.md) §6 forbids.
 `TextureDescriptor` gains `SampleCount int`, where 0 and 1 both mean
 single-sampled. `validateTexture` gains, in the shape `MipLevels` already has:
 
-- `SampleCount > 1` requires `UsageRenderTarget`, and refuses `UsageCopySrc`,
-  `UsageCopyDst`, and any shader-visible usage;
+- `SampleCount > 1` requires `UsageRenderTarget`, and refuses `BufferCopySrc`,
+  `BufferCopyDst`, and any shader-visible usage;
 - `MipLevels` and `ArrayLayers` must be 1, so MSAA reopens nothing about
   subresource naming;
 - the count must be in the device's set for that **format**, per §3.1.

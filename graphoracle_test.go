@@ -35,7 +35,7 @@ func (c oracleCase) record(r *accel.Recorder) {
 		at++
 		return v % mod
 	}
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	// Transients of varying size, so packing has something to sort. Shape is
 	// randomized too, not only node count: the bug the interference relation
@@ -59,7 +59,7 @@ func (c oracleCase) record(r *accel.Recorder) {
 		switch next(3) {
 		case 0:
 			dst := pick()
-			r.CopyToBuffer(dst, make([]float32, dst.Count))
+			r.UploadToBuffer(dst, make([]float32, dst.Count))
 		case 1:
 			dst, src := pick(), pick()
 			if dst.Count == src.Count {
@@ -119,7 +119,7 @@ func FuzzWholePlanOracle(f *testing.F) {
 	}
 	f.Cleanup(func() { _ = p.Close() })
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	mk := func(label string) *accel.Buffer {
 		b, err := d.NewBuffer(accel.BufferDescriptor{
 			DType: accel.F32, Count: oracleElems, Usage: storage, Label: label,
@@ -211,7 +211,7 @@ func equalFloats(a, b []float32) bool {
 func TestTheTwoPlansAreActuallyDifferent(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -287,7 +287,7 @@ func TestTheTwoPlansAreActuallyDifferent(t *testing.T) {
 func TestTheOracleAgreesOnADiamond(t *testing.T) {
 	const n = 32
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})

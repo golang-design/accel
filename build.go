@@ -131,7 +131,7 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 // else, and a version that skipped offsets entirely would make that a larger
 // change than it is.
 func (g *Graph) placeTransients() error {
-	align := g.dev.allocAlignment(UsageStorage | UsageCopySrc | UsageCopyDst)
+	align := g.dev.allocAlignment(BufferStorage | BufferCopySrc | BufferCopyDst)
 	g.poolAlign = align
 	for _, t := range g.transients {
 		g.memory.UnaliasedBytes += alignUp(t.bytes, align)

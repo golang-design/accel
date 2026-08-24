@@ -53,10 +53,10 @@ func TestADecodeStepAppendsAndAttends(t *testing.T) {
 		Name: "slot", DType: accel.U32, Shape: tensor.Shape{1},
 	})
 
-	kc := tensor.Persistent(b, tensor.StateDesc{
+	kc := tensor.NewState(b, tensor.StateDesc{
 		Name: "kcache", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 	})
-	vc := tensor.Persistent(b, tensor.StateDesc{
+	vc := tensor.NewState(b, tensor.StateDesc{
 		Name: "vcache", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 	})
 
@@ -188,7 +188,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		return tensor.Input(b, tensor.ValueDesc{Name: n, DType: accel.U32, Shape: dims})
 	}
 	cache := func(b *tensor.Builder, n string, dims ...int) *tensor.State {
-		return tensor.Persistent(b, tensor.StateDesc{
+		return tensor.NewState(b, tensor.StateDesc{
 			Name: n, DType: accel.F32, Shape: dims,
 		})
 	}
@@ -323,7 +323,7 @@ func TestAStaleStateVersionIsRefused(t *testing.T) {
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 
-	c := tensor.Persistent(b, tensor.StateDesc{
+	c := tensor.NewState(b, tensor.StateDesc{
 		Name: "cache", DType: accel.F32, Shape: tensor.Shape{4, 2, 8},
 	})
 	rows := tensor.Input(b, tensor.ValueDesc{

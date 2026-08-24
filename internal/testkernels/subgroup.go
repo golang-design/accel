@@ -33,9 +33,9 @@ func SubgroupReduce(t accel.Thread, in []float32, out []float32) {
 	// One lane per subgroup publishes, which is what Elect is for: hardware
 	// guarantees only that exactly one lane is elected, and accel pins it to
 	// the lowest so the output does not depend on the device.
-	elected := t.Elect()
+	elected := t.SubgroupElect()
 	if elected {
-		sid := t.SubgroupID()
+		sid := t.SubgroupIndex()
 		if sid < uint32(len(out)) {
 			out[sid] = total
 		}

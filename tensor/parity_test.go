@@ -87,10 +87,10 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		q := tensor.Input(b, tensor.ValueDesc{
 			Name: "q", DType: accel.F32, Shape: tensor.Shape{n, qHeads, headDim},
 		})
-		kc := tensor.Persistent(b, tensor.StateDesc{
+		kc := tensor.NewState(b, tensor.StateDesc{
 			Name: "k", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
-		vc := tensor.Persistent(b, tensor.StateDesc{
+		vc := tensor.NewState(b, tensor.StateDesc{
 			Name: "v", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
 		w := tensor.Weight(b, tensor.ValueDesc{
@@ -163,10 +163,10 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 		q := tensor.Input(b, tensor.ValueDesc{
 			Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
 		})
-		kc := tensor.Persistent(b, tensor.StateDesc{
+		kc := tensor.NewState(b, tensor.StateDesc{
 			Name: "k", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
-		vc := tensor.Persistent(b, tensor.StateDesc{
+		vc := tensor.NewState(b, tensor.StateDesc{
 			Name: "v", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
 		w := tensor.Weight(b, tensor.ValueDesc{

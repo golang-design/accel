@@ -16,7 +16,7 @@ import (
 
 func newPool(t *testing.T, d *accel.Device, kind accel.MemoryKind, bytes int) *accel.Pool {
 	t.Helper()
-	p, err := d.NewPool(kind, bytes)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: kind, Bytes: bytes})
 	if err != nil {
 		t.Fatalf("NewPool(%v, %d): %v", kind, bytes, err)
 	}
@@ -25,7 +25,7 @@ func newPool(t *testing.T, d *accel.Device, kind accel.MemoryKind, bytes int) *a
 
 func alloc(t *testing.T, p *accel.Pool, desc accel.BufferDescriptor) *accel.Buffer {
 	t.Helper()
-	b, err := p.Alloc(desc)
+	b, err := p.AllocBuffer(desc)
 	if err != nil {
 		t.Fatalf("Alloc(%+v): %v", desc, err)
 	}
@@ -67,7 +67,7 @@ func TestPoolKindsAndRejection(t *testing.T) {
 		t.Fatal("the mimicked profile should report no unified memory")
 	}
 
-	_, err := dd.NewPool(accel.MemoryShared, 1<<20)
+	_, err := dd.NewPool(accel.PoolDescriptor{Kind: accel.MemoryShared, Bytes: 1 << 20})
 	if err == nil {
 		t.Fatal("a device reporting no unified memory returned a Shared pool")
 	}
@@ -94,9 +94,9 @@ func TestPoolConstructionRejections(t *testing.T) {
 		{"unknown policy", accel.PoolDescriptor{Bytes: 1 << 20, Policy: accel.PoolPolicy(9)}, "policy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.NewPoolWith(tc.desc)
+			_, err := d.NewPool(tc.desc)
 			if err == nil {
-				t.Fatalf("NewPoolWith(%+v) was accepted", tc.desc)
+				t.Fatalf("NewPool(%+v) was accepted", tc.desc)
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not explain %q", err, tc.want)
@@ -118,13 +118,13 @@ func TestAllocationAlignsByUsage(t *testing.T) {
 		align int
 	}{
 		{0, 4},
-		{accel.UsageVertex, 4},
-		{accel.UsageIndirect, 4},
-		{accel.UsageStorage, lim.MinStorageBufferOffsetAlignment},
-		{accel.UsageUniform, lim.MinUniformBufferOffsetAlignment},
-		{accel.UsageCopySrc, lim.MinBufferCopyOffsetAlignment},
-		{accel.UsageCopyDst, lim.MinBufferCopyOffsetAlignment},
-		{accel.UsageStorage | accel.UsageCopyDst, lim.MinStorageBufferOffsetAlignment},
+		{accel.BufferVertex, 4},
+		{accel.BufferIndirect, 4},
+		{accel.BufferStorage, lim.MinStorageBufferOffsetAlignment},
+		{accel.BufferUniform, lim.MinUniformBufferOffsetAlignment},
+		{accel.BufferCopySrc, lim.MinBufferCopyOffsetAlignment},
+		{accel.BufferCopyDst, lim.MinBufferCopyOffsetAlignment},
+		{accel.BufferStorage | accel.BufferCopyDst, lim.MinStorageBufferOffsetAlignment},
 	} {
 		// Push the cursor to an odd place first so a satisfied alignment is the
 		// allocator's doing rather than an accident of starting at zero.
@@ -193,7 +193,7 @@ func TestUsedIncludesPadding(t *testing.T) {
 // exhaustion from fragmentation and a bare failure does not.
 func TestAllocErrorDistinguishesFragmentation(t *testing.T) {
 	d := openCPU(t, accel.CPUOptions{})
-	p, err := d.NewPoolWith(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20, Label: "weights"})
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20, Label: "weights"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestAllocErrorDistinguishesFragmentation(t *testing.T) {
 	}()
 
 	// Exhaustion first: a request larger than the pool.
-	_, err = p.Alloc(accel.BufferDescriptor{DType: accel.U8, Count: 4 << 20, Label: "kv"})
+	_, err = p.AllocBuffer(accel.BufferDescriptor{DType: accel.U8, Count: 4 << 20, Label: "kv"})
 	if err == nil {
 		t.Fatal("a request larger than the pool was accepted")
 	}
@@ -227,7 +227,7 @@ func TestAllocErrorDistinguishesFragmentation(t *testing.T) {
 
 	// Then fragmentation: fill, free every other, ask for more than any hole.
 	for i := 0; ; i++ {
-		b, err := p.Alloc(accel.BufferDescriptor{
+		b, err := p.AllocBuffer(accel.BufferDescriptor{
 			DType: accel.U8, Count: 256, Label: fmt.Sprintf("block%d", i),
 		})
 		if err != nil {
@@ -246,7 +246,7 @@ func TestAllocErrorDistinguishesFragmentation(t *testing.T) {
 	live = held
 
 	s := p.Stats()
-	_, err = p.Alloc(accel.BufferDescriptor{DType: accel.U8, Count: 4096, Label: "big"})
+	_, err = p.AllocBuffer(accel.BufferDescriptor{DType: accel.U8, Count: 4096, Label: "big"})
 	if err == nil {
 		t.Fatal("a fragmented pool served a request larger than any hole")
 	}
@@ -288,7 +288,7 @@ func TestBufferDescriptorRejections(t *testing.T) {
 		{"beyond MaxBufferBytes", accel.BufferDescriptor{DType: accel.F32, Count: 1 << 40}, "MaxBufferBytes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := p.Alloc(tc.desc); err == nil {
+			if _, err := p.AllocBuffer(tc.desc); err == nil {
 				t.Fatalf("Alloc(%+v) was accepted", tc.desc)
 			} else if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not explain %q", err, tc.want)
@@ -301,7 +301,7 @@ func TestBufferDescriptorRejections(t *testing.T) {
 // pool or a texture pool and never both.
 func TestTexturePoolRejectsBuffers(t *testing.T) {
 	d := openCPU(t, accel.CPUOptions{})
-	p, err := d.NewPoolWith(accel.PoolDescriptor{
+	p, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryDevice, Bytes: 1 << 20, Textures: true, Label: "targets",
 	})
 	if err != nil {
@@ -309,7 +309,7 @@ func TestTexturePoolRejectsBuffers(t *testing.T) {
 	}
 	defer p.Close()
 
-	_, err = p.Alloc(accel.BufferDescriptor{DType: accel.F32, Count: 4, Label: "b"})
+	_, err = p.AllocBuffer(accel.BufferDescriptor{DType: accel.F32, Count: 4, Label: "b"})
 	if err == nil {
 		t.Fatal("a texture pool allocated a buffer")
 	}
@@ -334,7 +334,7 @@ func TestLinearPoolResets(t *testing.T) {
 		t.Errorf("error does not unwrap to ErrUsage: %v", err)
 	}
 
-	linear, err := d.NewPoolWith(accel.PoolDescriptor{
+	linear, err := d.NewPool(accel.PoolDescriptor{
 		Kind: accel.MemoryDevice, Bytes: 1 << 20, Policy: accel.PoolLinear, Label: "transients",
 	})
 	if err != nil {
@@ -380,7 +380,7 @@ func TestClosingIsOrderedNotRecursive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, err := d.NewPoolWith(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20, Label: "weights"})
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20, Label: "weights"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestClosingIsOrderedNotRecursive(t *testing.T) {
 	// A device that refused to close is still fully open. It must not have
 	// marked itself closed and rolled back, because a concurrent caller would
 	// then see a closed device that never closed.
-	probe, err := d.NewPool(accel.MemoryUpload, 1<<20)
+	probe, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryUpload, Bytes: 1 << 20})
 	if err != nil {
 		t.Fatalf("the device stopped working after refusing to close: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestClosingIsOrderedNotRecursive(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 200 {
-				q, err := d.NewPool(accel.MemoryUpload, 1<<16)
+				q, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryUpload, Bytes: 1 << 16})
 				if err != nil {
 					t.Errorf("NewPool raced Close and saw: %v", err)
 					return
@@ -525,7 +525,7 @@ func TestClosedHandlesAreReported(t *testing.T) {
 		t.Fatalf("the pool should be empty: %v", err)
 	}
 	// A closed pool refuses to allocate.
-	if _, err := p.Alloc(accel.BufferDescriptor{DType: accel.F32, Count: 1}); err == nil {
+	if _, err := p.AllocBuffer(accel.BufferDescriptor{DType: accel.F32, Count: 1}); err == nil {
 		t.Error("a closed pool allocated")
 	}
 	if err := p.Reset(); err == nil {
@@ -547,7 +547,7 @@ func TestImplicitPoolGrows(t *testing.T) {
 	var live []*accel.Buffer
 	for i := range 4 {
 		b, err := d.NewBuffer(accel.BufferDescriptor{
-			DType: accel.U8, Count: each, Usage: accel.UsageStorage,
+			DType: accel.U8, Count: each, Usage: accel.BufferStorage,
 			Label: fmt.Sprintf("convenience%d", i),
 		})
 		if err != nil {
@@ -600,7 +600,7 @@ func TestMaxPoolsIsEnforced(t *testing.T) {
 	second := newPool(t, d, accel.MemoryDevice, 1<<20)
 	defer second.Close()
 
-	_, err := d.NewPool(accel.MemoryDevice, 1<<20)
+	_, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 	if err == nil {
 		t.Fatal("a third pool was created on a device capped at two")
 	}
@@ -630,8 +630,8 @@ func TestPoolIsSafeForConcurrentUse(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := range each {
-				b, err := p.Alloc(accel.BufferDescriptor{
-					DType: accel.F32, Count: 16, Usage: accel.UsageStorage,
+				b, err := p.AllocBuffer(accel.BufferDescriptor{
+					DType: accel.F32, Count: 16, Usage: accel.BufferStorage,
 					Label: fmt.Sprintf("g%d-%d", g, i),
 				})
 				if err != nil {
@@ -699,7 +699,7 @@ func TestDeviceIsSafeForConcurrentUse(t *testing.T) {
 	const width = 64
 	target := alloc(t, shared, accel.BufferDescriptor{
 		DType: accel.U32, Count: width * 8,
-		Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "target",
+		Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "target",
 	})
 
 	var (
@@ -721,8 +721,8 @@ func TestDeviceIsSafeForConcurrentUse(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := range 16 {
-				b, err := shared.Alloc(accel.BufferDescriptor{
-					DType: accel.F32, Count: 8, Usage: accel.UsageStorage,
+				b, err := shared.AllocBuffer(accel.BufferDescriptor{
+					DType: accel.F32, Count: 8, Usage: accel.BufferStorage,
 					Label: fmt.Sprintf("sub-g%d-%d", g, i),
 				})
 				if err != nil {
@@ -748,7 +748,7 @@ func TestDeviceIsSafeForConcurrentUse(t *testing.T) {
 		// Create a pool, which counts the device's live allocations.
 		go func() {
 			defer wg.Done()
-			p, err := d.NewPool(accel.MemoryUpload, 1<<20)
+			p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryUpload, Bytes: 1 << 20})
 			if err != nil {
 				t.Errorf("NewPool: %v", err)
 				return

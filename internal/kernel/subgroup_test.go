@@ -67,11 +67,11 @@ func TestABallotMaskReportsEachLane(t *testing.T) {
 				f.Pass = 1
 				f.Sub = kernel.SubBallot
 				// Odd lanes set their predicate.
-				f.SubBool = th.SubgroupInvocationID()%2 == 1
+				f.SubBool = th.SubgroupLane()%2 == 1
 				f.Barrier = kernel.BarrierID{Index: 0}
 				return true
 			default:
-				lane := th.SubgroupInvocationID()
+				lane := th.SubgroupLane()
 				out[lane] = uint32(f.SubMask.Count())
 				if f.SubMask.Bit(lane) != (lane%2 == 1) {
 					t.Errorf("lane %d's own bit is %v", lane, f.SubMask.Bit(lane))
@@ -83,7 +83,7 @@ func TestABallotMaskReportsEachLane(t *testing.T) {
 					if got := f.SubMask.CountLower(5); got != 2 {
 						t.Errorf("CountLower(5) is %d, want 2", got)
 					}
-					if !f.SubMask.Any() {
+					if !f.SubMask.NotEmpty() {
 						t.Error("Any is false for a mask with bits set")
 					}
 				}
@@ -107,7 +107,7 @@ func TestABallotMaskReportsEachLane(t *testing.T) {
 // lane zero.
 func TestAnEmptyMaskNamesNoLane(t *testing.T) {
 	var m kernel.Mask
-	if m.Any() {
+	if m.NotEmpty() {
 		t.Error("an empty mask reports Any")
 	}
 	if m.Count() != 0 {
@@ -196,7 +196,7 @@ func TestTheRestOfTheSubgroupOperations(t *testing.T) {
 				Name: "Op", WorkgroupSize: kernel.ID3{X: 8, Y: 1, Z: 1},
 				Generator: kernel.ABIVersion, Suspensions: 1,
 				Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
-					lane := th.SubgroupInvocationID()
+					lane := th.SubgroupLane()
 					if f.Pass == 0 {
 						f.Pass = 1
 						f.Sub = c.op

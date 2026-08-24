@@ -601,3 +601,42 @@ func TestCapabilitiesBridgeToTheRequirementSet(t *testing.T) {
 		t.Error("a device satisfies capabilities it does not have")
 	}
 }
+
+// Two devices that disagree about what they can do must not share an identity.
+//
+// The CPU adapter's token is a constant — there is one CPU adapter — but an
+// opened device's profile is not: CPUStrict and CPUMimic resolve different
+// names, capabilities and limits. The identity used to come from the adapter
+// alone, so two open devices reported equal Info().ID and disagreed about what
+// they could run.
+//
+// That matters beyond tidiness. DeviceInfo promises a caller can choose "on
+// reported capabilities and limits rather than by trying and catching
+// failures", and specs/007-tensor-layer.md keys its plan cache on the device
+// identity — so a plan compiled against the developer profile could be reused
+// on a strict device that cannot run its kernels.
+func TestDeviceIdentityCoversTheResolvedProfile(t *testing.T) {
+	dev := openCPU(t, accel.CPUOptions{})
+	strict := openCPU(t, accel.CPUOptions{
+		Mode:          accel.CPUStrict,
+		StrictTargets: []accel.Backend{accel.BackendMetal},
+	})
+
+	if dev.Info().Capabilities == strict.Info().Capabilities &&
+		dev.Limits() == strict.Limits() {
+		t.Skip("this build's strict profile equals the developer one, so there is " +
+			"nothing for the identity to distinguish")
+	}
+	if dev.Info().ID == strict.Info().ID {
+		t.Error("two devices with different capabilities share an AdapterID; a plan " +
+			"cache keyed on it would reuse a plan the strict device cannot run")
+	}
+
+	// And it is stable: the same profile opened twice is the same identity, or
+	// every cache lookup misses.
+	again := openCPU(t, accel.CPUOptions{})
+	if dev.Info().ID != again.Info().ID {
+		t.Error("the same profile opened twice reports different identities, so no " +
+			"cache keyed on it can ever hit")
+	}
+}

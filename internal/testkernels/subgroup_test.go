@@ -144,11 +144,11 @@ func TestSubgroupIDsFollowTheOracleMapping(t *testing.T) {
 			if got, want := th.SubgroupSize(), width; got != want {
 				t.Fatalf("SubgroupSize is %d, want %d", got, want)
 			}
-			if got, want := th.SubgroupID(), l/width; got != want {
-				t.Errorf("width %d lane %d: SubgroupID is %d, want %d", width, l, got, want)
+			if got, want := th.SubgroupIndex(), l/width; got != want {
+				t.Errorf("width %d lane %d: SubgroupIndex is %d, want %d", width, l, got, want)
 			}
-			if got, want := th.SubgroupInvocationID(), l%width; got != want {
-				t.Errorf("width %d lane %d: SubgroupInvocationID is %d, want %d",
+			if got, want := th.SubgroupLane(), l%width; got != want {
+				t.Errorf("width %d lane %d: SubgroupLane is %d, want %d",
 					width, l, got, want)
 			}
 		}
@@ -222,7 +222,7 @@ func TestTheSubgroupKernelDeclaresItsCapabilities(t *testing.T) {
 		why  string
 	}{
 		{accel.CapSubgroupArithmetic, "CapSubgroupArithmetic", "it reduces across lanes"},
-		{accel.CapSubgroupBasic, "CapSubgroupBasic", "it elects a lane and reads SubgroupID"},
+		{accel.CapSubgroupBasic, "CapSubgroupBasic", "it elects a lane and reads SubgroupIndex"},
 	} {
 		if caps&want.cap == 0 {
 			t.Errorf("the record does not require %s, and %s", want.name, want.why)

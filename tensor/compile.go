@@ -253,7 +253,7 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	} else {
 		v := r.Transient(accel.BufferDescriptor{
 			DType: n.out.dtype, Count: n.out.shape.Elements(),
-			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 			Label: fmt.Sprintf("%s.%s.%d", p.label, n.op, i),
 		})
 		views[i] = v
@@ -303,7 +303,7 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		count := n.out.shape.Elements()
 		scratch := r.Transient(accel.BufferDescriptor{
 			DType: n.out.dtype, Count: count,
-			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 			Label: fmt.Sprintf("%s.%s.%d.inplace", p.label, n.op, i),
 		})
 		src := binds[len(binds)-1]

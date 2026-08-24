@@ -48,7 +48,7 @@ func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, u []Uniform
 	return r.indirectImpl(p, b, u, count, max)
 }
 
-// CopyToBuffer records a host-to-device transfer, copying src at record time.
+// UploadToBuffer records a host-to-device transfer, copying src at record time.
 //
 // The copy happens here rather than at submit because a Graph is immutable, and
 // holding the caller's slice would make the bytes a submission writes depend on
@@ -58,61 +58,61 @@ func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, u []Uniform
 // staging buffer and [Recorder.CopyBuffer], and for anything varying per
 // submission, which wants an Upload buffer written between submissions. It is
 // here for small constants baked into a graph.
-func (r *Recorder) CopyToBuffer(dst BufferView, src any) NodeID {
-	a, ok := r.declare("CopyToBuffer", dst, AccessWrite)
+func (r *Recorder) UploadToBuffer(dst BufferView, src any) NodeID {
+	a, ok := r.declare("UploadToBuffer", dst, AccessWrite)
 	if !ok {
-		return r.node(NodeHostWrite, "CopyToBuffer", nil, nil)
+		return r.node(NodeHostWrite, "UploadToBuffer", nil, nil)
 	}
-	data, err := hostBytes("CopyToBuffer", dst.Buffer.desc.Label, dst.DType, src)
+	data, err := hostBytes("UploadToBuffer", dst.Buffer.desc.Label, dst.DType, src)
 	if err != nil {
 		r.state.errs = append(r.state.errs, err)
-		return r.node(NodeHostWrite, "CopyToBuffer", nil, nil)
+		return r.node(NodeHostWrite, "UploadToBuffer", nil, nil)
 	}
 	if len(data) != a.size {
-		r.fail("CopyToBuffer on %q: the view holds %d bytes and src has %d",
+		r.fail("UploadToBuffer on %q: the view holds %d bytes and src has %d",
 			dst.Buffer.desc.Label, a.size, len(data))
-		return r.node(NodeHostWrite, "CopyToBuffer", nil, nil)
+		return r.node(NodeHostWrite, "UploadToBuffer", nil, nil)
 	}
 	// Copied now, because a Graph is immutable and holding the caller's slice
 	// would make what a submission writes depend on when they last touched it.
 	owned := make([]byte, len(data))
 	copy(owned, data)
 
-	id := r.node(NodeHostWrite, "CopyToBuffer", []access{a}, owned)
+	id := r.node(NodeHostWrite, "UploadToBuffer", []access{a}, owned)
 	r.touch(id, a)
 	return id
 }
 
-// CopyToBufferSlot records a host-to-device transfer into a slot's eventual
+// UploadToSlot records a host-to-device transfer into a slot's eventual
 // resource, over its first count elements from offset.
 //
-// It exists because [Recorder.CopyToBuffer] takes a view and a slot has no
+// It exists because [Recorder.UploadToBuffer] takes a view and a slot has no
 // resource to make a view of. Splitting it out rather than overloading a
 // BufferView with an optional slot keeps a view a thing that names bytes.
-func (r *Recorder) CopyToBufferSlot(dst Slot, offset, count int, src any) NodeID {
+func (r *Recorder) UploadToSlot(dst Slot, offset, count int, src any) NodeID {
 	d, ok := r.slotDescriptor(dst)
 	if !ok {
-		r.fail("CopyToBufferSlot: slot %d was not declared by this recorder", int(dst))
-		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+		r.fail("UploadToSlot: slot %d was not declared by this recorder", int(dst))
+		return r.node(NodeHostWrite, "UploadToSlot", nil, nil)
 	}
-	data, err := hostBytes("CopyToBufferSlot", d.Name, d.DType, src)
+	data, err := hostBytes("UploadToSlot", d.Name, d.DType, src)
 	if err != nil {
 		r.state.errs = append(r.state.errs, err)
-		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+		return r.node(NodeHostWrite, "UploadToSlot", nil, nil)
 	}
-	a, ok := r.slotAccess("CopyToBufferSlot", dst, offset*d.DType.Size(), count*d.DType.Size(), AccessWrite)
+	a, ok := r.slotAccess("UploadToSlot", dst, offset*d.DType.Size(), count*d.DType.Size(), AccessWrite)
 	if !ok {
-		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+		return r.node(NodeHostWrite, "UploadToSlot", nil, nil)
 	}
 	if len(data) != a.size {
-		r.fail("CopyToBufferSlot on %q: the range holds %d bytes and src has %d",
+		r.fail("UploadToSlot on %q: the range holds %d bytes and src has %d",
 			d.Name, a.size, len(data))
-		return r.node(NodeHostWrite, "CopyToBufferSlot", nil, nil)
+		return r.node(NodeHostWrite, "UploadToSlot", nil, nil)
 	}
 	owned := make([]byte, len(data))
 	copy(owned, data)
 
-	id := r.node(NodeHostWrite, "CopyToBufferSlot", []access{a}, owned)
+	id := r.node(NodeHostWrite, "UploadToSlot", []access{a}, owned)
 	r.touch(id, a)
 	return id
 }

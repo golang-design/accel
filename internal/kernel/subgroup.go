@@ -133,7 +133,7 @@ func (m Mask) CountLower(lane uint32) int {
 }
 
 // Any reports whether any lane set its predicate.
-func (m Mask) Any() bool { return m.bits[0] != 0 || m.bits[1] != 0 }
+func (m Mask) NotEmpty() bool { return m.bits[0] != 0 || m.bits[1] != 0 }
 
 func (m Mask) String() string { return fmt.Sprintf("mask{%016x %016x}", m.bits[1], m.bits[0]) }
 
@@ -155,23 +155,23 @@ func popcount(w uint64) int {
 // SubgroupSize is how many lanes a subgroup has on this device.
 func (t Thread) SubgroupSize() uint32 { return t.subgroupSize }
 
-// SubgroupID is which subgroup of the workgroup this invocation is in.
+// SubgroupIndex is which subgroup of the workgroup this invocation is in.
 //
 // The mapping is LocalIndex/size, which is what most hardware does and what
 // this oracle uses. It is **not promised by every backend**: which invocation
 // lands in which subgroup is implementation-defined, and a kernel needing a
 // specific lane-to-data mapping must build it from LocalIndex itself. See
 // specs/002-compute-model.md section 5.1.
-func (t Thread) SubgroupID() uint32 {
+func (t Thread) SubgroupIndex() uint32 {
 	if t.subgroupSize == 0 {
 		return 0
 	}
 	return t.LocalIndex() / t.subgroupSize
 }
 
-// SubgroupInvocationID is this invocation's lane within its subgroup, under the
-// same implementation-defined mapping as [Thread.SubgroupID].
-func (t Thread) SubgroupInvocationID() uint32 {
+// SubgroupLane is this invocation's lane within its subgroup, under the
+// same implementation-defined mapping as [Thread.SubgroupIndex].
+func (t Thread) SubgroupLane() uint32 {
 	if t.subgroupSize == 0 {
 		return 0
 	}
@@ -201,23 +201,23 @@ func (t Thread) SubgroupMaxF32(v float32) float32 { return v }
 // BroadcastFirstF32 gives every active lane the lowest-numbered active lane's
 // v. It is the safe broadcast: unlike a broadcast from a chosen lane, it is
 // always defined, because the lane it reads is active by construction.
-func (t Thread) BroadcastFirstF32(v float32) float32 { return v }
+func (t Thread) SubgroupBroadcastFirstF32(v float32) float32 { return v }
 
 // Elect is true for exactly one lane, and accel pins which: the lowest
 // numbered. Hardware guarantees only "exactly one", so leaving it unpinned
 // would make a correct kernel's output depend on the device.
-func (t Thread) Elect() bool { return true }
+func (t Thread) SubgroupElect() bool { return true }
 
 // Any and All reduce a predicate over the active lanes.
-func (t Thread) Any(pred bool) bool { return pred }
-func (t Thread) All(pred bool) bool { return pred }
+func (t Thread) SubgroupAny(pred bool) bool { return pred }
+func (t Thread) SubgroupAll(pred bool) bool { return pred }
 
 // Ballot reports each lane's predicate as a bit. An inactive lane's bit is
 // zero, so Ballot(true).Count() is the *active* count.
-func (t Thread) Ballot(pred bool) Mask {
+func (t Thread) SubgroupBallot(pred bool) Mask {
 	var m Mask
 	if pred {
-		m.set(t.SubgroupInvocationID())
+		m.set(t.SubgroupLane())
 	}
 	return m
 }

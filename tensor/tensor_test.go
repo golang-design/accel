@@ -36,7 +36,7 @@ func f32Buffer(t *testing.T, d *accel.Device, label string, vals []float32) acce
 	t.Helper()
 	b, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.F32, Count: len(vals), Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("buffer %s: %v", label, err)
@@ -233,7 +233,7 @@ func TestBindingValidation(t *testing.T) {
 		name: "a view of the wrong dtype",
 		mut: func(m map[string]accel.BufferView) {
 			buf, err := d.NewBuffer(accel.BufferDescriptor{
-				DType: accel.U32, Count: 8, Usage: accel.UsageStorage, Label: "u32",
+				DType: accel.U32, Count: 8, Usage: accel.BufferStorage, Label: "u32",
 			})
 			if err != nil {
 				t.Fatal(err)

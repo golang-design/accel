@@ -17,7 +17,7 @@ defer weights.Close()
 w, err := weights.Alloc(accel.BufferDescriptor{
 	DType: accel.F16,
 	Count: 4096 * 4096,
-	Usage: accel.UsageStorage | accel.UsageCopyDst,
+	Usage: accel.BufferStorage | accel.BufferCopyDst,
 	Label: "blk.0.attn_q.weight", // labels appear in every error about it
 })
 defer w.Close()

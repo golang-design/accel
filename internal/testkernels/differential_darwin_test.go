@@ -567,9 +567,9 @@ func withinAbs(got, want []float32, ceiling float64) numeq.Report {
 // uninitialized memory between two backends is a flake waiting to happen.
 func runCase(t *testing.T, d *accel.Device, c diffCase) [][]float32 {
 	t.Helper()
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	if len(c.uniforms) > 0 {
-		storage |= accel.UsageUniform
+		storage |= accel.BufferUniform
 	}
 	seed := c.seed
 	if seed == nil {
@@ -659,37 +659,37 @@ func writeSeed(t *testing.T, r *accel.Recorder, v accel.BufferView, dt accel.DTy
 		for i := range vals {
 			vals[i] = accel.ToFloat16(at(i)).Bits()
 		}
-		r.CopyToBuffer(v, vals)
+		r.UploadToBuffer(v, vals)
 	case accel.U32:
 		vals := make([]uint32, n)
 		for i := range vals {
 			vals[i] = uint32(math.Abs(float64(at(i))))
 		}
-		r.CopyToBuffer(v, vals)
+		r.UploadToBuffer(v, vals)
 	case accel.I8:
 		vals := make([]int8, n)
 		for i := range vals {
 			vals[i] = int8(at(i))
 		}
-		r.CopyToBuffer(v, vals)
+		r.UploadToBuffer(v, vals)
 	case accel.U8:
 		vals := make([]uint8, n)
 		for i := range vals {
 			vals[i] = uint8(math.Abs(float64(at(i))))
 		}
-		r.CopyToBuffer(v, vals)
+		r.UploadToBuffer(v, vals)
 	case accel.I32:
 		vals := make([]int32, n)
 		for i := range vals {
 			vals[i] = int32(at(i))
 		}
-		r.CopyToBuffer(v, vals)
+		r.UploadToBuffer(v, vals)
 	default:
 		vals := make([]float32, n)
 		for i := range vals {
 			vals[i] = at(i)
 		}
-		r.CopyToBuffer(v, vals)
+		r.UploadToBuffer(v, vals)
 	}
 }
 
@@ -824,7 +824,7 @@ func TestTheTiledGEMMMatchesItsReferenceOnMetal(t *testing.T) {
 
 func runGEMM(t *testing.T, d *accel.Device, m, n, k int, a, b []accel.Float16) []float32 {
 	t.Helper()
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst | accel.UsageUniform
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst | accel.BufferUniform
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.MatMulTiledKernel, Label: "gemm",
@@ -871,9 +871,9 @@ func runGEMM(t *testing.T, d *accel.Device, m, n, k int, a, b []accel.Float16) [
 	}
 
 	r := d.NewRecorder()
-	r.CopyToBuffer(av, bits(a))
-	r.CopyToBuffer(bv, bits(b))
-	r.CopyToBuffer(outView, make([]float32, m*n))
+	r.UploadToBuffer(av, bits(a))
+	r.UploadToBuffer(bv, bits(b))
+	r.UploadToBuffer(outView, make([]float32, m*n))
 	r.Dispatch(p, []accel.Binding{
 		{Index: 0, Buffer: av},
 		{Index: 1, Buffer: bv},

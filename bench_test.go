@@ -27,21 +27,21 @@ func benchDevice(b *testing.B) *accel.Device {
 // one costs.
 func BenchmarkPoolAlloc(b *testing.B) {
 	d := benchDevice(b)
-	p, err := d.NewPool(accel.MemoryDevice, 1<<30)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 30})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer p.Close()
 
 	desc := accel.BufferDescriptor{
-		DType: accel.F16, Count: 4096, Usage: accel.UsageStorage | accel.UsageCopyDst,
+		DType: accel.F16, Count: 4096, Usage: accel.BufferStorage | accel.BufferCopyDst,
 		Label: "weight",
 	}
 
 	b.ReportAllocs()
 	var live []*accel.Buffer
 	for b.Loop() {
-		buf, err := p.Alloc(desc)
+		buf, err := p.AllocBuffer(desc)
 		if err != nil {
 			b.StopTimer()
 			for _, x := range live {
@@ -63,17 +63,17 @@ func BenchmarkPoolAlloc(b *testing.B) {
 // the render-target rebuild rather than the weight burst.
 func BenchmarkPoolAllocFree(b *testing.B) {
 	d := benchDevice(b)
-	p, err := d.NewPool(accel.MemoryDevice, 1<<24)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 24})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer p.Close()
 
-	desc := accel.BufferDescriptor{DType: accel.F32, Count: 1024, Usage: accel.UsageStorage}
+	desc := accel.BufferDescriptor{DType: accel.F32, Count: 1024, Usage: accel.BufferStorage}
 
 	b.ReportAllocs()
 	for b.Loop() {
-		buf, err := p.Alloc(desc)
+		buf, err := p.AllocBuffer(desc)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -87,12 +87,12 @@ func BenchmarkPoolAllocFree(b *testing.B) {
 // is meant to be free enough to cache one per attention head.
 func BenchmarkView(b *testing.B) {
 	d := benchDevice(b)
-	p, err := d.NewPool(accel.MemoryDevice, 1<<20)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer p.Close()
-	buf, err := p.Alloc(accel.BufferDescriptor{DType: accel.F16, Count: 8192, Usage: accel.UsageStorage})
+	buf, err := p.AllocBuffer(accel.BufferDescriptor{DType: accel.F16, Count: 8192, Usage: accel.BufferStorage})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -114,14 +114,14 @@ func BenchmarkTransfer(b *testing.B) {
 		for _, n := range []int{1 << 10, 1 << 16} {
 			b.Run(fmt.Sprintf("%v/%dKiB", kind, n*4>>10), func(b *testing.B) {
 				d := benchDevice(b)
-				p, err := d.NewPool(kind, 1<<22)
+				p, err := d.NewPool(accel.PoolDescriptor{Kind: kind, Bytes: 1 << 22})
 				if err != nil {
 					b.Fatal(err)
 				}
 				defer p.Close()
-				buf, err := p.Alloc(accel.BufferDescriptor{
+				buf, err := p.AllocBuffer(accel.BufferDescriptor{
 					DType: accel.F32, Count: n,
-					Usage: accel.UsageCopyDst | accel.UsageCopySrc,
+					Usage: accel.BufferCopyDst | accel.BufferCopySrc,
 				})
 				if err != nil {
 					b.Fatal(err)
@@ -150,14 +150,14 @@ func BenchmarkTransfer(b *testing.B) {
 // wrong in a hot loop. The number is here so that claim has evidence.
 func BenchmarkReadBuffer(b *testing.B) {
 	d := benchDevice(b)
-	p, err := d.NewPool(accel.MemoryDevice, 1<<22)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 22})
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer p.Close()
 	const n = 1 << 12
-	buf, err := p.Alloc(accel.BufferDescriptor{
-		DType: accel.F32, Count: n, Usage: accel.UsageCopyDst | accel.UsageCopySrc,
+	buf, err := p.AllocBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: n, Usage: accel.BufferCopyDst | accel.BufferCopySrc,
 	})
 	if err != nil {
 		b.Fatal(err)
@@ -282,7 +282,7 @@ func benchBuffer(b *testing.B, d *accel.Device, label string) *accel.Buffer {
 	b.Helper()
 	buf, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.F32, Count: 1024, Label: label,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		b.Fatalf("buffer %q: %v", label, err)
@@ -358,7 +358,7 @@ func BenchmarkDispatchThroughAGraph(b *testing.B) {
 	}
 	defer p.Close()
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	mk := func(label string) *accel.Buffer {
 		buf, err := d.NewBuffer(accel.BufferDescriptor{
 			DType: accel.F32, Count: n, Usage: storage, Label: label,
@@ -416,7 +416,7 @@ func BenchmarkTransientPacking(b *testing.B) {
 				for range n {
 					v := r.Transient(accel.BufferDescriptor{
 						DType: accel.F32, Count: 1024, // matches benchBuffer
-						Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+						Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 					})
 					r.CopyBuffer(v, prev)
 					prev = v

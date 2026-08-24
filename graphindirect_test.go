@@ -25,13 +25,13 @@ func indirectGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stat
 	}
 	t.Cleanup(func() { _ = p.Close() })
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	const n = 256
 	in := newBuffer(t, d, "in", n, storage)
 	out := newBuffer(t, d, "out", n, storage)
 	count, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.U32, Count: 3, Label: "count",
-		Usage: accel.UsageIndirect | accel.UsageCopyDst | accel.UsageStorage,
+		Usage: accel.BufferIndirect | accel.BufferCopyDst | accel.BufferStorage,
 	})
 	if err != nil {
 		t.Fatalf("count buffer: %v", err)
@@ -105,7 +105,7 @@ func countGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stats b
 
 	counts, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.U32, Count: 1, Label: "counts",
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("counts: %v", err)
@@ -114,7 +114,7 @@ func countGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stats b
 
 	countBuf, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.U32, Count: 3, Label: "indirect",
-		Usage: accel.UsageIndirect | accel.UsageCopyDst,
+		Usage: accel.BufferIndirect | accel.BufferCopyDst,
 	})
 	if err != nil {
 		t.Fatalf("indirect: %v", err)
@@ -287,11 +287,11 @@ func TestIndirectValidationRows(t *testing.T) {
 			}
 			defer p.Close()
 
-			storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+			storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 			in := newBuffer(t, d, "in", 64, storage)
 			count, err := d.NewBuffer(accel.BufferDescriptor{
 				DType: accel.U32, Count: 3, Label: "count",
-				Usage: accel.UsageIndirect | accel.UsageCopyDst,
+				Usage: accel.BufferIndirect | accel.BufferCopyDst,
 			})
 			if err != nil {
 				t.Fatalf("count buffer: %v", err)
@@ -328,7 +328,7 @@ func TestTheIndirectCountBufferIsChecked(t *testing.T) {
 	}
 	defer p.Close()
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	in := newBuffer(t, d, "in", 64, storage)
 
 	cases := []struct {
@@ -341,10 +341,10 @@ func TestTheIndirectCountBufferIsChecked(t *testing.T) {
 		make: func(t *testing.T) accel.BufferView { return whole(t, in) },
 	}, {
 		name: "a buffer without indirect usage",
-		says: "needs UsageIndirect",
+		says: "needs BufferIndirect",
 		make: func(t *testing.T) accel.BufferView {
 			b, err := d.NewBuffer(accel.BufferDescriptor{
-				DType: accel.U32, Count: 3, Usage: accel.UsageCopyDst, Label: "plain",
+				DType: accel.U32, Count: 3, Usage: accel.BufferCopyDst, Label: "plain",
 			})
 			if err != nil {
 				t.Fatalf("buffer: %v", err)
@@ -378,7 +378,7 @@ func TestTheIndirectCountBufferIsChecked(t *testing.T) {
 // failed dependency rather than running anyway.
 func TestSubmitAfterWaitsForItsDependencies(t *testing.T) {
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	src := newBuffer(t, d, "src", 64, storage)
 	mid := newBuffer(t, d, "mid", 64, storage)
 	dst := newBuffer(t, d, "dst", 64, storage)

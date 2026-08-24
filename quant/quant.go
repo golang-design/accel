@@ -9,7 +9,7 @@
 // both from [Int8], hand them to the device as an I8 buffer and an F16 buffer,
 // and a quantized operator reads them together.
 //
-//	q, s := quant.Int8(weights)
+//	q, s := quant.Int8Quantize(weights)
 //
 // # What it costs you
 //
@@ -30,6 +30,7 @@
 package quant
 
 import (
+	"fmt"
 	"math"
 
 	"golang.design/x/accel"
@@ -56,7 +57,7 @@ const Int8Max = 127
 // The returned quants are one per weight and the scales one per [Int8Block] of
 // them, padded when the length is not a multiple: a trailing partial block gets
 // its own scale over the weights it has.
-func Int8(w []float32) (quants []int8, scales []accel.Float16) {
+func Int8Quantize(w []float32) (quants []int8, scales []accel.Float16) {
 	blocks := (len(w) + Int8Block - 1) / Int8Block
 	quants = make([]int8, len(w))
 	scales = make([]accel.Float16, blocks)
@@ -117,7 +118,7 @@ func Int8(w []float32) (quants []int8, scales []accel.Float16) {
 //
 // The reference for what a kernel must compute, and the thing to compare
 // against when asking how much accuracy a quantization cost.
-func Dequantize(quants []int8, scales []accel.Float16) []float32 {
+func Int8Dequantize(quants []int8, scales []accel.Float16) []float32 {
 	out := make([]float32, len(quants))
 	for i := range quants {
 		out[i] = float32(quants[i]) * scales[i/Int8Block].F32()
@@ -144,11 +145,24 @@ func Dequantize(quants []int8, scales []accel.Float16) []float32 {
 // **This covers quantization only.** The products are summed in f32, so
 // specs/008-numerics.md section 7's reduction bound applies to the sum on top,
 // and a caller comparing against an exact reference adds the two.
-func Error(x []float32, scales []accel.Float16) float64 {
+// It takes one scale **per term**, not the quantized array's per-block scales.
+//
+// That is the whole correction. It used to index scales[i/Int8Block], which is
+// a bound only when the dot product's terms are contiguous in the quantized
+// array — true for a row, false for a column. A caller who passed a column's
+// activations and the matrix's scales got a plausible number that was not a
+// bound, and this repository already worked around it by building a per-term
+// array and reimplementing the loop inline. Now the signature asks for what the
+// arithmetic needs, so the workaround is the call.
+func Int8ErrorBound(x []float32, termScales []accel.Float16) float64 {
+	if len(termScales) != len(x) {
+		panic(fmt.Sprintf("accel/quant: Int8ErrorBound has %d terms and %d scales; "+
+			"it takes one scale per term, because a per-block scale is a bound only "+
+			"where the terms are contiguous in the quantized array", len(x), len(termScales)))
+	}
 	var sum float64
 	for i, xi := range x {
-		s := float64(scales[i/Int8Block].F32())
-		sum += math.Abs(float64(xi)) * s / 2
+		sum += math.Abs(float64(xi)) * float64(termScales[i].F32()) / 2
 	}
 	return sum
 }

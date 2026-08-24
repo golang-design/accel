@@ -161,7 +161,7 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 func combineSubgroups(threads []Thread, frames []Frame) {
 	// Group the suspended lanes by subgroup. Ascending lane order within each,
 	// which the invocation order already gives: fill visits x fastest and
-	// SubgroupInvocationID is LocalIndex modulo the size.
+	// SubgroupLane is LocalIndex modulo the size.
 	type group struct {
 		op    SubgroupOp
 		lanes []int
@@ -173,7 +173,7 @@ func combineSubgroups(threads []Thread, frames []Frame) {
 		if frames[i].Done || frames[i].Sub == SubNone {
 			continue
 		}
-		id := threads[i].SubgroupID()
+		id := threads[i].SubgroupIndex()
 		g := groups[id]
 		if g == nil {
 			g = &group{op: frames[i].Sub}
@@ -259,7 +259,7 @@ func combineOne(threads []Thread, frames []Frame, op SubgroupOp, lanes []int) {
 		var m Mask
 		for _, i := range lanes {
 			if frames[i].SubBool {
-				m.set(threads[i].SubgroupInvocationID())
+				m.set(threads[i].SubgroupLane())
 			}
 		}
 		for _, i := range lanes {

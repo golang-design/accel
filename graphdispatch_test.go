@@ -35,7 +35,7 @@ func TestGraphUploadDispatchReadback(t *testing.T) {
 	q := d.Queue()
 	p := addPipeline(t, d)
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	first := newBuffer(t, d, "first", n, storage)
 	second := newBuffer(t, d, "second", n, storage)
 	out := newBuffer(t, d, "out", n, storage)
@@ -61,7 +61,7 @@ func TestGraphUploadDispatchReadback(t *testing.T) {
 	for i := range tens {
 		tens[i] = 10
 	}
-	r.CopyToBuffer(uploaded, tens)
+	r.UploadToBuffer(uploaded, tens)
 
 	a := r.Slot(accel.SlotDescriptor{
 		Name: "a", Kind: accel.BindingStorageBuffer,
@@ -117,7 +117,7 @@ func TestADispatchChainThroughATransient(t *testing.T) {
 	q := d.Queue()
 	p := addPipeline(t, d)
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	in := newBuffer(t, d, "in", n, storage)
 	out := newBuffer(t, d, "out", n, storage)
 	ones := make([]float32, n)
@@ -166,7 +166,7 @@ func TestIndependentDispatchesAreNotSeparated(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
 	p := addPipeline(t, d)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	in := newBuffer(t, d, "in", n, storage)
 
 	r := d.NewRecorder()
@@ -194,7 +194,7 @@ func TestIndependentDispatchesAreNotSeparated(t *testing.T) {
 
 // The dispatch validation rows. Spec 003's V1, V3, V6, V8, V10, and V17.
 func TestDispatchValidationRows(t *testing.T) {
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	cases := []struct {
 		row  string
@@ -262,11 +262,11 @@ func TestDispatchValidationRows(t *testing.T) {
 	}, {
 		row:  "V6",
 		what: "a buffer created without storage usage",
-		says: "needs UsageStorage",
+		says: "needs BufferStorage",
 		run: func(t *testing.T, d *accel.Device) error {
 			p := addPipeline(t, d)
 			in := newBuffer(t, d, "in", 64, storage)
-			plain := newBuffer(t, d, "plain", 64, accel.UsageCopyDst)
+			plain := newBuffer(t, d, "plain", 64, accel.BufferCopyDst)
 			r := d.NewRecorder()
 			r.Dispatch(p, []accel.Binding{
 				{Index: 0, Buffer: whole(t, in)},
@@ -537,7 +537,7 @@ func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
 	}
 	defer p.Close()
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	mk := func(label string, count int, dt accel.DType) *accel.Buffer {
 		b, err := d.NewBuffer(accel.BufferDescriptor{
 			DType: dt, Count: count, Usage: storage, Label: label,
@@ -634,7 +634,7 @@ func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
 	}
 	defer gather.Close()
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	const width, capacity, count = 4, 8, 4
 	state := newBuffer(t, d, "state", capacity*width, storage)
 	rows := newBuffer(t, d, "rows", count*width, storage)
@@ -719,7 +719,7 @@ func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
 func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.ElemScaleKernel, Label: "scale",

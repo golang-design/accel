@@ -132,7 +132,7 @@ func NewUniformBuffer[T any](d *Device, codec UniformCodec[T]) (*UniformBuffer[T
 	// 3.3 names both.
 	buf, err := d.NewBuffer(BufferDescriptor{
 		DType: U8, Count: size,
-		Usage: UsageUniform | UsageCopyDst,
+		Usage: BufferUniform | BufferCopyDst,
 		Label: "uniform",
 	})
 	if err != nil {

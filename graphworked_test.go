@@ -31,7 +31,7 @@ type workedGraph struct {
 func worked(t *testing.T, d *accel.Device) workedGraph {
 	t.Helper()
 	const n = 64 // stands in for the spec's 1 Mi elements
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	// One pipeline stands in for the spec's five: the assertions are about the
 	// graph's shape, and five identical kernels would say nothing more.
@@ -81,7 +81,7 @@ func worked(t *testing.T, d *accel.Device) workedGraph {
 	}
 
 	// n0: the host write to params.
-	r.CopyToBufferSlot(params, 0, n, make([]float32, n))
+	r.UploadToSlot(params, 0, n, make([]float32, n))
 	// n1: t0 = norm(x, params)
 	dispatch(accel.Binding{Slot: x}, accel.Binding{Slot: params}, accel.Binding{Buffer: t0})
 	// n2: t1 = t0 @ wQ, and n3: t2 = t0 @ wK. The diamond's two arms.
@@ -177,7 +177,7 @@ func TestWorkedGraphBarrierPositions(t *testing.T) {
 func TestWorkedGraphSubRangeVariant(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "gemm",
 	})
@@ -223,7 +223,7 @@ func TestWorkedGraphRuns(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
 	w := worked(t, d)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	bind := func(s accel.Slot, label string, fill float32) *accel.Buffer {
 		b := newBuffer(t, d, label, n, storage)
@@ -287,7 +287,7 @@ func TestWorkedGraphMemoryNumbers(t *testing.T) {
 		elems = mib // 1 Mi f32 elements is 4 MiB
 	)
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -316,14 +316,14 @@ func TestWorkedGraphMemoryNumbers(t *testing.T) {
 			{Index: 0, Buffer: a}, {Index: 1, Buffer: b}, {Index: 2, Buffer: out},
 		}, nil, accel.WorkgroupCount{X: 1})
 	}
-	r.CopyToBuffer(params, make([]float32, elems)) // n0, the parameter upload
-	dis(x, params, t0)                             // n1: t0 = norm(x)
-	dis(t0, wQ, t1)                                // n2: the diamond's first arm
-	dis(t0, wK, t2)                                // n3: the second arm
-	dis(t1, params, t3)                            // n4: rope, extending arm one
-	dis(halfOf(t3), halfOf(t2), t4)                // n5: the arms join
-	dis(t4, halfOf(kv), halfOf(t5))                // n6: attend
-	dis(halfOf(t5), halfOf(x), halfOf(y))          // n7: y = x + t5
+	r.UploadToBuffer(params, make([]float32, elems)) // n0, the parameter upload
+	dis(x, params, t0)                               // n1: t0 = norm(x)
+	dis(t0, wQ, t1)                                  // n2: the diamond's first arm
+	dis(t0, wK, t2)                                  // n3: the second arm
+	dis(t1, params, t3)                              // n4: rope, extending arm one
+	dis(halfOf(t3), halfOf(t2), t4)                  // n5: the arms join
+	dis(t4, halfOf(kv), halfOf(t5))                  // n6: attend
+	dis(halfOf(t5), halfOf(x), halfOf(y))            // n7: y = x + t5
 
 	g, err := r.Build()
 	if err != nil {
@@ -390,7 +390,7 @@ func halfOf(v accel.BufferView) accel.BufferView {
 func TestAliasingAddsNoBarrier(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})

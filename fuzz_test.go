@@ -33,15 +33,15 @@ func FuzzViewOffsets(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, offset, count, dtypeIndex int) {
 		d := openCPU(t, accel.CPUOptions{})
-		p, err := d.NewPool(accel.MemoryDevice, 1<<16)
+		p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 16})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer p.Close()
 
-		b, err := p.Alloc(accel.BufferDescriptor{
+		b, err := p.AllocBuffer(accel.BufferDescriptor{
 			DType: accel.F32, Count: 64,
-			Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "fuzz",
+			Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "fuzz",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -97,16 +97,16 @@ func FuzzTransferOffsets(f *testing.F) {
 		}
 		d := openCPU(t, accel.CPUOptions{})
 		q := d.Queue()
-		p, err := d.NewPool(accel.MemoryDevice, 1<<16)
+		p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 16})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer p.Close()
 
 		const n = 64
-		b, err := p.Alloc(accel.BufferDescriptor{
+		b, err := p.AllocBuffer(accel.BufferDescriptor{
 			DType: accel.F32, Count: n,
-			Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "fuzz",
+			Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "fuzz",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -155,7 +155,7 @@ func FuzzPoolAllocation(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, rawCount, rawDType, rawUsage uint) {
 		d := openCPU(t, accel.CPUOptions{})
-		p, err := d.NewPool(accel.MemoryDevice, 1<<20)
+		p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +170,7 @@ func FuzzPoolAllocation(f *testing.F) {
 		}
 
 		before := p.Stats()
-		b, err := p.Alloc(desc)
+		b, err := p.AllocBuffer(desc)
 		if err != nil {
 			if after := p.Stats(); after != before {
 				t.Fatalf("a refused allocation changed the pool: %+v then %+v", before, after)

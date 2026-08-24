@@ -34,7 +34,7 @@ func FuzzRecordAndBuild(f *testing.F) {
 	for i := range bufs {
 		b, err := d.NewBuffer(accel.BufferDescriptor{
 			DType: accel.F32, Count: elems, Label: "fuzz",
-			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 		})
 		if err != nil {
 			f.Fatalf("buffer: %v", err)
@@ -76,7 +76,7 @@ func FuzzRecordAndBuild(f *testing.F) {
 		for range next(6) {
 			v := r.Transient(accel.BufferDescriptor{
 				DType: accel.F32, Count: 1 + next(elems),
-				Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+				Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 			})
 			if v.Buffer != nil {
 				views = append(views, v)
@@ -94,7 +94,7 @@ func FuzzRecordAndBuild(f *testing.F) {
 			switch next(4) {
 			case 0:
 				dst := views[next(len(views))]
-				r.CopyToBuffer(dst, make([]float32, dst.Count))
+				r.UploadToBuffer(dst, make([]float32, dst.Count))
 			case 1:
 				r.CopyBuffer(views[next(len(views))], views[next(len(views))])
 			case 2:

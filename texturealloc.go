@@ -231,7 +231,7 @@ func (d *Device) newTexture(desc TextureDescriptor) (*Texture, error) {
 	if kind == 0 {
 		kind = MemoryDevice
 	}
-	p, err := d.NewPoolWith(PoolDescriptor{
+	p, err := d.NewPool(PoolDescriptor{
 		Kind: kind, Bytes: size + d.info.Limits.MinTexturePlacementAlignment,
 		Textures: true, Label: "implicit texture pool for " + desc.Label,
 	})

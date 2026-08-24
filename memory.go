@@ -196,19 +196,23 @@ func (d DType) String() string {
 // validation error when the graph is built, not undefined behaviour when it runs.
 type BufferUsage uint32
 
+// The bits are named for the resource they apply to, so BufferCopyDst and
+// TextureCopyDst are distinguishable at a glance. They used to be Usage* and
+// Texture*, which put UsageCopyDst and TextureCopyDst side by side meaning the
+// same thing for different resources.
 const (
-	UsageStorage BufferUsage = 1 << iota
-	UsageUniform
-	UsageIndex
-	UsageVertex
-	UsageIndirect
-	UsageCopySrc
-	UsageCopyDst
+	BufferStorage BufferUsage = 1 << iota
+	BufferUniform
+	BufferIndex
+	BufferVertex
+	BufferIndirect
+	BufferCopySrc
+	BufferCopyDst
 )
 
 // usageNames is the declaration order of the usage bits, for String.
-var usageNames = []string{"UsageStorage", "UsageUniform", "UsageIndex", "UsageVertex",
-	"UsageIndirect", "UsageCopySrc", "UsageCopyDst"}
+var usageNames = []string{"BufferStorage", "BufferUniform", "BufferIndex", "BufferVertex",
+	"BufferIndirect", "BufferCopySrc", "BufferCopyDst"}
 
 // String returns the usage set as a |-separated list, which is how validation
 // errors name what a buffer declared against what it needs.

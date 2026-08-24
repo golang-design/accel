@@ -28,16 +28,16 @@ func TestConformanceRoundTrip(t *testing.T) {
 		d := p.Open(t)
 		q := d.Queue()
 
-		pool, err := d.NewPool(accel.MemoryDevice, 1<<20)
+		pool, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 		if err != nil {
 			t.Fatalf("%s: NewPool: %v", p, err)
 		}
 		defer pool.Close()
 
 		want := []uint32{0, 1, math.MaxUint32, 0x0f0f0f0f, 7}
-		b, err := pool.Alloc(accel.BufferDescriptor{
+		b, err := pool.AllocBuffer(accel.BufferDescriptor{
 			DType: accel.U32, Count: len(want),
-			Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "conformance",
+			Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "conformance",
 		})
 		if err != nil {
 			t.Fatalf("%s: Alloc: %v", p, err)

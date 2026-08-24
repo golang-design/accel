@@ -32,13 +32,7 @@ const implicitBlockBytes = 64 << 20
 // It is [Device.NewPoolWith] with the general-purpose policy. A pool never grows:
 // a pool is one device allocation, no backend can resize one in place, and moving
 // it would invalidate every address already handed out.
-func (d *Device) NewPool(kind MemoryKind, bytes int) (*Pool, error) {
-	return d.NewPoolWith(PoolDescriptor{Kind: kind, Bytes: bytes, Policy: PoolGeneral})
-}
-
-// NewPoolWith allocates a pool with an explicit policy, which is how a caller
-// asks for a linear pool or reserves one for textures.
-func (d *Device) NewPoolWith(desc PoolDescriptor) (*Pool, error) {
+func (d *Device) NewPool(desc PoolDescriptor) (*Pool, error) {
 	if err := d.state.checkOpen("NewPoolWith"); err != nil {
 		return nil, err
 	}
@@ -202,7 +196,7 @@ func (s *blockSet) alloc(d *Device, desc BufferDescriptor, size int) (*Buffer, e
 	defer s.mu.Unlock()
 
 	for _, p := range s.blocks {
-		if b, err := p.Alloc(desc); err == nil {
+		if b, err := p.AllocBuffer(desc); err == nil {
 			return b, nil
 		}
 	}
@@ -224,7 +218,7 @@ func (s *blockSet) alloc(d *Device, desc BufferDescriptor, size int) (*Buffer, e
 	}
 	s.blocks = append(s.blocks, p)
 	d.countImplicit(1)
-	return p.Alloc(desc)
+	return p.AllocBuffer(desc)
 }
 
 func (s *blockSet) close(d *Device) error {
@@ -242,7 +236,7 @@ func (s *blockSet) close(d *Device) error {
 }
 
 // Alloc suballocates a buffer from the pool.
-func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error) {
+func (p *Pool) AllocBuffer(desc BufferDescriptor) (*Buffer, error) {
 	if err := p.state.checkOpen("Alloc"); err != nil {
 		return nil, err
 	}
@@ -293,16 +287,16 @@ func (p *Pool) Alloc(desc BufferDescriptor) (*Buffer, error) {
 func (d *Device) allocAlignment(u BufferUsage) int {
 	lim := d.info.Limits
 	align := 4 // the dtype floor, always
-	if u&UsageStorage != 0 {
+	if u&BufferStorage != 0 {
 		align = max(align, lim.MinStorageBufferOffsetAlignment)
 	}
-	if u&UsageUniform != 0 {
+	if u&BufferUniform != 0 {
 		align = max(align, lim.MinUniformBufferOffsetAlignment)
 	}
-	if u&(UsageCopySrc|UsageCopyDst) != 0 {
+	if u&(BufferCopySrc|BufferCopyDst) != 0 {
 		align = max(align, lim.MinBufferCopyOffsetAlignment)
 	}
-	if u&UsageIndirect != 0 {
+	if u&BufferIndirect != 0 {
 		align = max(align, 4) // indirect args are u32 triples
 	}
 	return align

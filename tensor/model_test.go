@@ -93,16 +93,16 @@ func TestATwoLayerModelProducesLogits(t *testing.T) {
 			Name: "table", DType: accel.F32, Shape: tensor.Shape{vocab, width},
 		})
 
-		h := tensor.Rows(b, tab, ids) // [1, width]
+		h := tensor.GatherRows(b, tab, ids) // [1, width]
 
 		for l := range layers {
 			gain := tensor.Weight(b, tensor.ValueDesc{
 				Name: gainName(l), DType: accel.F32, Shape: tensor.Shape{width},
 			})
-			kc := tensor.Persistent(b, tensor.StateDesc{
+			kc := tensor.NewState(b, tensor.StateDesc{
 				Name: kName(l), DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 			})
-			vc := tensor.Persistent(b, tensor.StateDesc{
+			vc := tensor.NewState(b, tensor.StateDesc{
 				Name: vName(l), DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 			})
 			kIn := tensor.Input(b, tensor.ValueDesc{

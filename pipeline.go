@@ -286,9 +286,9 @@ func (r *Recorder) bindingAccess(p *ComputePipeline, b Binding, slot kernel.Bind
 			p.label, slot.Name, want, v.DType)
 		return access{}, false
 	}
-	if v.Buffer.transient == nil && v.Buffer.desc.Usage&UsageStorage == 0 {
+	if v.Buffer.transient == nil && v.Buffer.desc.Usage&BufferStorage == 0 {
 		r.fail("Dispatch %q: binding %q needs %v and %q was created with %v",
-			p.label, slot.Name, UsageStorage, v.Buffer.desc.Label, v.Buffer.desc.Usage)
+			p.label, slot.Name, BufferStorage, v.Buffer.desc.Label, v.Buffer.desc.Usage)
 		return access{}, false
 	}
 	return r.declare("Dispatch "+p.label, v, mode)
@@ -373,9 +373,9 @@ func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, us []UniformVa
 		return r.node(NodeDispatchIndirect, p.label, nil, nil)
 	}
 	if countBuf.Buffer != nil && countBuf.Buffer.transient == nil &&
-		countBuf.Buffer.desc.Usage&UsageIndirect == 0 {
+		countBuf.Buffer.desc.Usage&BufferIndirect == 0 {
 		r.fail("DispatchIndirect %q: the count buffer needs %v and %q was created with %v",
-			p.label, UsageIndirect, countBuf.Buffer.desc.Label, countBuf.Buffer.desc.Usage)
+			p.label, BufferIndirect, countBuf.Buffer.desc.Label, countBuf.Buffer.desc.Usage)
 		return r.node(NodeDispatchIndirect, p.label, nil, nil)
 	}
 	countAccess, ok := r.declare("DispatchIndirect "+p.label, countBuf, AccessRead)

@@ -29,11 +29,11 @@ func TestClosedReceiverIsReportedEverywhere(t *testing.T) {
 		call  func(*fixtureT) error
 	}{
 		{"Device.NewPool", closeDevice, func(f *fixtureT) error {
-			_, err := f.dev.NewPool(accel.MemoryDevice, 1<<20)
+			_, err := f.dev.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 			return err
 		}},
 		{"Device.NewPoolWith", closeDevice, func(f *fixtureT) error {
-			_, err := f.dev.NewPoolWith(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
+			_, err := f.dev.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 			return err
 		}},
 		{"Device.NewBuffer", closeDevice, func(f *fixtureT) error {
@@ -41,7 +41,7 @@ func TestClosedReceiverIsReportedEverywhere(t *testing.T) {
 			return err
 		}},
 		{"Pool.Alloc", closePool, func(f *fixtureT) error {
-			_, err := f.pool.Alloc(accel.BufferDescriptor{DType: accel.F32, Count: 4})
+			_, err := f.pool.AllocBuffer(accel.BufferDescriptor{DType: accel.F32, Count: 4})
 			return err
 		}},
 		{"Pool.Reset", closePool, func(f *fixtureT) error { return f.pool.Reset() }},
@@ -118,13 +118,13 @@ func newFixture(t *testing.T) *fixtureT {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := d.NewPool(accel.MemoryDevice, 1<<20)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := p.Alloc(accel.BufferDescriptor{
+	b, err := p.AllocBuffer(accel.BufferDescriptor{
 		DType: accel.F32, Count: 16,
-		Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "subject",
+		Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "subject",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +153,7 @@ func TestOffsetsCannotWrapIntoTheBuffer(t *testing.T) {
 
 	b := alloc(t, p, accel.BufferDescriptor{
 		DType: accel.F32, Count: 16,
-		Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "wrappable",
+		Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "wrappable",
 	})
 	defer b.Close()
 
@@ -220,7 +220,7 @@ func TestDeviceCloseCountsImplicitChildren(t *testing.T) {
 	}
 
 	b, err := d.NewBuffer(accel.BufferDescriptor{
-		DType: accel.F32, Count: 64, Usage: accel.UsageStorage, Label: "convenience",
+		DType: accel.F32, Count: 64, Usage: accel.BufferStorage, Label: "convenience",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestDeviceCloseCountsImplicitChildren(t *testing.T) {
 	}
 
 	// The refusal left the device fully open, so it still allocates.
-	probe, err := d.NewPool(accel.MemoryUpload, 1<<20)
+	probe, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryUpload, Bytes: 1 << 20})
 	if err != nil {
 		t.Fatalf("the device stopped working after refusing to close: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestClosingATransientsBufferIsRefusedRatherThanFatal(t *testing.T) {
 	r := d.NewRecorder()
 	v := r.Transient(accel.BufferDescriptor{
 		DType: accel.F32, Count: 64,
-		Usage: accel.UsageStorage | accel.UsageCopyDst, Label: "mid",
+		Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "mid",
 	})
 
 	err := v.Buffer.Close()

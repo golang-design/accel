@@ -21,14 +21,14 @@ func TestSubRangesAreComparedNotResources(t *testing.T) {
 
 	build := func(t *testing.T, aOff, aLen, bOff, bLen int) *accel.Graph {
 		t.Helper()
-		buf := newBuffer(t, d, "shared", 16, accel.UsageStorage|accel.UsageCopyDst)
+		buf := newBuffer(t, d, "shared", 16, accel.BufferStorage|accel.BufferCopyDst)
 		r := d.NewRecorder()
 		for _, c := range [][2]int{{aOff, aLen}, {bOff, bLen}} {
 			v, err := buf.View(c[0], c[1])
 			if err != nil {
 				t.Fatalf("view: %v", err)
 			}
-			r.CopyToBuffer(v, make([]float32, c[1]))
+			r.UploadToBuffer(v, make([]float32, c[1]))
 		}
 		g, err := r.Build()
 		if err != nil {
@@ -64,11 +64,11 @@ func TestSubRangesAreComparedNotResources(t *testing.T) {
 // accesses in a model graph.
 func TestReadsDoNotHazardAgainstReads(t *testing.T) {
 	d := openDevice(t)
-	src := newBuffer(t, d, "weights", 8, accel.UsageStorage|accel.UsageCopySrc)
+	src := newBuffer(t, d, "weights", 8, accel.BufferStorage|accel.BufferCopySrc)
 
 	r := d.NewRecorder()
 	for range 5 {
-		dst := newBuffer(t, d, "out", 8, accel.UsageStorage|accel.UsageCopyDst)
+		dst := newBuffer(t, d, "out", 8, accel.BufferStorage|accel.BufferCopyDst)
 		r.CopyBuffer(whole(t, dst), whole(t, src))
 	}
 	g, err := r.Build()
@@ -95,24 +95,24 @@ func TestEachHazardProducesItsEdge(t *testing.T) {
 		rec  func(r *accel.Recorder, a, b accel.BufferView)
 	}{
 		{"read after write", func(r *accel.Recorder, a, b accel.BufferView) {
-			r.CopyToBuffer(a, make([]float32, a.Count)) // writes a
-			r.CopyBuffer(b, a)                          // reads a
+			r.UploadToBuffer(a, make([]float32, a.Count)) // writes a
+			r.CopyBuffer(b, a)                            // reads a
 		}},
 		{"write after write", func(r *accel.Recorder, a, b accel.BufferView) {
-			r.CopyToBuffer(a, make([]float32, a.Count))
-			r.CopyToBuffer(a, make([]float32, a.Count))
+			r.UploadToBuffer(a, make([]float32, a.Count))
+			r.UploadToBuffer(a, make([]float32, a.Count))
 		}},
 		{"write after read", func(r *accel.Recorder, a, b accel.BufferView) {
-			r.CopyBuffer(b, a)                          // reads a
-			r.CopyToBuffer(a, make([]float32, a.Count)) // writes a
+			r.CopyBuffer(b, a)                            // reads a
+			r.UploadToBuffer(a, make([]float32, a.Count)) // writes a
 		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a := newBuffer(t, d, "a", 4,
-				accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 			b := newBuffer(t, d, "b", 4,
-				accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 			r := d.NewRecorder()
 			c.rec(r, whole(t, a), whole(t, b))
 			g, err := r.Build()
@@ -140,7 +140,7 @@ func TestEachHazardProducesItsEdge(t *testing.T) {
 func TestANodeDoesNotHazardAgainstItself(t *testing.T) {
 	d := openDevice(t)
 	buf := newBuffer(t, d, "buf", 8,
-		accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 
 	lo, err := buf.View(0, 4)
 	if err != nil {
@@ -176,16 +176,16 @@ func TestANodeDoesNotHazardAgainstItself(t *testing.T) {
 // clearing what a queue-wide barrier already satisfied emits one before n3 too.
 func TestOneBarrierCoversUnrelatedHazards(t *testing.T) {
 	d := openDevice(t)
-	a := newBuffer(t, d, "a", 4, accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
-	b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
-	outA := newBuffer(t, d, "outA", 4, accel.UsageStorage|accel.UsageCopyDst)
-	outB := newBuffer(t, d, "outB", 4, accel.UsageStorage|accel.UsageCopyDst)
+	a := newBuffer(t, d, "a", 4, accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	b := newBuffer(t, d, "b", 4, accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	outA := newBuffer(t, d, "outA", 4, accel.BufferStorage|accel.BufferCopyDst)
+	outB := newBuffer(t, d, "outB", 4, accel.BufferStorage|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
-	r.CopyToBuffer(whole(t, a), []float32{1, 2, 3, 4}) // n0 writes a
-	r.CopyToBuffer(whole(t, b), []float32{5, 6, 7, 8}) // n1 writes b, independent of n0
-	r.CopyBuffer(whole(t, outA), whole(t, a))          // n2 reads a: RAW sourced at n0
-	r.CopyBuffer(whole(t, outB), whole(t, b))          // n3 reads b: RAW sourced at n1
+	r.UploadToBuffer(whole(t, a), []float32{1, 2, 3, 4}) // n0 writes a
+	r.UploadToBuffer(whole(t, b), []float32{5, 6, 7, 8}) // n1 writes b, independent of n0
+	r.CopyBuffer(whole(t, outA), whole(t, a))            // n2 reads a: RAW sourced at n0
+	r.CopyBuffer(whole(t, outB), whole(t, b))            // n3 reads b: RAW sourced at n1
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -222,7 +222,7 @@ func TestPlansAreDeterministic(t *testing.T) {
 		bufs := make([]*accel.Buffer, 6)
 		for i := range bufs {
 			bufs[i] = newBuffer(t, d, fmt.Sprintf("b%d", i), 16,
-				accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 		}
 		r := d.NewRecorder()
 		for i := range 12 {
@@ -259,7 +259,7 @@ func TestPlansAreDeterministic(t *testing.T) {
 // land on the same bytes.
 func TestSlotsHazardByIdentity(t *testing.T) {
 	d := openDevice(t)
-	src := newBuffer(t, d, "src", 4, accel.UsageStorage|accel.UsageCopySrc)
+	src := newBuffer(t, d, "src", 4, accel.BufferStorage|accel.BufferCopySrc)
 
 	r := d.NewRecorder()
 	s := r.Slot(accel.SlotDescriptor{

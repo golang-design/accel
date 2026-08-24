@@ -61,9 +61,9 @@ func TestAGraphOfCopiesRunsAndReplays(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
 
-	a := newBuffer(t, d, "a", 4, accel.UsageStorage|accel.UsageCopySrc)
-	b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
-	out := newBuffer(t, d, "out", 4, accel.UsageStorage|accel.UsageCopyDst)
+	a := newBuffer(t, d, "a", 4, accel.BufferStorage|accel.BufferCopySrc)
+	b := newBuffer(t, d, "b", 4, accel.BufferStorage|accel.BufferCopySrc)
+	out := newBuffer(t, d, "out", 4, accel.BufferStorage|accel.BufferCopyDst)
 	if err := q.WriteBuffer(a, 0, []float32{1, 2, 3, 4}); err != nil {
 		t.Fatalf("write a: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestAGraphOfCopiesRunsAndReplays(t *testing.T) {
 	})
 	mid := r.Transient(accel.BufferDescriptor{
 		DType: accel.F32, Count: 4,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst, Label: "mid",
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst, Label: "mid",
 	})
 	r.CopyFromSlot(mid, in, 0, 4)
 	r.CopyBuffer(whole(t, out), mid)
@@ -114,11 +114,11 @@ func TestAGraphOfCopiesRunsAndReplays(t *testing.T) {
 func TestAHostWriteIsOwnedByTheGraph(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
-	out := newBuffer(t, d, "out", 4, accel.UsageStorage|accel.UsageCopyDst)
+	out := newBuffer(t, d, "out", 4, accel.BufferStorage|accel.BufferCopyDst)
 
 	src := []float32{1, 2, 3, 4}
 	r := d.NewRecorder()
-	r.CopyToBuffer(whole(t, out), src)
+	r.UploadToBuffer(whole(t, out), src)
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -142,20 +142,20 @@ func TestAHostWriteIsOwnedByTheGraph(t *testing.T) {
 func TestMemoryReportsAllThreeFields(t *testing.T) {
 	d := openDevice(t)
 	r := d.NewRecorder()
-	dst := newBuffer(t, d, "dst", 64, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 64, accel.BufferStorage|accel.BufferCopyDst)
 
 	const n = 3
 	views := make([]accel.BufferView, n)
 	for i := range views {
 		views[i] = r.Transient(accel.BufferDescriptor{
 			DType: accel.F32, Count: 64,
-			Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 		})
 	}
 	// A chain: each transient is written then read, so at most two are live at
 	// any record-order point and the peak is below the total.
 	for i := range views {
-		r.CopyToBuffer(views[i], make([]float32, 64))
+		r.UploadToBuffer(views[i], make([]float32, 64))
 	}
 	r.CopyBuffer(whole(t, dst), views[n-1])
 
@@ -183,11 +183,11 @@ func TestMemoryReportsAllThreeFields(t *testing.T) {
 // the head-of-submission barrier absorbs the first.
 func TestSerialWritesEachNeedABarrier(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
 	for range 4 {
-		r.CopyToBuffer(whole(t, dst), []float32{1, 2, 3, 4})
+		r.UploadToBuffer(whole(t, dst), []float32{1, 2, 3, 4})
 	}
 	g, err := r.Build()
 	if err != nil {
@@ -217,9 +217,9 @@ func TestIndependentNodesAreNotSeparated(t *testing.T) {
 
 	r := d.NewRecorder()
 	for i := range 4 {
-		b := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
+		b := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
 		_ = i
-		r.CopyToBuffer(whole(t, b), []float32{1, 2, 3, 4})
+		r.UploadToBuffer(whole(t, b), []float32{1, 2, 3, 4})
 	}
 	g, err := r.Build()
 	if err != nil {
@@ -245,9 +245,9 @@ func TestSlotsAreDiscoverable(t *testing.T) {
 	r := d.NewRecorder()
 	a := r.Slot(accel.SlotDescriptor{Name: "a", DType: accel.F32, MinCount: 4, Access: accel.AccessRead})
 	b := r.Slot(accel.SlotDescriptor{DType: accel.U32, MinCount: 8, Access: accel.AccessWrite})
-	dst := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
 	r.CopyFromSlot(whole(t, dst), a, 0, 4)
-	r.CopyToSlot(b, 0, 8, mustViewAs(t, newBuffer(t, d, "src", 8, accel.UsageStorage|accel.UsageCopySrc), accel.U32))
+	r.CopyToSlot(b, 0, 8, mustViewAs(t, newBuffer(t, d, "src", 8, accel.BufferStorage|accel.BufferCopySrc), accel.U32))
 
 	g, err := r.Build()
 	if err != nil {
@@ -279,12 +279,12 @@ func mustViewAs(t *testing.T, b *accel.Buffer, d accel.DType) accel.BufferView {
 
 func TestBuildReportsEveryErrorAtOnce(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
-	r.CopyToBuffer(accel.BufferView{}, []float32{1})                                          // names no buffer
-	r.CopyToBuffer(accel.BufferView{Buffer: dst, DType: accel.F32, Count: 999}, []float32{1}) // out of range
-	r.CopyToBuffer(whole(t, dst), []int32{1, 2, 3, 4})                                        // wrong host slice
+	r.UploadToBuffer(accel.BufferView{}, []float32{1})                                          // names no buffer
+	r.UploadToBuffer(accel.BufferView{Buffer: dst, DType: accel.F32, Count: 999}, []float32{1}) // out of range
+	r.UploadToBuffer(whole(t, dst), []int32{1, 2, 3, 4})                                        // wrong host slice
 
 	_, err := r.Build()
 	if err == nil {
@@ -319,8 +319,8 @@ func TestARecorderIsUsedOnce(t *testing.T) {
 
 func TestAGraphIsSubmittedOneAtATime(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 1<<14, accel.UsageStorage|accel.UsageCopyDst)
-	src := newBuffer(t, d, "src", 1<<14, accel.UsageStorage|accel.UsageCopySrc)
+	dst := newBuffer(t, d, "dst", 1<<14, accel.BufferStorage|accel.BufferCopyDst)
+	src := newBuffer(t, d, "src", 1<<14, accel.BufferStorage|accel.BufferCopySrc)
 
 	want := make([]float32, 1<<14)
 	for i := range want {
@@ -383,8 +383,8 @@ func TestAGraphIsSubmittedOneAtATime(t *testing.T) {
 // half the graph would see one resource and half the other.
 func TestRebindDuringASubmissionIsRefused(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 1<<14, accel.UsageStorage|accel.UsageCopyDst)
-	src := newBuffer(t, d, "src", 1<<14, accel.UsageStorage|accel.UsageCopySrc)
+	dst := newBuffer(t, d, "dst", 1<<14, accel.BufferStorage|accel.BufferCopyDst)
+	src := newBuffer(t, d, "src", 1<<14, accel.BufferStorage|accel.BufferCopySrc)
 
 	r := d.NewRecorder()
 	in := r.Slot(accel.SlotDescriptor{
@@ -429,7 +429,7 @@ func TestRebindDuringASubmissionIsRefused(t *testing.T) {
 func TestClosingAGraphReleasesItsTransients(t *testing.T) {
 	d := openDevice(t)
 	r := d.NewRecorder()
-	r.Transient(accel.BufferDescriptor{DType: accel.F32, Count: 1024, Usage: accel.UsageStorage})
+	r.Transient(accel.BufferDescriptor{DType: accel.F32, Count: 1024, Usage: accel.BufferStorage})
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -454,7 +454,7 @@ func TestClosingAGraphReleasesItsTransients(t *testing.T) {
 func TestSubmissionsOnOneQueueAreOrdered(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
-	dst := newBuffer(t, d, "dst", 1<<14, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 1<<14, accel.BufferStorage|accel.BufferCopyDst)
 
 	// Each graph is long enough that an unordered implementation genuinely
 	// overlaps them rather than finishing before the next call is made.
@@ -466,7 +466,7 @@ func TestSubmissionsOnOneQueueAreOrdered(t *testing.T) {
 		}
 		r := d.NewRecorder()
 		for range 64 {
-			r.CopyToBuffer(whole(t, dst), payload)
+			r.UploadToBuffer(whole(t, dst), payload)
 		}
 		g, err := r.Build()
 		if err != nil {
@@ -500,8 +500,8 @@ func TestSubmissionsOnOneQueueAreOrdered(t *testing.T) {
 func TestAHostWriteIsOrderedAgainstSubmissions(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
-	src := newBuffer(t, d, "src", 1<<14, accel.UsageStorage|accel.UsageCopySrc)
-	dst := newBuffer(t, d, "dst", 1<<14, accel.UsageStorage|accel.UsageCopyDst)
+	src := newBuffer(t, d, "src", 1<<14, accel.BufferStorage|accel.BufferCopySrc)
+	dst := newBuffer(t, d, "dst", 1<<14, accel.BufferStorage|accel.BufferCopyDst)
 
 	ones := make([]float32, 1<<14)
 	for i := range ones {
@@ -557,10 +557,10 @@ func TestAHostWriteIsOrderedAgainstSubmissions(t *testing.T) {
 // and against one that rescans every node in a two-node graph.
 func TestRebindDoesNotScaleWithGraphSize(t *testing.T) {
 	d := openDevice(t)
-	src := newBuffer(t, d, "src", 64, accel.UsageStorage|accel.UsageCopySrc)
+	src := newBuffer(t, d, "src", 64, accel.BufferStorage|accel.BufferCopySrc)
 
 	cost := func(nodes int) float64 {
-		dst := newBuffer(t, d, "dst", 64, accel.UsageStorage|accel.UsageCopyDst)
+		dst := newBuffer(t, d, "dst", 64, accel.BufferStorage|accel.BufferCopyDst)
 		r := d.NewRecorder()
 		in := r.Slot(readSlot(64))
 		for range nodes {
@@ -601,10 +601,10 @@ func TestRebindDoesNotScaleWithGraphSize(t *testing.T) {
 func TestSubmissionDoesNotScaleWithGraphSize(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
-	src := newBuffer(t, d, "src", 64, accel.UsageStorage|accel.UsageCopySrc)
+	src := newBuffer(t, d, "src", 64, accel.BufferStorage|accel.BufferCopySrc)
 
 	cost := func(nodes int) uint64 {
-		dst := newBuffer(t, d, "dst", 64, accel.UsageStorage|accel.UsageCopyDst)
+		dst := newBuffer(t, d, "dst", 64, accel.BufferStorage|accel.BufferCopyDst)
 		r := d.NewRecorder()
 		for range nodes {
 			r.CopyBuffer(whole(t, dst), whole(t, src))
@@ -645,10 +645,10 @@ func TestSubmissionDoesNotScaleWithGraphSize(t *testing.T) {
 // right one for a script.
 func TestQueueRunBuildsSubmitsAndWaits(t *testing.T) {
 	d := openDevice(t)
-	out := newBuffer(t, d, "out", 4, accel.UsageStorage|accel.UsageCopyDst)
+	out := newBuffer(t, d, "out", 4, accel.BufferStorage|accel.BufferCopyDst)
 
 	if err := d.Queue().Run(func(r *accel.Recorder) {
-		r.CopyToBuffer(whole(t, out), []float32{7, 8, 9, 10})
+		r.UploadToBuffer(whole(t, out), []float32{7, 8, 9, 10})
 	}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -662,7 +662,7 @@ func TestQueueRunBuildsSubmitsAndWaits(t *testing.T) {
 	// A recording that cannot build reports the build error rather than
 	// submitting nothing and reporting success.
 	err := d.Queue().Run(func(r *accel.Recorder) {
-		r.CopyToBuffer(accel.BufferView{}, []float32{1})
+		r.UploadToBuffer(accel.BufferView{}, []float32{1})
 	})
 	if err == nil || !strings.Contains(err.Error(), "names no buffer") {
 		t.Fatalf("expected the build error, got %v", err)
@@ -673,14 +673,14 @@ func TestQueueRunBuildsSubmitsAndWaits(t *testing.T) {
 // cannot be spelled as a view.
 func TestCopyToBufferSlot(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 8, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 8, accel.BufferStorage|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
 	out := r.Slot(accel.SlotDescriptor{
 		Name: "out", Kind: accel.BindingStorageBuffer,
 		DType: accel.F32, Access: accel.AccessWrite, MinCount: 8,
 	})
-	r.CopyToBufferSlot(out, 2, 4, []float32{1, 2, 3, 4})
+	r.UploadToSlot(out, 2, 4, []float32{1, 2, 3, 4})
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -709,18 +709,18 @@ func TestRecordingRejectionsThatCannotReachBuild(t *testing.T) {
 		says string
 	}{
 		{"an undeclared slot", func(r *accel.Recorder) {
-			r.CopyToBufferSlot(accel.Slot(7), 0, 1, []float32{1})
+			r.UploadToSlot(accel.Slot(7), 0, 1, []float32{1})
 		}, "was not declared by this recorder"},
 		{"a host slice of the wrong type for a slot", func(r *accel.Recorder) {
 			s := r.Slot(readSlot(4))
-			r.CopyToBufferSlot(s, 0, 4, []int32{1, 2, 3, 4})
+			r.UploadToSlot(s, 0, 4, []int32{1, 2, 3, 4})
 		}, "must be []float32"},
 		{"a payload the slot range cannot hold", func(r *accel.Recorder) {
 			s := r.Slot(accel.SlotDescriptor{
 				Name: "out", Kind: accel.BindingStorageBuffer,
 				DType: accel.F32, Access: accel.AccessWrite, MinCount: 8,
 			})
-			r.CopyToBufferSlot(s, 0, 2, []float32{1, 2, 3, 4})
+			r.UploadToSlot(s, 0, 2, []float32{1, 2, 3, 4})
 		}, "the range holds 8 bytes and src has 16"},
 		{"a slot with a dtype outside the set", func(r *accel.Recorder) {
 			r.Slot(accel.SlotDescriptor{Name: "bad", DType: accel.DType(99), MinCount: 4})

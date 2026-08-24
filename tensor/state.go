@@ -67,7 +67,7 @@ type State struct {
 //
 // Never transient and never aliased by the planner: the caller owns the buffer
 // and its contents outlive the submission, which is the whole point of a cache.
-func Persistent(b *Builder, d StateDesc) *State {
+func NewState(b *Builder, d StateDesc) *State {
 	t := b.declare(1, "Persistent", ValueDesc{
 		Name: d.Name, DType: d.DType, Shape: d.Shape,
 	}, PortState)

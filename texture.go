@@ -21,6 +21,11 @@ import (
 type Format int
 
 const (
+	// The constants below are the formats' own names, unprefixed, because that
+	// is how they read at the point of use: `Format: accel.RGBA8Unorm`. The
+	// zero value is the one exception, and carries the type name because "no
+	// format" has no name of its own.
+	//
 	// FormatInvalid is not a creatable format. It is the zero-value sentinel used
 	// by optional format constraints such as a graph slot.
 	FormatInvalid Format = iota

@@ -45,19 +45,19 @@ func perRow(out *Tensor) accel.WorkgroupCount {
 // plausible embedding, so this is the one place where a diagnostic would be
 // worth more than a safe answer -- and where the corpus kernel gives the safe
 // answer because a GPU has no other option.
-func Rows(b *Builder, table, ids *Tensor) *Tensor {
+func GatherRows(b *Builder, table, ids *Tensor) *Tensor {
 	if poisoned(table, ids) {
 		return b.poison()
 	}
 	if table.dtype != accel.F32 {
-		return b.fail(1, "Rows", "the table is %v and the registered kernel reads f32; "+
+		return b.fail(1, "GatherRows", "the table is %v and the registered kernel reads f32; "+
 			"specs/010-kernel-corpus.md owns the f16 variant", table.dtype)
 	}
 	if ids.dtype != accel.U32 {
-		return b.fail(1, "Rows", "ids are %v and must be u32", ids.dtype)
+		return b.fail(1, "GatherRows", "ids are %v and must be u32", ids.dtype)
 	}
 	if len(table.shape) != 2 {
-		return b.fail(1, "Rows", "the table is %v and must be [vocab, width]", table.shape)
+		return b.fail(1, "GatherRows", "the table is %v and must be [vocab, width]", table.shape)
 	}
 	capacity, width := table.shape[0], table.shape[1]
 	rows := ids.shape.Elements()
@@ -67,7 +67,7 @@ func Rows(b *Builder, table, ids *Tensor) *Tensor {
 	out = append(out, width)
 
 	return b.record(node{
-		op: "Rows", inputs: []*Tensor{table, ids}, kernel: &testkernels.GatherRowsKernel,
+		op: "GatherRows", inputs: []*Tensor{table, ids}, kernel: &testkernels.GatherRowsKernel,
 		uniform: func(map[string]ScalarValue) any {
 			return testkernels.RowParams{
 				Rows: uint32(rows), Width: uint32(width), Capacity: uint32(capacity),

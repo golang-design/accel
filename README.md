@@ -91,7 +91,7 @@ func main() {
 	defer pipe.Close()
 
 	const n = 256
-	usage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	in, _ := dev.NewBuffer(accel.BufferDescriptor{DType: accel.F32, Count: n, Usage: usage, Label: "in"})
 	out, _ := dev.NewBuffer(accel.BufferDescriptor{DType: accel.F32, Count: n, Usage: usage, Label: "out"})
 	defer in.Close()

@@ -13,7 +13,7 @@ import (
 // poolGraph builds a graph of copies through a transient, into pool.
 func poolGraph(t *testing.T, d *Device, pool *TransientPool, n int) *Graph {
 	t.Helper()
-	usage := UsageStorage | UsageCopySrc | UsageCopyDst
+	usage := BufferStorage | BufferCopySrc | BufferCopyDst
 	src, err := d.NewBuffer(BufferDescriptor{DType: F32, Count: n, Usage: usage, Label: "src"})
 	if err != nil {
 		t.Fatalf("src: %v", err)
@@ -123,7 +123,7 @@ func TestSharedPoolRefusesABuildWhileInFlight(t *testing.T) {
 	}
 	r := d.NewRecorder()
 	r.UseTransientPool(pool)
-	r.Transient(BufferDescriptor{DType: F32, Count: 4096, Usage: UsageStorage, Label: "big"})
+	r.Transient(BufferDescriptor{DType: F32, Count: 4096, Usage: BufferStorage, Label: "big"})
 	_, err = r.Build()
 	pool.end()
 	if err == nil {

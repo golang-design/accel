@@ -37,7 +37,7 @@ func TestRoundTripEveryDTypeAndKind(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					b := alloc(t, p, accel.BufferDescriptor{
 						DType: dt, Count: count,
-						Usage: accel.UsageCopySrc | accel.UsageCopyDst, Label: name,
+						Usage: accel.BufferCopySrc | accel.BufferCopyDst, Label: name,
 					})
 					defer b.Close()
 
@@ -70,7 +70,7 @@ func TestWriteCopiesOutOfTheCallersSlice(t *testing.T) {
 	for _, kind := range allKinds {
 		p := newPool(t, d, kind, 1<<20)
 		b := alloc(t, p, accel.BufferDescriptor{
-			DType: accel.F32, Count: 8, Usage: accel.UsageCopyDst | accel.UsageCopySrc,
+			DType: accel.F32, Count: 8, Usage: accel.BufferCopyDst | accel.BufferCopySrc,
 			Label: fmt.Sprintf("%v", kind),
 		})
 
@@ -108,7 +108,7 @@ func TestPartialWriteTouchesOnlyItsRange(t *testing.T) {
 	for _, kind := range allKinds {
 		p := newPool(t, d, kind, 1<<20)
 		b := alloc(t, p, accel.BufferDescriptor{
-			DType: accel.F32, Count: 16, Usage: accel.UsageCopyDst | accel.UsageCopySrc,
+			DType: accel.F32, Count: 16, Usage: accel.BufferCopyDst | accel.BufferCopySrc,
 			Label: "partial",
 		})
 
@@ -170,7 +170,7 @@ func TestReadFlushesPendingWrites(t *testing.T) {
 	defer p.Close()
 
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.U32, Count: 4, Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "staged",
+		DType: accel.U32, Count: 4, Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "staged",
 	})
 	defer b.Close()
 
@@ -197,7 +197,7 @@ func TestFlushWithoutRead(t *testing.T) {
 	defer p.Close()
 
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.I32, Count: 2, Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "flushed",
+		DType: accel.I32, Count: 2, Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "flushed",
 	})
 	defer b.Close()
 
@@ -244,13 +244,13 @@ func TestClosingAPendingDestinationIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := d.Queue()
-	p, err := d.NewPool(accel.MemoryDevice, 1<<20)
+	p, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	b, err := p.Alloc(accel.BufferDescriptor{
-		DType: accel.U8, Count: 64, Usage: accel.UsageCopyDst, Label: "staging",
+	b, err := p.AllocBuffer(accel.BufferDescriptor{
+		DType: accel.U8, Count: 64, Usage: accel.BufferCopyDst, Label: "staging",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +303,7 @@ func TestTransferTypeChecking(t *testing.T) {
 	defer p.Close()
 
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.F32, Count: 8, Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "typed",
+		DType: accel.F32, Count: 8, Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "typed",
 	})
 	defer b.Close()
 
@@ -350,7 +350,7 @@ func TestEveryDTypeNamesItsHostSlice(t *testing.T) {
 		{accel.U8, "[]byte"},
 	} {
 		b := alloc(t, p, accel.BufferDescriptor{
-			DType: tc.dt, Count: 4, Usage: accel.UsageCopyDst, Label: tc.dt.String(),
+			DType: tc.dt, Count: 4, Usage: accel.BufferCopyDst, Label: tc.dt.String(),
 		})
 		// A []float64 matches no dtype, so every case takes the rejection path.
 		err := q.WriteBuffer(b, 0, []float64{1, 2, 3, 4})
@@ -371,7 +371,7 @@ func TestTransferRangeChecking(t *testing.T) {
 	defer p.Close()
 
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.F32, Count: 8, Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "small",
+		DType: accel.F32, Count: 8, Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "small",
 	})
 	defer b.Close()
 
@@ -431,7 +431,7 @@ func TestBitPatternsSurvive(t *testing.T) {
 		math.MaxFloat32,
 	}
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.F32, Count: len(want), Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "specials",
+		DType: accel.F32, Count: len(want), Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "specials",
 	})
 	defer b.Close()
 
@@ -452,7 +452,7 @@ func TestBitPatternsSurvive(t *testing.T) {
 	// The same bytes read through a u32 buffer at the same offsets are the IEEE
 	// encodings, which is the guarantee a backend could break by converting.
 	raw := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.U32, Count: len(want), Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "raw",
+		DType: accel.U32, Count: len(want), Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "raw",
 	})
 	defer raw.Close()
 
@@ -482,7 +482,7 @@ func TestQueueStats(t *testing.T) {
 	defer p.Close()
 
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.U8, Count: 1024, Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "counted",
+		DType: accel.U8, Count: 1024, Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "counted",
 	})
 	defer b.Close()
 
@@ -540,7 +540,7 @@ func TestHostVisibleWritesDoNotStage(t *testing.T) {
 		p := newPool(t, d, kind, 4<<20)
 		defer p.Close()
 		b := alloc(t, p, accel.BufferDescriptor{
-			DType: accel.F32, Count: n, Usage: accel.UsageCopyDst, Label: "measured",
+			DType: accel.F32, Count: n, Usage: accel.BufferCopyDst, Label: "measured",
 		})
 		defer b.Close()
 		data := make([]float32, n)
@@ -596,7 +596,7 @@ func TestConcurrentTransfers(t *testing.T) {
 	const goroutines, each = 8, 32
 	b := alloc(t, p, accel.BufferDescriptor{
 		DType: accel.U32, Count: goroutines * each,
-		Usage: accel.UsageCopyDst | accel.UsageCopySrc, Label: "shared",
+		Usage: accel.BufferCopyDst | accel.BufferCopySrc, Label: "shared",
 	})
 	defer b.Close()
 
@@ -638,15 +638,15 @@ func TestM1EndToEnd(t *testing.T) {
 		t.Fatalf("OpenCPU: %v", err)
 	}
 
-	weights, err := dev.NewPool(accel.MemoryDevice, 1<<20)
+	weights, err := dev.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 	if err != nil {
 		t.Fatalf("NewPool: %v", err)
 	}
 
-	buf, err := weights.Alloc(accel.BufferDescriptor{
+	buf, err := weights.AllocBuffer(accel.BufferDescriptor{
 		DType: accel.F32,
 		Count: 1024,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 		Label: "blk.0.attn_q.weight",
 	})
 	if err != nil {

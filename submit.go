@@ -75,9 +75,9 @@ func (g *Graph) checkUsage(d SlotDescriptor, b *Buffer) error {
 	var need BufferUsage
 	switch d.Kind {
 	case BindingUniformBuffer:
-		need = UsageUniform
+		need = BufferUniform
 	default:
-		need = UsageStorage
+		need = BufferStorage
 	}
 	if b.desc.Usage&need == 0 {
 		return fmt.Errorf("accel: Bind %q: this slot needs %v and %q was created with %v",

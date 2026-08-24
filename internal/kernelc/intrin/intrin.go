@@ -269,12 +269,12 @@ var table = map[key]*Intrinsic{
 		Authored: "accel.Thread.SubgroupSize", Op: ir.OpSubgroupSize,
 		Uniformity: PerWorkgroup, Result: ir.U32, Cap: CapSubgroupBasic,
 	},
-	{kernelPkg, "Thread", "SubgroupID"}: {
-		Authored: "accel.Thread.SubgroupID", Op: ir.OpSubgroupID,
+	{kernelPkg, "Thread", "SubgroupIndex"}: {
+		Authored: "accel.Thread.SubgroupIndex", Op: ir.OpSubgroupID,
 		Uniformity: PerInvocation, Result: ir.U32, Cap: CapSubgroupBasic,
 	},
-	{kernelPkg, "Thread", "SubgroupInvocationID"}: {
-		Authored: "accel.Thread.SubgroupInvocationID", Op: ir.OpSubgroupInvocationID,
+	{kernelPkg, "Thread", "SubgroupLane"}: {
+		Authored: "accel.Thread.SubgroupLane", Op: ir.OpSubgroupInvocationID,
 		Uniformity: PerInvocation, Result: ir.U32, Cap: CapSubgroupBasic,
 	},
 
@@ -290,19 +290,19 @@ var table = map[key]*Intrinsic{
 		Authored: "accel.Thread.SubgroupMaxF32", Op: ir.OpSubgroupMaxF32, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
-	{kernelPkg, "Thread", "BroadcastFirstF32"}: {
+	{kernelPkg, "Thread", "SubgroupBroadcastFirstF32"}: {
 		Authored: "accel.Thread.BroadcastFirstF32", Op: ir.OpBroadcastFirstF32, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupBallot,
 	},
-	{kernelPkg, "Thread", "Elect"}: {
+	{kernelPkg, "Thread", "SubgroupElect"}: {
 		Authored: "accel.Thread.Elect", Op: ir.OpElect,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupBasic,
 	},
-	{kernelPkg, "Thread", "Any"}: {
+	{kernelPkg, "Thread", "SubgroupAny"}: {
 		Authored: "accel.Thread.Any", Op: ir.OpSubgroupAny, Params: 1,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},
-	{kernelPkg, "Thread", "All"}: {
+	{kernelPkg, "Thread", "SubgroupAll"}: {
 		Authored: "accel.Thread.All", Op: ir.OpSubgroupAll, Params: 1,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},

@@ -73,13 +73,13 @@ func TestErrorMessages(t *testing.T) {
 			name: "undeclared usage",
 			err: &accel.UsageError{
 				Resource: "logits", Node: 41, Slot: 2,
-				Declared: accel.UsageStorage | accel.UsageCopySrc,
-				Needed:   accel.UsageCopyDst,
+				Declared: accel.BufferStorage | accel.BufferCopySrc,
+				Needed:   accel.BufferCopyDst,
 				Site:     "model/attention.go:118",
 			},
 			sentinel: accel.ErrUsage,
 			want: []string{
-				"node 41 slot 2", `"logits"`, "UsageStorage|UsageCopySrc", "UsageCopyDst",
+				"node 41 slot 2", `"logits"`, "BufferStorage|BufferCopySrc", "BufferCopyDst",
 				"model/attention.go:118",
 			},
 		},
@@ -138,9 +138,9 @@ func TestUsageString(t *testing.T) {
 		want string
 	}{
 		{0, "no usage"},
-		{accel.UsageStorage, "UsageStorage"},
-		{accel.UsageCopySrc | accel.UsageCopyDst, "UsageCopySrc|UsageCopyDst"},
-		{accel.UsageStorage | 1<<20, "UsageStorage|BufferUsage(1048576)"},
+		{accel.BufferStorage, "BufferStorage"},
+		{accel.BufferCopySrc | accel.BufferCopyDst, "BufferCopySrc|BufferCopyDst"},
+		{accel.BufferStorage | 1<<20, "BufferStorage|BufferUsage(1048576)"},
 	} {
 		if got := tc.u.String(); got != tc.want {
 			t.Errorf("BufferUsage(%d).String() = %q, want %q", tc.u, got, tc.want)

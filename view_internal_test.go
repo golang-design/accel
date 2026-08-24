@@ -24,13 +24,13 @@ func TestViewCheckAtUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	p, err := d.NewPool(MemoryDevice, 1<<20)
+	p, err := d.NewPool(PoolDescriptor{Kind: MemoryDevice, Bytes: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.Close()
 
-	b, err := p.Alloc(BufferDescriptor{DType: F32, Count: 16, Label: "small"})
+	b, err := p.AllocBuffer(BufferDescriptor{DType: F32, Count: 16, Label: "small"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestViewCheckAtUse(t *testing.T) {
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
-	next, err := p.Alloc(BufferDescriptor{DType: F32, Count: 16, Label: "next"})
+	next, err := p.AllocBuffer(BufferDescriptor{DType: F32, Count: 16, Label: "next"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@
 package accel
 
 import (
+	"crypto/sha256"
 	"fmt"
 
 	"golang.design/x/accel/internal/cpu"
@@ -252,7 +253,7 @@ func violatesLimits(c LimitConstraints, have Limits) string {
 // Device is an opened accelerator.
 func newDevice(token [16]byte, dev driver.Device) *Device {
 	d := &Device{dev: dev}
-	d.info = infoFrom(token, dev.Info())
+	d.info = infoFrom(profileToken(token, dev.Info()), dev.Info())
 	d.state.init(d.info.Name)
 	// At v0 both backends report exactly one queue: Metal has one general queue
 	// and the CPU backend has one by construction. Every multi-queue path in this
@@ -382,4 +383,32 @@ func (d *Device) Close() error {
 	d.mu.Unlock()
 
 	return d.dev.Close()
+}
+
+// profileToken folds what a device reports into its identity.
+//
+// An adapter's token identifies the adapter. It does not identify what an
+// *opened* device can do, and on the CPU backend those differ: the token is a
+// constant, while CPUStrict and CPUMimic resolve different names, capabilities
+// and limits. Two open devices therefore reported equal Info().ID and disagreed
+// about what they could run.
+//
+// That is not only untidy. [DeviceInfo] promises a caller can choose "on
+// reported capabilities and limits rather than by trying and catching
+// failures", and specs/007-tensor-layer.md keys its plan cache on the device
+// identity — so a plan compiled against the developer profile could be reused
+// on a strict-mode device that cannot run its kernels.
+//
+// The fold is over the fields a caller can act on. It is stable across
+// enumerations because it is a function of what the device reports, and two
+// devices resolving the same profile still share an id, which is what makes a
+// cache hit correct rather than lucky.
+func profileToken(adapter [16]byte, info driver.Info) [16]byte {
+	h := sha256.New()
+	h.Write(adapter[:])
+	fmt.Fprintf(h, "\x00name=%s\x00backend=%d\x00", info.Name, info.Backend)
+	fmt.Fprintf(h, "caps=%+v\x00limits=%+v", info.Capabilities, info.Limits)
+	var out [16]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }

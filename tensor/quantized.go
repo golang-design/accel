@@ -107,21 +107,21 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 // An embedding table is the largest single tensor in a small model and the one
 // quantization helps most: every token reads one row of it and nothing else, so
 // the whole table sits in memory to serve one row at a time.
-func QuantRows(b *Builder, table Quantized, ids *Tensor) *Tensor {
+func QuantGatherRows(b *Builder, table Quantized, ids *Tensor) *Tensor {
 	if table.Quants == nil || table.Scales == nil {
-		return b.fail(1, "QuantRows", "the table needs both a quant plane and a scale plane")
+		return b.fail(1, "QuantGatherRows", "the table needs both a quant plane and a scale plane")
 	}
 	if poisoned(table.Quants, table.Scales, ids) {
 		return b.poison()
 	}
 	if why := checkQuantized(table, "the table"); why != "" {
-		return b.fail(1, "QuantRows", "%s", why)
+		return b.fail(1, "QuantGatherRows", "%s", why)
 	}
 	if ids.dtype != accel.U32 {
-		return b.fail(1, "QuantRows", "ids are %v and must be u32", ids.dtype)
+		return b.fail(1, "QuantGatherRows", "ids are %v and must be u32", ids.dtype)
 	}
 	if len(table.Quants.shape) != 2 {
-		return b.fail(1, "QuantRows", "the table is %v and must be [vocab, width]",
+		return b.fail(1, "QuantGatherRows", "the table is %v and must be [vocab, width]",
 			table.Quants.shape)
 	}
 	capacity, width := table.Quants.shape[0], table.Quants.shape[1]
@@ -132,7 +132,7 @@ func QuantRows(b *Builder, table Quantized, ids *Tensor) *Tensor {
 	out = append(out, width)
 
 	return b.record(node{
-		op: "QuantRows", inputs: []*Tensor{table.Quants, table.Scales, ids},
+		op: "QuantGatherRows", inputs: []*Tensor{table.Quants, table.Scales, ids},
 		kernel: &testkernels.QuantRowsKernel,
 		uniform: func(map[string]ScalarValue) any {
 			return testkernels.RowParams{

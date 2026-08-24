@@ -30,7 +30,7 @@ func TestValidationRows(t *testing.T) {
 				Name: "tex", Kind: accel.BindingSampledTexture,
 				DType: accel.F32, Access: accel.AccessRead, MinCount: 4,
 			})
-			b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
+			b := newBuffer(t, d, "b", 4, accel.BufferStorage|accel.BufferCopySrc)
 			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)})
 		},
 	}, {
@@ -39,7 +39,7 @@ func TestValidationRows(t *testing.T) {
 		says: "the slot is f32 and the view is u32",
 		run: func(t *testing.T, d *accel.Device) error {
 			g, s := graphWithSlot(t, d, readSlot(4))
-			b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
+			b := newBuffer(t, d, "b", 4, accel.BufferStorage|accel.BufferCopySrc)
 			return g.Bind(accel.SlotBinding{Slot: s, Buffer: mustViewAs(t, b, accel.U32)})
 		},
 	}, {
@@ -48,7 +48,7 @@ func TestValidationRows(t *testing.T) {
 		says: "need 4 elements and the view has 2",
 		run: func(t *testing.T, d *accel.Device) error {
 			g, s := graphWithSlot(t, d, readSlot(4))
-			b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
+			b := newBuffer(t, d, "b", 4, accel.BufferStorage|accel.BufferCopySrc)
 			v, err := b.View(0, 2)
 			if err != nil {
 				t.Fatalf("view: %v", err)
@@ -58,10 +58,10 @@ func TestValidationRows(t *testing.T) {
 	}, {
 		row:  "V6",
 		what: "a buffer created without the usage the slot needs",
-		says: "needs UsageStorage",
+		says: "needs BufferStorage",
 		run: func(t *testing.T, d *accel.Device) error {
 			g, s := graphWithSlot(t, d, readSlot(4))
-			b := newBuffer(t, d, "b", 4, accel.UsageCopySrc)
+			b := newBuffer(t, d, "b", 4, accel.BufferCopySrc)
 			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)})
 		},
 	}, {
@@ -69,8 +69,8 @@ func TestValidationRows(t *testing.T) {
 		what: "a copy whose ends are different sizes",
 		says: "the destination holds 16 bytes and the source 8",
 		run: func(t *testing.T, d *accel.Device) error {
-			dst := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
-			src := newBuffer(t, d, "src", 2, accel.UsageStorage|accel.UsageCopySrc)
+			dst := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
+			src := newBuffer(t, d, "src", 2, accel.BufferStorage|accel.BufferCopySrc)
 			r := d.NewRecorder()
 			r.CopyBuffer(whole(t, dst), whole(t, src))
 			_, err := r.Build()
@@ -81,9 +81,9 @@ func TestValidationRows(t *testing.T) {
 		what: "a copy reaching past its buffer",
 		says: "outside the buffer",
 		run: func(t *testing.T, d *accel.Device) error {
-			dst := newBuffer(t, d, "dst", 4, accel.UsageStorage|accel.UsageCopyDst)
+			dst := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
 			r := d.NewRecorder()
-			r.CopyToBuffer(accel.BufferView{Buffer: dst, DType: accel.F32, Offset: 2, Count: 4},
+			r.UploadToBuffer(accel.BufferView{Buffer: dst, DType: accel.F32, Offset: 2, Count: 4},
 				[]float32{1, 2, 3, 4})
 			_, err := r.Build()
 			return err
@@ -94,7 +94,7 @@ func TestValidationRows(t *testing.T) {
 		says: "closed",
 		run: func(t *testing.T, d *accel.Device) error {
 			b, err := d.NewBuffer(accel.BufferDescriptor{
-				DType: accel.F32, Count: 4, Usage: accel.UsageStorage | accel.UsageCopyDst, Label: "gone",
+				DType: accel.F32, Count: 4, Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "gone",
 			})
 			if err != nil {
 				t.Fatalf("buffer: %v", err)
@@ -104,7 +104,7 @@ func TestValidationRows(t *testing.T) {
 				t.Fatalf("close: %v", err)
 			}
 			r := d.NewRecorder()
-			r.CopyToBuffer(v, []float32{1, 2, 3, 4})
+			r.UploadToBuffer(v, []float32{1, 2, 3, 4})
 			_, err = r.Build()
 			return err
 		},
@@ -115,7 +115,7 @@ func TestValidationRows(t *testing.T) {
 		run: func(t *testing.T, d *accel.Device) error {
 			g, s := graphWithSlot(t, d, readSlot(4))
 			b, err := d.NewBuffer(accel.BufferDescriptor{
-				DType: accel.F32, Count: 4, Usage: accel.UsageStorage | accel.UsageCopySrc, Label: "gone",
+				DType: accel.F32, Count: 4, Usage: accel.BufferStorage | accel.BufferCopySrc, Label: "gone",
 			})
 			if err != nil {
 				t.Fatalf("buffer: %v", err)
@@ -134,9 +134,9 @@ func TestValidationRows(t *testing.T) {
 		says: "different device",
 		run: func(t *testing.T, d *accel.Device) error {
 			other := openDevice(t)
-			b := newBuffer(t, other, "elsewhere", 4, accel.UsageStorage|accel.UsageCopyDst)
+			b := newBuffer(t, other, "elsewhere", 4, accel.BufferStorage|accel.BufferCopyDst)
 			r := d.NewRecorder()
-			r.CopyToBuffer(whole(t, b), []float32{1, 2, 3, 4})
+			r.UploadToBuffer(whole(t, b), []float32{1, 2, 3, 4})
 			_, err := r.Build()
 			return err
 		},
@@ -145,7 +145,7 @@ func TestValidationRows(t *testing.T) {
 		what: "a use reaching past what the slot descriptor promised",
 		says: "at least 16 bytes and this use is",
 		run: func(t *testing.T, d *accel.Device) error {
-			dst := newBuffer(t, d, "dst", 8, accel.UsageStorage|accel.UsageCopyDst)
+			dst := newBuffer(t, d, "dst", 8, accel.BufferStorage|accel.BufferCopyDst)
 			r := d.NewRecorder()
 			s := r.Slot(readSlot(4))
 			r.CopyFromSlot(whole(t, dst), s, 0, 8)
@@ -157,7 +157,7 @@ func TestValidationRows(t *testing.T) {
 		what: "a use whose mode the slot descriptor does not permit",
 		says: "declared read and this use is write",
 		run: func(t *testing.T, d *accel.Device) error {
-			src := newBuffer(t, d, "src", 4, accel.UsageStorage|accel.UsageCopySrc)
+			src := newBuffer(t, d, "src", 4, accel.BufferStorage|accel.BufferCopySrc)
 			r := d.NewRecorder()
 			s := r.Slot(readSlot(4))
 			r.CopyToSlot(s, 0, 4, whole(t, src))
@@ -185,7 +185,7 @@ func TestValidationRows(t *testing.T) {
 			})
 			mid := r.Transient(accel.BufferDescriptor{
 				DType: accel.F32, Count: 4,
-				Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+				Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 			})
 			r.CopyFromSlot(mid, in, 0, 4)
 			r.CopyToSlot(out, 0, 4, mid)
@@ -196,7 +196,7 @@ func TestValidationRows(t *testing.T) {
 			t.Cleanup(func() { _ = g.Close() })
 
 			b := newBuffer(t, d, "shared", 4,
-				accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 			return g.Bind([]accel.SlotBinding{
 				{Slot: in, Buffer: whole(t, b)},
 				{Slot: out, Buffer: whole(t, b)},
@@ -208,10 +208,10 @@ func TestValidationRows(t *testing.T) {
 		says: "and at least one of them writes",
 		run: func(t *testing.T, d *accel.Device) error {
 			b := newBuffer(t, d, "shared", 4,
-				accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 			r := d.NewRecorder()
 			in := r.Slot(readSlot(4))
-			r.CopyToBuffer(whole(t, b), []float32{1, 2, 3, 4}) // a concrete write
+			r.UploadToBuffer(whole(t, b), []float32{1, 2, 3, 4}) // a concrete write
 			r.CopyFromSlot(whole(t, b), in, 0, 4)
 			g, err := r.Build()
 			if err != nil {
@@ -241,7 +241,7 @@ func TestValidationRows(t *testing.T) {
 // that simply rejects every overlap.
 func TestOverlappingReadOnlySlotsAreAccepted(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 8, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 8, accel.BufferStorage|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
 	a := r.Slot(readSlot(4))
@@ -262,7 +262,7 @@ func TestOverlappingReadOnlySlotsAreAccepted(t *testing.T) {
 	}
 	defer g.Close()
 
-	src := newBuffer(t, d, "src", 4, accel.UsageStorage|accel.UsageCopySrc)
+	src := newBuffer(t, d, "src", 4, accel.BufferStorage|accel.BufferCopySrc)
 	if err := g.Bind([]accel.SlotBinding{
 		{Slot: a, Buffer: whole(t, src)},
 		{Slot: b, Buffer: whole(t, src)},
@@ -276,7 +276,7 @@ func TestOverlappingReadOnlySlotsAreAccepted(t *testing.T) {
 func TestDisjointRangesOfOneBufferAreAccepted(t *testing.T) {
 	d := openDevice(t)
 	shared := newBuffer(t, d, "shared", 8,
-		accel.UsageStorage|accel.UsageCopySrc|accel.UsageCopyDst)
+		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
 	in := r.Slot(readSlot(4))
@@ -286,7 +286,7 @@ func TestDisjointRangesOfOneBufferAreAccepted(t *testing.T) {
 	})
 	mid := r.Transient(accel.BufferDescriptor{
 		DType: accel.F32, Count: 4,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 	})
 	r.CopyFromSlot(mid, in, 0, 4)
 	r.CopyToSlot(out, 0, 4, mid)
@@ -317,8 +317,8 @@ func TestDisjointRangesOfOneBufferAreAccepted(t *testing.T) {
 func TestARejectedRebindChangesNothing(t *testing.T) {
 	d := openDevice(t)
 	g, s := graphWithSlot(t, d, readSlot(4))
-	good := newBuffer(t, d, "good", 4, accel.UsageStorage|accel.UsageCopySrc)
-	small := newBuffer(t, d, "small", 2, accel.UsageStorage|accel.UsageCopySrc)
+	good := newBuffer(t, d, "good", 4, accel.BufferStorage|accel.BufferCopySrc)
+	small := newBuffer(t, d, "small", 2, accel.BufferStorage|accel.BufferCopySrc)
 
 	if err := g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, good)}); err != nil {
 		t.Fatalf("bind: %v", err)
@@ -338,7 +338,7 @@ func TestARejectedRebindChangesNothing(t *testing.T) {
 func TestBindRejectsMalformedBindings(t *testing.T) {
 	d := openDevice(t)
 	g, s := graphWithSlot(t, d, readSlot(4))
-	b := newBuffer(t, d, "b", 4, accel.UsageStorage|accel.UsageCopySrc)
+	b := newBuffer(t, d, "b", 4, accel.BufferStorage|accel.BufferCopySrc)
 
 	for _, c := range []struct {
 		name string
@@ -368,7 +368,7 @@ func TestATransientIsNotACallerResource(t *testing.T) {
 	d := openDevice(t)
 	r := d.NewRecorder()
 	v := r.Transient(accel.BufferDescriptor{
-		DType: accel.F32, Count: 4, Usage: accel.UsageStorage | accel.UsageCopyDst,
+		DType: accel.F32, Count: 4, Usage: accel.BufferStorage | accel.BufferCopyDst,
 	})
 	g, err := r.Build()
 	if err != nil {
@@ -383,7 +383,7 @@ func TestATransientIsNotACallerResource(t *testing.T) {
 
 	// And one recorder's transient is not another's.
 	other := d.NewRecorder()
-	other.CopyToBuffer(v, []float32{1, 2, 3, 4})
+	other.UploadToBuffer(v, []float32{1, 2, 3, 4})
 	if _, err := other.Build(); err == nil ||
 		!strings.Contains(err.Error(), "another graph's transient") {
 		t.Fatalf("expected a foreign-transient rejection, got %v", err)
@@ -400,7 +400,7 @@ func TestDeviceLossIsTerminal(t *testing.T) {
 	defer d.Close()
 
 	dst, err := d.NewBuffer(accel.BufferDescriptor{
-		DType: accel.F32, Count: 4, Usage: accel.UsageStorage | accel.UsageCopyDst, Label: "dst",
+		DType: accel.F32, Count: 4, Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "dst",
 	})
 	if err != nil {
 		t.Fatalf("buffer: %v", err)
@@ -412,7 +412,7 @@ func TestDeviceLossIsTerminal(t *testing.T) {
 	}
 
 	r := d.NewRecorder()
-	r.CopyToBuffer(v, []float32{1, 2, 3, 4})
+	r.UploadToBuffer(v, []float32{1, 2, 3, 4})
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -446,7 +446,7 @@ func readSlot(n int) accel.SlotDescriptor {
 // graphWithSlot builds the smallest graph that reads one slot.
 func graphWithSlot(t *testing.T, d *accel.Device, desc accel.SlotDescriptor) (*accel.Graph, accel.Slot) {
 	t.Helper()
-	dst := newBuffer(t, d, "sink", desc.MinCount, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "sink", desc.MinCount, accel.BufferStorage|accel.BufferCopyDst)
 	r := d.NewRecorder()
 	s := r.Slot(desc)
 	r.CopyFromSlot(whole(t, dst), s, 0, desc.MinCount)
@@ -479,7 +479,7 @@ func TestATransientCannotReachASlot(t *testing.T) {
 	})
 	mid := r.Transient(accel.BufferDescriptor{
 		DType: accel.F32, Count: 4,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst, Label: "mid",
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst, Label: "mid",
 	})
 	r.CopyFromSlot(mid, in, 0, 4)
 

@@ -73,7 +73,7 @@ func TestEveryWeightIsWithinHalfAStep(t *testing.T) {
 		}(),
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
-			q, s := quant.Int8(tc.w)
+			q, s := quant.Int8Quantize(tc.w)
 			if len(q) != len(tc.w) {
 				t.Fatalf("%d quants for %d weights", len(q), len(tc.w))
 			}
@@ -82,7 +82,7 @@ func TestEveryWeightIsWithinHalfAStep(t *testing.T) {
 				t.Fatalf("%d scales for %d weights, want %d", len(s), len(tc.w), want)
 			}
 
-			back := quant.Dequantize(q, s)
+			back := quant.Int8Dequantize(q, s)
 			for i := range tc.w {
 				step := float64(s[i/quant.Int8Block].F32())
 				got := math.Abs(float64(back[i] - tc.w[i]))
@@ -115,14 +115,14 @@ func TestTheClampCatchesTheWrapAround(t *testing.T) {
 	for i := range w {
 		w[i] = math.Float32frombits(math.Float32bits(peak) - uint32(i))
 	}
-	q, s := quant.Int8(w)
+	q, s := quant.Int8Quantize(w)
 	for i := range q {
 		if q[i] < 0 {
 			t.Fatalf("weight %d is positive (%v) and quantized to %d, which is the sign "+
 				"flip a missing clamp produces", i, w[i], q[i])
 		}
 	}
-	back := quant.Dequantize(q, s)
+	back := quant.Int8Dequantize(q, s)
 	for i := range w {
 		if back[i] < 0 {
 			t.Fatalf("weight %d reconstructed as %v from a positive %v", i, back[i], w[i])
@@ -143,8 +143,8 @@ func TestTheDotProductBoundHolds(t *testing.T) {
 		w[i] = float32(math.Sin(float64(i)*0.17)) * 2
 		x[i] = float32(math.Cos(float64(i)*0.29)) * 3
 	}
-	q, s := quant.Int8(w)
-	back := quant.Dequantize(q, s)
+	q, s := quant.Int8Quantize(w)
+	back := quant.Int8Dequantize(q, s)
 
 	var exact, quantized, magnitude float64
 	for i := range w {
@@ -152,7 +152,14 @@ func TestTheDotProductBoundHolds(t *testing.T) {
 		quantized += float64(back[i]) * float64(x[i])
 		magnitude += math.Abs(float64(w[i]) * float64(x[i]))
 	}
-	bound := quant.Error(x, s)
+	// One scale per term. The terms here are contiguous, so this is the block
+	// scale expanded — but writing the expansion is what makes the call correct
+	// for a column too, where scales[i/Int8Block] would not be a bound at all.
+	termScales := make([]accel.Float16, len(x))
+	for i := range termScales {
+		termScales[i] = s[i/quant.Int8Block]
+	}
+	bound := quant.Int8ErrorBound(x, termScales)
 	if got := math.Abs(quantized - exact); got > bound {
 		t.Fatalf("the quantized dot product is %v from the exact one, and the derived "+
 			"bound is %v", got, bound)
@@ -186,7 +193,7 @@ func TestScalesThatUnderflowF16(t *testing.T) {
 	for i := range w {
 		w[i] = 1e-12
 	}
-	q, s := quant.Int8(w)
+	q, s := quant.Int8Quantize(w)
 	if s[0].F32() != 0 {
 		t.Skipf("f16 represents %v as %v, so this input no longer underflows",
 			w[0]/quant.Int8Max, s[0].F32())
@@ -196,7 +203,7 @@ func TestScalesThatUnderflowF16(t *testing.T) {
 			t.Errorf("quant %d is %d against a zero scale", i, q[i])
 		}
 	}
-	for i, v := range quant.Dequantize(q, s) {
+	for i, v := range quant.Int8Dequantize(q, s) {
 		if v != 0 || math.IsNaN(float64(v)) {
 			t.Errorf("weight %d reconstructed as %v, want zero", i, v)
 		}
@@ -208,7 +215,7 @@ func TestScalesThatUnderflowF16(t *testing.T) {
 func TestDequantizeIsTheReference(t *testing.T) {
 	q := []int8{1, -2, 127, -127}
 	s := []accel.Float16{accel.ToFloat16(0.5)}
-	got := quant.Dequantize(q, s)
+	got := quant.Int8Dequantize(q, s)
 	want := []float32{0.5, -1, 63.5, -63.5}
 	for i := range want {
 		if got[i] != want[i] {

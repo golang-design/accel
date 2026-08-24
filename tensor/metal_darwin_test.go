@@ -236,10 +236,10 @@ func TestADecodeStepAgreesOnCPUAndMetal(t *testing.T) {
 		slot := tensor.Input(b, tensor.ValueDesc{
 			Name: "slot", DType: accel.U32, Shape: tensor.Shape{1},
 		})
-		kc := tensor.Persistent(b, tensor.StateDesc{
+		kc := tensor.NewState(b, tensor.StateDesc{
 			Name: "kc", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
-		vc := tensor.Persistent(b, tensor.StateDesc{
+		vc := tensor.NewState(b, tensor.StateDesc{
 			Name: "vc", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
 		tensor.Output(b, "out", tensor.Attention(b, q,

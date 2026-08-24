@@ -81,7 +81,7 @@ func TestTheSameGraphAgreesOnCPUAndMetal(t *testing.T) {
 
 	run := func(t *testing.T, d *accel.Device) []float32 {
 		t.Helper()
-		storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+		storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 		p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 			Kernel: &testkernels.AddKernel, Label: "add",
@@ -99,8 +99,8 @@ func TestTheSameGraphAgreesOnCPUAndMetal(t *testing.T) {
 		// Upload through the graph rather than through the queue, so the
 		// recorded plan carries the host writes and the scenario is the one
 		// specs/009-sequencing.md names: upload, dispatch, readback.
-		r.CopyToBuffer(whole(t, ba), a)
-		r.CopyToBuffer(whole(t, bb), b)
+		r.UploadToBuffer(whole(t, ba), a)
+		r.UploadToBuffer(whole(t, bb), b)
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: whole(t, ba)},
 			{Index: 1, Buffer: whole(t, bb)},
@@ -158,7 +158,7 @@ func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
 
 	run := func(t *testing.T, d *accel.Device) []float32 {
 		t.Helper()
-		storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+		storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 		p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 			Kernel: &testkernels.ElemScaleKernel, Label: "scale",
 		})
@@ -170,7 +170,7 @@ func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
 		bin := newBuffer(t, d, "in", n, storage)
 		out := newBuffer(t, d, "out", n, storage)
 		r := d.NewRecorder()
-		r.CopyToBuffer(whole(t, bin), in)
+		r.UploadToBuffer(whole(t, bin), in)
 		r.Dispatch(p, []accel.Binding{
 			{Index: 0, Buffer: whole(t, bin)},
 			{Index: 1, Buffer: whole(t, out)},
@@ -213,7 +213,7 @@ func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
 func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 	d := openMetal(t)
 	const n = 64
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	unlowered := accel.Kernel{
 		Name:          "Unlowered",
@@ -275,7 +275,7 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 func TestEveryDTypeRoundTripsOnMetal(t *testing.T) {
 	d := openMetal(t)
 	const n = 64
-	usage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	// Bit patterns rather than values: a round trip moves bytes, and comparing
 	// values would ask a question about conversion that this test is not about.
@@ -367,7 +367,7 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 	const n = 256
 	const wg = 64 // AddKernel's workgroup
 
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "add",
 	})
@@ -393,7 +393,7 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 			out := newBuffer(t, d, "out", n, storage)
 			count, err := d.NewBuffer(accel.BufferDescriptor{
 				DType: accel.U32, Count: 3, Label: "count",
-				Usage: accel.UsageIndirect | accel.UsageCopyDst | accel.UsageStorage,
+				Usage: accel.BufferIndirect | accel.BufferCopyDst | accel.BufferStorage,
 			})
 			if err != nil {
 				t.Fatalf("count buffer: %v", err)
@@ -406,7 +406,7 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 
 			r := d.NewRecorder()
 			r.CollectRunStats(true)
-			r.CopyToBuffer(countView, []uint32{tc.supply, 1, 1})
+			r.UploadToBuffer(countView, []uint32{tc.supply, 1, 1})
 			// Ones in, so every element the dispatch touched is 2 and every one
 			// it did not is 0. Counting them is how many workgroups ran, which
 			// is the only externally visible consequence of the clamp.
@@ -414,8 +414,8 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 			for i := range ones {
 				ones[i] = 1
 			}
-			r.CopyToBuffer(whole(t, in), ones)
-			r.CopyToBuffer(whole(t, out), make([]float32, n))
+			r.UploadToBuffer(whole(t, in), ones)
+			r.UploadToBuffer(whole(t, out), make([]float32, n))
 			r.DispatchIndirect(p, []accel.Binding{
 				{Index: 0, Buffer: whole(t, in)},
 				{Index: 1, Buffer: whole(t, in)},
@@ -483,7 +483,7 @@ func TestTheWorkedGraphRunsOnMetal(t *testing.T) {
 	const n = 64
 	d := openMetal(t)
 	w := worked(t, d)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	bind := func(s accel.Slot, label string, fill float32) *accel.Buffer {
 		b := newBuffer(t, d, label, n, storage)
@@ -551,7 +551,7 @@ func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 	// called on the next line. "Usually" is why the loop counts how often it
 	// caught one rather than requiring every iteration to.
 	const n = 1 << 20
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "add",
@@ -566,7 +566,7 @@ func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 		a := newBuffer(t, d, "a", n, storage)
 		out := newBuffer(t, d, "out", n, storage)
 		r := d.NewRecorder()
-		r.CopyToBuffer(whole(t, a), make([]float32, n))
+		r.UploadToBuffer(whole(t, a), make([]float32, n))
 		// Several dispatches, so the submission is long enough that the close
 		// on the next line usually lands while it is still running. One was
 		// caught roughly once in twenty, which is a path that would rot.

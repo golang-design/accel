@@ -20,7 +20,7 @@ func TestBufferAccessors(t *testing.T) {
 	defer p.Close()
 
 	b := alloc(t, p, accel.BufferDescriptor{
-		DType: accel.F16, Count: 300, Usage: accel.UsageStorage | accel.UsageCopyDst, Label: "kv",
+		DType: accel.F16, Count: 300, Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "kv",
 	})
 	defer b.Close()
 
@@ -33,7 +33,7 @@ func TestBufferAccessors(t *testing.T) {
 	if got, want := b.Bytes(), 600; got != want {
 		t.Errorf("Bytes = %d, want %d: the buffer's size is the caller's number and is never rounded", got, want)
 	}
-	if got := b.Usage(); got != accel.UsageStorage|accel.UsageCopyDst {
+	if got := b.Usage(); got != accel.BufferStorage|accel.BufferCopyDst {
 		t.Errorf("Usage = %v", got)
 	}
 }

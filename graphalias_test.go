@@ -26,7 +26,7 @@ import (
 func TestTheDiamondDoesNotAliasUnorderedTransients(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -104,7 +104,7 @@ func TestTheDiamondDoesNotAliasUnorderedTransients(t *testing.T) {
 func TestOrderedTransientsAlias(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -172,7 +172,7 @@ func TestOrderedTransientsAlias(t *testing.T) {
 func TestTransientsSharingAUserDoNotAlias(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -242,7 +242,7 @@ func TestTransientsSharingAUserDoNotAlias(t *testing.T) {
 func TestThePeakNeverExceedsThePool(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -292,7 +292,7 @@ func TestThePeakNeverExceedsThePool(t *testing.T) {
 func TestMemoryFieldsSeparateUnderAliasing(t *testing.T) {
 	const n = 64
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -363,13 +363,13 @@ func TestV20RejectsAnOversizedPool(t *testing.T) {
 	defer d.Close()
 
 	r := d.NewRecorder()
-	dst := newBuffer(t, d, "dst", 4096, accel.UsageStorage|accel.UsageCopyDst)
+	dst := newBuffer(t, d, "dst", 4096, accel.BufferStorage|accel.BufferCopyDst)
 	v := r.Transient(accel.BufferDescriptor{
 		DType: accel.F32, Count: 4096,
-		Usage: accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 		Label: "big",
 	})
-	r.CopyToBuffer(v, make([]float32, 4096))
+	r.UploadToBuffer(v, make([]float32, 4096))
 	r.CopyBuffer(whole(t, dst), v)
 	_, err = r.Build()
 	if err == nil {
@@ -389,7 +389,7 @@ func TestV20RejectsAnOversizedPool(t *testing.T) {
 // packer, and therefore on an unrelated transient's size.
 func TestReadingAnUnwrittenTransientIsRefused(t *testing.T) {
 	const n = 32
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	cases := []struct {
 		name string
@@ -415,7 +415,7 @@ func TestReadingAnUnwrittenTransientIsRefused(t *testing.T) {
 			})
 			half := v
 			half.Count = n / 2
-			r.CopyToBuffer(half, make([]float32, n/2))
+			r.UploadToBuffer(half, make([]float32, n/2))
 			r.CopyBuffer(whole(t, dst), v)
 		},
 	}, {
@@ -480,7 +480,7 @@ func TestReadingAnUnwrittenTransientIsRefused(t *testing.T) {
 func TestInPlaceWorkOnAWrittenTransientIsFine(t *testing.T) {
 	const n = 32
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -539,7 +539,7 @@ func TestInPlaceWorkOnAWrittenTransientIsFine(t *testing.T) {
 func TestATransientLivingBetweenTwoUsersDoesNotAlias(t *testing.T) {
 	const n = 32
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "op",
 	})
@@ -620,7 +620,7 @@ func TestATransientLivingBetweenTwoUsersDoesNotAlias(t *testing.T) {
 func TestANodeMayWriteOnePartAndReadAnother(t *testing.T) {
 	const n = 32
 	d := openDevice(t)
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	src := newBuffer(t, d, "src", n/2, storage)
 	dst := newBuffer(t, d, "dst", n, storage)
 

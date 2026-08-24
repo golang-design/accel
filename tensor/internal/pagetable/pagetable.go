@@ -2,7 +2,14 @@
 // All rights reserved. Use of this source code is governed by
 // a BSD-style license that can be found in the LICENSE file.
 
-package tensor
+// Package pagetable is the block pool behind a paged KV cache.
+//
+// It is internal until an operator accepts a page table. It was exported from
+// tensor with six declarations and no consumer — no operator takes one, so a
+// caller could build a pool, allocate blocks, and have nowhere to put the
+// result. specs/030-paged-kv.md's attention is what gives it a caller, and it
+// re-exports then. See specs/036-documentation.md's freeze record, section 5.3.
+package pagetable
 
 import (
 	"errors"
@@ -13,7 +20,7 @@ import (
 // BlockPool hands out fixed-size pieces of one KV cache so sequences of
 // different lengths can share it.
 //
-//	pool := tensor.NewBlockPool(blocks, positionsPerBlock)
+//	pool := pagetable.NewBlockPool(blocks, positionsPerBlock)
 //	pages, err := pool.Grow(nil, 40) // enough blocks for 40 positions
 //	...
 //	pool.Free(pages)

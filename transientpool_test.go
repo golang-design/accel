@@ -16,7 +16,7 @@ import (
 // and returns it with its output buffer.
 func buildInto(t *testing.T, d *accel.Device, pool *accel.TransientPool, n int) (*accel.Graph, *accel.Buffer) {
 	t.Helper()
-	storage := accel.UsageStorage | accel.UsageCopySrc | accel.UsageCopyDst
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &testkernels.AddKernel, Label: "add",
@@ -220,7 +220,7 @@ func TestTransientPoolLifetime(t *testing.T) {
 	r := d.NewRecorder()
 	r.UseTransientPool(pool)
 	r.Transient(accel.BufferDescriptor{
-		DType: accel.F32, Count: 16, Usage: accel.UsageStorage, Label: "t",
+		DType: accel.F32, Count: 16, Usage: accel.BufferStorage, Label: "t",
 	})
 	if _, err := r.Build(); err == nil {
 		t.Error("a graph built into a closed pool")
