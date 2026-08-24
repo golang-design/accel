@@ -48,6 +48,33 @@ recovers the caller's range as `position.z * 2 - 1`.
 **Correction belongs in the backend**, in the emitted shader, never in the
 caller's matrix.
 
+**Enforced since 2026-08-24**, and the way it was caught is the point: the
+Metal stage target emitted the author's `z` unchanged, and every test passed —
+the MSL compiled, the pipeline built, and a picture appeared. What found it was
+the CPU-against-Metal differential, on its first run, as *near geometry missing
+its near half*. A convention divergence does not announce itself as one.
+
+### Attachment contents a pass did not write
+
+| | CPU backend | Metal |
+| --- | --- | --- |
+| `LoadDontCare`, a pixel the pass never covers | the framebuffer aliases the caller's buffer, so prior contents remain | a fresh texture, so whatever that memory held |
+| `StoreDiscard` | nothing to skip; the pass already wrote the caller's buffer | the write-back is skipped, so the buffer keeps what it had |
+
+**Divergence, and it is legal.** Both actions leave contents *undefined*, and
+the two backends realize that differently because their shapes differ. Neither
+is wrong.
+
+**Guarantee.** What a pass **writes** is defined, and every backend agrees on it
+exactly. What a pass does **not** write is undefined, and a caller who reads it
+has a bug no API can catch.
+
+**If you are writing a backend:** do not make undefined contents match another
+backend's. Preserving them is a promise `accel` does not make, and the next
+backend would inherit it. The differential asserts the defined half agrees and
+deliberately asserts the undefined half *differs*, so a backend that quietly
+started preserving them fails. See specs/033-render-api.md §7.1.
+
 ### Face winding
 
 **Divergence.** Metal's default front-facing winding is the opposite of GL's for

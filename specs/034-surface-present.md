@@ -276,6 +276,15 @@ a compositor makes a caller wait. Taking it later would move the wait to a point
 the loop cannot act on, and §3 is explicit that `Acquire` is the call that can
 block.
 
+**A resize with a frame outstanding is refused.** §8's rule — a resize
+invalidates every frame acquired before it — was free while a frame was a buffer
+view. A windowed frame holds a drawable, so a caller following that rule
+literally would drop one and leak it, which is the pool exhaustion `Discard`
+exists to prevent. `Surface` keeps no list of outstanding frames and so cannot
+return them; refusing turns a silent leak into a call the caller fixes in one
+line, and §1's loop already satisfies it because its resize follows an acquire
+that *failed*.
+
 **`Surface.Discard` is new and §1 did not have it.** Every acquired frame is
 presented or discarded. A windowed frame holds a drawable the compositor lent
 it; one abandoned rather than returned exhausts the pool, and the symptom is a
@@ -289,6 +298,13 @@ could not be tested at all — and an untestable branch a caller can reach is th
 shape [009](009-sequencing.md) records four times. It also saves the caller
 nothing: they have AppKit loaded, because they made the window, and `view.layer`
 is one line on their side. The error says exactly that.
+
+**One cost, stated rather than hidden.** `Present` waits on the submission fence
+on the host before encoding the conversion, so a frame loop stalls the CPU until
+rendering completes rather than letting one queue order the two command buffers.
+It is correct and it is not what a frame loop wants; the fix is to encode the
+conversion into the same submission, which is a change to how a present slot
+lowers rather than to this API.
 
 ### 8.2 Not built
 

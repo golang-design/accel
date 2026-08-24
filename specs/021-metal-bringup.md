@@ -349,6 +349,14 @@ load and store action constants, plus `BlitEncoder.CopyTextureToBuffer` and
 `CopyBufferToTexture`. Listed because a package layout no spec records is
 undocumented structure.
 
+The on-screen half arrived the same day and is listed for the same reason:
+`MetalLayer` with `WrapLayer`, `NewOffscreenLayer`, `Configure`, `NextDrawable`
+and `Pointer`; `Drawable` with `Texture` and `Release`;
+`CommandBuffer.PresentDrawable`; `Size2D`; and `PixelFormatBGRA8Unorm`. Its own
+hazards are in [034](034-surface-present.md) §8.1 rather than repeated here,
+because they are properties of the drawable contract rather than of this
+binding.
+
 Three hazards this section exists to record, because each one compiles.
 
 **An invalid pipeline descriptor aborts the process.**
