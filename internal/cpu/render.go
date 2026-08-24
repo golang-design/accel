@@ -131,12 +131,12 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 
 	fetch := newFetcher(d, bufs)
 
-	// The vertex function, in the form primitive assembly takes. The nil
-	// uniforms are a refusal upstream rather than an omission here: graph build
-	// rejects a draw whose stages declare a by-value parameter, because
-	// specs/033-render-api.md deviation 1 leaves that channel unbuilt.
+	// The vertex function, in the form primitive assembly takes. The two
+	// uniform slices are separate because each stage indexes its own from
+	// zero -- one shared slice would give a fragment stage the vertex stage's
+	// parameter 0, and the adapter would assert on the wrong type.
 	vertexFn := func(index, instance, base uint32) raster.Vertex {
-		pos, vary := vs(kernel.NewVertex(index, instance), nil, fetch(index, instance))
+		pos, vary := vs(kernel.NewVertex(index, instance), d.VertexUniforms, fetch(index, instance))
 		return raster.Vertex{
 			Pos:      raster.Clip{X: pos[0], Y: pos[1], Z: pos[2], W: pos[3]},
 			Varyings: vary,
@@ -146,7 +146,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 	shade := func(f raster.Fragment) raster.Shaded {
 		out := fs(kernel.NewFragment(
 			kernel.Vec4{float32(f.X) + 0.5, float32(f.Y) + 0.5, f.Depth, f.InvW},
-			f.Front), nil, f.Varyings)
+			f.Front), d.FragmentUniforms, f.Varyings)
 		return raster.Shaded{Color: out}
 	}
 

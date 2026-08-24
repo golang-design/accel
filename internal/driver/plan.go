@@ -594,6 +594,11 @@ type RenderDraw struct {
 	// VertexLayouts says what is packed inside each. They are the same length.
 	VertexBuffers []Operand
 	VertexLayouts []VertexLayout
+
+	// VertexUniforms and FragmentUniforms are the stages' by-value parameters,
+	// one slice per stage because each stage indexes its own from zero.
+	VertexUniforms   []any
+	FragmentUniforms []any
 }
 
 // VertexLayout is what one bound vertex buffer holds.

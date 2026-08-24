@@ -7,6 +7,7 @@ package accel
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"golang.design/x/accel/internal/driver"
 )
@@ -471,25 +472,66 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		for _, t := range pipe.desc.Targets {
 			rd.Masks = append(rd.Masks, uint8(t.Mask.resolved()))
 		}
-		// A stage that declares a by-value parameter cannot be drawn, and this
-		// is where the value would have been needed. specs/033-render-api.md
-		// deviation 1: the draw-time uniform channel was removed, and the
-		// mechanism the spec does describe -- a uniform buffer at a recorded
-		// offset, section 6 -- is unbuilt. Refused rather than passed an empty
-		// slice, because the generated adapter would then index past its end
-		// and the diagnostic would come from the backend.
-		for _, s := range []*Stage{pipe.desc.Vertex, pipe.desc.Fragment} {
-			if len(s.Uniforms) > 0 {
-				return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s declares "+
-					"the by-value parameter %q, and no render path supplies one yet "+
-					"(specs/033-render-api.md deviation 1)",
-					p.desc.Label, i, s.Name, s.Uniforms[0].Name)
-			}
+		vu, err := stageUniforms(p.desc.Label, i, pipe.desc.Vertex, d.vertexU, "SetVertexUniform")
+		if err != nil {
+			return nil, err
 		}
+		fu, err := stageUniforms(p.desc.Label, i, pipe.desc.Fragment, d.fragmentU, "SetFragmentUniform")
+		if err != nil {
+			return nil, err
+		}
+		rd.VertexUniforms, rd.FragmentUniforms = vu, fu
 		if err := g.vertexOperands(p, i, pipe, d, &rd); err != nil {
 			return nil, err
 		}
 		out.Draws = append(out.Draws, rd)
+	}
+	return out, nil
+}
+
+// stageUniforms checks one stage's by-value parameters against what the pass set.
+//
+// One slice per stage, and the index is the stage's own: a vertex stage's
+// parameter 0 and a fragment stage's parameter 0 are different parameters that
+// share a number. Checked here rather than left to the generated adapter, which
+// would index past the end of a short slice or assert on the wrong type -- a
+// panic inside a backend, where the caller cannot see which parameter was wrong.
+//
+// The type is compared by name, which is what the stage record carries. Two
+// identically named types in different packages would pass; the adapter's own
+// assertion catches that, and this catches the mistake a caller actually makes.
+func stageUniforms(label string, draw int, s *Stage, set []any, call string) ([]any, error) {
+	if len(s.Uniforms) == 0 {
+		for i, v := range set {
+			if v != nil {
+				return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s(%d, ...) "+
+					"was called and %s declares no by-value parameters", label, draw,
+					call, i, s.Name)
+			}
+		}
+		return nil, nil
+	}
+	out := make([]any, len(s.Uniforms))
+	for _, u := range s.Uniforms {
+		if u.Index >= len(set) || set[u.Index] == nil {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s takes %q at "+
+				"index %d and no value was set; call %s(%d, ...) before the draw",
+				label, draw, s.Name, u.Name, u.Index, call, u.Index)
+		}
+		v := set[u.Index]
+		if got := reflect.TypeOf(v).Name(); got != u.Type {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s takes %s as "+
+				"%q at index %d and a %s was set", label, draw, s.Name, u.Type,
+				u.Name, u.Index, got)
+		}
+		out[u.Index] = v
+	}
+	for i, v := range set {
+		if v != nil && i >= len(out) {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s(%d, ...) was "+
+				"called and %s declares %d by-value parameters", label, draw, call, i,
+				s.Name, len(out))
+		}
 	}
 	return out, nil
 }

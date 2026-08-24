@@ -360,9 +360,14 @@ type RenderPass struct {
 	id   NodeID
 
 	pipeline *RenderPipeline
-	buffers  []BufferView
-	draws    []drawCall
-	failed   bool
+
+	// vertexUniforms and fragmentUniforms are the by-value parameters set so
+	// far, one slice per stage because each stage indexes its own from zero.
+	vertexUniforms   []any
+	fragmentUniforms []any
+	buffers          []BufferView
+	draws            []drawCall
+	failed           bool
 }
 
 // drawCall is one recorded draw.
@@ -373,6 +378,8 @@ type drawCall struct {
 	first     int
 	firstInst int
 	vertexBuf []BufferView
+	vertexU   []any
+	fragmentU []any
 }
 
 // Draw is one non-instanced or instanced draw's counts.
@@ -459,6 +466,52 @@ func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
 
 func (p *RenderPass) vertexBuffers() []BufferView { return p.buffers }
 
+// SetVertexUniform and SetFragmentUniform supply one by-value parameter of the
+// stage named, for every draw recorded after the call.
+//
+// # Why two calls and not one
+//
+// The two stages are compiled independently, so each indexes its own uniform
+// space from zero: a vertex stage's parameter 0 and a fragment stage's
+// parameter 0 are different parameters with the same index. One shared slice
+// cannot hold both, and a single call taking an index would have to guess which
+// stage a value was for. specs/033-render-api.md deviation 1 is what happened
+// when it did not: values were placed in the order the caller wrote them, so
+// two passed out of order bound to each other's parameters.
+//
+// # Why pass state and not a draw argument
+//
+// It matches SetPipeline and SetVertexBuffer, which are the calls a reader
+// already knows, and a value shared by several draws is written once. A draw
+// captures whatever is set when it is recorded, so a later call does not reach
+// back and change an earlier draw.
+func (p *RenderPass) SetVertexUniform(index int, v any) {
+	p.setUniform(&p.vertexUniforms, "SetVertexUniform", index, v)
+}
+
+// SetFragmentUniform supplies one by-value parameter of the fragment stage. See
+// [RenderPass.SetVertexUniform].
+func (p *RenderPass) SetFragmentUniform(index int, v any) {
+	p.setUniform(&p.fragmentUniforms, "SetFragmentUniform", index, v)
+}
+
+func (p *RenderPass) setUniform(dst *[]any, what string, index int, v any) {
+	if index < 0 {
+		p.r.fail("RenderPass %q: %s at index %d", p.desc.Label, what, index)
+		p.failed = true
+		return
+	}
+	if v == nil {
+		p.r.fail("RenderPass %q: %s at index %d has a nil value", p.desc.Label, what, index)
+		p.failed = true
+		return
+	}
+	for len(*dst) <= index {
+		*dst = append(*dst, nil)
+	}
+	(*dst)[index] = v
+}
+
 // Draw records one draw.
 //
 // It executes in the order recorded, and the builder never reorders it: blending
@@ -491,6 +544,8 @@ func (p *RenderPass) Draw(d Draw) {
 		pipeline: p.pipeline, vertices: d.VertexCount, instances: instances,
 		first: d.FirstVertex, firstInst: d.FirstInstance,
 		vertexBuf: append([]BufferView(nil), p.buffers...),
+		vertexU:   append([]any(nil), p.vertexUniforms...),
+		fragmentU: append([]any(nil), p.fragmentUniforms...),
 	})
 }
 
