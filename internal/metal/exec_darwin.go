@@ -73,6 +73,20 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 			if _, err := d.pipelineFor(n.Dispatch.Kernel); err != nil {
 				return nil, fmt.Errorf("accel: node %d: %w", n.ID, err)
 			}
+		case driver.OpRenderPass:
+			// Every stage in the pass compiles here rather than at encode, for
+			// the reason a dispatch's kernel does: a stage outside the MSL
+			// subset is a refusal a caller can act on, and discovering it while
+			// encoding a command buffer is a refusal in the middle of a
+			// submission.
+			for _, d := range n.Render.Draws {
+				for _, st := range []*kernel.Stage{d.Vertex, d.Fragment} {
+					if _, err := e.stageFunction(st); err != nil {
+						return nil, fmt.Errorf("accel: node %d: %w", n.ID, err)
+					}
+				}
+			}
+
 		default:
 			return nil, fmt.Errorf("accel: node %d is a %v, which the Metal backend does not "+
 				"lower at specs/021-metal-bringup.md", n.ID, n.Op)
@@ -134,6 +148,13 @@ type executable struct {
 	// submissions. Guarded by mu with everything else: it is written during
 	// encoding, which happens under the same lock that records the fence.
 	uniformBufs [][]byte
+
+	// The render path's compiled objects, cached for the life of the
+	// executable: the plan fixes every input to each of them, so a replayed
+	// graph compiles nothing.
+	functions   map[string]*mtl.Function
+	pipelines   map[string]*mtl.RenderPipeline
+	depthStates map[string]*mtl.DepthState
 
 	// indirect is one slot per indirect node, in plan order.
 	indirect []*indirectSlot
@@ -303,6 +324,11 @@ func (e *executable) encode(p *pass) error {
 
 		case driver.OpDispatch:
 			if err := e.dispatch(p, n); err != nil {
+				return err
+			}
+
+		case driver.OpRenderPass:
+			if err := e.renderPass(p, n); err != nil {
 				return err
 			}
 		}
@@ -543,6 +569,18 @@ func (e *executable) Close() error {
 	for _, s := range e.indirect {
 		s.close()
 	}
+	// The render path's compiled objects. Each is +1 from a new* selector and
+	// is released exactly once, which is the ownership rule internal/mtl states.
+	for _, f := range e.functions {
+		f.Close()
+	}
+	for _, p := range e.pipelines {
+		p.Close()
+	}
+	for _, s := range e.depthStates {
+		s.Close()
+	}
+	e.functions, e.pipelines, e.depthStates = nil, nil, nil
 	e.indirect = nil
 	return nil
 }

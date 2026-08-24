@@ -46,12 +46,14 @@ const (
 	textureUsageRenderTarget = 4
 	storageModePrivate       = 2
 
-	loadActionDontCare = 0
-	loadActionLoad     = 1
-	loadActionClear    = 2
+	// The load and store actions, exported because a backend maps its own onto
+	// them and the mapping is written out by name rather than by number.
+	LoadActionDontCare = 0
+	LoadActionLoad     = 1
+	LoadActionClear    = 2
 
-	storeActionStore    = 1
-	storeActionDontCare = 0
+	StoreActionDontCare = 0
+	StoreActionStore    = 1
 )
 
 // The Metal classes, looked up on first use rather than at package
@@ -126,11 +128,13 @@ var (
 	selSetRenderPipeline   = objc.RegisterName("setRenderPipelineState:")
 	selSetDepthStencil     = objc.RegisterName("setDepthStencilState:")
 	selSetVertexBuffer     = objc.RegisterName("setVertexBuffer:offset:atIndex:")
-	selSetFragmentBuffer   = objc.RegisterName("setFragmentBuffer:offset:atIndex:")
 	selSetCullMode         = objc.RegisterName("setCullMode:")
 	selSetWinding          = objc.RegisterName("setFrontFacingWinding:")
 	selDrawPrimitives      = objc.RegisterName("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:")
 	selDrawIndexed         = objc.RegisterName("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:")
+	selSetVertexBytes      = objc.RegisterName("setVertexBytes:length:atIndex:")
+	selSetFragmentBytes    = objc.RegisterName("setFragmentBytes:length:atIndex:")
+	selCopyBufferToTexture = objc.RegisterName("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
 	selCopyTextureToBuffer = objc.RegisterName("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:")
 )
 
@@ -464,11 +468,6 @@ func (e *RenderEncoder) SetVertexBuffer(b *Buffer, offset, index int) {
 	e.id.Send(selSetVertexBuffer, b.id, uintptr(offset), uintptr(index))
 }
 
-// SetFragmentBuffer binds a buffer the fragment stage reads.
-func (e *RenderEncoder) SetFragmentBuffer(b *Buffer, offset, index int) {
-	e.id.Send(selSetFragmentBuffer, b.id, uintptr(offset), uintptr(index))
-}
-
 // SetCull selects the cull mode: 0 none, 1 front, 2 back.
 func (e *RenderEncoder) SetCull(mode int) { e.id.Send(selSetCullMode, uintptr(mode)) }
 
@@ -526,6 +525,44 @@ func copyTextureToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset int) {
 			origin{}, size{W: uint64(src.width), H: uint64(src.height), D: 1},
 			dst.id, uintptr(offset), uintptr(rowBytes),
 			uintptr(rowBytes*src.height))
+	})
+}
+
+// SetVertexBytes and SetFragmentBytes put a small value directly in the command
+// stream, which is what Metal offers for a uniform smaller than its 4 KiB
+// limit. Larger than that needs a buffer, which the stage uniform path does not
+// reach: a std140 block that big is a design mistake rather than a case to
+// support.
+func (e *RenderEncoder) SetVertexBytes(b []byte, index int) {
+	withPool(func() {
+		e.id.Send(selSetVertexBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
+	})
+}
+
+// SetFragmentBytes is the fragment stage's half. See [RenderEncoder.SetVertexBytes].
+func (e *RenderEncoder) SetFragmentBytes(b []byte, index int) {
+	withPool(func() {
+		e.id.Send(selSetFragmentBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
+	})
+}
+
+// CopyBufferToTexture blits a tightly packed buffer into a whole texture.
+//
+// This is what LoadKeep costs on this backend: keeping prior contents means the
+// texture must start as what the buffer holds. Clear and DontCare skip it.
+func (b *BlitEncoder) CopyBufferToTexture(src *Buffer, offset int, dst *Texture) {
+	copyBufferToTexture(b.id, src, offset, dst)
+}
+
+func copyBufferToTexture(enc objc.ID, src *Buffer, offset int, dst *Texture) {
+	type origin struct{ X, Y, Z uint64 }
+	type size struct{ W, H, D uint64 }
+	rowBytes := dst.width * dst.bpp
+	withPool(func() {
+		enc.Send(selCopyBufferToTexture,
+			src.id, uintptr(offset), uintptr(rowBytes), uintptr(rowBytes*dst.height),
+			size{W: uint64(dst.width), H: uint64(dst.height), D: 1},
+			dst.id, uintptr(0), uintptr(0), origin{})
 	})
 }
 

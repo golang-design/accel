@@ -130,3 +130,148 @@ fragment FOut fmain(VOut in [[stage_in]]) {
 func f32(b []byte) float32 {
 	return math.Float32frombits(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
 }
+
+// Every refusal NewRenderPipeline owns, and each is here because Metal's
+// alternative is an abort.
+//
+// -newRenderPipelineStateWithDescriptor: calls assert on an invalid descriptor,
+// so a missing vertex function is not a bad error message: it is the caller's
+// process gone, with a line from Metal on stderr and no Go frame anywhere. Each
+// case below is a descriptor that would abort.
+func TestRenderPipelineRefusalsHappenBeforeMetalSeesThem(t *testing.T) {
+	devs, err := mtl.Devices()
+	if err != nil || len(devs) == 0 {
+		if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+			t.Fatalf("this job promises Metal and found no device (err=%v)", err)
+		}
+		t.Skipf("no Metal device (err=%v)", err)
+	}
+	d := devs[0]
+	defer func() {
+		for _, x := range devs {
+			x.Close()
+		}
+	}()
+
+	const src = `#include <metal_stdlib>
+using namespace metal;
+struct VOut { float4 _pos [[position]]; };
+vertex VOut vmain(uint vid [[vertex_id]]) { VOut o; o._pos = float4(0,0,0,1); return o; }
+struct FOut { float4 c [[color(0)]]; };
+fragment FOut fmain(VOut in [[stage_in]]) { FOut o; o.c = float4(1); return o; }`
+
+	vs, err := d.CompileFunction(src, "vmain")
+	if err != nil {
+		t.Fatalf("vertex: %v", err)
+	}
+	defer vs.Close()
+	fs, err := d.CompileFunction(src, "fmain")
+	if err != nil {
+		t.Fatalf("fragment: %v", err)
+	}
+	defer fs.Close()
+
+	ok := mtl.RenderPipelineSpec{
+		Vertex: vs, Fragment: fs,
+		ColorFormats: []int{mtl.PixelFormatRGBA32Float},
+	}
+	for _, c := range []struct {
+		name string
+		mut  func(*mtl.RenderPipelineSpec)
+		says string
+	}{
+		{"no vertex function", func(s *mtl.RenderPipelineSpec) { s.Vertex = nil },
+			"no vertex function"},
+		{"no fragment function", func(s *mtl.RenderPipelineSpec) { s.Fragment = nil },
+			"no fragment function"},
+		{"no colour attachments", func(s *mtl.RenderPipelineSpec) { s.ColorFormats = nil },
+			"no colour attachments"},
+		{"a colour attachment with no format",
+			func(s *mtl.RenderPipelineSpec) { s.ColorFormats = []int{0} },
+			"has no pixel format"},
+		{"a vertex buffer with no stride", func(s *mtl.RenderPipelineSpec) {
+			s.VertexLayouts = []mtl.VertexLayoutSpec{{Stride: 0}}
+		}, "stride of 0"},
+		{"an attribute with no format", func(s *mtl.RenderPipelineSpec) {
+			s.VertexLayouts = []mtl.VertexLayoutSpec{{
+				Stride:     12,
+				Attributes: []mtl.VertexAttributeSpec{{Location: 0, Format: 0}},
+			}}
+		}, "has no format"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			spec := ok
+			c.mut(&spec)
+			p, err := d.NewRenderPipeline(spec)
+			if err == nil {
+				p.Close()
+				t.Fatalf("an invalid descriptor was handed to Metal, which aborts on it")
+			}
+			if !contains(err.Error(), c.says) {
+				t.Errorf("the error should say %q, got %v", c.says, err)
+			}
+		})
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// A render target the device cannot make is an error, not a nil texture.
+func TestRenderTargetRefusals(t *testing.T) {
+	devs, err := mtl.Devices()
+	if err != nil || len(devs) == 0 {
+		if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+			t.Fatalf("this job promises Metal and found no device (err=%v)", err)
+		}
+		t.Skipf("no Metal device (err=%v)", err)
+	}
+	d := devs[0]
+	defer func() {
+		for _, x := range devs {
+			x.Close()
+		}
+	}()
+
+	if _, err := d.NewRenderTarget(mtl.PixelFormatRGBA32Float, 0, 8); err == nil {
+		t.Error("a zero-width render target was accepted")
+	}
+	if _, err := d.NewRenderTarget(mtl.PixelFormatRGBA32Float, 8, -1); err == nil {
+		t.Error("a negative-height render target was accepted")
+	}
+}
+
+// A render pass with no colour attachment is refused before an encoder exists.
+func TestARenderPassNeedsAnAttachment(t *testing.T) {
+	devs, err := mtl.Devices()
+	if err != nil || len(devs) == 0 {
+		if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+			t.Fatalf("this job promises Metal and found no device (err=%v)", err)
+		}
+		t.Skipf("no Metal device (err=%v)", err)
+	}
+	d := devs[0]
+	defer func() {
+		for _, x := range devs {
+			x.Close()
+		}
+	}()
+	q := d.NewQueue()
+	defer q.Close()
+	cb := q.Begin()
+
+	if _, err := cb.Render(nil, nil); err == nil {
+		t.Error("a render pass with no colour attachments was accepted")
+	}
+	if _, err := cb.Render([]mtl.RenderAttachment{{}}, nil); err == nil {
+		t.Error("a colour attachment with no texture was accepted")
+	}
+	cb.Commit()
+	cb.Wait()
+}
