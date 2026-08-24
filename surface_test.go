@@ -188,6 +188,12 @@ func TestBindPresentRejections(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire: %v", err)
 		}
+		// Discarded before the resize, which is the rule: a resize invalidates
+		// every frame acquired before it, and a frame has to go back before it
+		// can be invalidated.
+		if err := s.Discard(f); err != nil {
+			t.Fatalf("discard: %v", err)
+		}
 		// Resize to the same extent, which is the case an extent check misses.
 		if err := s.Resize(w, h); err != nil {
 			t.Fatalf("resize: %v", err)
@@ -196,7 +202,6 @@ func TestBindPresentRejections(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire after resize: %v", err)
 		}
-		_ = f
 		err = g.BindPresent(swap, newFrame)
 		if err == nil {
 			t.Fatal("a frame from a later generation bound to a stale graph")
@@ -777,4 +782,84 @@ func failedFence(t *testing.T, d *accel.Device) *accel.Fence {
 		t.Fatal("submitting a closed graph succeeded, so this fence carries no failure")
 	}
 	return f
+}
+
+// A resize with a frame outstanding is refused, and the refusal names the
+// count.
+//
+// specs/034-surface-present.md section 8 says a resize invalidates every frame
+// acquired before it. That was free while a frame was a buffer view; a windowed
+// frame holds a drawable the compositor lent it, and a caller who dropped one
+// and acquired again would leak it — which is the pool exhaustion Discard
+// exists to prevent, and whose symptom is a loop that stops with no error and
+// no stack.
+//
+// The surface keeps no list of outstanding frames, so it cannot return them for
+// the caller. Refusing turns the silent leak into a call they fix in one line,
+// and the frame loop of section 1 already satisfies the rule: the resize there
+// follows an acquire that failed, so nothing is outstanding.
+func TestAResizeWithAFrameOutstandingIsRefused(t *testing.T) {
+	d := openDevice(t)
+	s := newSurface(t, d, 8, 8, 2)
+
+	f, err := s.Acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	err = s.Resize(16, 16)
+	if err == nil {
+		t.Fatal("a resize with a frame outstanding was accepted, which leaks its drawable")
+	}
+	if !strings.Contains(err.Error(), "1 frame(s) outstanding") {
+		t.Errorf("the error should say how many are outstanding, got %v", err)
+	}
+	if got := s.Generation(); got != 0 {
+		t.Errorf("a refused resize left the generation at %d; a resize that did not "+
+			"happen must not invalidate a graph", got)
+	}
+	if gw, gh := s.Extent(); gw != 8 || gh != 8 {
+		t.Errorf("a refused resize changed the extent to %dx%d", gw, gh)
+	}
+
+	// And the documented fix works.
+	if err := s.Discard(f); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if err := s.Resize(16, 16); err != nil {
+		t.Fatalf("after discarding, resize gave %v", err)
+	}
+}
+
+// A frame that outlived its generation is dropped rather than shown, and its
+// drawable goes back.
+//
+// Unreachable through Resize now that Resize refuses, and kept because a
+// refusal that is also handled is cheaper than a rule that is only stated: the
+// buffer behind a stale frame may already be closed, so presenting one would
+// read freed memory rather than show a wrong picture.
+func TestAStaleFrameIsDroppedRatherThanShown(t *testing.T) {
+	d := openDevice(t)
+	s := newSurface(t, d, 8, 8, 2)
+
+	f, err := s.Acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if err := s.Discard(f); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if err := s.Resize(4, 4); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+
+	// A second frame from the new generation presents normally, which is what
+	// makes the drop above about staleness rather than about the surface being
+	// broken by the resize.
+	after, err := s.Acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire after resize: %v", err)
+	}
+	if err := s.Present(after, nil); err != nil {
+		t.Fatalf("present after resize: %v", err)
+	}
 }

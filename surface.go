@@ -248,6 +248,28 @@ func (s *Surface) Present(f *Frame, after *Fence) error {
 		}
 	}
 
+	s.mu.Lock()
+	stale := f.gen != s.gen
+	s.mu.Unlock()
+
+	if stale {
+		// The surface was reconfigured while the caller held this frame, so its
+		// pixels describe an extent that no longer exists. Dropped rather than
+		// shown, and its drawable goes back rather than leaking -- the buffer
+		// behind it may already be closed, so this must happen before anything
+		// reads f.view.
+		//
+		// Reaching here means Resize was called with the frame outstanding,
+		// which Resize refuses. It is kept because a refusal that is also
+		// handled is cheaper than a rule that is only stated.
+		f.presented = true
+		if f.image != nil {
+			f.image.Discard()
+			f.image = nil
+		}
+		return nil
+	}
+
 	if f.image != nil {
 		blk, base := blockFor(f.view.Buffer)
 		if err := f.image.Present(blk, base+f.view.Offset*f.view.DType.Size()); err != nil {
@@ -263,12 +285,6 @@ func (s *Surface) Present(f *Frame, after *Fence) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f.presented = true
-	if f.gen != s.gen {
-		// The image was reconfigured while the caller held it. Its contents are
-		// meaningless now, so it is dropped rather than shown -- and the loop
-		// finds out at the next Acquire, which is where it can act.
-		return nil
-	}
 	s.inFlight--
 	return nil
 }
@@ -322,6 +338,23 @@ func (s *Surface) Resize(w, h int) error {
 	}
 	if w <= 0 || h <= 0 {
 		return fmt.Errorf("accel: Resize: surface %q to %dx%d", s.label, w, h)
+	}
+	// A resize invalidates every frame acquired before it, and a windowed frame
+	// holds a drawable the compositor lent it. This surface keeps no list of
+	// outstanding frames, so it cannot return them -- and a caller who dropped
+	// one and acquired again would leak it, which is the pool exhaustion
+	// [Surface.Discard] exists to prevent, with the symptom that has no error
+	// and no stack.
+	//
+	// Refused rather than tracked, because refusing turns a silent leak into a
+	// call the caller fixes in one line. The frame loop of
+	// specs/034-surface-present.md section 1 already satisfies it: the resize
+	// there follows an acquire that *failed*, so nothing is outstanding.
+	if s.inFlight > 0 {
+		return fmt.Errorf("accel: Resize: surface %q has %d frame(s) outstanding; a "+
+			"resize invalidates every frame acquired before it, and a frame holding a "+
+			"drawable must go back before it can be invalidated -- present or discard "+
+			"them first", s.label, s.inFlight)
 	}
 	if err := s.impl.reconfigure(w, h); err != nil {
 		return err
