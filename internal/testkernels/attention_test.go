@@ -22,7 +22,7 @@ import (
 // kernel is an optional selection against. A composed path sharing the fused
 // one's structure could not tell whether the fusion was right, only that it was
 // consistent with itself.
-func composedAttention(d testkernels.AttnDims, q, k, v []float32) []float64 {
+func composedAttention(d testkernels.AttnDims, kvLen uint32, q, k, v []float32) []float64 {
 	out := make([]float64, d.QHeads*d.HeadDim)
 	group := d.QHeads / d.KVHeads
 
@@ -30,8 +30,8 @@ func composedAttention(d testkernels.AttnDims, q, k, v []float32) []float64 {
 		kvHead := h / group
 
 		// MatMul: the scores.
-		scores := make([]float64, d.KVLen)
-		for j := range d.KVLen {
+		scores := make([]float64, kvLen)
+		for j := range kvLen {
 			var acc float64
 			for i := range d.HeadDim {
 				acc += float64(q[h*d.HeadDim+i]) *
@@ -55,7 +55,7 @@ func composedAttention(d testkernels.AttnDims, q, k, v []float32) []float64 {
 		// MatMul: the weighted sum of V.
 		for i := range d.HeadDim {
 			var acc float64
-			for j := range d.KVLen {
+			for j := range kvLen {
 				acc += scores[j] *
 					float64(v[j*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i])
 			}
@@ -86,8 +86,9 @@ func TestFusedAttentionAgreesWithTheComposedPath(t *testing.T) {
 			func(t *testing.T) {
 				d := testkernels.AttnDims{
 					QHeads: c.qHeads, KVHeads: c.kvHeads, HeadDim: c.headDim,
-					KVLen: c.kvLen, Scale: float32(1 / math.Sqrt(float64(c.headDim))),
+					Scale: float32(1 / math.Sqrt(float64(c.headDim))),
 				}
+				lengths := []uint32{c.kvLen}
 				q := ramp32(int(c.qHeads*c.headDim), 0.7)
 				k := ramp32(int(c.kvLen*c.kvHeads*c.headDim), 1.1)
 				v := ramp32(int(c.kvLen*c.kvHeads*c.headDim), 0.3)
@@ -95,12 +96,12 @@ func TestFusedAttentionAgreesWithTheComposedPath(t *testing.T) {
 
 				err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 					accel.ID3{X: c.qHeads},
-					kernelabi.Args{Slices: []any{q, k, v, out}, Uniforms: []any{d}})
+					kernelabi.Args{Slices: []any{q, k, v, lengths, out}, Uniforms: []any{d}})
 				if err != nil {
 					t.Fatalf("dispatch: %v", err)
 				}
 
-				want := composedAttention(d, q, k, v)
+				want := composedAttention(d, lengths[0], q, k, v)
 				for i := range out {
 					// NaN before the tolerance, because NaN > 1e-4 is false and
 					// a difference test alone would pass on it.
@@ -133,8 +134,9 @@ func ramp32(n int, step float64) []float32 {
 func TestGroupedQueryHeadsShareTheRightKVHead(t *testing.T) {
 	const qHeads, kvHeads, headDim, kvLen = 6, 3, 8, 4
 	d := testkernels.AttnDims{
-		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, KVLen: kvLen, Scale: 1,
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, Scale: 1,
 	}
+	lengths := []uint32{kvLen}
 
 	// Every query is identical, and each KV head's V is a distinct constant, so
 	// each output is exactly its group's constant whatever the scores are.
@@ -155,7 +157,7 @@ func TestGroupedQueryHeadsShareTheRightKVHead(t *testing.T) {
 
 	err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 		accel.ID3{X: qHeads},
-		kernelabi.Args{Slices: []any{q, k, v, out}, Uniforms: []any{d}})
+		kernelabi.Args{Slices: []any{q, k, v, lengths, out}, Uniforms: []any{d}})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -180,8 +182,9 @@ func TestGroupedQueryHeadsShareTheRightKVHead(t *testing.T) {
 func TestLanesPastTheCacheDoNotSkewTheMaximum(t *testing.T) {
 	const qHeads, kvHeads, headDim, kvLen = 1, 1, 8, 3
 	d := testkernels.AttnDims{
-		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, KVLen: kvLen, Scale: 1,
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, Scale: 1,
 	}
+	lengths := []uint32{kvLen}
 
 	// Scores are all strongly negative: q and k point in opposite directions.
 	q := make([]float32, headDim)
@@ -202,12 +205,12 @@ func TestLanesPastTheCacheDoNotSkewTheMaximum(t *testing.T) {
 
 	err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 		accel.ID3{X: qHeads},
-		kernelabi.Args{Slices: []any{q, k, v, out}, Uniforms: []any{d}})
+		kernelabi.Args{Slices: []any{q, k, v, lengths, out}, Uniforms: []any{d}})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
-	want := composedAttention(d, q, k, v)
+	want := composedAttention(d, lengths[0], q, k, v)
 	for i := range out {
 		// NaN first, and separately. A comparison against a tolerance cannot
 		// see it — NaN > 1e-4 is false — so a test written only as a difference
@@ -237,9 +240,9 @@ func TestLanesPastTheCacheDoNotSkewTheMaximum(t *testing.T) {
 func TestAuthoredAttentionDecode(t *testing.T) {
 	const qHeads, kvHeads, headDim, kvLen = 4, 2, 32, 20
 	d := testkernels.AttnDims{
-		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, KVLen: kvLen,
-		Scale: float32(1 / math.Sqrt(headDim)),
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, Scale: float32(1 / math.Sqrt(headDim)),
 	}
+	lengths := []uint32{kvLen}
 	q := ramp32(qHeads*headDim, 0.9)
 	k := ramp32(kvLen*kvHeads*headDim, 0.4)
 	v := ramp32(kvLen*kvHeads*headDim, 1.3)
@@ -252,19 +255,19 @@ func TestAuthoredAttentionDecode(t *testing.T) {
 		kernelabi.Poison(red[:])
 		kernel.RunAuthored(size, kernel.ID3{X: h}, kernel.ID3{X: qHeads}, 128,
 			func(th kernel.Thread) {
-				testkernels.AttentionDecode(th, d, q, k, v, authored, &scores, &red)
+				testkernels.AttentionDecode(th, d, q, k, v, lengths, authored, &scores, &red)
 			})
 	}
 
 	generated := make([]float32, qHeads*headDim)
 	err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 		accel.ID3{X: qHeads},
-		kernelabi.Args{Slices: []any{q, k, v, generated}, Uniforms: []any{d}})
+		kernelabi.Args{Slices: []any{q, k, v, lengths, generated}, Uniforms: []any{d}})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 
-	want := composedAttention(d, q, k, v)
+	want := composedAttention(d, lengths[0], q, k, v)
 	for i := range generated {
 		if math.IsNaN(float64(generated[i])) || math.IsNaN(float64(authored[i])) {
 			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])

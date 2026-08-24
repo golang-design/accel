@@ -318,7 +318,6 @@ func TestPaddingDoesNotChangeTheRealRows(t *testing.T) {
 	run := func(seq int) []float32 {
 		t.Helper()
 		b := rt.NewBuilder("prefill")
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 		qt := tensor.Input(b, tensor.ValueDesc{
@@ -330,8 +329,11 @@ func TestPaddingDoesNotChangeTheRealRows(t *testing.T) {
 		vc := tensor.NewState(b, tensor.StateDesc{
 			Name: "v", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
+		lengths := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+		})
 		tensor.Output(b, "out", tensor.Attention(b, qt, kc, vc, tensor.AttentionOptions{
-			CurrentLengthName: "len", ScaleName: "scale", BaseName: "base",
+			Lengths: lengths, ScaleName: "scale", BaseName: "base",
 		}))
 		plan, err := b.Compile(rt, tensor.CompileOptions{})
 		if err != nil {
@@ -346,13 +348,13 @@ func TestPaddingDoesNotChangeTheRealRows(t *testing.T) {
 				"k":   f32Buffer(t, d, "k", kv),
 				"v":   f32Buffer(t, d, "v", kv),
 				"out": out,
-			},
-			Scalars: map[string]tensor.ScalarValue{
 				// The length is the *real* prompt in both cases: a bucket pads
 				// the query, not the cache, so the padded rows attend over the
 				// same span and simply produce values nobody reads.
-				"len": tensor.U32(real), "base": tensor.U32(0),
-				"scale": tensor.F32(scale),
+				"len": u32Buffer(t, d, "len", []uint32{real}),
+			},
+			Scalars: map[string]tensor.ScalarValue{
+				"base": tensor.U32(0), "scale": tensor.F32(scale),
 			},
 		})
 		if err := f.Wait(); err != nil {

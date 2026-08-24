@@ -81,11 +81,12 @@ func TestBatchedDecodeMatchesOneAtATime(t *testing.T) {
 					q[s*qHeads*headDim : (s+1)*qHeads*headDim],
 					physK, physV,
 					pages[s*maxPages : (s+1)*maxPages],
+					lengths[s : s+1],
 					alone,
 				},
 				Uniforms: []any{testkernels.PagedDims{
 					QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-					KVLen: lengths[s], Block: block, Scale: scale,
+					Block: block, Scale: scale,
 				}},
 			})
 		if err != nil {
@@ -137,10 +138,10 @@ func TestBatchOfOne(t *testing.T) {
 	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 		accel.ID3{X: qHeads},
 		kernelabi.Args{
-			Slices: []any{q, physK, physV, pages, unbatched},
+			Slices: []any{q, physK, physV, pages, []uint32{5}, unbatched},
 			Uniforms: []any{testkernels.PagedDims{
 				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-				KVLen: 5, Block: block, Scale: scale,
+				Block: block, Scale: scale,
 			}},
 		}); err != nil {
 		t.Fatalf("paged: %v", err)

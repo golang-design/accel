@@ -81,7 +81,6 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 	// The prefill plan: n query tokens at once, over a cache holding n.
 	prefill := func() []float32 {
 		b := rt.NewBuilder("prefill")
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 		q := tensor.Input(b, tensor.ValueDesc{
@@ -97,7 +96,10 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 			Name: "wout", DType: accel.F16, Shape: tensor.Shape{width, vocab},
 		})
 		attn := tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
-			CurrentLengthName: "len", ScaleName: "scale", BaseName: "base",
+			Lengths: tensor.Input(b, tensor.ValueDesc{
+				Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+			}),
+			ScaleName: "scale", BaseName: "base",
 		})
 		tensor.Output(b, "out", attn)
 		// Logits for every prefilled position: the prompt's last token is what
@@ -137,9 +139,10 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 			Buffers: map[string]accel.BufferView{
 				"q": f32Buffer(t, d, "q", flatQ), "k": kBuf, "v": vBuf,
 				"wout": woutBuf, "out": out, "logits": logits,
+				"len": u32Buffer(t, d, "len", []uint32{n}),
 			},
 			Scalars: map[string]tensor.ScalarValue{
-				"len": tensor.U32(n), "base": tensor.U32(0), "scale": tensor.F32(scale),
+				"base": tensor.U32(0), "scale": tensor.F32(scale),
 			},
 		})
 		if err := f.Wait(); err != nil {
@@ -158,7 +161,6 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 	// The decode plan: one token, over a cache that grows by one each step.
 	decode := func() []float32 {
 		b := rt.NewBuilder("decode")
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 		q := tensor.Input(b, tensor.ValueDesc{
 			Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
@@ -173,7 +175,10 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 			Name: "wout", DType: accel.F16, Shape: tensor.Shape{width, vocab},
 		})
 		attn := tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
-			CurrentLengthName: "len", ScaleName: "scale",
+			Lengths: tensor.Input(b, tensor.ValueDesc{
+				Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+			}),
+			ScaleName: "scale",
 		})
 		tensor.Output(b, "out", attn)
 		flat := tensor.Reshape(b, attn, tensor.Shape{1, width})
@@ -195,13 +200,12 @@ func TestPrefillAndDecodeAgree(t *testing.T) {
 				Buffers: map[string]accel.BufferView{
 					"q": f32Buffer(t, d, "dq", qs[s]), "k": kBuf, "v": vBuf,
 					"wout": woutBuf, "out": out, "logits": logits,
-				},
-				Scalars: map[string]tensor.ScalarValue{
 					// The cache holds every token, and the length is what makes
 					// step s see only the first s+1 -- which is the same
 					// masking the prefill does with its base.
-					"len": tensor.U32(uint32(s + 1)), "scale": tensor.F32(scale),
+					"len": u32Buffer(t, d, "dlen", []uint32{uint32(s + 1)}),
 				},
+				Scalars: map[string]tensor.ScalarValue{"scale": tensor.F32(scale)},
 			})
 			if err := f.Wait(); err != nil {
 				t.Fatalf("decode step %d: %v", s, err)

@@ -80,11 +80,13 @@ func TestATwoLayerModelProducesLogits(t *testing.T) {
 		}()
 
 		b := rt.NewBuilder("stack")
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 
 		ids := tensor.Input(b, tensor.ValueDesc{
 			Name: "ids", DType: accel.U32, Shape: tensor.Shape{1},
+		})
+		lengths := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
 		})
 		slot := tensor.Input(b, tensor.ValueDesc{
 			Name: "slot", DType: accel.U32, Shape: tensor.Shape{1},
@@ -120,7 +122,7 @@ func TestATwoLayerModelProducesLogits(t *testing.T) {
 			attn := tensor.Attention(b, q,
 				tensor.ScatterRows(b, kc, kIn, slot),
 				tensor.ScatterRows(b, vc, vIn, slot),
-				tensor.AttentionOptions{CurrentLengthName: "len", ScaleName: "scale"})
+				tensor.AttentionOptions{Lengths: lengths, ScaleName: "scale"})
 			h = tensor.Add(b, h, tensor.Reshape(b, attn, tensor.Shape{1, width}))
 		}
 
@@ -162,6 +164,7 @@ func TestATwoLayerModelProducesLogits(t *testing.T) {
 		for step, tok := range tokens {
 			bufs["ids"] = u32Buffer(t, d, "ids", []uint32{tok})
 			bufs["slot"] = u32Buffer(t, d, "slot", []uint32{uint32(step)})
+			bufs["len"] = u32Buffer(t, d, "len", []uint32{uint32(step + 1)})
 			for l := range layers {
 				bufs[kInName(l)] = f32Buffer(t, d, kInName(l), layerKV(l, step, kvHeads*headDim, 1))
 				bufs[vInName(l)] = f32Buffer(t, d, vInName(l), layerKV(l, step, kvHeads*headDim, 2))
@@ -169,7 +172,7 @@ func TestATwoLayerModelProducesLogits(t *testing.T) {
 			f := plan.Submit(d.Queue(), tensor.Bindings{
 				Buffers: bufs,
 				Scalars: map[string]tensor.ScalarValue{
-					"len":   tensor.U32(uint32(step + 1)),
+
 					"scale": tensor.F32(float32(1 / math.Sqrt(headDim))),
 				},
 			})

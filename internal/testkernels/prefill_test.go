@@ -42,7 +42,7 @@ func TestAttentionPrefillMatchesItsReference(t *testing.T) {
 			dims := testkernels.PrefillDims{
 				QHeads: uint32(c.qHeads), KVHeads: uint32(c.kvHeads),
 				HeadDim: uint32(c.headDim), QSeq: uint32(c.qSeq),
-				KVLen: uint32(kvLen), Base: uint32(c.base),
+				Base:  uint32(c.base),
 				Scale: float32(1 / math.Sqrt(float64(c.headDim))),
 			}
 			q := make([]float32, c.qSeq*c.qHeads*c.headDim)
@@ -56,6 +56,9 @@ func TestAttentionPrefillMatchesItsReference(t *testing.T) {
 				v[i] = float32(i%9)/4 - 1
 			}
 			out := make([]float32, len(q))
+			// A prefill's cache holds its own tokens plus whatever preceded
+			// them, which is what Base counts.
+			lengths := []uint32{uint32(c.base + c.qSeq)}
 
 			run := func() {
 				for i := range out {
@@ -64,7 +67,7 @@ func TestAttentionPrefillMatchesItsReference(t *testing.T) {
 				err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
 					accel.ID3{X: uint32(c.qSeq * c.qHeads)},
 					kernelabi.Args{
-						Slices: []any{q, k, v, out}, Uniforms: []any{dims},
+						Slices: []any{q, k, v, lengths, out}, Uniforms: []any{dims},
 					})
 				if err != nil {
 					t.Fatalf("dispatch: %v", err)
@@ -197,10 +200,10 @@ func TestPrefillEqualsIncrementalDecode(t *testing.T) {
 	err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
 		accel.ID3{X: n * qHeads},
 		kernelabi.Args{
-			Slices: []any{q, k, v, prefill},
+			Slices: []any{q, k, v, []uint32{n}, prefill},
 			Uniforms: []any{testkernels.PrefillDims{
 				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-				QSeq: n, KVLen: n, Base: 0, Scale: scale,
+				QSeq: n, Base: 0, Scale: scale,
 			}},
 		})
 	if err != nil {
@@ -218,11 +221,12 @@ func TestPrefillEqualsIncrementalDecode(t *testing.T) {
 					q[step*qHeads*headDim : (step+1)*qHeads*headDim],
 					k[:(step+1)*kvHeads*headDim],
 					v[:(step+1)*kvHeads*headDim],
+					[]uint32{uint32(step + 1)},
 					step1,
 				},
 				Uniforms: []any{testkernels.AttnDims{
 					QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-					KVLen: uint32(step + 1), Scale: scale,
+					Scale: scale,
 				}},
 			})
 		if err != nil {
@@ -523,7 +527,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		const qHeads, kvHeads, headDim, block, kvLen, blocks = 2, 1, 8, 4, 6, 8
 		d := testkernels.PagedDims{
 			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-			KVLen: kvLen, Block: block, Scale: float32(1) / float32(math.Sqrt(headDim)),
+			Block: block, Scale: float32(1) / float32(math.Sqrt(headDim)),
 		}
 		q := make([]float32, qHeads*headDim)
 		pk := make([]float32, blocks*block*kvHeads*headDim)
@@ -537,21 +541,22 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 		// Out of order, so the two forms agree about the addressing.
 		pages := []uint32{5, 2}
+		lengths := []uint32{kvLen}
 
 		authored := make([]float32, qHeads*headDim)
 		for g := range uint32(qHeads) {
 			var scores, red [128]float32
 			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
 				kernel.ID3{X: qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
-					testkernels.AttentionDecodePaged(th, d, q, pk, pv, pages, authored,
-						&scores, &red)
+					testkernels.AttentionDecodePaged(th, d, q, pk, pv, pages, lengths,
+						authored, &scores, &red)
 				})
 		}
 		generated := make([]float32, qHeads*headDim)
 		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 			accel.ID3{X: qHeads},
 			kernelabi.Args{
-				Slices: []any{q, pk, pv, pages, generated}, Uniforms: []any{d},
+				Slices: []any{q, pk, pv, pages, lengths, generated}, Uniforms: []any{d},
 			}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
@@ -566,7 +571,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		const qHeads, kvHeads, headDim, qSeq = 2, 1, 8, 4
 		dims := testkernels.PrefillDims{
 			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-			QSeq: qSeq, KVLen: qSeq, Base: 0,
+			QSeq: qSeq, Base: 0,
 			Scale: float32(1) / float32(math.Sqrt(headDim)),
 		}
 		q := make([]float32, qSeq*qHeads*headDim)
@@ -580,13 +585,15 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 			v[i] = float32(i%5) - 2
 		}
 
+		// A fresh cache, so its length equals the query sequence.
+		lengths := []uint32{qSeq}
 		authored := make([]float32, len(q))
 		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
 		size := kernel.ID3{X: 128, Y: 1, Z: 1}
 		for g := range groups.X {
 			var scores, red [128]float32
 			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
-				testkernels.AttentionPrefill(th, dims, q, k, v, authored, &scores, &red)
+				testkernels.AttentionPrefill(th, dims, q, k, v, lengths, authored, &scores, &red)
 			})
 		}
 
@@ -594,7 +601,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
 			accel.ID3{X: groups.X},
 			kernelabi.Args{
-				Slices: []any{q, k, v, generated}, Uniforms: []any{dims},
+				Slices: []any{q, k, v, lengths, generated}, Uniforms: []any{dims},
 			}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}

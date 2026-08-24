@@ -58,7 +58,6 @@ func TestAnF16CacheAgreesWithAnF32One(t *testing.T) {
 	run := func(t *testing.T, dt accel.DType) []float32 {
 		t.Helper()
 		b := rt.NewBuilder("cache")
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 		q := tensor.Input(b, tensor.ValueDesc{
 			Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
@@ -69,8 +68,11 @@ func TestAnF16CacheAgreesWithAnF32One(t *testing.T) {
 		vc := tensor.NewState(b, tensor.StateDesc{
 			Name: "vcache", DType: dt, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
+		lengths := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+		})
 		tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
-			CurrentLengthName: "len", ScaleName: "scale",
+			Lengths: lengths, ScaleName: "scale",
 		}))
 
 		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "cache"})
@@ -91,10 +93,9 @@ func TestAnF16CacheAgreesWithAnF32One(t *testing.T) {
 				"q":      f32Buffer(t, d, "q", qs),
 				"kcache": buf("kcache", ks), "vcache": buf("vcache", vs),
 				"out": out,
+				"len": u32Buffer(t, d, "len", []uint32{capacity}),
 			},
-			Scalars: map[string]tensor.ScalarValue{
-				"len": tensor.U32(capacity), "scale": tensor.F32(scale),
-			},
+			Scalars: map[string]tensor.ScalarValue{"scale": tensor.F32(scale)},
 		})
 		if err := f.Wait(); err != nil {
 			t.Fatalf("submit %v: %v", dt, err)
@@ -139,7 +140,6 @@ func TestAPrefillOverAnF16CacheIsRefused(t *testing.T) {
 	const qHeads, kvHeads, headDim, capacity, qSeq = 4, 2, 8, 6, 3
 	rt := newRuntime(t)
 	b := rt.NewBuilder("prefill16")
-	tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
 
@@ -153,7 +153,10 @@ func TestAPrefillOverAnF16CacheIsRefused(t *testing.T) {
 		Name: "v", DType: accel.F16, Shape: tensor.Shape{capacity, kvHeads, headDim},
 	})
 	tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
-		CurrentLengthName: "len", ScaleName: "scale", BaseName: "base",
+		Lengths: tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+		}),
+		ScaleName: "scale", BaseName: "base",
 	})
 
 	err := b.Err()
@@ -170,7 +173,6 @@ func TestTheTwoCachesMustShareADType(t *testing.T) {
 	const kvHeads, headDim, capacity, qHeads = 2, 8, 6, 4
 	rt := newRuntime(t)
 	b := rt.NewBuilder("mixed")
-	tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 	q := tensor.Input(b, tensor.ValueDesc{
 		Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
@@ -182,7 +184,10 @@ func TestTheTwoCachesMustShareADType(t *testing.T) {
 		Name: "v", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 	})
 	tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
-		CurrentLengthName: "len", ScaleName: "scale",
+		Lengths: tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+		}),
+		ScaleName: "scale",
 	})
 	if err := b.Err(); err == nil {
 		t.Fatal("a mixed-dtype cache pair was accepted")

@@ -49,10 +49,10 @@ func TestPagedDecodeMatchesContiguous(t *testing.T) {
 	err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
 		accel.ID3{X: qHeads},
 		kernelabi.Args{
-			Slices: []any{q, logicalK, logicalV, contiguous},
+			Slices: []any{q, logicalK, logicalV, []uint32{kvLen}, contiguous},
 			Uniforms: []any{testkernels.AttnDims{
 				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-				KVLen: kvLen, Scale: scale,
+				Scale: scale,
 			}},
 		})
 	if err != nil {
@@ -87,10 +87,10 @@ func TestPagedDecodeMatchesContiguous(t *testing.T) {
 			err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 				accel.ID3{X: qHeads},
 				kernelabi.Args{
-					Slices: []any{q, physK, physV, tc.pages, paged},
+					Slices: []any{q, physK, physV, tc.pages, []uint32{kvLen}, paged},
 					Uniforms: []any{testkernels.PagedDims{
 						QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-						KVLen: kvLen, Block: block, Scale: scale,
+						Block: block, Scale: scale,
 					}},
 				})
 			if err != nil {
@@ -158,10 +158,10 @@ func TestTwoSequencesShareAPoolWithoutSeeingEachOther(t *testing.T) {
 		err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel,
 			accel.ID3{X: qHeads},
 			kernelabi.Args{
-				Slices: []any{q, physK, physV, s.pages, out},
+				Slices: []any{q, physK, physV, s.pages, []uint32{uint32(s.n)}, out},
 				Uniforms: []any{testkernels.PagedDims{
 					QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
-					KVLen: uint32(s.n), Block: block, Scale: scale,
+					Block: block, Scale: scale,
 				}},
 			})
 		if err != nil {

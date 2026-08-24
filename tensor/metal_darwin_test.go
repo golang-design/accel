@@ -222,7 +222,6 @@ func TestADecodeStepAgreesOnCPUAndMetal(t *testing.T) {
 			t.Fatalf("runtime: %v", err)
 		}
 		b := rt.NewBuilder("decode")
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 		q := tensor.Input(b, tensor.ValueDesc{
 			Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
@@ -242,10 +241,13 @@ func TestADecodeStepAgreesOnCPUAndMetal(t *testing.T) {
 		vc := tensor.NewState(b, tensor.StateDesc{
 			Name: "vc", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
 		})
+		lengths := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+		})
 		tensor.Output(b, "out", tensor.Attention(b, q,
 			tensor.ScatterRows(b, kc, nk, slot),
 			tensor.ScatterRows(b, vc, nv, slot),
-			tensor.AttentionOptions{CurrentLengthName: "len", ScaleName: "scale"}))
+			tensor.AttentionOptions{Lengths: lengths, ScaleName: "scale"}))
 
 		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "decode"})
 		if err != nil {
@@ -260,9 +262,10 @@ func TestADecodeStepAgreesOnCPUAndMetal(t *testing.T) {
 				"kc":   f32Buffer(t, d, "kc", make([]float32, capacity*kvHeads*headDim)),
 				"vc":   f32Buffer(t, d, "vc", make([]float32, capacity*kvHeads*headDim)),
 				"out":  out,
+				"len":  u32Buffer(t, d, "len", []uint32{1}),
 			},
 			Scalars: map[string]tensor.ScalarValue{
-				"len": tensor.U32(1), "scale": tensor.F32(float32(1 / math.Sqrt(headDim))),
+				"scale": tensor.F32(float32(1 / math.Sqrt(headDim))),
 			},
 		})
 		if err := f.Wait(); err != nil {

@@ -402,9 +402,9 @@ func diffCases() []diffCase {
 			// position and the last sees four -- which exercises the mask
 			// across its whole range rather than at one length.
 			kernel: &testkernels.AttentionPrefillKernel,
-			counts: []int{4 * 2 * 8, 4 * 1 * 8, 4 * 1 * 8, 4 * 2 * 8},
+			counts: []int{4 * 2 * 8, 4 * 1 * 8, 4 * 1 * 8, 1, 4 * 2 * 8},
 			uniforms: []any{testkernels.PrefillDims{
-				QHeads: 2, KVHeads: 1, HeadDim: 8, QSeq: 4, KVLen: 4, Base: 0,
+				QHeads: 2, KVHeads: 1, HeadDim: 8, QSeq: 4, Base: 0,
 				Scale: float32(1) / float32(math.Sqrt(8)),
 			}},
 			groups: accel.WorkgroupCount{X: 4 * 2},
@@ -438,9 +438,9 @@ func diffCases() []diffCase {
 			// the attention. An identity page table would compare equal even
 			// for a kernel that ignored the table.
 			kernel: &testkernels.AttentionDecodePagedKernel,
-			counts: []int{2 * 8, 8 * 4 * 1 * 8, 8 * 4 * 1 * 8, 2, 2 * 8},
+			counts: []int{2 * 8, 8 * 4 * 1 * 8, 8 * 4 * 1 * 8, 2, 1, 2 * 8},
 			uniforms: []any{testkernels.PagedDims{
-				QHeads: 2, KVHeads: 1, HeadDim: 8, KVLen: 6, Block: 4,
+				QHeads: 2, KVHeads: 1, HeadDim: 8, Block: 4,
 				Scale: float32(1) / float32(math.Sqrt(8)),
 			}},
 			groups: accel.WorkgroupCount{X: 2},
@@ -456,10 +456,9 @@ func diffCases() []diffCase {
 		},
 		{
 			kernel: &testkernels.AttentionDecodeKernel,
-			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 2 * 8},
+			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 1, 2 * 8},
 			uniforms: []any{testkernels.AttnDims{
-				QHeads: 2, KVHeads: 1, HeadDim: 8, KVLen: 3,
-				Scale: float32(1) / float32(math.Sqrt(8)),
+				QHeads: 2, KVHeads: 1, HeadDim: 8, Scale: float32(1) / float32(math.Sqrt(8)),
 			}},
 			groups: accel.WorkgroupCount{X: 2},
 			ulp:    32, why: "a softmax composed with two dot products, per section 8's propagation",
@@ -470,10 +469,9 @@ func diffCases() []diffCase {
 			// conversion rather than the conversion itself -- and the widening
 			// is exact, so the ceiling is the f32 kernel's.
 			kernel: &testkernels.AttentionDecodeF16Kernel,
-			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 2 * 8},
+			counts: []int{2 * 8, 3 * 1 * 8, 3 * 1 * 8, 1, 2 * 8},
 			uniforms: []any{testkernels.AttnDims{
-				QHeads: 2, KVHeads: 1, HeadDim: 8, KVLen: 3,
-				Scale: float32(1) / float32(math.Sqrt(8)),
+				QHeads: 2, KVHeads: 1, HeadDim: 8, Scale: float32(1) / float32(math.Sqrt(8)),
 			}},
 			groups: accel.WorkgroupCount{X: 2},
 			ulp:    32, why: "a softmax composed with two dot products, per section 8's propagation",

@@ -13,10 +13,36 @@ import (
 
 // AttentionOptions carries what attention needs beyond its operands.
 type AttentionOptions struct {
-	// CurrentLengthName is a declared u32 scalar: how much of the cache holds
-	// real tokens. It is a scalar rather than a shape because it changes every
-	// decode step and the plan must not.
-	CurrentLengthName string
+	// Lengths is a u32 tensor holding, per sequence, how much of that
+	// sequence's cache holds real tokens.
+	//
+	// A tensor rather than a scalar, and specs/043-per-row-values.md draws the
+	// line: a value every row of a dispatch shares is a uniform, and a value
+	// that differs per row is device data. Cache lengths are genuinely
+	// independent across a batch -- that is what continuous batching *is* --
+	// so no scalar can express them, and no scheduling arrangement makes one
+	// correct.
+	//
+	// One sequence binds a one-element tensor. That is the same path, not a
+	// special case.
+	Lengths *Tensor
+
+	// Pages is an optional u32 page table: entry [s][i] is the physical block
+	// holding sequence s's i-th logical block.
+	//
+	// Nil means the cache is contiguous, which is the same thing with an
+	// identity table and a block size of one. It is nil-able rather than
+	// required because the indirection is a real cost in the innermost loop of
+	// decode, and a contiguous cache should not pay it -- the operator selects
+	// the kernel and reports which in [Plan.Selections].
+	//
+	// Paging is not a second kind of cache. A State addressed through a page
+	// table is the same State; what differs is the binding.
+	Pages *Tensor
+
+	// Block is how many positions one physical block holds, and is required
+	// when Pages is set.
+	Block int
 
 	// ScaleName is a declared f32 scalar, conventionally 1/sqrt(headDim). Named
 	// rather than computed here so a caller can use a different convention
@@ -27,6 +53,10 @@ type AttentionOptions struct {
 	// of its first query token within the cache. It decides what the causal
 	// mask hides, so a prefill that extends an existing cache masks correctly
 	// rather than letting its first token see nothing.
+	//
+	// Still a scalar because a prefill is one sequence: specs/040-batch-scheduler.md
+	// owns batched prefill, and until it exists there is no row for this to
+	// differ across.
 	BaseName string
 }
 
@@ -102,13 +132,14 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			"query heads share one cache entry, so the first is a multiple of the second",
 			qHeads, kvHeads)
 	}
-	if _, ok := b.scalarKind(opts.CurrentLengthName); !ok {
-		return b.fail(1, "Attention", "%q is not a declared scalar; the cache's current "+
-			"length changes every step and is named for that reason", opts.CurrentLengthName)
+	if opts.Lengths == nil || poisoned(opts.Lengths) {
+		return b.fail(1, "Attention", "Lengths is required: it holds how much of each "+
+			"sequence's cache is real, one entry per sequence "+
+			"(specs/043-per-row-values.md). A single sequence binds one element")
 	}
-	if kind, _ := b.scalarKind(opts.CurrentLengthName); kind != ScalarU32 {
-		return b.fail(1, "Attention", "%q is declared %v and a length is u32",
-			opts.CurrentLengthName, kind)
+	if opts.Lengths.dtype != accel.U32 {
+		return b.fail(1, "Attention", "Lengths is %v and a cache length is u32",
+			opts.Lengths.dtype)
 	}
 	if kind, ok := b.scalarKind(opts.ScaleName); !ok || kind != ScalarF32 {
 		return b.fail(1, "Attention", "%q is not a declared f32 scalar", opts.ScaleName)
@@ -150,14 +181,14 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			return b.fail(1, "Attention", "%q is not a declared u32 scalar", opts.BaseName)
 		}
 		return b.record(node{
-			op: "Attention", inputs: []*Tensor{q, readState(b, k), readState(b, v)},
+			op:     "Attention",
+			inputs: []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths},
 			kernel: &testkernels.AttentionPrefillKernel,
-			reads:  []string{opts.CurrentLengthName, opts.ScaleName, opts.BaseName},
+			reads:  []string{opts.ScaleName, opts.BaseName},
 			uniform: func(vals map[string]ScalarValue) any {
 				return testkernels.PrefillDims{
 					QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 					HeadDim: uint32(headDim), QSeq: uint32(qSeq),
-					KVLen: vals[opts.CurrentLengthName].U32,
 					Base:  vals[opts.BaseName].U32,
 					Scale: vals[opts.ScaleName].F32,
 				}
@@ -171,26 +202,59 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		}, accel.F32, out)
 	}
 
-	// The narrow variant when the cache is narrow. A separate kernel rather
-	// than a dtype parameter, because specs/004-kernel-authoring.md keeps
-	// generics out of the subset and a variant is what
-	// specs/010-kernel-corpus.md registers.
+	// Which decode kernel runs. The caller writes one shape and the choice is
+	// reported in Plan.Selections, which is how every other operator here
+	// behaves: a variant is a selection, not a second API.
 	decode := &testkernels.AttentionDecodeKernel
 	decodeWhy := "the fused decode kernel"
-	if cacheDType == accel.F16 {
+	inputs := []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths}
+	rejected := []string{"the causal prefill kernel: it takes a sequence of query tokens"}
+
+	switch {
+	case opts.Pages != nil:
+		if opts.Pages.dtype != accel.U32 {
+			return b.fail(1, "Attention", "Pages is %v and a page table is u32",
+				opts.Pages.dtype)
+		}
+		if opts.Block <= 0 {
+			return b.fail(1, "Attention", "Pages is set and Block is %d; a page table "+
+				"addresses blocks, so how many positions one holds is required",
+				opts.Block)
+		}
+		if cacheDType != accel.F32 {
+			return b.fail(1, "Attention", "the cache is %v and only the contiguous decode "+
+				"kernel reads a narrow cache; specs/010-kernel-corpus.md owns the paged "+
+				"f16 variant", cacheDType)
+		}
+		decode = &testkernels.AttentionDecodePagedKernel
+		decodeWhy = fmt.Sprintf("the paged decode kernel: blocks of %d, addressed through "+
+			"a page table", opts.Block)
+		// Pages before lengths, which is the kernel's binding order.
+		inputs = []*Tensor{q, readState(b, k), readState(b, v), opts.Pages, opts.Lengths}
+		rejected = append(rejected,
+			"the contiguous decode kernel: a page table was supplied")
+
+	case cacheDType == accel.F16:
 		decode = &testkernels.AttentionDecodeF16Kernel
 		decodeWhy = "the fused decode kernel over an f16 cache, accumulating f32"
 	}
 
 	return b.record(node{
-		op: "Attention", inputs: []*Tensor{q, readState(b, k), readState(b, v)},
+		op:     "Attention",
+		inputs: inputs,
 		kernel: decode,
-		reads:  []string{opts.CurrentLengthName, opts.ScaleName},
+		reads:  []string{opts.ScaleName},
 		uniform: func(vals map[string]ScalarValue) any {
+			if opts.Pages != nil {
+				return testkernels.PagedDims{
+					QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
+					HeadDim: uint32(headDim), Block: uint32(opts.Block),
+					Scale: vals[opts.ScaleName].F32,
+				}
+			}
 			return testkernels.AttnDims{
 				QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 				HeadDim: uint32(headDim),
-				KVLen:   vals[opts.CurrentLengthName].U32,
 				Scale:   vals[opts.ScaleName].F32,
 			}
 		},
@@ -199,6 +263,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		},
 		reason: fmt.Sprintf("%s: one workgroup per query head over %d cached positions",
 			decodeWhy, k.shape[0]),
-		rejected: []string{"the causal prefill kernel: it takes a sequence of query tokens"},
+		rejected: rejected,
 	}, accel.F32, out)
 }

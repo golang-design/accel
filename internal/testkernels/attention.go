@@ -21,9 +21,6 @@ type AttnDims struct {
 	// HeadDim is divisible by eight and at most 128, per spec 010.
 	HeadDim uint32
 
-	// KVLen is how many cached positions there are.
-	KVLen uint32
-
 	// Scale multiplies the scores, conventionally 1/sqrt(headDim). It is a
 	// parameter rather than computed, because a model may ship a different one
 	// and computing it here would silently override what the weights expect.
@@ -59,9 +56,14 @@ const AttnMaxKV = 128
 //
 //accel:kernel workgroup=128
 func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32,
-	out []float32, scores *[128]float32, red *[128]float32) {
+	lengths []uint32, out []float32, scores *[128]float32, red *[128]float32) {
 
 	h := t.GroupID().X
+	// One sequence, so its length is the first entry. The length is a binding
+	// rather than a uniform because specs/043-per-row-values.md makes a
+	// per-sequence value device data -- and a single sequence is the same path
+	// as a batch of one rather than a different one.
+	kvLen := lengths[0]
 	lane := t.LocalID().X
 
 	// Several query heads share one KV head. Integer division rather than a
@@ -72,7 +74,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 
 	// Each lane scores one cached position.
 	s := float32(0)
-	if lane < d.KVLen {
+	if lane < kvLen {
 		acc := float32(0)
 		for i := uint32(0); i < d.HeadDim; i++ {
 			qi := q[h*d.HeadDim+i]
@@ -88,7 +90,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 	// shift every exponent, which changes the answer rather than only the
 	// intermediate.
 	red[lane] = s
-	if lane >= d.KVLen {
+	if lane >= kvLen {
 		red[lane] = -3.4e38
 	}
 	t.Barrier()
@@ -106,7 +108,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 	// for a *sum* is the identity and therefore correct where it was not for
 	// the maximum.
 	e := float32(0)
-	if lane < d.KVLen {
+	if lane < kvLen {
 		e = kmath.Exp(scores[lane] - m)
 	}
 	scores[lane] = e
@@ -126,7 +128,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 	// can read all of them and each owns one output element.
 	if lane < d.HeadDim {
 		acc := float32(0)
-		for j := uint32(0); j < d.KVLen; j++ {
+		for j := uint32(0); j < kvLen; j++ {
 			acc = acc + scores[j]*v[j*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 		}
 		out[h*d.HeadDim+lane] = acc / total
@@ -157,10 +159,11 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 //
 //accel:kernel workgroup=128
 func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float16,
-	v []accel.Float16,
+	v []accel.Float16, lengths []uint32,
 	out []float32, scores *[128]float32, red *[128]float32) {
 
 	h := t.GroupID().X
+	kvLen := lengths[0]
 	lane := t.LocalID().X
 
 	// Several query heads share one KV head. Integer division rather than a
@@ -171,7 +174,7 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 
 	// Each lane scores one cached position.
 	s := float32(0)
-	if lane < d.KVLen {
+	if lane < kvLen {
 		acc := float32(0)
 		for i := uint32(0); i < d.HeadDim; i++ {
 			qi := q[h*d.HeadDim+i]
@@ -187,7 +190,7 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 	// shift every exponent, which changes the answer rather than only the
 	// intermediate.
 	red[lane] = s
-	if lane >= d.KVLen {
+	if lane >= kvLen {
 		red[lane] = -3.4e38
 	}
 	t.Barrier()
@@ -205,7 +208,7 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 	// for a *sum* is the identity and therefore correct where it was not for
 	// the maximum.
 	e := float32(0)
-	if lane < d.KVLen {
+	if lane < kvLen {
 		e = kmath.Exp(scores[lane] - m)
 	}
 	scores[lane] = e
@@ -225,7 +228,7 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 	// can read all of them and each owns one output element.
 	if lane < d.HeadDim {
 		acc := float32(0)
-		for j := uint32(0); j < d.KVLen; j++ {
+		for j := uint32(0); j < kvLen; j++ {
 			acc = acc + scores[j]*v[j*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane].F32()
 		}
 		out[h*d.HeadDim+lane] = acc / total

@@ -23,10 +23,6 @@ type PrefillDims struct {
 	// QSeq is how many query positions there are.
 	QSeq uint32
 
-	// KVLen is how many cached positions there are. For the prefill that
-	// produces a cache, it equals QSeq.
-	KVLen uint32
-
 	// Base is the position of the first query token within the cache, so a
 	// prefill that extends an existing cache masks correctly.
 	Base uint32
@@ -59,9 +55,16 @@ type PrefillDims struct {
 //
 //accel:kernel workgroup=128
 func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v []float32,
-	out []float32, scores *[128]float32, red *[128]float32) {
+	lengths []uint32, out []float32, scores *[128]float32, red *[128]float32) {
 
 	group := t.GroupID().X
+	// A prefill is one sequence, so its cache length is the first entry. A
+	// binding rather than a uniform so that there is exactly one way to say
+	// "how much of the cache is real" across every attention kernel --
+	// specs/043-per-row-values.md. Batched prefill is
+	// specs/040-batch-scheduler.md's, and when it arrives this indexes by
+	// sequence like the decode kernels do.
+	kvLen := lengths[0]
 	lane := t.LocalID().X
 
 	// The workgroup's output row: which query position, and which head.
@@ -75,7 +78,7 @@ func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v
 	limit := d.Base + s
 
 	score := float32(0)
-	visible := lane <= limit && lane < d.KVLen
+	visible := lane <= limit && lane < kvLen
 	if visible {
 		acc := float32(0)
 		for i := uint32(0); i < d.HeadDim; i++ {
@@ -133,7 +136,7 @@ func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v
 	// can read every probability now, and each owns one output element.
 	if lane < d.HeadDim {
 		acc := float32(0)
-		for j := uint32(0); j < d.KVLen; j++ {
+		for j := uint32(0); j < kvLen; j++ {
 			acc = acc + scores[j]*v[j*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 		}
 		out[(s*d.QHeads+h)*d.HeadDim+lane] = acc / total

@@ -37,7 +37,6 @@ func TestADecodeStepAppendsAndAttends(t *testing.T) {
 	d := rt.Device()
 	b := rt.NewBuilder("decode")
 
-	tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 
 	q := tensor.Input(b, tensor.ValueDesc{
@@ -51,6 +50,11 @@ func TestADecodeStepAppendsAndAttends(t *testing.T) {
 	})
 	slot := tensor.Input(b, tensor.ValueDesc{
 		Name: "slot", DType: accel.U32, Shape: tensor.Shape{1},
+	})
+	// One sequence, so one length. specs/043-per-row-values.md: the same path a
+	// batch takes, with one row.
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
 	})
 
 	kc := tensor.NewState(b, tensor.StateDesc{
@@ -66,7 +70,7 @@ func TestADecodeStepAppendsAndAttends(t *testing.T) {
 	kc2 := tensor.ScatterRows(b, kc, newK, slot)
 	vc2 := tensor.ScatterRows(b, vc, newV, slot)
 	tensor.Output(b, "out", tensor.Attention(b, q, kc2, vc2, tensor.AttentionOptions{
-		CurrentLengthName: "len", ScaleName: "scale",
+		Lengths: lengths, ScaleName: "scale",
 	}))
 
 	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "decode"})
@@ -106,9 +110,10 @@ func TestADecodeStepAppendsAndAttends(t *testing.T) {
 				"newv":   f32Buffer(t, d, "newv", vs),
 				"slot":   u32Buffer(t, d, "slot", []uint32{uint32(step)}),
 				"kcache": kBuf, "vcache": vBuf, "out": out,
+				"len": u32Buffer(t, d, "len", []uint32{uint32(step + 1)}),
 			},
 			Scalars: map[string]tensor.ScalarValue{
-				"len": tensor.U32(uint32(step + 1)), "scale": tensor.F32(scale),
+				"scale": tensor.F32(scale),
 			},
 		})
 		if err := f.Wait(); err != nil {
@@ -193,10 +198,11 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		})
 	}
 	scalars := func(b *tensor.Builder) {
-		tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 	}
-	opts := tensor.AttentionOptions{CurrentLengthName: "len", ScaleName: "scale"}
+	opts := func(b *tensor.Builder) tensor.AttentionOptions {
+		return tensor.AttentionOptions{Lengths: u32(b, "len", 1), ScaleName: "scale"}
+	}
 
 	for _, tc := range []struct {
 		name  string
@@ -225,7 +231,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		build: func(b *tensor.Builder) {
 			scalars(b)
 			tensor.Attention(b, f32(b, "q", 3, 8), cache(b, "k", 4, 2, 8),
-				cache(b, "v", 4, 2, 8), opts)
+				cache(b, "v", 4, 2, 8), opts(b))
 		},
 		want: "share one cache entry",
 	}, {
@@ -233,7 +239,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		build: func(b *tensor.Builder) {
 			scalars(b)
 			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 4, 2, 8),
-				cache(b, "v", 4, 2, 4), opts)
+				cache(b, "v", 4, 2, 4), opts(b))
 		},
 		want: "both",
 	}, {
@@ -241,7 +247,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		build: func(b *tensor.Builder) {
 			scalars(b)
 			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 4, 2, 8),
-				cache(b, "v", 4, 2, 8), opts)
+				cache(b, "v", 4, 2, 8), opts(b))
 		},
 		want: "a prefill needs BaseName",
 	}, {
@@ -249,7 +255,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		build: func(b *tensor.Builder) {
 			scalars(b)
 			tensor.Attention(b, f32(b, "q", 8), cache(b, "k", 4, 2, 8),
-				cache(b, "v", 4, 2, 8), opts)
+				cache(b, "v", 4, 2, 8), opts(b))
 		},
 		want: "for a prefill",
 	}, {
@@ -257,16 +263,27 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		build: func(b *tensor.Builder) {
 			scalars(b)
 			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 512, 2, 8),
-				cache(b, "v", 512, 2, 8), opts)
+				cache(b, "v", 512, 2, 8), opts(b))
 		},
 		want: "the looping variant",
 	}, {
-		name: "an undeclared length",
+		name: "no lengths tensor",
 		build: func(b *tensor.Builder) {
 			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 4, 2, 8),
-				cache(b, "v", 4, 2, 8), opts)
+				cache(b, "v", 4, 2, 8),
+				tensor.AttentionOptions{ScaleName: "scale"})
 		},
-		want: "not a declared scalar",
+		want: "Lengths is required",
+	}, {
+		name: "lengths of the wrong dtype",
+		build: func(b *tensor.Builder) {
+			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 4, 2, 8),
+				cache(b, "v", 4, 2, 8),
+				tensor.AttentionOptions{
+					Lengths: f32(b, "len", 1), ScaleName: "scale",
+				})
+		},
+		want: "Lengths is f32",
 	}, {
 		name: "a layer view",
 		build: func(b *tensor.Builder) {
@@ -302,7 +319,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 	tensor.ScatterRows(b, bad, f32(b, "r2", 1, 4), u32(b, "i2", 1))
 	tensor.LayerState(b, bad, 0)
 	tensor.ReadState(b, bad)
-	tensor.Attention(b, f32(b, "q", 4, 8), bad, bad, opts)
+	tensor.Attention(b, f32(b, "q", 4, 8), bad, bad, opts(b))
 	if b.Err().Error() != before {
 		t.Errorf("an operator on a poisoned state recorded a diagnostic:\n%v", b.Err())
 	}
@@ -320,7 +337,6 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 func TestAStaleStateVersionIsRefused(t *testing.T) {
 	rt := newRuntime(t)
 	b := rt.NewBuilder("stale")
-	tensor.Scalar(b, tensor.ScalarDesc{Name: "len", Kind: tensor.ScalarU32})
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 
 	c := tensor.NewState(b, tensor.StateDesc{
@@ -346,7 +362,9 @@ func TestAStaleStateVersionIsRefused(t *testing.T) {
 		{"through ReadState", func() { tensor.ReadState(b, c) }},
 		{"through Attention", func() {
 			tensor.Attention(b, q, c, c, tensor.AttentionOptions{
-				CurrentLengthName: "len", ScaleName: "scale",
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "attnlen", DType: accel.U32, Shape: tensor.Shape{1},
+				}), ScaleName: "scale",
 			})
 		}},
 		{"through a second write", func() { tensor.ScatterRows(b, c, rows, ids) }},

@@ -18,9 +18,6 @@ type PagedDims struct {
 	KVHeads uint32
 	HeadDim uint32
 
-	// KVLen is how many logical positions hold real tokens.
-	KVLen uint32
-
 	// Block is how many positions one physical block holds.
 	Block uint32
 
@@ -46,9 +43,12 @@ type PagedDims struct {
 //
 //accel:kernel workgroup=128
 func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
-	v []float32, pages []uint32, out []float32, scores *[128]float32, red *[128]float32) {
+	v []float32, pages []uint32, lengths []uint32, out []float32,
+	scores *[128]float32, red *[128]float32) {
 
 	h := t.GroupID().X
+	// One sequence, so its length is the first entry. See AttentionDecode.
+	kvLen := lengths[0]
 	lane := t.LocalID().X
 
 	group := d.QHeads / d.KVHeads
@@ -56,7 +56,7 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 
 	// Each lane scores one cached position, reached through its page.
 	s := float32(0)
-	if lane < d.KVLen {
+	if lane < kvLen {
 		phys := pages[lane/d.Block]*d.Block + lane%d.Block
 		acc := float32(0)
 		for i := uint32(0); i < d.HeadDim; i++ {
@@ -69,7 +69,7 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	scores[lane] = s
 
 	m := s
-	if lane >= d.KVLen {
+	if lane >= kvLen {
 		m = float32(-3.4e38)
 	}
 	red[lane] = m
@@ -89,7 +89,7 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	t.Barrier()
 
 	e := float32(0)
-	if lane < d.KVLen {
+	if lane < kvLen {
 		e = kmath.Exp(scores[lane] - best)
 	}
 	scores[lane] = e
@@ -109,7 +109,7 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	// lookup happens per position here rather than per lane.
 	if lane < d.HeadDim {
 		acc := float32(0)
-		for j := uint32(0); j < d.KVLen; j++ {
+		for j := uint32(0); j < kvLen; j++ {
 			phys := pages[j/d.Block]*d.Block + j%d.Block
 			acc = acc + scores[j]*v[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 		}
