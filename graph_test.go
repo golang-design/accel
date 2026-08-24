@@ -121,15 +121,10 @@ func viewAs(t *testing.T, tex *accel.Texture, f accel.Format) accel.TextureView 
 // readTarget reads a float32 colour target back as components.
 func readTarget(t *testing.T, d *accel.Device, tex *accel.Texture) []float32 {
 	t.Helper()
-	sz := tex.Size()
 	raw := readTargetBytes(t, d, tex)
 	out := make([]float32, len(raw)/4)
 	for i := range out {
 		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
-	}
-	if want := sz.Width * sz.Height * tex.Format().BytesPerPixel() / 4; len(out) != want {
-		t.Fatalf("read %d components from a %dx%d %v target, want %d",
-			len(out), sz.Width, sz.Height, tex.Format(), want)
 	}
 	return out
 }

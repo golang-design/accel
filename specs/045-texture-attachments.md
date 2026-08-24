@@ -298,13 +298,18 @@ The differential entries on that path skip with the reason rather than being
 deleted, the arrangement `TestATextureRoundTripKeepsCallerOrderOnMetal` already
 uses, so the comparison resumes on the first day it can.
 
-**The cost is measured and it is real.** On a Mac, `internal/metal` falls to
-85.8% and `internal/mtl` to 84.1% — both under the 90% gate — because the render
-encoder is no longer reached by any running test. The repository's coverage job
-runs on Linux, where both packages are documentation-only and contribute no
-statements, so CI does not see it. It is recorded here rather than left to be
-rediscovered: **the Metal slice is not optional cleanup, it is a gate this
-change opened.**
+**The cost is measured, and it is stated as a level rather than as a drop.**
+Running the coverage gate on a Mac after this change puts `internal/metal` at
+85.8% (680/793 statements) and `internal/mtl` at 84.1% (408/485), both under the
+90% bar, because the Metal render encoder is no longer reached by any running
+test. What those two packages measured *before* was not recorded, so no delta is
+claimed here — only that they are below the gate now and that the Metal slice is
+what brings them back.
+
+The repository's coverage job runs on Linux, where both packages are
+documentation-only and contribute no statements, so CI does not see this. That
+is why it is written down: **the Metal slice is not optional cleanup, and the
+one gate that would have argued for it does not run where anyone would notice.**
 
 ### 8.5 What is still owed
 

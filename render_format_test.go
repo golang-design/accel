@@ -298,6 +298,15 @@ func TestAnSRGBViewConvertsOnWriteAndOnRead(t *testing.T) {
 }
 
 // Every refusal an attachment's texture owns, and each names what is wrong.
+//
+// The two aspect cases depend on an ordering, and it is worth saying so where a
+// reader will see it: check V13 would refuse the same two recordings, because a
+// pipeline that agreed with a wrong-aspect attachment cannot be constructed --
+// NewRenderPipeline rejects a depth format as a colour target and the reverse.
+// The attachment check runs first and gives the better message, so these assert
+// that message. If V13 ever moved ahead of it these would still pass, on V13's
+// wording, with the check they exist for gone; the comment on checkAttachment
+// says the same thing from the other side.
 func TestTextureAttachmentRefusals(t *testing.T) {
 	const w, h = 4, 4
 	for _, c := range []struct {

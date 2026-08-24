@@ -15,9 +15,14 @@ import (
 
 // unorm8 is v/255 exactly, and the round trip is the identity.
 //
-// Exactly, because this backend is the oracle: an encode that truncated rather
-// than rounded would lose every value -- 1/255 decoded and re-encoded lands on
-// zero -- and the loss is invisible in an image and fatal in a comparison.
+// Exactly, because this backend is the oracle and a lost bit is invisible in an
+// image and fatal in a comparison.
+//
+// The round trip alone is a weaker check than it looks: truncating instead of
+// rounding survives it here, because float32(b)/255 widened to float64 and
+// multiplied by 255 lands at or above b for every b. What catches truncation is
+// the halfway case in TestUnorm8ClampsItsInput, and that is why it is written
+// out as a value rather than left to this loop.
 func TestUnorm8IsExactAndRoundTrips(t *testing.T) {
 	if got := unorm8ToFloat(0); got != 0 {
 		t.Errorf("unorm8 0 decodes to %v, want 0", got)

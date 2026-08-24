@@ -726,6 +726,20 @@ func (g *Graph) checkAttachment(p *RenderPass, what string, v TextureView, s Slo
 			t.desc.Size.Width, t.desc.Size.Height, p.desc.Width, p.desc.Height)
 	}
 
+	// The aspect check, and what it is worth given V13 exists.
+	//
+	// V13 would refuse every input this refuses, because NewRenderPipeline
+	// already rejects a depth format as a colour target and a colour format as
+	// a depth one -- so a pipeline that *agreed* with a wrong-aspect attachment
+	// cannot be constructed, and the format comparison would catch the
+	// disagreement. This runs first and says something better: "a colour
+	// attachment does not take a depth format" names the mistake, where
+	// "colour target 0 is RGBA8Unorm and attachment 0 is Depth32Float" leaves a
+	// caller to work out which of the two they got wrong.
+	//
+	// The ordering is therefore load-bearing rather than incidental. Moving
+	// V13 ahead of this would leave the check dead with its tests still
+	// passing on V13's message, which is the shape a rule ends up withdrawn in.
 	info := g.dev.FormatInfo(v.Format)
 	if info.IsDepth != (components == 1) {
 		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is viewed as %v, and %s",
