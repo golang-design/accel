@@ -4,7 +4,11 @@
 
 package accel
 
-import "fmt"
+import (
+	"fmt"
+
+	"golang.design/x/accel/internal/driver"
+)
 
 // The format table of specs/001-device-resources.md section 4.1.
 //
@@ -128,6 +132,44 @@ func (f Format) String() string {
 func (f Format) valid() bool {
 	_, ok := formatTable[f]
 	return ok
+}
+
+// plan is the format's spelling in a [driver.Plan].
+//
+// Written out rather than converted numerically, for the reason
+// [driver.Format] gives: two enumerations that happen to agree today are one
+// insertion away from shifting every value after it, and the result of a shift
+// is a plausible image rather than an error.
+//
+// An unknown format maps to [driver.FormatInvalid] rather than being guessed at.
+// A plan that carried it is refused by [driver.Plan.Validate], which is where a
+// backend learns rather than where it decodes bytes by assumption.
+func (f Format) plan() driver.Format {
+	switch f {
+	case RGBA8Unorm:
+		return driver.RGBA8Unorm
+	case RGBA8UnormSRGB:
+		return driver.RGBA8UnormSRGB
+	case BGRA8Unorm:
+		return driver.BGRA8Unorm
+	case R16Float:
+		return driver.R16Float
+	case RG16Float:
+		return driver.RG16Float
+	case RGBA16Float:
+		return driver.RGBA16Float
+	case R32Float:
+		return driver.R32Float
+	case RG32Float:
+		return driver.RG32Float
+	case RGBA32Float:
+		return driver.RGBA32Float
+	case Depth32Float:
+		return driver.Depth32Float
+	case Depth24PlusStencil8:
+		return driver.Depth24PlusStencil8
+	}
+	return driver.FormatInvalid
 }
 
 // FormatInfo reports what this device can do with a format.
