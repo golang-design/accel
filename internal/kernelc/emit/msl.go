@@ -82,6 +82,14 @@ type msl struct {
 	fn      *ir.Func
 	binding map[string]int
 
+	// stageOut and the three that follow are set while a graphics stage's body
+	// is being emitted, so a return can assemble this target's output struct.
+	// Empty for a compute kernel, which returns nothing.
+	stageOut      string
+	stageKind     ir.Stage
+	stageVaryings *ir.Type
+	stageOutputs  []*ir.Target
+
 	// atomic is every binding the body touches with an atomic, by name.
 	//
 	// It changes the parameter's *type*, not only the operation: MSL requires
@@ -141,7 +149,11 @@ func (m *msl) emit() {
 	// reason Generate emits the Go body before its import list.
 	head := m.buf
 	m.buf = bytes.Buffer{}
-	m.body(k)
+	if k.Stage == ir.StageVertex || k.Stage == ir.StageFragment {
+		m.stageEmit(k)
+	} else {
+		m.body(k)
+	}
 	body := m.buf
 	m.buf = head
 
@@ -576,6 +588,36 @@ func atomicBindings(k *ir.Func) map[string]bool {
 	return out
 }
 
+// composite spells a struct or vector literal.
+//
+// MSL constructs a vector by call syntax and a struct by braces, which is the
+// one place the two spellings differ and the reason this is not a single
+// printf. Go writes both with braces.
+func (m *msl) composite(c *ir.Composite) {
+	t := c.Type()
+	if t == nil {
+		m.fail("a composite with no type")
+		return
+	}
+	open, close := "{", "}"
+	if t.Kind == ir.Array {
+		open, close = m.dtype(t)+"(", ")"
+	} else if t.Kind == ir.Struct {
+		open = t.Name + "{"
+	} else {
+		m.fail("a composite of %v, and MSL constructs a vector or a struct", t)
+		return
+	}
+	m.printf("%s", open)
+	for i, e := range c.Elems {
+		if i > 0 {
+			m.printf(", ")
+		}
+		m.value(e)
+	}
+	m.printf("%s", close)
+}
+
 func (m *msl) dtype(t *ir.Type) string {
 	if t == nil {
 		m.fail("a binding with no element type")
@@ -600,6 +642,15 @@ func (m *msl) dtype(t *ir.Type) string {
 		return "char"
 	case ir.U8:
 		return "uchar"
+	case ir.Array:
+		// A short array of one scalar is a vector, which is what a graphics
+		// stage exchanges: accel.Vec4 is [4]float32 and MSL spells it float4.
+		// Only here and not in the compute path's bindings, where an array
+		// element would be a slice of arrays and specs/021-metal-bringup.md
+		// leaves that out of the subset.
+		if t.Elem != nil && t.Len >= 2 && t.Len <= 4 {
+			return fmt.Sprintf("%s%d", m.dtype(t.Elem), t.Len)
+		}
 	}
 	m.fail("dtype %v has no MSL spelling in the subset of specs/021-metal-bringup.md", t.Kind)
 	return "void"
@@ -676,6 +727,10 @@ func (m *msl) stmt(s ir.Stmt, depth int) {
 		m.printf("%scontinue;\n", mslIndent(depth))
 
 	case *ir.Return:
+		if m.stageOut != "" {
+			m.stageReturn(s, depth)
+			return
+		}
 		if s.Value == nil {
 			m.printf("%sreturn;\n", mslIndent(depth))
 			return
@@ -737,6 +792,9 @@ func (m *msl) value(v ir.Value) {
 
 	case *ir.Local:
 		m.printf("%s", v.Name)
+
+	case *ir.Composite:
+		m.composite(v)
 
 	case *ir.FieldSel:
 		m.value(v.X)
@@ -881,6 +939,25 @@ func (m *msl) constant(c *ir.Const) {
 
 func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 	switch v.Op {
+	// The graphics built-ins, each a parameter this target declares on every
+	// stage signature. Declared unconditionally for the reason the compute ids
+	// are: the signature stays a function of the declared inputs alone.
+	case ir.OpVertexIndex:
+		m.printf("_vid")
+		return
+	case ir.OpInstanceIndex:
+		m.printf("_iid")
+		return
+	case ir.OpFragCoord:
+		// The interpolated window position arrives in the varyings struct's
+		// own [[position]] field. MSL rejects a signature declaring the
+		// attribute twice, so there is no separate parameter to name.
+		m.printf("_in._pos")
+		return
+	case ir.OpFrontFacing:
+		m.printf("_front")
+		return
+
 	case ir.OpGlobalID:
 		m.printf("_gid")
 		return

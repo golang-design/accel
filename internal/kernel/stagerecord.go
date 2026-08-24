@@ -63,6 +63,15 @@ type Stage struct {
 	RunVertex   VertexFn
 	RunFragment FragmentFn
 
+	// MSL is the generated Metal Shading Language source, and is empty when
+	// the stage falls outside the subset that target lowers.
+	//
+	// Empty is not a fallback: a Metal render pipeline built from a stage with
+	// no MSL is an error, for the reason a Metal dispatch of a kernel with no
+	// MSL is. A backend that silently ran something else would make the two
+	// backends disagree about what a program means.
+	MSL string
+
 	// Digest identifies the authored source this was generated from.
 	Digest string
 

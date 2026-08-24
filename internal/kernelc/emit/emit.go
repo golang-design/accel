@@ -93,9 +93,10 @@ func Generate(p Package) ([]byte, error) {
 			}
 		}
 	}
-	var compute []*ir.Func
+	var compute, stages []*ir.Func
 	for _, k := range p.Kernels {
 		if k.Stage.Graphics() {
+			stages = append(stages, k)
 			e.stage(k)
 			continue
 		}
@@ -105,10 +106,8 @@ func Generate(p Package) ([]byte, error) {
 	for _, fn := range e.pending {
 		fn()
 	}
-	// The registry lists compute kernels. A stage is reached through a render
-	// pipeline, which specs/033-render-api.md owns and which does not exist, so
-	// listing one here would advertise something no caller can use.
 	e.registry(compute)
+	e.stageRegistry(stages)
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -304,6 +303,7 @@ func (e *emitter) stage(k *ir.Func) {
 		e.printf("\tDiscards: true,\n")
 	}
 	e.stageAdapter(k, lower)
+	e.mslArtifact(k)
 	e.printf("\tDigest: %q,\n", Digest(k))
 	e.printf("\tGenerator: kernelabi.Version,\n")
 	e.printf("}\n\n")
@@ -566,6 +566,28 @@ func (e *emitter) uniformRecords(k *ir.Func) {
 // keeping a list beside it. A hand-maintained list goes stale the moment the
 // package gains a kernel, and the failure is silence: the new kernel looks
 // exactly like one that passed.
+// stageRegistry emits the package's graphics stages as one slice.
+//
+// The same argument the kernel registry makes, and it earns it in the same
+// place: the test that compiles every emitted MSL on a real device reads this
+// rather than a list, because a list goes stale the moment a stage is added and
+// the failure is silence -- a stage never compiled looks exactly like one that
+// passes.
+func (e *emitter) stageRegistry(stages []*ir.Func) {
+	if len(stages) == 0 {
+		return
+	}
+	e.printf("// Stages is every graphics stage this package generated, in source order.\n")
+	e.printf("//\n")
+	e.printf("// Generated rather than written, so that a pass over the whole corpus cannot\n")
+	e.printf("// silently miss a stage somebody added.\n")
+	e.printf("var Stages = []*accel.Stage{\n")
+	for _, k := range stages {
+		e.printf("\t&%sStage,\n", k.Name)
+	}
+	e.printf("}\n\n")
+}
+
 func (e *emitter) registry(kernels []*ir.Func) {
 	if len(kernels) == 0 {
 		return
