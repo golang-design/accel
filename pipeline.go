@@ -327,11 +327,17 @@ func publicDType(d kernel.DType) DType {
 
 // indirectImpl records a dispatch whose workgroup count the device supplies.
 //
-// The count buffer is declared read, and read in the transfer stage rather than
-// the compute one: the indirect fetch happens before the dispatch does, so a
-// node that writes it must be ordered before this one by the fetch rather than
-// by the kernel. Getting that wrong would be a hazard the barrier plan does not
-// see.
+// The count buffer is declared read, and read in the indirect-fetch stage
+// rather than the compute one: the fetch happens before the dispatch does, so a
+// node that writes the count must be ordered before this one by the fetch
+// rather than by the kernel. Getting that wrong would be a hazard the barrier
+// plan does not see.
+//
+// This is what per-access stages are for. The comment here said "the transfer
+// stage" and claimed a distinction the code could not make, because a node
+// carried one stage for all its accesses and this node's is compute -- so the
+// count was classified as a compute read, which is the case the paragraph above
+// exists to rule out.
 func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, us []UniformValue,
 	countBuf BufferView, max WorkgroupCount) NodeID {
 
@@ -380,6 +386,7 @@ func (r *Recorder) indirectImpl(p *ComputePipeline, bs []Binding, us []UniformVa
 	if !ok {
 		return r.node(NodeDispatchIndirect, p.label, nil, nil)
 	}
+	countAccess.stage = stageIndirectFetch
 
 	accesses, uniforms, ok := r.bindingAccesses(p, bs, us)
 	if !ok {

@@ -47,8 +47,10 @@ type recNode struct {
 	// derived from it must not depend on iteration order.
 	accesses []access
 
-	// stage is the part of the pipeline this node runs in, which is what a
-	// barrier names on each side.
+	// stage is the union of its accesses' stages. It is what an ordering point
+	// that concerns the whole node -- an aliasing handover, which hands over
+	// bytes rather than a range one access names -- puts on its far side. A
+	// hazard on one access names that access's stage instead.
 	stage stage
 
 	// pipeline, count and uniforms are a dispatch node's payload.
@@ -74,9 +76,24 @@ type access struct {
 	off  int // bytes from the start of the buffer, or of the slot's bound window
 	size int
 	mode Access
+
+	// stage is where in the pipeline this range is touched. Zero means the
+	// declaring call did not say, and [Recorder.node] fills in the node kind's
+	// default. A call that knows better -- a render pass, an indirect fetch --
+	// sets it, because the node kind cannot tell an attachment write from a
+	// vertex fetch.
+	stage stage
 }
 
 func (a access) writes() bool { return a.mode == AccessWrite || a.mode == AccessReadWrite }
+
+// sameRange reports whether two declarations name the same range in the same
+// mode, ignoring the stage. It is what decides whether a second declaration is
+// a duplicate or a new access: two roles for one range are one access whose
+// stage mask names both.
+func (a access) sameRange(b access) bool {
+	return a.res == b.res && a.off == b.off && a.size == b.size && a.mode == b.mode
+}
 
 // resourceRef names either a resource known now or one supplied before
 // submission. Exactly one field is set, and the two constructors that build one
@@ -188,17 +205,34 @@ func (r *Recorder) fail(format string, args ...any) {
 // another transient could be placed over those bytes.
 func (r *Recorder) node(kind NodeKind, label string, accesses []access, data []byte) NodeID {
 	id := NodeID(len(r.state.nodes))
-	r.state.nodes = append(r.state.nodes, recNode{
+	// An access that did not name a stage gets the node kind's default. The
+	// node's own stage is then the union, so a node with no accesses at all --
+	// every failed recording call returns one -- still names the stage it would
+	// have run in rather than "none".
+	node := recNode{
 		id: id, kind: kind, label: label, accesses: accesses, data: data,
 		stage: stageFor(kind),
-	})
+	}
+	if len(accesses) > 0 {
+		node.stage = 0
+		for i := range accesses {
+			if accesses[i].stage == 0 {
+				accesses[i].stage = stageFor(kind)
+			}
+			node.stage |= accesses[i].stage
+		}
+	}
+	r.state.nodes = append(r.state.nodes, node)
 	for _, a := range accesses {
 		r.touch(id, a)
 	}
 	return id
 }
 
-// stageFor is which part of the pipeline a node kind runs in.
+// stageFor is the stage an access gets when the call that declared it did not
+// say. It is a property of the node kind, so it is only ever right for a node
+// whose accesses are all in one stage: a copy, a host write, a dispatch's
+// bindings. A render pass declares its own, and so does an indirect fetch.
 func stageFor(k NodeKind) stage {
 	switch k {
 	case NodeDispatch, NodeDispatchIndirect:

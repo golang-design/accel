@@ -522,7 +522,7 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 	// DontCare is a write only, and DontCare is what makes the
 	// read-after-write edge to its previous writer disappear.
 	var accesses []access
-	declare := func(v BufferView, slot Slot, load LoadOp, what string, elems int) {
+	declare := func(v BufferView, slot Slot, load LoadOp, what string, elems int, st stage) {
 		mode := AccessWrite
 		if load == LoadKeep {
 			mode = AccessReadWrite
@@ -541,6 +541,7 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 			p.failed = true
 			return
 		}
+		a.stage = st
 		accesses = append(accesses, a)
 	}
 	for i, c := range desc.Color {
@@ -551,7 +552,11 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 			p.failed = true
 			continue
 		}
-		declare(c.View, c.Slot, c.Load, what, desc.Width*desc.Height*4)
+		// Colour is written by the blend and output stage, not by the fragment
+		// shader: the shader returns a value and the attachment write happens
+		// after it, which is the pair of stages Vulkan separates and the reason
+		// a barrier against a colour attachment names the output stage.
+		declare(c.View, c.Slot, c.Load, what, desc.Width*desc.Height*4, stageColourOutput)
 	}
 	if dep := desc.Depth; dep != nil {
 		if (dep.View.Buffer == nil) == (dep.Slot == 0) {
@@ -560,7 +565,14 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 				either(dep.View.Buffer != nil, dep.Slot != 0))
 			p.failed = true
 		} else {
-			declare(dep.View, dep.Slot, dep.Load, "depth", desc.Width*desc.Height)
+			// Both fragment-test stages, and that is not hedging. Where the
+			// depth test runs depends on whether the fragment shader can
+			// discard or write depth, which the pass does not know here; a
+			// barrier naming only one of the two is wrong for half the
+			// pipelines a caller can build, and naming both is what every
+			// Vulkan depth barrier does.
+			declare(dep.View, dep.Slot, dep.Load, "depth", desc.Width*desc.Height,
+				stageEarlyDepth|stageLateDepth)
 		}
 	}
 
@@ -803,7 +815,7 @@ func (p *RenderPass) DrawIndirect(args BufferView, bound Draw) {
 		first: bound.FirstVertex, firstInst: bound.FirstInstance,
 		indirect: true, indirectArgs: args,
 	}
-	d.indirectAccess = p.declareRead(args, "indirect arguments")
+	d.indirectAccess = p.declareRead(args, "indirect arguments", stageIndirectFetch)
 	p.record(d)
 }
 
@@ -874,38 +886,51 @@ func (p *RenderPass) record(d drawCall) {
 	for i, v := range d.vertexBuf {
 		d.vertexAccess[i] = -1
 		if v.Buffer != nil && i < declared {
-			d.vertexAccess[i] = p.declareRead(v, fmt.Sprintf("vertex buffer %d", i))
+			d.vertexAccess[i] = p.declareRead(v, fmt.Sprintf("vertex buffer %d", i), stageVertexInput)
 		}
 	}
 	d.indexAccess = -1
 	if d.indexed {
-		d.indexAccess = p.declareRead(d.indexBuf, "index buffer")
+		d.indexAccess = p.declareRead(d.indexBuf, "index buffer", stageVertexInput)
 	}
 
 	p.draws = append(p.draws, d)
 }
 
-// declareRead adds one read to the pass's node, once per distinct view.
+// declareRead adds one read to the pass's node, once per distinct view, in the
+// stage named.
 //
 // Once, because several draws sharing a vertex buffer are one read of it: a
 // duplicate would inflate the hazard count a caller reads, and the builder
 // would compute the same barrier twice.
+//
+// The stage is not part of what makes a read distinct. One range fetched in two
+// roles -- an argument buffer a draw also fetches attributes from -- is still
+// one read, and the mask is what carries both roles. Splitting on stage instead
+// would restore exactly the duplicate this exists to prevent, and would shift
+// the returned index, which build consumes positionally.
+//
 // It returns the index into the node's access list, which is how build turns
 // the same view into an operand -- through the same path an attachment takes, so
 // a slot or a transient works here for the reason it works there.
-func (p *RenderPass) declareRead(v BufferView, what string) int {
+func (p *RenderPass) declareRead(v BufferView, what string, st stage) int {
 	a, ok := p.r.declare("RenderPass "+p.desc.Label+" "+what, v, AccessRead)
 	if !ok {
 		p.failed = true
 		return -1
 	}
+	a.stage = st
 	n := p.r.state.nodes[p.id]
 	for i, have := range n.accesses {
-		if have == a {
+		if have.sameRange(a) {
+			n.accesses[i].stage |= st
+			n.stage |= st
+			p.r.state.nodes[p.id] = n
 			return i
 		}
 	}
 	n.accesses = append(n.accesses, a)
+	n.stage |= st
 	p.r.state.nodes[p.id] = n
 	// Touched here for the same reason [Recorder.node] touches the accesses it
 	// is given: this access arrives after the node exists, so nothing else
