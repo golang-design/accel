@@ -597,7 +597,8 @@ const (
 
 func subCarrier(op ir.Opcode) carrier {
 	switch op {
-	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32, ir.OpBroadcastFirstF32:
+	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32, ir.OpBroadcastFirstF32,
+		ir.OpSubgroupInclusiveAddF32, ir.OpSubgroupExclusiveAddF32:
 		return carrierF32
 	case ir.OpElect, ir.OpSubgroupAny, ir.OpSubgroupAll:
 		return carrierBool
@@ -640,6 +641,10 @@ func subOpName(op ir.Opcode) (string, bool) {
 		return "kernelabi.SubShuffleUpF32", true
 	case ir.OpShuffleDownF32:
 		return "kernelabi.SubShuffleDownF32", true
+	case ir.OpSubgroupInclusiveAddF32:
+		return "kernelabi.SubInclusiveAddF32", true
+	case ir.OpSubgroupExclusiveAddF32:
+		return "kernelabi.SubExclusiveAddF32", true
 	}
 	return "", false
 }

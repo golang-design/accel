@@ -135,7 +135,7 @@ becomes a wrong answer on hardware nobody in this project owns.
 | `reduce_sum` against [008](008-numerics.md)'s budget | built |
 | arm64 and amd64 numeric probes | built |
 | `Broadcast` from a chosen lane, and the four shuffles | built 2026-08-24 — see §6.4 |
-| Subgroup scans | **not built** |
+| The inclusive and exclusive add scans | built 2026-08-24 — see §6.5 |
 
 ### 6.1 Three bugs, each a wrong answer that compiled
 
@@ -171,9 +171,6 @@ exercise.
   sentinel is a value a kernel could compute.
 
 ### 6.3 What is deferred, and why
-
-**Subgroup scans.** Deferred with the shuffles and landing after them; the
-active-set machinery §6.4 built is what they need.
 
 **Subgroup operations in divergent control flow.** [002](002-compute-model.md)
 §5.1 says whether lanes reconverge after divergence is implementation-defined,
@@ -241,6 +238,35 @@ to an ordinary barrier — a suspension that combined nothing and resumed readin
 the lane's own contribution, which is §6.1's third bug wearing a different hat.
 `TestEverySubgroupRendezvousIsRegistered` walks the opcode range instead, so an
 operation added later is covered before anyone remembers to add it to a list.
+
+### 6.5 The scans — 2026-08-24
+
+`SubgroupInclusiveAddF32` and `SubgroupExclusiveAddF32` are built on both
+backends, over the active lanes in ascending lane order.
+
+**Only the add scans, and only over f32.** [002](002-compute-model.md) §5.2's
+scan rows name `Add` alone, and the reduction row's other operators — `Mul`,
+`Min`, `Max`, `And`, `Or`, `Xor`, and the i32 and u32 dtypes — are not built for
+either the reduction or the scan. Each is a table entry and a spelling per
+backend rather than a design question, and none has a consumer:
+[010](010-kernel-corpus.md)'s kernels reduce f32 sums and take f32 maxima, which
+is what shipped. They are named here so the gap is a decision rather than an
+oversight.
+
+**The exclusive scan's identity is the one place an identity is the answer.**
+The lowest active lane sums an *empty* prefix, so it receives `+0` whatever it
+holds — while a reduction over one active lane receives that lane's value, sign
+and all. Both rows are tested with a negative zero, because that is the only
+input on which the two rules produce different bits.
+
+**One bug, and it was the range check.** `combineOne` routed a rendezvous to the
+shuffle machinery with `op >= SubBroadcastF32`, which read correctly until the
+scans were added after the shuffles in the same enumeration — at which point
+every scan became a lane-addressed read of lane 0, reported an inactive-lane
+error, and returned a NaN. It is a smaller cousin of the bug
+`TestEverySubgroupRendezvousIsRegistered` exists to stop, and the fix is the
+same shape: a predicate that names its members rather than a bound that happens
+to sit at the end of a list.
 
 ## 7. What it does not build
 

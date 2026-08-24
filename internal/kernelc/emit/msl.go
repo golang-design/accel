@@ -1180,6 +1180,14 @@ var mslSubgroup = map[ir.Opcode]string{
 	ir.OpBroadcastFirstF32: "simd_broadcast_first",
 	ir.OpSubgroupAny:       "simd_any",
 	ir.OpSubgroupAll:       "simd_all",
+
+	// The scans. Metal accumulates in whatever order the hardware scans in,
+	// which is not the oracle's ascending lane order, so two backends agree
+	// exactly only where every ordering of the sum is exact. That is a property
+	// of a kernel's inputs rather than of this spelling, and it is why the
+	// differential's case says so.
+	ir.OpSubgroupInclusiveAddF32: "simd_prefix_inclusive_sum",
+	ir.OpSubgroupExclusiveAddF32: "simd_prefix_exclusive_sum",
 }
 
 // mslLaneRead is each lane-addressed read's Metal spelling.

@@ -54,9 +54,9 @@
 //
 // On both backends: buffers, textures, memory pools, uploads and readbacks,
 // compute dispatch both direct and indirect, command graphs, cooperative
-// kernels with workgroup-shared memory and barriers, atomics, and subgroup
-// reductions, broadcasts and shuffles. The two agree exactly where the kernel's
-// arithmetic is exact, and
+// kernels with workgroup-shared memory and barriers, atomics, and the subgroup
+// operations: reductions, votes, broadcasts, shuffles and prefix scans. The two
+// agree exactly where the kernel's arithmetic is exact, and
 // within a stated ceiling where it reaches a bounded primitive such as exp.
 //
 // Uniform blocks are encoded by a generated std140 codec, so you supply a
@@ -71,8 +71,6 @@
 // # What does not
 //
 // The API is under construction and will change.
-//
-// Subgroup scans are unbuilt. The shuffles are built on both backends.
 //
 // Graphics runs on the CPU backend and on Metal, and the two are compared pixel
 // by pixel: render pipelines, passes, vertex and index buffers, by-value stage

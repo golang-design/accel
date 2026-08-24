@@ -185,6 +185,27 @@ func diffCases() []diffCase {
 				return defaultSeed(b, i)
 			},
 		},
+		// The scans, compared exactly — and the exactness is a property of the
+		// inputs rather than of the two implementations agreeing on an order.
+		// The oracle scans in ascending lane order and Metal's
+		// simd_prefix_inclusive_sum does not say what order it uses, so a
+		// prefix sum that rounded would be free to differ. defaultSeed produces
+		// quarters in [-1.5, 1.5], so every prefix over 32 lanes is a multiple
+		// of 1/4 below 48 in magnitude: exact in f32 whatever order it is
+		// summed in, which makes a difference of one bit a difference in what
+		// was summed.
+		{kernel: &testkernels.SubgroupScanKernel, counts: []int{64, 64, 64},
+			groups: accel.WorkgroupCount{X: 1}},
+		{
+			kernel: &testkernels.SubgroupScanFallbackKernel, counts: []int{64, 64, 64, 1},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 3 {
+					return float32(subgroupWidth)
+				}
+				return defaultSeed(b, i)
+			},
+		},
 		{
 			kernel: &testkernels.NormalizeKernel, counts: []int{64, 64, 64},
 			groups: accel.WorkgroupCount{X: 2},

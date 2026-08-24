@@ -179,3 +179,88 @@ func SubgroupShuffleMixFallback(t accel.Thread, in []float32, out []float32, wid
 		out[gid] = r
 	}
 }
+
+// SubgroupScan writes both prefix sums of its subgroup: the inclusive one, and
+// the exclusive one beside it.
+//
+// Both, in one kernel, because the pair is where the interesting rule lives.
+// The two differ only at the lane itself, so a lowering that emitted one for
+// the other produces a result that is right for lane 0 of an exclusive scan and
+// wrong everywhere else — visible here as two buffers that disagree in a way no
+// single-scan kernel would show.
+//
+//accel:kernel workgroup=64
+//accel:requires subgroup_arithmetic
+func SubgroupScan(t accel.Thread, in []float32, incl []float32, excl []float32) {
+	gid := t.GlobalID().X
+
+	v := float32(0)
+	if gid < uint32(len(in)) {
+		v = in[gid]
+	}
+
+	inclusive := t.SubgroupInclusiveAddF32(v)
+	exclusive := t.SubgroupExclusiveAddF32(v)
+
+	if gid < uint32(len(incl)) {
+		incl[gid] = inclusive
+	}
+	if gid < uint32(len(excl)) {
+		excl[gid] = exclusive
+	}
+}
+
+// SubgroupScanFallback computes the same two prefix sums with no subgroup
+// operation, by summing the buffer.
+//
+// # It sums in the order the scan is specified to
+//
+// Ascending lane, with the first term taken rather than added to a zero
+// accumulator. f32 addition is not associative, so a fallback that summed in
+// any other order would disagree in the last bit and the disagreement would be
+// the test's rather than the kernel's — and taking the first term rather than
+// adding it is what keeps a negative zero negative.
+//
+//accel:kernel workgroup=64
+func SubgroupScanFallback(t accel.Thread, in []float32, incl []float32, excl []float32, width []uint32) {
+	gid := t.GlobalID().X
+	lid := t.LocalID().X
+	w := width[0]
+	lane := lid % w
+	base := gid - lane
+	n := uint32(len(in))
+
+	inclusive := float32(0)
+	for l := uint32(0); l <= lane; l++ {
+		x := float32(0)
+		if base+l < n {
+			x = in[base+l]
+		}
+		if l == 0 {
+			inclusive = x
+		} else {
+			inclusive = inclusive + x
+		}
+	}
+
+	// The lowest lane's exclusive prefix is empty, and an empty sum is +0.
+	exclusive := float32(0)
+	for l := uint32(0); l < lane; l++ {
+		x := float32(0)
+		if base+l < n {
+			x = in[base+l]
+		}
+		if l == 0 {
+			exclusive = x
+		} else {
+			exclusive = exclusive + x
+		}
+	}
+
+	if gid < uint32(len(incl)) {
+		incl[gid] = inclusive
+	}
+	if gid < uint32(len(excl)) {
+		excl[gid] = exclusive
+	}
+}

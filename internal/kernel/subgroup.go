@@ -59,7 +59,28 @@ const (
 	SubShuffleXorF32
 	SubShuffleUpF32
 	SubShuffleDownF32
+
+	// The scans, which combine a prefix of the active lanes rather than all of
+	// them.
+	SubInclusiveAddF32
+	SubExclusiveAddF32
 )
+
+// isLaneRead reports the operations that read the value held by a lane their
+// second operand names.
+//
+// A switch rather than a comparison against the first of them. The set is a
+// contiguous run today and the constants after it are the scans, so a range
+// check reads correctly and routes a scan into the shuffle machinery the moment
+// one is added -- which is what happened, and what this shape stops happening
+// again.
+func (o SubgroupOp) isLaneRead() bool {
+	switch o {
+	case SubBroadcastF32, SubShuffleF32, SubShuffleXorF32, SubShuffleUpF32, SubShuffleDownF32:
+		return true
+	}
+	return false
+}
 
 func (o SubgroupOp) String() string {
 	switch o {
@@ -89,6 +110,10 @@ func (o SubgroupOp) String() string {
 		return "ShuffleUpF32"
 	case SubShuffleDownF32:
 		return "ShuffleDownF32"
+	case SubInclusiveAddF32:
+		return "SubgroupInclusiveAddF32"
+	case SubExclusiveAddF32:
+		return "SubgroupExclusiveAddF32"
 	}
 	return "barrier"
 }
@@ -270,6 +295,32 @@ func (t Thread) SubgroupShuffleXorF32(v float32, mask uint32) float32 { return v
 // subgroup is undefined, which for these two is every lane at one end.
 func (t Thread) SubgroupShuffleUpF32(v float32, delta uint32) float32   { return v }
 func (t Thread) SubgroupShuffleDownF32(v float32, delta uint32) float32 { return v }
+
+// SubgroupInclusiveAddF32 gives lane i the sum of the active lanes up to and
+// including itself, and SubgroupExclusiveAddF32 the sum of the active lanes
+// below it.
+//
+// # Inactive lanes are skipped, not counted as zero
+//
+// The two differ, and specs/002-compute-model.md section 5.2 rule 4 is the
+// difference: over active lanes {0, 2, 3} the exclusive scan gives lane 3 the
+// sum of lanes 0 and 2, rather than a sum of lanes 0, 1 and 2 in which lane 1
+// contributed a zero it does not hold.
+//
+// # The order is ascending lane, and it is part of the contract
+//
+// f32 addition is not associative, so a scan's result depends on the order it
+// accumulates in. Ascending active lane is what this oracle does and what a
+// fallback has to do to be comparable; a backend that scans in a tree order
+// differs in the last bit, which is what specs/008-numerics.md section 7's
+// budget is for.
+//
+// The lowest active lane's exclusive result is the identity, +0. That is the
+// one row where an identity is the right answer, and it does not contradict the
+// reduction's rule that a single active lane reads back its own value: the
+// exclusive scan of the lowest lane sums nothing at all.
+func (t Thread) SubgroupInclusiveAddF32(v float32) float32 { return v }
+func (t Thread) SubgroupExclusiveAddF32(v float32) float32 { return 0 }
 
 // Ballot reports each lane's predicate as a bit. An inactive lane's bit is
 // zero, so Ballot(true).Count() is the *active* count.

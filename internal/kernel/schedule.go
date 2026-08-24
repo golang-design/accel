@@ -153,9 +153,12 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 // exactly the configuration a sweep across sizes 1, 4, 32 and 64 is written to
 // distinguish.
 //
-// # Why the reduction order is fixed
+// # Why the reduction and scan order is fixed
 //
-// Lane order, ascending. f32 addition is not associative, so a reduction's
+// Lane order, ascending, over the *active* lanes: a scan skips an inactive lane
+// rather than adding an identity element in its place, which is what makes an
+// exclusive scan over active lanes {0, 2, 3} give lane 3 the sum of lanes 0 and
+// 2. f32 addition is not associative, so a reduction's
 // result depends on the order, and an oracle whose answer moved between runs
 // would be an oracle no test could be written against. Real hardware may use a
 // different order and produce a different last bit; that is what
@@ -210,7 +213,7 @@ func combineSubgroups(kernel string, threads []Thread, frames []Frame, diag bool
 
 // combineOne applies one operation across one subgroup's suspended lanes.
 func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, lanes []int, diag bool) Diagnostics {
-	if op >= SubBroadcastF32 {
+	if op.isLaneRead() {
 		return laneRead(kernel, threads, frames, op, lanes, diag)
 	}
 	switch op {
@@ -249,6 +252,29 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 
 	case SubBroadcastFirstF32:
 		broadcastF32(frames, lanes, frames[lanes[0]].SubF32)
+
+	case SubInclusiveAddF32:
+		// The first active lane reads back its own value rather than zero plus
+		// it, for the reason SubAddF32 does: a scan whose first step is 0 + v
+		// turns a negative zero into a positive one.
+		acc := frames[lanes[0]].SubF32
+		for _, i := range lanes[1:] {
+			acc += frames[i].SubF32
+			frames[i].SubF32 = acc
+		}
+
+	case SubExclusiveAddF32:
+		// The lowest active lane sums nothing, and nothing is +0. That is the
+		// one row in specs/002-compute-model.md section 5.2 where an identity
+		// is the answer, and it does not contradict the rule above: this lane's
+		// prefix is empty rather than one element long.
+		acc := frames[lanes[0]].SubF32
+		frames[lanes[0]].SubF32 = 0
+		for _, i := range lanes[1:] {
+			v := frames[i].SubF32
+			frames[i].SubF32 = acc
+			acc += v
+		}
 
 	case SubElect:
 		// True for exactly one lane, and accel pins *which*: the lowest

@@ -56,7 +56,7 @@ means it exists and should not.
 | ~~`Requirements.SharedBytes`~~ **done** | [016](016-graph-execution.md) | V11 was stated and could not fire |
 | ~~Timestamps~~ **done** | [003](003-command-graph.md) §9 | whole-submission device time; per-node still needs the planner to stop merging boundaries |
 | ~~Subgroup shuffles~~ **done** | [020](020-cooperative-atomics.md) §6.4 | `Broadcast`, `Shuffle`, `ShuffleXor`, `ShuffleUp`, `ShuffleDown`, on both backends |
-| Subgroup scans | [020](020-cooperative-atomics.md) | `SubgroupInclusiveAddF32` and `SubgroupExclusiveAddF32` are specified and uncallable |
+| ~~Subgroup scans~~ **done** | [020](020-cooperative-atomics.md) §6.5 | `SubgroupInclusiveAddF32` and `SubgroupExclusiveAddF32`, on both backends |
 | Line and point rasterization | [035](035-cpu-rasterizer.md) §10 | needs a measurement first — see below |
 | Texture attachments | [033](033-render-api.md) | attachments are buffer views "at this milestone" |
 | Texel fetch in a stage | [032](032-stage-abi.md) §5 | also unblocks 033's feedback rejection |

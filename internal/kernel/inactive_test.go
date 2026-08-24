@@ -282,3 +282,113 @@ func TestAShuffleMovesBits(t *testing.T) {
 		}
 	}
 }
+
+// Rule 4: a scan skips an inactive lane rather than treating it as an identity
+// element, and each lane's prefix is over the active lanes below it.
+//
+// The values are powers of two, so a sum names its terms: over active lanes
+// {0, 2, 3} lane 3's exclusive scan is 5, which is lanes 0 and 2 and could be
+// no other subset. That is what fixes *which* lanes each prefix covers.
+//
+// It is not, on its own, a witness for skip against identity-fill — see
+// [TestAScanSkippingALaneIsVisibleOnlyInTheSign] for that, and for why the
+// distinction needs a signed zero to be observable at all.
+func TestAScanSkipsInactiveLanesRatherThanZeroingThem(t *testing.T) {
+	// 1, 2, 4, 8 by lane, so a sum names its terms.
+	give := func(lane uint32) (float32, bool, uint32) { return float32(int(1) << lane), false, 0 }
+	active := []uint32{0, 2, 3}
+
+	excl, err := runPartial(t, 4, active, kernel.SubExclusiveAddF32, give, true)
+	if err != nil {
+		t.Fatalf("exclusive: %v", err)
+	}
+	for _, c := range []struct {
+		lane uint32
+		want float32
+		why  string
+	}{
+		{0, 0, "the lowest active lane sums nothing, and nothing is the identity"},
+		{2, 1, "lane 0 only: lane 1 is not active, so it contributes no 2"},
+		{3, 5, "lanes 0 and 2, which is 1+4 and not 1+2+4"},
+	} {
+		if got := excl[c.lane].f; got != c.want {
+			t.Errorf("lane %d's exclusive scan is %v, want %v: %s", c.lane, got, c.want, c.why)
+		}
+	}
+
+	incl, err := runPartial(t, 4, active, kernel.SubInclusiveAddF32, give, true)
+	if err != nil {
+		t.Fatalf("inclusive: %v", err)
+	}
+	for _, c := range []struct {
+		lane uint32
+		want float32
+	}{{0, 1}, {2, 5}, {3, 13}} {
+		if got := incl[c.lane].f; got != c.want {
+			t.Errorf("lane %d's inclusive scan is %v, want %v", c.lane, got, c.want)
+		}
+	}
+}
+
+// The lowest active lane's exclusive scan is the identity, and the lowest
+// active lane's inclusive scan is its own value.
+//
+// The same witness as the reduction's, read twice, because the two rows of
+// specs/002-compute-model.md section 5.2 disagree on purpose: an inclusive scan
+// over one lane is that lane's value, so a negative zero survives it, and an
+// exclusive scan over one lane is the sum of nothing, which is +0 whatever that
+// lane holds. An implementation that seeded both with the same accumulator gets
+// one of them wrong.
+func TestTheEndsOfAScanDifferOnNegativeZero(t *testing.T) {
+	negZero := float32(math.Copysign(0, -1))
+	give := func(lane uint32) (float32, bool, uint32) { return negZero, false, 0 }
+
+	incl, err := runPartial(t, 4, []uint32{1, 2}, kernel.SubInclusiveAddF32, give, true)
+	if err != nil {
+		t.Fatalf("inclusive: %v", err)
+	}
+	if bits := math.Float32bits(incl[1].f); bits != math.Float32bits(negZero) {
+		t.Errorf("the lowest active lane's inclusive scan is 0x%08X, want 0x%08X: it is a "+
+			"prefix of one element, which is that lane's value and not zero plus it",
+			bits, math.Float32bits(negZero))
+	}
+
+	excl, err := runPartial(t, 4, []uint32{1, 2}, kernel.SubExclusiveAddF32, give, true)
+	if err != nil {
+		t.Fatalf("exclusive: %v", err)
+	}
+	if bits := math.Float32bits(excl[1].f); bits != 0 {
+		t.Errorf("the lowest active lane's exclusive scan is 0x%08X, want +0: its prefix is "+
+			"empty, so it receives the identity rather than anything it holds", bits)
+	}
+}
+
+// And the difference between skipping a lane and adding an identity for it is
+// visible only in the sign of a zero.
+//
+// This is worth stating rather than assuming, because it bounds what the rule
+// above can prove: `x + 0` is exactly `x` for every finite x, so an
+// implementation that summed an identity element for each inactive lane would
+// produce the same number as one that skipped it — on every input but one.
+// `-0 + 0` is `+0`. So the witness is a prefix whose whole content is a
+// negative zero, and the mistake it catches is a sign that flips, which changes
+// the sign of a later division and nothing else about the answer.
+func TestAScanSkippingALaneIsVisibleOnlyInTheSign(t *testing.T) {
+	negZero := float32(math.Copysign(0, -1))
+	give := func(lane uint32) (float32, bool, uint32) {
+		if lane == 0 {
+			return negZero, false, 0
+		}
+		return 1, false, 0
+	}
+	// Lane 1 sits out, so lane 2's exclusive prefix is lane 0 alone.
+	got, err := runPartial(t, 4, []uint32{0, 2}, kernel.SubExclusiveAddF32, give, true)
+	if err != nil {
+		t.Fatalf("exclusive: %v", err)
+	}
+	if bits := math.Float32bits(got[2].f); bits != math.Float32bits(negZero) {
+		t.Errorf("lane 2's exclusive scan is 0x%08X, want 0x%08X: its prefix is lane 0 "+
+			"alone, and adding an identity element for the lane that is not there turns "+
+			"that lane's negative zero positive", bits, math.Float32bits(negZero))
+	}
+}

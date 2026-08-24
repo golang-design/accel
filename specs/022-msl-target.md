@@ -180,8 +180,9 @@ it would otherwise pass every ceiling there is.
 ## 5. Still outstanding
 
 - `simd_ballot` returns a `simd_vote` rather than an integer, so `Ballot` is
-  refused by name; shuffles and scans are deferred on both backends by
-  [020](020-cooperative-atomics.md).
+  refused by name. The shuffles and the prefix sums are **built** — 2026-08-24,
+  [020](020-cooperative-atomics.md) §6.4 and §6.5 — and this device now reports
+  `SubgroupShuffle`, which it did not while nothing emitted them.
 - `atomic<float>` is a Metal *version* capability rather than a spelling, so an
   f32 atomic is refused until the capability table can make the family query.
 - An **array** member of a uniform block: std140 gives it a 16-byte stride

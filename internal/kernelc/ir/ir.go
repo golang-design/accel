@@ -490,6 +490,14 @@ const (
 	OpShuffleUpF32
 	OpShuffleDownF32
 
+	// The scans. A scan is a reduction over a *prefix* of the active lanes, so
+	// it skips an inactive lane rather than adding an identity element in its
+	// place -- specs/002-compute-model.md section 5.2 rule 4, where an
+	// exclusive add-scan over active lanes {0, 2, 3} gives lane 3 the sum of
+	// lanes 0 and 2.
+	OpSubgroupInclusiveAddF32
+	OpSubgroupExclusiveAddF32
+
 	// The graphics stage built-ins of specs/032-stage-abi.md. They sit after the
 	// subgroup range on purpose: IsSubgroup is a bounds check over that range,
 	// and inserting into it would silently make a vertex index a subgroup
@@ -512,7 +520,7 @@ const (
 // the range is one that infers no capability and is lowered as an ordinary
 // call. It sits in its own const block because assigning inside the iota block
 // above would silence the iota for everything after it.
-const opLastSubgroup = OpShuffleDownF32
+const opLastSubgroup = OpSubgroupExclusiveAddF32
 
 var opcodeNames = [...]string{
 	OpInvalid:                  "invalid",
@@ -573,6 +581,8 @@ var opcodeNames = [...]string{
 	OpShuffleXorF32:            "ShuffleXorF32",
 	OpShuffleUpF32:             "ShuffleUpF32",
 	OpShuffleDownF32:           "ShuffleDownF32",
+	OpSubgroupInclusiveAddF32:  "SubgroupInclusiveAddF32",
+	OpSubgroupExclusiveAddF32:  "SubgroupExclusiveAddF32",
 }
 
 func (o Opcode) String() string {

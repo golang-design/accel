@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 3
+const ABIVersion = 4
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -353,6 +353,21 @@ var table = map[key]*Intrinsic{
 	{kernelPkg, "Thread", "SubgroupShuffleDownF32"}: {
 		Authored: "accel.Thread.SubgroupShuffleDownF32", Op: ir.OpShuffleDownF32, Params: 2,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
+	},
+
+	// The scans. Bounded rather than exact, for the reason the reduction is:
+	// the result is a sum of f32 values and f32 addition is not associative, so
+	// two backends that accumulate in different orders differ in the last bit.
+	// specs/002-compute-model.md section 5.2 fixes the *order* -- ascending
+	// active lane -- which is what makes a comparison against a fallback
+	// meaningful at all.
+	{kernelPkg, "Thread", "SubgroupInclusiveAddF32"}: {
+		Authored: "accel.Thread.SubgroupInclusiveAddF32", Op: ir.OpSubgroupInclusiveAddF32,
+		Params: 1, Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupExclusiveAddF32"}: {
+		Authored: "accel.Thread.SubgroupExclusiveAddF32", Op: ir.OpSubgroupExclusiveAddF32,
+		Params: 1, Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
 	},
 
 	// Recognized and not available. Being in the table is what makes the

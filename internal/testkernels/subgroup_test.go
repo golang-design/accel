@@ -384,3 +384,127 @@ func TestTheShuffleKernelDeclaresItsCapabilities(t *testing.T) {
 		t.Errorf("the fallback requires capabilities %d and should require none", got)
 	}
 }
+
+// The scans agree with a fallback that sums the buffer, at every width in the
+// sweep.
+//
+// Exactly, and the exactness is earned rather than assumed: spec 002 section
+// 5.2 fixes the order at ascending active lane and the fallback sums in that
+// order, so the two compute the same expression term by term. A fallback that
+// summed downwards would differ in the last bit on inputs that round, and the
+// difference would be the test's rather than the kernel's.
+func TestTheScanSweepAgreesWithTheFallback(t *testing.T) {
+	const group = 64
+	in := make([]float32, group)
+	for i := range in {
+		// Values that round: a scan over these is not exact, which is the point
+		// — two implementations that agree here agree on the order as well as
+		// on the terms.
+		in[i] = float32(i)*0.1 - 3.3
+	}
+
+	for _, width := range []uint32{1, 4, 32, 64} {
+		t.Run(fmt.Sprintf("size=%d", width), func(t *testing.T) {
+			incl := make([]float32, group)
+			excl := make([]float32, group)
+			err := kernel.DispatchCooperativeWith(&testkernels.SubgroupScanKernel,
+				accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, incl, excl}},
+				kernel.Options{SubgroupSize: width, Diagnostics: true})
+			if err != nil {
+				t.Fatalf("scan path: %v", err)
+			}
+
+			wantIncl := make([]float32, group)
+			wantExcl := make([]float32, group)
+			err = kernel.Dispatch(&testkernels.SubgroupScanFallbackKernel, accel.ID3{X: 1},
+				kernelabi.Args{Slices: []any{in, wantIncl, wantExcl, []uint32{width}}})
+			if err != nil {
+				t.Fatalf("fallback: %v", err)
+			}
+
+			for i := range incl {
+				if math.Float32bits(incl[i]) != math.Float32bits(wantIncl[i]) {
+					t.Fatalf("inclusive element %d: scan %v, fallback %v",
+						i, incl[i], wantIncl[i])
+				}
+				if math.Float32bits(excl[i]) != math.Float32bits(wantExcl[i]) {
+					t.Fatalf("exclusive element %d: scan %v, fallback %v",
+						i, excl[i], wantExcl[i])
+				}
+			}
+			// And the two scans are not the same function, or the comparison
+			// above would hold for a lowering that emitted one for both.
+			if width > 1 && incl[1] == excl[1] {
+				t.Fatalf("the inclusive and exclusive scans agree at lane 1 (%v), and they "+
+					"differ by that lane's own value", incl[1])
+			}
+		})
+	}
+}
+
+// The authored scan kernel agrees with its generated lowering.
+//
+// At width 1, where the authored bodies are correct rather than stubs: a
+// subgroup of one has an inclusive scan of the lane's own value and an
+// exclusive scan of nothing, which is what `return v` and `return 0` compute.
+// The two rows of spec 002 section 5.2 disagree there, so a stub that returned
+// the argument for both would fail this.
+func TestAuthoredScanKernel(t *testing.T) {
+	const group = 64
+	in := make([]float32, group)
+	for i := range in {
+		in[i] = float32(i)*0.5 - 3
+	}
+
+	authoredIncl := make([]float32, group)
+	authoredExcl := make([]float32, group)
+	size := kernel.ID3{X: group, Y: 1, Z: 1}
+	for l := range uint32(group) {
+		th := kernel.NewThreadWithSubgroup(kernel.ID3{X: l}, kernel.ID3{X: l},
+			kernel.ID3{}, size, kernel.ID3{X: 1}, 1)
+		testkernels.SubgroupScan(th, in, authoredIncl, authoredExcl)
+	}
+
+	incl := make([]float32, group)
+	excl := make([]float32, group)
+	err := kernel.DispatchCooperativeWith(&testkernels.SubgroupScanKernel,
+		accel.ID3{X: 1}, kernelabi.Args{Slices: []any{in, incl, excl}},
+		kernel.Options{SubgroupSize: 1, Diagnostics: true})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for i := range incl {
+		if math.Float32bits(authoredIncl[i]) != math.Float32bits(incl[i]) {
+			t.Fatalf("inclusive element %d: authored %v, generated %v",
+				i, authoredIncl[i], incl[i])
+		}
+		if math.Float32bits(authoredExcl[i]) != math.Float32bits(excl[i]) {
+			t.Fatalf("exclusive element %d: authored %v, generated %v",
+				i, authoredExcl[i], excl[i])
+		}
+	}
+	if incl[7] != in[7] || excl[7] != 0 {
+		t.Fatalf("at a subgroup of one, element 7's inclusive scan is its own value and its "+
+			"exclusive scan is the identity: got %v and %v, want %v and 0",
+			incl[7], excl[7], in[7])
+	}
+}
+
+// The scan kernel requires the arithmetic capability and nothing else.
+//
+// Nothing else matters as much as the requirement itself: a kernel that
+// declared more than it uses is unavailable on a device that could run it, and
+// the symptom is a device being skipped, which nobody notices.
+func TestTheScanKernelDeclaresItsCapabilities(t *testing.T) {
+	caps := accel.Capability(testkernels.SubgroupScanKernel.Caps)
+	if caps&accel.CapSubgroupArithmetic == 0 {
+		t.Error("the record does not require CapSubgroupArithmetic, and the kernel sums " +
+			"across lanes")
+	}
+	if extra := caps &^ accel.CapSubgroupArithmetic; extra != 0 {
+		t.Errorf("the record also requires %v, which the body does not use", extra)
+	}
+	if got := testkernels.SubgroupScanFallbackKernel.Caps; got != 0 {
+		t.Errorf("the fallback requires capabilities %d and should require none", got)
+	}
+}

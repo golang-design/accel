@@ -247,9 +247,9 @@ and a different one elsewhere. See
 Compute works end to end on two backends, the CPU backend and Metal: pooled
 memory, buffers and typed views; kernels written in a subset of Go; recorded
 command graphs with inferred barriers and transient aliasing; cooperative
-kernels with shared memory and barriers; a portable tiled GEMM; and the tensor
-layer above it, with quantized weights, sampling, a paged KV cache, and prefill
-and decode attention. Subgroup scans are specified and not built.
+kernels with shared memory, barriers, atomics and the subgroup operations; a
+portable tiled GEMM; and the tensor layer above it, with quantized weights,
+sampling, a paged KV cache, and prefill and decode attention.
 
 Graphics runs a frame. A render pipeline, a pass node with load and store
 actions, vertex and index buffers, per-vertex and per-instance attributes,
