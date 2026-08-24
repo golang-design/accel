@@ -1313,7 +1313,20 @@ $$
 
 The generalizable rule from the first and third: **a guard written as an
 exemption is a guard that will be wrong once, silently, at the moment something
-new is added.** Both were exemption-shaped — "every op but a dispatch", "the
+new is added.**
+
+**A fourth, about the gates rather than the code.** `recNode.pass` — the field
+every render-pass commit depends on — was never staged. Eight commits went out
+and none of them compiled from a clean checkout; every local gate had run
+against a working tree that carried the file. CI caught it at the first job that
+checked out what was pushed.
+
+Staging explicit paths is required here ([CONTRIBUTING](../CONTRIBUTING.md), and
+`git add -A` is what it exists to prevent), so the miss is a cost of the rule
+rather than a violation of it. The guard is cheap and belongs before a push:
+`git status --short` must be empty, or what is about to be pushed is not what
+was tested. Running the gates in a fresh clone is the stronger form and is worth
+it before a batch. Both were exemption-shaped — "every op but a dispatch", "the
 colour attachments" — and both failed on the first case outside the shape.
 
 **What a stage still cannot do, and where it is refused.** Neither vertex
