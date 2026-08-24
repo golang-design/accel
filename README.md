@@ -29,13 +29,19 @@ it on whichever backend the machine has — today the CPU or Metal — with
 > and a release note. `specs/036-documentation.md` §5 is the record, symbol by
 > symbol, including the few marked provisional and the event that moves each.
 >
-> **Graphics works and is changing shape.** It runs on the CPU backend and on
-> Metal, compared pixel by pixel, and presents to a window you create; accel
-> does not create windows. But a review of that surface found its attachment
-> model has to change in a way that is not additive — attachments become
-> textures — so code written against today's shape will need rewriting.
-> `specs/045-texture-attachments.md` is the change. If you are starting
-> something on the graphics half, that is the thing to read first.
+> **Graphics works and is younger.** It runs on the CPU backend and on Metal,
+> compared pixel by pixel — render passes, depth, blending, indexed and indirect
+> draws, and attachment formats — and it presents to a window you create; accel
+> does not create windows.
+>
+> The one change that was going to break callers has landed: an attachment names
+> a texture view rather than a buffer view, so it can carry a format, a mip
+> level and an array layer. What is left is **additive**: binding a texture to a
+> render pass so a stage can fetch from it, mip levels above one, and rejecting
+> a subresource used as an attachment and read by a stage at once.
+> `specs/045-texture-attachments.md` §8 is the ledger. Treat the graphics API as
+> settling rather than settled: it is outside the freeze record below, and a
+> name here may still move where one in the compute half will not.
 >
 > Vulkan, D3D12, OpenGL and WebGPU are designed and not started. The
 > [status table](#what-works-today) says which is which.
@@ -91,7 +97,9 @@ import (
 )
 
 func main() {
-	dev, err := accel.OpenCPU(accel.CPUOptions{})
+	// The best device this machine has, falling back to the CPU backend
+	// when there is no GPU. The same program runs either way.
+	dev, err := accel.OpenBest(accel.Policy{AllowCPU: true})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -140,16 +148,22 @@ func main() {
 }
 ```
 
-To run the same thing on a GPU, swap `OpenCPU` for
-`accel.OpenBest(accel.Policy{})`. Nothing else changes.
+That program runs on a GPU where there is one and on the CPU backend where there
+is not, and the kernel is the same either way.
+
+`AllowCPU` is what makes the fallback legal, and leaving it out is the other
+useful default: `accel.OpenBest(accel.Policy{})` **fails** on a machine with no
+GPU rather than quietly running on the CPU. Use that when a CPU run would be a
+misconfiguration you want to hear about — a benchmark, or a deployment that is
+supposed to have a device. A device you asked for is never silently
+substituted.
+
+To pin the CPU backend for a test, `accel.OpenCPU(accel.CPUOptions{})` opens it
+directly.
 
 The [tutorials](docs/tutorial/) take this apart one idea at a time: what the
 kernel subset allows, where memory comes from, how to record work once and
 replay it, and how to run the same code on a device you do not own.
-
-On a machine with no GPU that returns an error rather than falling back:
-`OpenBest` never selects the CPU backend unless you set `Policy.AllowCPU`. A
-device you asked for is never silently substituted.
 
 ## Two layers, four packages
 
@@ -208,6 +222,8 @@ position.
 | Run a whole sampling policy on device | yes — temperature, softmax, top-k, top-p and the draw compose into one submission, so a decode step reads back a token rather than a vocabulary of logits |
 | Page a KV cache, and batch several sequences in one step | yes |
 | Draw triangles | yes, on both backends: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending, indexed and indirect draws |
+| Render into a chosen pixel format | yes — an attachment names a texture view, so it carries its own format, and sRGB converts on write and on read |
+| Read a texture from a shader stage | **not yet.** The kernel side is built — a stage compiles an integer texel fetch on both backends — and no render pass can bind a texture to it, so a caller cannot reach it. There will be no sampler: a filtered one cannot be reproduced exactly by the CPU reference, so a stage that wants filtering builds it from fetches |
 | Render a frame loop with acquire and present | yes, headless — the pixels come back in a buffer |
 | Present to a window | yes on Metal, into a `CAMetalLayer` you own; accel does not create windows |
 | Use Vulkan, D3D12, OpenGL or WebGPU | not yet |
