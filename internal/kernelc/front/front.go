@@ -812,6 +812,23 @@ func (c *checker) uniformParam(k *ir.Func, index int, id *ast.Ident, obj types.O
 		return nil, false
 	}
 
+	// The codec is generated into the package being compiled, so the type has
+	// to be declared there. A type from another package would emit a codec
+	// spelling the type unqualified -- code that does not compile -- and
+	// qualifying it instead would put a second codec for one type in every
+	// package that used it, which is two layouts that disagree the moment the
+	// type changes.
+	if named, ok := types.Unalias(obj.Type()).(*types.Named); ok {
+		if o := named.Obj(); o.Pkg() != nil && o.Pkg() != c.pkg.Types {
+			c.errorf(id.Pos(), "kernel %s: parameter %q is %s, which is declared in "+
+				"another package, and a by-value parameter's type is declared in the "+
+				"package being compiled: its std140 codec is generated beside it, and "+
+				"one generated here would be a second layout for the same type",
+				k.Name, id.Name, obj.Type())
+			return nil, false
+		}
+	}
+
 	layout, err := std140.Of(name, obj.Type())
 	if err != nil {
 		c.errorf(id.Pos(), "kernel %s: %s", k.Name, err)
