@@ -501,13 +501,18 @@ two actually runs the test depends on whether the pipeline's fragment stage can
 discard or write depth, which is not known where the attachment is declared, and
 a barrier naming only one is wrong for half the pipelines a caller can build.
 
-**Widening this changed no inferred edge, no hazard count and no barrier count**,
-which is worth recording because [042](042-surface-completion.md) §5.3 predicted
-it would change all three. Edge inference reads only the access mode and the
-range; barrier *existence* is decided by the same two. The stage decides only
-what a barrier names on each side, so the whole change is confined to `src` and
-`dst`. The prediction was the reason to do the work before a Vulkan backend
-exists, and it was wrong about the risk.
+**Widening this cannot change an inferred edge, a hazard count or a barrier
+count**, and that is a property of the algorithms rather than a measurement:
+edge inference reads the access mode and the range and never the stage, and
+barrier *existence* is decided by the same two. The stage decides only what a
+barrier names on each side, so the whole change is confined to `src` and `dst`.
+A corpus spanning copies, transients, dispatches, render passes under all three
+load actions, and slots confirms it — byte-identical plans across the change.
+
+This is recorded because [042](042-surface-completion.md) §5.3 predicted the
+opposite, and that prediction was the reason the work was scheduled before a
+Vulkan backend exists. The schedule was right and the reason was not: what
+deferring would have cost is a wrong barrier to debug during a bring-up.
 
 **`AtomicRMW` is one bit, not read plus write.** An atomic is both, but a run of
 atomics on the same range from consecutive nodes needs no barrier between them on

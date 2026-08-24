@@ -95,6 +95,10 @@ func stageTestPipeline(t *testing.T, d *Device) *RenderPipeline {
 }
 
 // stageOf returns the stage recorded for the access naming v on node id.
+//
+// It matches on the buffer, so it assumes each test gives one buffer one range.
+// Two disjoint ranges of one buffer are two legitimate accesses and this would
+// call that an error; a test that needs them should match on the range instead.
 func stageOf(t *testing.T, r *Recorder, id NodeID, v BufferView) stage {
 	t.Helper()
 	var found []stage
@@ -106,6 +110,22 @@ func stageOf(t *testing.T, r *Recorder, id NodeID, v BufferView) stage {
 	if len(found) != 1 {
 		t.Fatalf("node %d declares %d accesses of %q, want exactly one",
 			int(id), len(found), v.Buffer.desc.Label)
+	}
+	return found[0]
+}
+
+// stageOfSlot is stageOf for an access that names a slot rather than a buffer.
+func stageOfSlot(t *testing.T, r *Recorder, id NodeID, s Slot) stage {
+	t.Helper()
+	var found []stage
+	for _, a := range r.state.nodes[id].accesses {
+		if a.res.slot == s {
+			found = append(found, a.stage)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("node %d declares %d accesses of slot %d, want exactly one",
+			int(id), len(found), int(s))
 	}
 	return found[0]
 }
@@ -168,6 +188,43 @@ func TestEveryRenderPassAccessNamesItsOwnStage(t *testing.T) {
 		if got := stageOf(t, r, p.Node(), c.view); got != c.want {
 			t.Errorf("%s is in the %v stage, want %v: %s", c.what, got, c.want, c.why)
 		}
+	}
+}
+
+// An attachment bound through a slot carries the same stage a bound one does.
+//
+// The two go through different declaring calls -- slotAccess against the
+// descriptor, declare against the view -- and a slot is its own identity for
+// hazard inference, so the path is genuinely separate rather than a wrapper.
+// It is also the path a swapchain image takes: specs/034-surface-present.md
+// makes the presented image a slot, so this is the first colour attachment a
+// Vulkan backend would ever barrier.
+func TestASlotBoundAttachmentCarriesTheAttachmentStage(t *testing.T) {
+	const w, h = 4, 4
+	d := stageTestDevice(t)
+
+	r := d.NewRecorder()
+	colour := r.Slot(SlotDescriptor{
+		Name: "colour", Kind: BindingStorageBuffer,
+		DType: F32, Access: AccessWrite, MinCount: w * h * 4,
+	})
+	depth := r.Slot(SlotDescriptor{
+		Name: "depth", Kind: BindingStorageBuffer,
+		DType: F32, Access: AccessWrite, MinCount: w * h,
+	})
+	p := r.RenderPass(RenderPassDescriptor{
+		Color: []ColorAttachment{{Slot: colour, Load: LoadClear}},
+		Depth: &DepthAttachment{Slot: depth, Load: LoadClear, Clear: 1},
+		Width: w, Height: h, Label: "slot attachments",
+	})
+
+	if got := stageOfSlot(t, r, p.Node(), colour); got != stageColourOutput {
+		t.Errorf("a slot-bound colour attachment is in the %v stage, want %v",
+			got, stageColourOutput)
+	}
+	if want := stageEarlyDepth | stageLateDepth; stageOfSlot(t, r, p.Node(), depth) != want {
+		t.Errorf("a slot-bound depth attachment is in the %v stage, want %v",
+			stageOfSlot(t, r, p.Node(), depth), want)
 	}
 }
 
