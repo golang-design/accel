@@ -6,9 +6,11 @@ package testkernels_test
 
 import (
 	"fmt"
-	"golang.design/x/accel/kernelabi"
 	"math"
+	"math/rand/v2"
 	"testing"
+
+	"golang.design/x/accel/kernelabi"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/kernel"
@@ -591,9 +593,10 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
 		size := kernel.ID3{X: 128, Y: 1, Z: 1}
 		for g := range groups.X {
-			var scores, red [128]float32
+			var scores, red, acc [128]float32
 			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
-				testkernels.AttentionPrefill(th, dims, q, k, v, lengths, authored, &scores, &red)
+				testkernels.AttentionPrefill(th, dims, q, k, v, lengths, authored,
+					&scores, &red, &acc)
 			})
 		}
 
@@ -628,4 +631,72 @@ func flatThread(i, n int) kernel.Thread {
 		kernel.ID3{X: wg, Y: 1, Z: 1},
 		kernel.ID3{X: uint32((n + wg - 1) / wg), Y: 1, Z: 1},
 	)
+}
+
+// A prefill whose sequence is longer than one workgroup, which the 128-position
+// cap made unreachable (accel issue 8): a prefill is how a prompt enters the
+// cache, so the cap bounded the prompt as well as the cache.
+//
+// It also exercises the one thing this kernel does that the decode kernels do
+// not: the loop bound is the causal limit, so the first query position scores
+// one block and the last scores every block the sequence needs. A bound that
+// ignored the limit would still be correct here -- the mask would discard the
+// extra work -- so the test that it is *tighter* is the suspension count and
+// the reasoning in the kernel, not this. This tests the answer.
+func TestPrefillScoresASequenceLongerThanAWorkgroup(t *testing.T) {
+	const qHeads, kvHeads, headDim = 4, 2, 32
+	for _, qSeq := range []int{129, 300} {
+		t.Run(fmt.Sprint(qSeq), func(t *testing.T) {
+			const base = 0
+			kvLen := qSeq
+			scale := 1 / math.Sqrt(headDim)
+			dims := testkernels.PrefillDims{
+				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+				QSeq: uint32(qSeq), Base: base, Scale: float32(scale),
+			}
+			rng := rand.New(rand.NewPCG(3, 12))
+			fill := func(n int) []float32 {
+				s := make([]float32, n)
+				for i := range s {
+					s[i] = float32(rng.NormFloat64())
+				}
+				return s
+			}
+			q := fill(qSeq * qHeads * headDim)
+			k := fill(kvLen * kvHeads * headDim)
+			v := fill(kvLen * kvHeads * headDim)
+			lengths := []uint32{uint32(kvLen)}
+
+			got := make([]float32, len(q))
+			if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel,
+				accel.ID3{X: uint32(qSeq * qHeads)},
+				kernelabi.Args{
+					Slices: []any{q, k, v, lengths, got}, Uniforms: []any{dims},
+				}); err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+
+			want := prefillReference(q, k, v, qHeads, kvHeads, headDim, qSeq, kvLen,
+				base, scale)
+
+			// The bound derived in
+			// TestAttentionDecodeScoresACacheLongerThanAWorkgroup, evaluated at
+			// the longest row: the last query position sees every cached one.
+			const u = 1.0 / (1 << 24)
+			n := float64(kvLen+headDim+1) + math.Ceil(float64(kvLen)/AttnBlockT)
+			gamma := n * u / (1 - n*u)
+			maxV := 0.0
+			for _, x := range v {
+				maxV = math.Max(maxV, math.Abs(float64(x)))
+			}
+			tol := maxV * gamma
+
+			for i := range got {
+				if diff := math.Abs(float64(got[i]) - want[i]); diff > tol {
+					t.Fatalf("element %d is %v, want %v: off by %g, tolerance %g",
+						i, got[i], want[i], diff, tol)
+				}
+			}
+		})
+	}
 }

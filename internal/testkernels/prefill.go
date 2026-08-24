@@ -49,14 +49,23 @@ type PrefillDims struct {
 // memory cannot be split across workgroups. Each workgroup owns one output row
 // and reduces over the cache within it.
 //
-// The grid is therefore QSeq*QHeads workgroups, and the cache length is bounded
-// by the shared array exactly as it is for decode. A longer one needs the
-// chunked variant with an online softmax, which is post-v0.
+// The grid is therefore QSeq*QHeads workgroups, and the cache is walked a block
+// at a time with a running softmax, exactly as it is for decode.
+//
+// # This kernel's loop bound is the causal limit, not the cache
+//
+// A query at position base+s may see positions 0..base+s and no others, so
+// there is nothing past that limit for the loop to reach. The limit is
+// workgroup-uniform -- Base is a field of the uniform struct and s comes from
+// the group id -- so it can bound a loop holding barriers where kvLen, being a
+// load, cannot. The first query of a prefill therefore scores one block and the
+// last scores as many as the sequence needs, which is the triangle the causal
+// mask describes rather than a square with half of it discarded.
 //
 //accel:kernel workgroup=128
 func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v []float32,
-	lengths []uint32, out []float32, scores *[128]float32, red *[128]float32) {
-
+	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32,
+	acc *[AttnBlock]float32) {
 	group := t.GroupID().X
 	// A prefill is one sequence, so its cache length is the first entry. A
 	// binding rather than a uniform so that there is exactly one way to say
@@ -77,68 +86,101 @@ func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v
 	// bound and nothing else: a lane past it contributes nothing.
 	limit := d.Base + s
 
-	score := float32(0)
-	visible := lane <= limit && lane < kvLen
-	if visible {
-		acc := float32(0)
-		for i := uint32(0); i < d.HeadDim; i++ {
-			qi := q[(s*d.QHeads+h)*d.HeadDim+i]
-			ki := k[lane*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
-			acc = acc + qi*ki
-		}
-		score = acc * d.Scale
+	// How far the loop walks. The causal limit, or the cache's extent if the
+	// limit reaches past it -- both workgroup-uniform, which is what lets the
+	// loop hold barriers. See the note above.
+	capacity := uint32(len(k)) / (d.KVHeads * d.HeadDim)
+	bound := limit + 1
+	if bound > capacity {
+		bound = capacity
 	}
-	scores[lane] = score
 
-	// The maximum, over the visible lanes only. A masked lane contributes a
-	// value that cannot win: for a *maximum* the identity is negative infinity,
-	// and the smallest finite f32 serves, because a real score below it would
-	// already have overflowed.
-	m := score
-	if !visible {
-		m = float32(-3.4e38)
-	}
-	red[lane] = m
-	t.Barrier()
-
-	for stride := uint32(64); stride > 0; stride /= 2 {
-		if lane < stride {
-			a := red[lane]
-			b := red[lane+stride]
-			if b > a {
-				red[lane] = b
-			}
-		}
-		t.Barrier()
-	}
-	best := red[0]
-	t.Barrier()
-
-	// The shifted exponentials. A masked lane contributes zero, which for a sum
-	// is the identity and is therefore correct where it was not for the maximum.
-	e := float32(0)
-	if visible {
-		e = kmath.Exp(scores[lane] - best)
-	}
-	scores[lane] = e
-	red[lane] = e
-	t.Barrier()
-
-	for stride := uint32(64); stride > 0; stride /= 2 {
-		if lane < stride {
-			red[lane] = red[lane] + red[lane+stride]
-		}
-		t.Barrier()
-	}
-	total := red[0]
-
-	// The weighted sum of V, parallel over the head's dimensions: every lane
-	// can read every probability now, and each owns one output element.
+	// The running softmax, carried across blocks. See [AttentionDecode] for the
+	// recurrence and for why one block reproduces the single-pass form exactly.
+	m := float32(-3.4e38)
+	l := float32(0)
 	if lane < d.HeadDim {
-		acc := float32(0)
-		for j := uint32(0); j < kvLen; j++ {
-			acc = acc + scores[j]*v[j*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+		acc[lane] = 0
+	}
+	t.Barrier()
+
+	for base := uint32(0); base < bound; base += AttnBlock {
+		pos := base + lane
+
+		// A masked lane contributes a value that cannot win the maximum: the
+		// identity is negative infinity and the smallest finite f32 serves,
+		// because a real score below it would already have overflowed.
+		score := float32(-3.4e38)
+		visible := pos <= limit && pos < kvLen
+		if visible {
+			dot := float32(0)
+			for i := uint32(0); i < d.HeadDim; i++ {
+				qi := q[(s*d.QHeads+h)*d.HeadDim+i]
+				ki := k[pos*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+				dot = dot + qi*ki
+			}
+			score = dot * d.Scale
 		}
-		out[(s*d.QHeads+h)*d.HeadDim+lane] = acc / total
+
+		// The shared arrays are loop-carried, so this pass's writes have to be
+		// ordered against the previous pass's reads of them. See
+		// [AttentionDecode].
+		t.Barrier()
+		scores[lane] = score
+		red[lane] = score
+		t.Barrier()
+
+		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
+			if lane < stride {
+				red[lane] = kmath.Max(red[lane], red[lane+stride])
+			}
+			t.Barrier()
+		}
+		blockMax := red[0]
+
+		next := kmath.Max(m, blockMax)
+		alpha := kmath.Exp(m - next)
+
+		// A masked lane contributes zero, which for a sum is the identity and
+		// is therefore correct where it was not for the maximum.
+		e := float32(0)
+		if visible {
+			e = kmath.Exp(score - next)
+		}
+		t.Barrier()
+		scores[lane] = e
+		red[lane] = e
+		t.Barrier()
+
+		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
+			if lane < stride {
+				red[lane] = red[lane] + red[lane+stride]
+			}
+			t.Barrier()
+		}
+		l = alpha*l + red[0]
+		m = next
+
+		// The weighted sum of V, parallel over the head's dimensions: every
+		// lane can read every probability now, and each owns one output
+		// element.
+		//
+		// The bound on j is a range check and not a mask. A position past the
+		// cache already has a probability of zero, so dropping it changes no
+		// arithmetic -- it reads V past its end, which the CPU backend reports
+		// as an out-of-range index and a device would not report at all.
+		if lane < d.HeadDim {
+			a := alpha * acc[lane]
+			for j := uint32(0); j < AttnBlock; j++ {
+				if base+j <= limit && base+j < kvLen {
+					a = a + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+				}
+			}
+			acc[lane] = a
+		}
+	}
+
+	if lane < d.HeadDim {
+		out[(s*d.QHeads+h)*d.HeadDim+lane] = acc[lane] / l
 	}
 }

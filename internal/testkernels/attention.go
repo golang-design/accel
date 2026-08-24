@@ -191,6 +191,11 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 		// every lane can read all of them and each owns one output element.
 		// Each lane owns acc[lane] across every pass, so the accumulator needs
 		// no barrier of its own.
+		//
+		// The bound on j is a range check and not a mask. A position past the
+		// cache already has a probability of zero, so dropping it changes no
+		// arithmetic -- it reads V past its end, which the CPU backend reports
+		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
 			a := alpha * acc[lane]
 			for j := uint32(0); j < AttnBlock; j++ {
@@ -331,6 +336,11 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 		// every lane can read all of them and each owns one output element.
 		// Each lane owns acc[lane] across every pass, so the accumulator needs
 		// no barrier of its own.
+		//
+		// The bound on j is a range check and not a mask. A position past the
+		// cache already has a probability of zero, so dropping it changes no
+		// arithmetic -- it reads V past its end, which the CPU backend reports
+		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
 			a := alpha * acc[lane]
 			for j := uint32(0); j < AttnBlock; j++ {

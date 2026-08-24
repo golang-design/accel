@@ -123,6 +123,11 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 		// The weighted sum of V, parallel over the head's dimensions. Each lane
 		// owns one output element and walks the block's positions, so the page
 		// lookup happens per position here rather than per lane.
+		//
+		// The bound on j is a range check and not a mask. A position past the
+		// cache already has a probability of zero, so dropping it changes no
+		// arithmetic -- it reads V past its end, which the CPU backend reports
+		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
 			a := alpha * acc[lane]
 			for j := uint32(0); j < AttnBlock; j++ {

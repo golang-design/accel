@@ -1005,7 +1005,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 1:
 			f.pc = 2
-			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "attention.go:263:2"}
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "attention.go:268:2"}
 			return true
 		case 2:
 			f.base8 = uint32(0)
@@ -1029,7 +1029,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 4:
 			f.pc = 5
-			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "attention.go:289:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "attention.go:294:3"}
 			return true
 		case 5:
 			tr.Write(0, int(f.lane2))
@@ -1040,7 +1040,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 6:
 			f.pc = 7
-			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: "attention.go:292:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: "attention.go:297:3"}
 			return true
 		case 7:
 			f.stride14 = uint32(64)
@@ -1055,7 +1055,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 9:
 			f.pc = 10
-			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "attention.go:298:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "attention.go:303:4"}
 			return true
 		case 10:
 			f.stride14 = (f.stride14 / uint32(2))
@@ -1080,7 +1080,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 13:
 			f.pc = 14
-			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "attention.go:315:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "attention.go:320:3"}
 			return true
 		case 14:
 			tr.Write(0, int(f.lane2))
@@ -1091,7 +1091,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 15:
 			f.pc = 16
-			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: "attention.go:318:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: "attention.go:323:3"}
 			return true
 		case 16:
 			f.stride19 = uint32(64)
@@ -1106,7 +1106,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 18:
 			f.pc = 19
-			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "attention.go:324:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "attention.go:329:4"}
 			return true
 		case 19:
 			f.stride19 = (f.stride19 / uint32(2))
@@ -4261,30 +4261,34 @@ kernel void AttentionDecodePaged(
 // is a superset of the right answer and therefore correct, and a liveness
 // analysis can shrink it later without changing anything a caller sees.
 type attentionPrefillFrame struct {
-	pc       int
-	group0   uint32
-	kvLen1   uint32
-	lane2    uint32
-	s3       uint32
-	h4       uint32
-	kvHead5  uint32
-	limit6   uint32
-	score7   float32
-	visible8 bool
-	acc9     float32
-	i10      uint32
-	qi11     float32
-	ki12     float32
-	m13      float32
-	stride14 uint32
-	a15      float32
-	b16      float32
-	best17   float32
-	e18      float32
-	stride19 uint32
-	total20  float32
-	acc21    float32
-	j22      uint32
+	pc         int
+	group0     uint32
+	kvLen1     uint32
+	lane2      uint32
+	s3         uint32
+	h4         uint32
+	kvHead5    uint32
+	limit6     uint32
+	capacity7  uint32
+	bound8     uint32
+	m9         float32
+	l10        float32
+	base11     uint32
+	pos12      uint32
+	score13    float32
+	visible14  bool
+	dot15      float32
+	i16        uint32
+	qi17       float32
+	ki18       float32
+	stride19   uint32
+	blockMax20 float32
+	next21     float32
+	alpha22    float32
+	e23        float32
+	stride24   uint32
+	a25        float32
+	j26        uint32
 }
 
 // attentionPrefillCoop runs one invocation of AttentionPrefill to its next suspension point.
@@ -4293,7 +4297,7 @@ type attentionPrefillFrame struct {
 // the scheduler stops calling it. Each case is one state; the assignment to
 // pc before continuing is the jump, which is explicit because a loop's states
 // do not run in numeric order.
-func attentionPrefillCoop(t accel.Thread, d PrefillDims, q []float32, k []float32, v []float32, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, f *attentionPrefillFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+func attentionPrefillCoop(t accel.Thread, d PrefillDims, q []float32, k []float32, v []float32, lengths []uint32, out []float32, scores *[128]float32, red *[128]float32, acc *[128]float32, f *attentionPrefillFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
 	for {
 		switch f.pc {
 		case 0:
@@ -4304,124 +4308,169 @@ func attentionPrefillCoop(t accel.Thread, d PrefillDims, q []float32, k []float3
 			f.h4 = (f.group0 % d.QHeads)
 			f.kvHead5 = (f.h4 / (d.QHeads / d.KVHeads))
 			f.limit6 = (d.Base + f.s3)
-			f.score7 = float32(0)
-			f.visible8 = ((f.lane2 <= f.limit6) && (f.lane2 < f.kvLen1))
-			if f.visible8 {
-				f.acc9 = float32(0)
-				{
-					f.i10 = uint32(0)
-					for ; f.i10 < d.HeadDim; f.i10 = (f.i10 + uint32(1)) {
-						f.qi11 = q[((((f.s3 * d.QHeads) + f.h4) * d.HeadDim) + f.i10)]
-						f.ki12 = k[((((f.lane2 * d.KVHeads) * d.HeadDim) + (f.kvHead5 * d.HeadDim)) + f.i10)]
-						f.acc9 = float32(f.acc9 + float32(f.qi11*f.ki12))
-					}
-				}
-				f.score7 = float32(f.acc9 * d.Scale)
+			f.capacity7 = (uint32(int32(len(k))) / (d.KVHeads * d.HeadDim))
+			f.bound8 = (f.limit6 + uint32(1))
+			if f.bound8 > f.capacity7 {
+				f.bound8 = f.capacity7
 			}
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.score7
-			f.m13 = f.score7
-			if !f.visible8 {
-				f.m13 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.m9 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.l10 = float32(0)
+			if f.lane2 < d.HeadDim {
+				tr.Write(2, int(f.lane2))
+				acc[f.lane2] = float32(0)
 			}
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.m13
 			f.pc = 1
 			continue
 		case 1:
 			f.pc = 2
-			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "prefill.go:102:2"}
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "prefill.go:105:2"}
 			return true
 		case 2:
-			f.stride14 = uint32(64)
-			f.pc = 6
+			f.base11 = uint32(0)
+			f.pc = 23
 			continue
 		case 3:
-			if f.lane2 < f.stride14 {
-				f.a15 = red[tr.ReadAt(1, int(f.lane2))]
-				f.b16 = red[tr.ReadAt(1, int((f.lane2+f.stride14)))]
-				if f.b16 > f.a15 {
-					tr.Write(1, int(f.lane2))
-					red[f.lane2] = f.b16
+			f.pos12 = (f.base11 + f.lane2)
+			f.score13 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.visible14 = ((f.pos12 <= f.limit6) && (f.pos12 < f.kvLen1))
+			if f.visible14 {
+				f.dot15 = float32(0)
+				{
+					f.i16 = uint32(0)
+					for ; f.i16 < d.HeadDim; f.i16 = (f.i16 + uint32(1)) {
+						f.qi17 = q[((((f.s3 * d.QHeads) + f.h4) * d.HeadDim) + f.i16)]
+						f.ki18 = k[((((f.pos12 * d.KVHeads) * d.HeadDim) + (f.kvHead5 * d.HeadDim)) + f.i16)]
+						f.dot15 = float32(f.dot15 + float32(f.qi17*f.ki18))
+					}
 				}
+				f.score13 = float32(f.dot15 * d.Scale)
 			}
 			f.pc = 4
 			continue
 		case 4:
 			f.pc = 5
-			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "prefill.go:112:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "prefill.go:128:3"}
 			return true
 		case 5:
-			f.stride14 = (f.stride14 / uint32(2))
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.score13
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.score13
 			f.pc = 6
 			continue
 		case 6:
-			if f.stride14 > uint32(0) {
-				f.pc = 3
-				continue
-			}
 			f.pc = 7
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: "prefill.go:131:3"}
+			return true
 		case 7:
-			f.best17 = red[tr.ReadAt(1, int(int32(0)))]
-			f.pc = 8
+			f.stride19 = uint32(64)
+			f.pc = 11
 			continue
 		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "prefill.go:115:2"}
-			return true
-		case 9:
-			f.e18 = float32(0)
-			if f.visible8 {
-				f.e18 = kmath.Exp(float32(scores[tr.ReadAt(0, int(f.lane2))] - f.best17))
-			}
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e18
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e18
-			f.pc = 10
-			continue
-		case 10:
-			f.pc = 11
-			frame.Barrier = kernelabi.BarrierID{Index: 10, Pos: "prefill.go:125:2"}
-			return true
-		case 11:
-			f.stride19 = uint32(64)
-			f.pc = 15
-			continue
-		case 12:
 			if f.lane2 < f.stride19 {
 				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride19)))])
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride19)))])
+			}
+			f.pc = 9
+			continue
+		case 9:
+			f.pc = 10
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "prefill.go:137:4"}
+			return true
+		case 10:
+			f.stride19 = (f.stride19 / uint32(2))
+			f.pc = 11
+			continue
+		case 11:
+			if f.stride19 > uint32(0) {
+				f.pc = 8
+				continue
+			}
+			f.pc = 12
+			continue
+		case 12:
+			f.blockMax20 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next21 = kmath.Max(f.m9, f.blockMax20)
+			f.alpha22 = kmath.Exp(float32(f.m9 - f.next21))
+			f.e23 = float32(0)
+			if f.visible14 {
+				f.e23 = kmath.Exp(float32(f.score13 - f.next21))
 			}
 			f.pc = 13
 			continue
 		case 13:
 			f.pc = 14
-			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "prefill.go:131:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "prefill.go:150:3"}
 			return true
 		case 14:
-			f.stride19 = (f.stride19 / uint32(2))
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e23
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e23
 			f.pc = 15
 			continue
 		case 15:
-			if f.stride19 > uint32(0) {
-				f.pc = 12
+			f.pc = 16
+			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: "prefill.go:153:3"}
+			return true
+		case 16:
+			f.stride24 = uint32(64)
+			f.pc = 20
+			continue
+		case 17:
+			if f.lane2 < f.stride24 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride24)))])
+			}
+			f.pc = 18
+			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "prefill.go:159:4"}
+			return true
+		case 19:
+			f.stride24 = (f.stride24 / uint32(2))
+			f.pc = 20
+			continue
+		case 20:
+			if f.stride24 > uint32(0) {
+				f.pc = 17
 				continue
 			}
-			f.pc = 16
+			f.pc = 21
 			continue
-		case 16:
-			f.total20 = red[tr.ReadAt(1, int(int32(0)))]
+		case 21:
+			f.l10 = float32(float32(f.alpha22*f.l10) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m9 = f.next21
 			if f.lane2 < d.HeadDim {
-				f.acc21 = float32(0)
+				f.a25 = (f.alpha22 * acc[tr.ReadAt(2, int(f.lane2))])
 				{
-					f.j22 = uint32(0)
-					for ; f.j22 < f.kvLen1; f.j22 = (f.j22 + uint32(1)) {
-						f.acc21 = float32(f.acc21 + float32(scores[tr.ReadAt(0, int(f.j22))]*v[((((f.j22*d.KVHeads)*d.HeadDim)+(f.kvHead5*d.HeadDim))+f.lane2)]))
+					f.j26 = uint32(0)
+					for ; f.j26 < uint32(128); f.j26 = (f.j26 + uint32(1)) {
+						if ((f.base11 + f.j26) <= f.limit6) && ((f.base11 + f.j26) < f.kvLen1) {
+							f.a25 = float32(f.a25 + float32(scores[tr.ReadAt(0, int(f.j26))]*v[(((((f.base11+f.j26)*d.KVHeads)*d.HeadDim)+(f.kvHead5*d.HeadDim))+f.lane2)]))
+						}
 					}
 				}
-				out[((((f.s3 * d.QHeads) + f.h4) * d.HeadDim) + f.lane2)] = float32(f.acc21 / f.total20)
+				tr.Write(2, int(f.lane2))
+				acc[f.lane2] = f.a25
+			}
+			f.pc = 22
+			continue
+		case 22:
+			f.base11 = (f.base11 + uint32(128))
+			f.pc = 23
+			continue
+		case 23:
+			if f.base11 < f.bound8 {
+				f.pc = 3
+				continue
+			}
+			f.pc = 24
+			continue
+		case 24:
+			if f.lane2 < d.HeadDim {
+				out[((((f.s3 * d.QHeads) + f.h4) * d.HeadDim) + f.lane2)] = float32(acc[tr.ReadAt(2, int(f.lane2))] / f.l10)
 			}
 			return false
 		}
@@ -4440,7 +4489,7 @@ var AttentionPrefillKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b6082162b55b41448fc2310797e36010",
+	Digest:    "c6aa661db17956eb7e5ada97b4e0dc9d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4472,6 +4521,7 @@ kernel void AttentionPrefill(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     threadgroup float scores[128];
     threadgroup float red[128];
+    threadgroup float acc[128];
     uint group = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
@@ -4479,68 +4529,85 @@ kernel void AttentionPrefill(
     uint h = (group % d.QHeads);
     uint kvHead = (h / (d.QHeads / d.KVHeads));
     uint limit = (d.Base + s);
-    float score = float(0);
-    bool visible = ((lane <= limit) && (lane < kvLen));
-    if (visible) {
-        float acc = float(0);
-        for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-            float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
-            float ki = k[((((lane * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
-            acc = (acc + (qi * ki));
-        }
-        score = (acc * d.Scale);
+    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    uint bound = (limit + uint(1));
+    if ((bound > capacity)) {
+        bound = capacity;
     }
-    scores[lane] = score;
-    float m = score;
-    if (!visible) {
-        m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-    }
-    red[lane] = m;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
-        if ((lane < stride)) {
-            float a = red[lane];
-            float b = red[(lane + stride)];
-            if ((b > a)) {
-                red[lane] = b;
-            }
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    float best = red[int(0)];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float e = float(0);
-    if (visible) {
-        e = precise::exp((scores[lane] - best));
-    }
-    scores[lane] = e;
-    red[lane] = e;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
-        if ((lane < stride)) {
-            red[lane] = (red[lane] + red[(lane + stride)]);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    float total = red[int(0)];
+    float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+    float l = float(0);
     if ((lane < d.HeadDim)) {
-        float acc = float(0);
-        for (uint j = uint(0); (j < kvLen); j = (j + uint(1))) {
-            acc = (acc + (scores[j] * v[((((j * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+        acc[lane] = float(0);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint base = uint(0); (base < bound); base = (base + uint(128))) {
+        uint pos = (base + lane);
+        float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        bool visible = ((pos <= limit) && (pos < kvLen));
+        if (visible) {
+            float dot = float(0);
+            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
+                float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
+                float ki = k[((((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
+                dot = (dot + (qi * ki));
+            }
+            score = (dot * d.Scale);
         }
-        out[((((s * d.QHeads) + h) * d.HeadDim) + lane)] = (acc / total);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = score;
+        red[lane] = score;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = max(red[lane], red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        float blockMax = red[int(0)];
+        float next = max(m, blockMax);
+        float alpha = precise::exp((m - next));
+        float e = float(0);
+        if (visible) {
+            e = precise::exp((score - next));
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        scores[lane] = e;
+        red[lane] = e;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+            if ((lane < stride)) {
+                red[lane] = (red[lane] + red[(lane + stride)]);
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        l = ((alpha * l) + red[int(0)]);
+        m = next;
+        if ((lane < d.HeadDim)) {
+            float a = (alpha * acc[lane]);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
+                if ((((base + j) <= limit) && ((base + j) < kvLen))) {
+                    a = (a + (scores[j] * v[(((((base + j) * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+            }
+            acc[lane] = a;
+        }
+    }
+    if ((lane < d.HeadDim)) {
+        out[((((s * d.QHeads) + h) * d.HeadDim) + lane)] = (acc[lane] / l);
     }
 }
 `,
-	Suspensions: 5,
-	SharedSizes: []int{128, 128},
-	SharedBytes: 1024,
+	Suspensions: 7,
+	SharedSizes: []int{128, 128, 128},
+	SharedBytes: 1536,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
 		var s1 [128]float32
 		kernelabi.Poison(s1[:])
-		return []any{&s0, &s1}
+		var s2 [128]float32
+		kernelabi.Poison(s2[:])
+		return []any{&s0, &s1, &s2}
 	},
 	Uniforms: []kernelabi.Uniform{
 		{Name: "d", Type: "PrefillDims", Size: 32, Encode: func(dst []byte, v any) error {
@@ -4553,7 +4620,7 @@ kernel void AttentionPrefill(
 			f = &attentionPrefillFrame{}
 			slot.State = f
 		}
-		return attentionPrefillCoop(t, kernelabi.UniformValue[PrefillDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), f, slot, slot.Shared)
+		return attentionPrefillCoop(t, kernelabi.UniformValue[PrefillDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[uint32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]float32](a, 1), kernelabi.Shared[[128]float32](a, 2), f, slot, slot.Shared)
 	},
 }
 
