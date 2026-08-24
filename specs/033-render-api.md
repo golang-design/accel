@@ -399,8 +399,9 @@ attachment is cleared, tested against and written through.
 
 Since then: the load-action edges are asserted on the graph, blended draw order
 is checked with two overlapping draws whose result depends on it, blend state is
-exposed and fixed at pipeline creation, and indexed draws with `BaseVertex` match
-the direct draw they replace.
+exposed and fixed at pipeline creation, indexed draws with `BaseVertex` match the
+direct draw they replace, and indirect draws clamp a device-written count to the
+recorded maximum in every build mode.
 
 **Outstanding**, and why this spec stays *in progress*:
 
@@ -409,8 +410,7 @@ the direct draw they replace.
 | transient attachment aliasing under `DontCare` | the edges are asserted; the aliasing consequence is not |
 | feedback rejection for an overlapping subresource | **blocked**, not merely unwritten: a stage cannot read a texture at all until [032](032-stage-abi.md) §5's texel fetch exists, so there is no way to construct feedback |
 | the N-object frame at recorded uniform offsets (§6) | see deviation 1; the by-value channel answers the one-uniform case |
-| indirect draws with a device-written count (§4.2) | unbuilt |
-| the Metal render path | waits on [032](032-stage-abi.md) §12.1's MSL stage target |
+| the Metal render path | [032](032-stage-abi.md) §12.1's MSL stage target is built; what remains is Metal's own render encoder, a texture attachment and a blit back |
 
 - a pipeline whose target count differs from its fragment stage's output field
   count is refused at creation, naming both numbers;

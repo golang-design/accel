@@ -1399,6 +1399,41 @@ texel fetch exists, so there is no way to construct the case. The Metal render
 path waits on [032](032-stage-abi.md) §12.1's MSL stage target. Indirect draws
 and transient attachment aliasing are unbuilt with nothing in the way.
 
+#### Indirect draws, aliasing, and the MSL stage target — 2026-08-24
+
+Three pieces after the frame, each with one finding worth keeping.
+
+**Indirect draws.** [033](033-render-api.md) §4.2's clamp, in every build mode.
+The test that matters is not the one that proves the clamp: it is the second
+one, proving a count *below* the maximum is used as given. Without it a backend
+that ignored the argument buffer entirely and always drew the maximum passes the
+clamp test. **A bound is two claims, and a test of one of them is half a test.**
+
+**A transient's live range excluded the pass writing it.** Every node-creating
+call site had to call `Recorder.touch` for the accesses it declared, and the
+render pass — the first node kind added after that rule existed — did not. A
+transient used only as an attachment had a live range of one node, and the
+aliasing pass was free to place another transient over bytes the pass writes.
+Fixed by touching inside `Recorder.node`, so no node kind can forget. This is
+the same shape as the missing access declaration a day earlier: **a duty spread
+across call sites is a duty the next call site will not know about.**
+
+**The MSL stage target.** [032](032-stage-abi.md) §12.1. Nine of ten corpus
+stages compiled on a real device and the tenth did not, which found that one IR
+type has two MSL spellings — a `vec4` local is `float4`, a `vec4` in a std140
+block is `float[4]`, because std140's `vec3` is 12 bytes where MSL's `float3` is
+16. A text golden would have accepted every one of the ten. **The value of
+compiling generated text with the real compiler is the case the author did not
+think of**, and that is why `-newLibraryWithSource:` is in the test suite rather
+than a parser.
+
+Recorded because it is a trap for the next piece: **`newRenderPipelineStateWithDescriptor:`
+aborts the process on an invalid descriptor** rather than returning nil with an
+error, which a throwaway probe found by handing it an empty one. Metal's
+validation layer calls `assert`. So the Metal render path must validate a
+descriptor itself before handing it over — an omission there is not a bad error
+message, it is the caller's process gone.
+
 #### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
 
 Two of the completed items name a follow-on, and both are already placed after

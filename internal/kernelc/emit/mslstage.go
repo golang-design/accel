@@ -104,7 +104,7 @@ func (m *msl) vertexStage(k *ir.Func) {
 		m.printf("    %s %s = _in.%s;\n", m.stageType(a.Type), a.Name, a.Name)
 	}
 	m.printf("    %s _out;\n", out)
-	m.stageBody(k, out)
+	m.stageBody(k)
 	m.printf("}\n")
 }
 
@@ -140,7 +140,7 @@ func (m *msl) fragmentStage(k *ir.Func) {
 		m.printf("    %s %s = _in;\n", in, k.Params[1].Name)
 	}
 	m.printf("    %s _out;\n", out)
-	m.stageBody(k, out)
+	m.stageBody(k)
 	m.printf("}\n")
 }
 
@@ -162,12 +162,11 @@ func (m *msl) paramList(params []string) {
 // what the author wrote. A pass that rewrote the IR would make the two
 // lowerings come from different trees, which is exactly what the differential
 // test exists to rule out.
-func (m *msl) stageBody(k *ir.Func, out string) {
+func (m *msl) stageBody(k *ir.Func) {
 	// The variable, not the type. They differ by one underscore and confusing
-	// them emits `Type.field = ...`, which MSL rejects -- so this is caught,
-	// but at the point furthest from the mistake.
+	// them emits `Type.field = ...`, which MSL rejects -- so it is caught, but
+	// at the point furthest from the mistake.
 	m.stageOut = "_out"
-	_ = out
 	m.stageKind = k.Stage
 	m.stageVaryings = k.Varyings
 	m.stageOutputs = k.Outputs

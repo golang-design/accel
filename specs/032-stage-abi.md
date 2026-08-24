@@ -587,9 +587,47 @@ parameters were `*[N]T`. A vertex attribute is a by-value array, so indexing one
 emitted a call to a shared-memory tracker no stage has. It now requires the name
 to be one the kernel declared as shared.
 
-### 12.1 Not built
+### 12.1 The MSL target — emitted and compiled, not differentially verified
 
-The MSL target for a stage, and the texel fetch of §5. Both wait on
-[033](033-render-api.md)'s pipeline, which is what would give either a caller:
-emitting a shader for a stage no pipeline can hold is a lowering nobody runs,
-which is the failure mode [009](009-sequencing.md)'s M6 outcome names.
+Built 2026-08-24. Every stage in the corpus lowers to MSL, and every one of
+those compiles on a real device: `-newLibraryWithSource:` **is** the Metal
+compiler, so text it accepts here is text it accepts in production. Resolving
+the function on top of that catches source which parses but declares the entry
+point under another name.
+
+**What is not yet proved, and the distinction matters.** No fragment emitted by
+this target has ever *executed*. The compute corpus is checked differentially —
+the generated Go lowering and the MSL run against the same inputs and must
+agree, which is what makes the CPU path an oracle. A stage has no such check,
+because running one needs the Metal render path. So "one IR, two lowerings" is
+true of the *source* and is not yet a checked invariant of the *results*. The
+differential arrives with the render path, and until then a stage's MSL is
+evidence that it compiles and nothing more.
+
+What the emitter needed that the compute path did not:
+
+| | Why |
+| --- | --- |
+| composites | a stage constructs what it returns; MSL builds a vector by call syntax and a struct by braces, where Go writes both with braces |
+| vector dtypes | a stage exchanges float32 vectors, and `[4]float32` is `float4` |
+| a rewritten return | MSL returns one struct with `[[position]]` on a field; Go returns two values |
+
+**One IR type has two MSL spellings.** A `vec4` local is `float4`; a `vec4`
+inside a std140 block is `float[4]`, because
+
+$$
+\text{sizeof}_{\text{std140}}(\text{vec3}) = 12 \qquad
+\text{sizeof}_{\text{MSL}}(\text{float3}) = 16
+$$
+
+so a block spelled with vectors would compute its padding wrongly. MSL will not
+convert between the two, and a stage returning a uniform member straight into a
+varying is exactly where that shows up. Nine of ten corpus stages compiled and
+the tenth did not — which is the value of running the real compiler over a text
+transform rather than a parser.
+
+### 12.2 Not built
+
+The texel fetch of §5, which needs a texture binding for a stage. That is also
+what blocks [033](033-render-api.md)'s feedback rejection: with no way for a
+stage to read a texture, the case cannot be constructed.
