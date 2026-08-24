@@ -301,3 +301,101 @@ func TestQuantizedRefusals(t *testing.T) {
 			b.Err())
 	}
 }
+
+// At M=1 the quantized path selects a matrix-vector kernel.
+//
+// accel issue 11: MatMul specialized M=1 and QuantMatMul had one kernel at
+// every M, so a decode step -- M=1, every step after the first -- ran with no
+// specialization on the path `auto` picks whenever f16 does not fit. The
+// configuration a model lands in because it is large was the one with the
+// fewest kernels.
+//
+// The budget is the one TestAPlanMixesQuantizedAndUnquantized derives, with the
+// accumulation term over the reduction's depth rather than its length: this
+// kernel folds K across the lanes and tree reduces, so the error grows with
+// log2 of the fold rather than with K.
+func TestQuantMatMulSelectsMatVecAtOneRow(t *testing.T) {
+	const k, n = 64, 16
+
+	acts := make([]float32, k)
+	weights := make([]float32, k*n)
+	for i := range acts {
+		acts[i] = float32(math.Sin(float64(i)*0.31)) * 2
+	}
+	for i := range weights {
+		weights[i] = float32(math.Cos(float64(i)*0.17)) * 1.5
+	}
+	wq, ws := quant.Int8Quantize(weights)
+
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("qmatvec")
+
+	x := tensor.Input(b, tensor.ValueDesc{
+		Name: "x", DType: accel.F16, Shape: tensor.Shape{1, k},
+	})
+	qw := tensor.Weight(b, tensor.ValueDesc{
+		Name: "wq", DType: accel.I8, Shape: tensor.Shape{k, n},
+	})
+	sw := tensor.Weight(b, tensor.ValueDesc{
+		Name: "ws", DType: accel.F16, Shape: tensor.Shape{len(ws)},
+	})
+	tensor.Output(b, "out", tensor.QuantMatMul(b, x, tensor.Quantized{Quants: qw, Scales: sw}))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "qmatvec"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	sel := plan.Selections()
+	if len(sel) != 1 || sel[0].Kernel != "QuantMatVec" {
+		t.Fatalf("selections are %+v, want the quantized matrix-vector kernel: a "+
+			"selection nobody can see is a selection nobody can evaluate", sel)
+	}
+	// And it says what it turned down, so a reader can tell the choice was made
+	// rather than defaulted.
+	var namedGEMM bool
+	for _, r := range sel[0].Rejected {
+		if strings.Contains(r, "per-element quantized GEMM") {
+			namedGEMM = true
+		}
+	}
+	if !namedGEMM {
+		t.Errorf("the selection does not say it rejected the per-element GEMM: %+v", sel[0])
+	}
+
+	out := f32Buffer(t, d, "out", make([]float32, n))
+	f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f16Buffer(t, d, "x", acts), "wq": i8Buffer(t, d, "wq", wq),
+		"ws": f16BitsBuffer(t, d, "ws", ws), "out": out,
+	}})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, n)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+
+	for col := range n {
+		var exact, magnitude, qErr float64
+		for kk := range k {
+			a := float64(accel.ToFloat16(acts[kk]).F32())
+			w := float64(weights[kk*n+col])
+			exact += a * w
+			magnitude += math.Abs(a * w)
+			s := float64(ws[(kk*n+col)/quant.Int8Block].F32())
+			qErr += math.Abs(a) * s / 2
+		}
+		// Each lane folds ceil(K/128) products sequentially, then a tree of
+		// depth log2(128) combines them.
+		const u = 1.0 / (1 << 24)
+		depth := math.Ceil(float64(k)/128) + 7
+		accErr := (depth * u) / (1 - depth*u) * magnitude
+		if diff := math.Abs(float64(got[col]) - exact); diff > qErr+accErr {
+			t.Fatalf("column %d is %v against an exact %v: off by %v, budget %v + %v",
+				col, got[col], exact, diff, qErr, accErr)
+		}
+	}
+}

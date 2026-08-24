@@ -387,6 +387,26 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The M=1 quantized selection. It folds K across the lanes and tree
+			// reduces where QuantMatMul sums sequentially, so its rounding
+			// differs from that kernel's -- but both backends run *this* order,
+			// which is what this compares. The tree is the reason for the ULP
+			// budget where QuantMatMul needed none.
+			kernel:   &testkernels.QuantMatVecKernel,
+			counts:   []int{32, 32 * 8, 32 * 8 / 32, 8},
+			uniforms: []any{testkernels.GEMMDims{M: 1, N: 8, K: 32}},
+			groups:   accel.WorkgroupCount{X: 8},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i%201) - 100
+				case 2:
+					return 0.25 + float32(i%3)/8
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			kernel:   &testkernels.QuantRowsKernel,
 			counts:   []int{8 * 32, 8 * 32 / 32, 4, 4 * 32},
 			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 32, Capacity: 8}},

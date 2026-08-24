@@ -49,6 +49,59 @@ func MatVec(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16,
 	}
 }
 
+// QuantMatVec is [MatVec] against int8 quantized weights.
+//
+//	out[n] = Σₖ a[k] · (bq[k·N+n] · bs[(k·N+n)/QuantBlock])
+//
+// # Why the quantized path needed its own M=1 kernel
+//
+// The unquantized path gets [MatVec] at M=1 and the quantized one had a single
+// per-element kernel at every M, so a decode step -- which is M=1, every step
+// after the first -- ran a shape with no specialization. A consumer named the
+// asymmetry: `auto` selects int8 whenever f16 does not fit, so the
+// configuration a model lands in *because it is large* was the one with the
+// fewest kernels, and the one most sensitive to it, since decode is
+// memory-bound (accel issue 11).
+//
+// The body is [MatVec]'s with the weight load dequantized, and the products
+// widen to f32 before accumulating for [QuantMatMul]'s reason: the scale varies
+// per block, so an integer accumulator would sum quants that mean different
+// things. specs/027-quantization.md's error bound is stated against this
+// evaluation, and the reduction order is a tree here against a sequential fold
+// in QuantMatMul -- which changes the rounding, not the bound, since 027 states
+// it over the number of terms rather than their order.
+//
+//accel:kernel workgroup=128
+func QuantMatVec(t accel.Thread, d GEMMDims, a []accel.Float16, bq []int8,
+	bs []accel.Float16, out []float32, sh *[128]float32) {
+
+	col := t.GroupID().X
+	lid := t.LocalID().X
+
+	acc := float32(0)
+	if col < d.N {
+		for k := lid; k < d.K; k += RowWidth {
+			w := k*d.N + col
+			q := float32(bq[w])
+			s := bs[w/QuantBlock].F32()
+			acc = acc + a[k].F32()*(q*s)
+		}
+	}
+	sh[lid] = acc
+	t.Barrier()
+
+	for stride := uint32(RowWidth / 2); stride > 0; stride /= 2 {
+		if lid < stride {
+			sh[lid] = sh[lid] + sh[lid+stride]
+		}
+		t.Barrier()
+	}
+
+	if lid == 0 && col < d.N {
+		out[col] = sh[0]
+	}
+}
+
 // LinearTiled is [MatMulTiled] with a bias added once per output.
 //
 // # Why the bias is an epilogue rather than a separate kernel

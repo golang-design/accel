@@ -88,17 +88,38 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 	}
 	m, k, n := x.shape[0], x.shape[1], w.Quants.shape[1]
 
+	dims := testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
+	integer := "an integer-accumulating variant: it needs one scale per output " +
+		"column, and this representation has one per block"
+
+	// The same M=1 selection MatMul makes, and it belongs here more than there.
+	// A decode step is M=1 and int8 is the width a model reaches for because it
+	// is large, so the quantized path is both where this shape is most common
+	// and where a missing specialization costs most -- a consumer reported the
+	// asymmetry rather than a measurement (accel issue 11).
+	if m == 1 {
+		return b.record(node{
+			op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
+			kernel:  &testkernels.QuantMatVecKernel,
+			uniform: func(map[string]ScalarValue) any { return dims },
+			grid: func(*Tensor) accel.WorkgroupCount {
+				return accel.WorkgroupCount{X: n}
+			},
+			reason: fmt.Sprintf("M is 1, so the quantized matrix-vector kernel gives each "+
+				"of the %d output columns a workgroup and folds K across the lanes", n),
+			rejected: []string{integer, "the per-element quantized GEMM: it gives each " +
+				"output element one invocation, which at M=1 leaves K unparallelized"},
+		}, accel.F32, Shape{m, n})
+	}
+
 	return b.record(node{
 		op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
-		kernel: &testkernels.QuantMatMulKernel,
-		uniform: func(map[string]ScalarValue) any {
-			return testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
-		},
-		grid: perElement(int(testkernels.QuantMatMulKernel.WorkgroupSize.X)),
+		kernel:  &testkernels.QuantMatMulKernel,
+		uniform: func(map[string]ScalarValue) any { return dims },
+		grid:    perElement(int(testkernels.QuantMatMulKernel.WorkgroupSize.X)),
 		reason: fmt.Sprintf("the int8 quantized GEMM over a %dx%d output; each product "+
 			"widens to f32 before accumulating, because the scale varies per block", m, n),
-		rejected: []string{"an integer-accumulating variant: it needs one scale per output " +
-			"column, and this representation has one per block"},
+		rejected: []string{integer, "the quantized matrix-vector kernel: it applies only at M=1"},
 	}, accel.F32, Shape{m, n})
 }
 
