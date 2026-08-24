@@ -161,9 +161,17 @@ func OpenBest(p Policy) (*Device, error) {
 	}
 
 	if chosen == nil {
-		return nil, fmt.Errorf("accel: OpenBest: no adapter satisfied the policy (%d rejected). "+
-			"The CPU backend is never selected unless Policy.AllowCPU says so, because it is not a fast path",
-			len(report.Rejected))
+		// Two failures, not one, because they need different fixes: nothing
+		// enumerated is a driver or a build, and everything rejected is the
+		// policy. A caller branching on errors.Is gets the right one.
+		if len(report.Rejected) == 0 {
+			return nil, fmt.Errorf("%w: OpenBest found no adapter to consider; "+
+				"Enumerate().Diagnostics says what each backend reported", ErrNoAdapter)
+		}
+		return nil, fmt.Errorf("%w: OpenBest rejected all %d enumerated adapters. The CPU "+
+			"backend is never selected unless Policy.AllowCPU says so, because it is not "+
+			"a fast path; SelectionReport says which clause rejected which adapter",
+			ErrPolicy, len(report.Rejected))
 	}
 
 	dev, err := chosen.Open(nil)

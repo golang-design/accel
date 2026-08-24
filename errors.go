@@ -27,6 +27,21 @@ var (
 	ErrLifetime          = errors.New("accel: lifetime violation")
 	ErrFormat            = errors.New("accel: format not usable this way")
 
+	// ErrNoAdapter reports that nothing was enumerated at all.
+	//
+	// Distinct from ErrPolicy because the two need different fixes and a caller
+	// branches on which: nothing enumerated means no driver, no device, or a
+	// build without the backend, and no policy change helps.
+	ErrNoAdapter = errors.New("accel: no adapter was enumerated")
+
+	// ErrPolicy reports that adapters were enumerated and the policy excluded
+	// every one.
+	//
+	// The fix is the policy, and [SelectionReport] says which clause rejected
+	// which adapter -- so a caller can widen exactly the one that cost them the
+	// device rather than dropping the policy wholesale.
+	ErrPolicy = errors.New("accel: no adapter satisfied the policy")
+
 	// ErrGraphInFlight reports an attempt to rebind or resubmit a graph while a
 	// submission of it is running. A graph's transients are one pool, so two
 	// overlapping submissions would write each other's intermediates, and a

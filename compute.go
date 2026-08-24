@@ -255,6 +255,51 @@ func (c Capability) String() string {
 // positive. Indirect dispatches keep zero as the specified skip mechanism.
 type WorkgroupCount struct{ X, Y, Z int }
 
+// Workgroups is how many workgroups cover n invocations of this pipeline's
+// kernel along X, with Y and Z at one.
+//
+// # Why this is a method and not arithmetic a caller writes
+//
+// The arithmetic is one line -- ceiling division by the kernel's workgroup size
+// -- and every caller writing that line has to know the size, which is the
+// kernel's and not theirs. So the line is written wherever the size is edited,
+// and the two drift silently: too few workgroups leaves a tail of the data
+// untouched, which looks like a kernel bug at the boundary, and too many runs
+// invocations past the end, which the kernel is supposed to guard but that
+// guard is exactly what a caller forgets to check.
+//
+// It is deliberately not a thread count. [WorkgroupCount] counts workgroups
+// because a thread count makes the workgroup size invisible, which is how a
+// predecessor ended up dispatching one thread per workgroup.
+//
+//	r.Dispatch(pipe, binds, nil, pipe.Workgroups(len(data)))
+func (p *ComputePipeline) Workgroups(n int) WorkgroupCount {
+	return p.WorkgroupsFor(n, 1, 1)
+}
+
+// WorkgroupsFor is [ComputePipeline.Workgroups] over three dimensions.
+//
+// A zero or negative extent in any axis yields a zero count in that axis, which
+// is the specified skip: specs/003-command-graph.md makes a zero in any
+// dimension a dispatch of nothing rather than an error, so covering "no work"
+// produces "no work" rather than one workgroup that reads past the end.
+func (p *ComputePipeline) WorkgroupsFor(x, y, z int) WorkgroupCount {
+	size := p.kernel.WorkgroupSize
+	return WorkgroupCount{
+		X: coverGroups(x, int(size.X)),
+		Y: coverGroups(y, int(size.Y)),
+		Z: coverGroups(z, int(size.Z)),
+	}
+}
+
+// coverGroups is ceiling division that treats a non-positive extent as no work.
+func coverGroups(n, size int) int {
+	if n <= 0 || size <= 0 {
+		return 0
+	}
+	return (n + size - 1) / size
+}
+
 // ComputePipelineDescriptor describes a compute pipeline to create.
 type ComputePipelineDescriptor struct {
 	// Kernel is the compiled kernel. See the kernel authoring package for how one

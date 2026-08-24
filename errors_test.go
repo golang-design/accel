@@ -165,3 +165,36 @@ func TestMemoryKindString(t *testing.T) {
 		}
 	}
 }
+
+// The two selection failures are distinct, because their fixes are.
+//
+// Nothing enumerated means a driver, a device, or a build without the backend,
+// and no policy change helps. Everything rejected means the policy, and the
+// SelectionReport says which clause cost which adapter. A caller branching on
+// errors.Is needs to tell them apart, and one sentinel for both would make them
+// guess.
+func TestTheTwoSelectionFailuresAreDistinct(t *testing.T) {
+	if errors.Is(accel.ErrNoAdapter, accel.ErrPolicy) ||
+		errors.Is(accel.ErrPolicy, accel.ErrNoAdapter) {
+		t.Fatal("the two selection sentinels unwrap to each other, so a caller cannot " +
+			"tell a missing driver from a policy that excluded everything")
+	}
+
+	// A policy nothing can satisfy: every enumerated adapter is rejected, and
+	// the CPU is excluded unless AllowCPU says otherwise.
+	_, err := accel.OpenBest(accel.Policy{
+		Limits: accel.LimitConstraints{
+			AtLeast: accel.Limits{MaxBufferBytes: 1 << 60},
+		},
+	})
+	if err == nil {
+		t.Fatal("a policy demanding an exbibyte buffer selected an adapter")
+	}
+	if !errors.Is(err, accel.ErrPolicy) && !errors.Is(err, accel.ErrNoAdapter) {
+		t.Fatalf("OpenBest failed with %v, which is neither selection sentinel", err)
+	}
+	// Whichever it is, it must not be both.
+	if errors.Is(err, accel.ErrPolicy) && errors.Is(err, accel.ErrNoAdapter) {
+		t.Errorf("the failure claims to be both selection classes: %v", err)
+	}
+}
