@@ -26,6 +26,13 @@ func TestRenderPipelineCompiles(t *testing.T) {
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 		Vertex:   &testkernels.GeometryVSStage,
 		Fragment: &testkernels.ShadeFSStage,
+		VertexBuffers: []accel.VertexBufferLayout{{
+			Stride: 32,
+			Attributes: []accel.VertexAttribute{
+				{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+				{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+			},
+		}},
 		Primitive: accel.PrimitiveState{
 			Topology: accel.TriangleList, FrontFace: accel.CounterClockwise,
 			Cull: accel.CullBack,
@@ -47,8 +54,15 @@ func TestRenderPipelineRefusals(t *testing.T) {
 	d := openDevice(t)
 	base := func() accel.RenderPipelineDescriptor {
 		return accel.RenderPipelineDescriptor{
-			Vertex:    &testkernels.GeometryVSStage,
-			Fragment:  &testkernels.ShadeFSStage,
+			Vertex:   &testkernels.GeometryVSStage,
+			Fragment: &testkernels.ShadeFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride: 32,
+				Attributes: []accel.VertexAttribute{
+					{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+					{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+				},
+			}},
 			Primitive: accel.PrimitiveState{Topology: accel.TriangleList},
 			Targets:   []accel.ColorTargetState{rgba(), rgba()},
 			Label:     "p",

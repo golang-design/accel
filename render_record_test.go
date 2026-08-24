@@ -144,6 +144,13 @@ func TestRenderPassRefusals(t *testing.T) {
 			mrt, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 				Vertex:   &testkernels.GeometryVSStage,
 				Fragment: &testkernels.ShadeFSStage,
+				VertexBuffers: []accel.VertexBufferLayout{{
+					Stride: 32,
+					Attributes: []accel.VertexAttribute{
+						{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+						{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+					},
+				}},
 				Targets: []accel.ColorTargetState{
 					{Format: accel.RGBA32Float}, {Format: accel.RGBA32Float},
 				},
@@ -178,6 +185,13 @@ func TestRenderPassRefusals(t *testing.T) {
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 				Vertex:   &testkernels.GeometryVSStage,
 				Fragment: &testkernels.ShadeFSStage,
+				VertexBuffers: []accel.VertexBufferLayout{{
+					Stride: 32,
+					Attributes: []accel.VertexAttribute{
+						{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+						{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+					},
+				}},
 				Targets: []accel.ColorTargetState{
 					{Format: accel.RGBA32Float}, {Format: accel.RGBA32Float},
 				},
