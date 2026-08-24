@@ -157,6 +157,38 @@ Two more belong in the same place, written before rather than after:
   fetched, which 033 §3.3 says is legal. A rule that only ever refuses is a rule
   nobody has tested the accepting half of.
 
+## 6.1 What the CPU-side change costs while Metal is behind — 2026-08-24
+
+Attachments name a `TextureView` and the CPU backend honours the format. **Metal
+does not lower a texture attachment yet**, and refuses by name. That is the
+correct intermediate state — a refusal a caller can read beats a wrong pixel —
+and it has a consequence worth stating before anyone reads a green CI and draws
+the wrong conclusion.
+
+**The Metal render differential now skips.** `TestARenderPassAgreesOnBothBackends`
+compared the same graph on the CPU rasterizer and on Metal pixel by pixel, and
+it is the reason the CPU backend is an *oracle* for graphics rather than the
+only implementation. It skips with Metal's own refusal as its reason, so it
+starts comparing again the day the Metal path lands — the same self-activating
+shape as §6's texture round trip.
+
+**`internal/mtl` fell from 92.8% to 84.1%** on the same 485 statements: 42
+statements of the Metal render path — `DrawIndexed`, depth state, clears,
+buffer-to-texture copies — are reachable by nothing while the differential
+skips. That is not a testing gap to paper over. It is the honest measurement of
+a half-landed change, and it resolves when the Metal path lands rather than by
+adding a test.
+
+**CI does not see it.** The coverage job runs on Linux, where `internal/mtl` is
+a `_darwin` package and is excluded from the profile entirely. The number is
+visible only on a Mac. So a green CI on this commit does **not** mean graphics
+is verified on two backends, and this paragraph exists because the next person
+to read that badge will assume it does.
+
+**This is a release blocker rather than a defect.** Nothing is wrong; something
+is half-built. A tag cut here would ship graphics verified on one backend while
+the previous commit verified it on two, and no gate in CI would say so.
+
 ## 7. Done
 
 - an attachment names a `TextureView`, and `MipLevels`/`ArrayLayers` above one
