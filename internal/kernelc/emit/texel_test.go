@@ -55,16 +55,24 @@ func TestMSLTexelFetchIsBoundsGuarded(t *testing.T) {
 		t.Errorf("the emitted MSL calls read() %d times, want exactly 1 — inside the "+
 			"guarded helper and nowhere else", n)
 	}
-	// An unsigned comparison against a raw int coordinate is the defect this
-	// spelling avoids, so its text is refused by name.
+	// A raw int coordinate compared against the uint extent, in either
+	// direction, is the defect this spelling avoids. Its text is refused by
+	// name, and the extents are counted so a second comparison cannot hide
+	// beside the guarded one.
 	for _, forbidden := range []string{
-		"x < t.get_width()",
-		"y < t.get_height()",
+		"x < t.get_width()", "x >= t.get_width()",
+		"y < t.get_height()", "y >= t.get_height()",
 	} {
 		if strings.Contains(src, forbidden) {
 			t.Errorf("the emitted MSL contains %q, which C compares unsigned and lets a "+
 				"negative coordinate through the guard", forbidden)
 		}
+	}
+	if n := strings.Count(src, "get_width()"); n != 1 {
+		t.Errorf("the emitted MSL reads get_width() %d times, want exactly 1", n)
+	}
+	if n := strings.Count(src, "get_height()"); n != 1 {
+		t.Errorf("the emitted MSL reads get_height() %d times, want exactly 1", n)
 	}
 }
 
