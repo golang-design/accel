@@ -155,6 +155,42 @@ func (RowDimsCodec) Encode(dst []byte, value RowDims) error {
 	return w.Err()
 }
 
+// PackParamsCodec is the generated std140 codec for PackParams.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type PackParamsCodec struct{}
+
+// PackParamsBlockSize is the encoded size of a PackParams block, in bytes.
+const PackParamsBlockSize = 272
+
+// EncodedSize reports the std140 block size.
+func (PackParamsCodec) EncodedSize() int { return PackParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (PackParamsCodec) Encode(dst []byte, value PackParams) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Rank)
+	w.U32(4, value.Count)
+	w.U32(8, value.Offset)
+	w.U32(16, value.Extent[0])
+	w.U32(32, value.Extent[1])
+	w.U32(48, value.Extent[2])
+	w.U32(64, value.Extent[3])
+	w.U32(80, value.Extent[4])
+	w.U32(96, value.Extent[5])
+	w.U32(112, value.Extent[6])
+	w.U32(128, value.Extent[7])
+	w.U32(144, value.Stride[0])
+	w.U32(160, value.Stride[1])
+	w.U32(176, value.Stride[2])
+	w.U32(192, value.Stride[3])
+	w.U32(208, value.Stride[4])
+	w.U32(224, value.Stride[5])
+	w.U32(240, value.Stride[6])
+	w.U32(256, value.Stride[7])
+	return w.Err()
+}
+
 // PagedDimsCodec is the generated std140 codec for PagedDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -3143,6 +3179,54 @@ kernel void Softmax(
 	},
 }
 
+// packFlat is the generated flat lowering of Pack.
+//
+// It is what the CPU backend runs. The authored Pack is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func packFlat(t accel.Thread, p PackParams, src []float32, dst []float32) {
+	var i uint32 = t.GlobalID().X
+	if i < p.Count {
+		var rem uint32 = i
+		var at uint32 = p.Offset
+		{
+			var axis int32 = int32(7)
+			for ; axis >= int32(0); axis = (axis - int32(1)) {
+				var a uint32 = uint32(axis)
+				if a < p.Rank {
+					var e uint32 = p.Extent[a]
+					if e > uint32(0) {
+						var c uint32 = (rem % e)
+						rem = (rem / e)
+						at = (at + (c * p.Stride[a]))
+					}
+				}
+			}
+		}
+		dst[i] = src[at]
+	}
+}
+
+// PackKernel is the compiled form of Pack.
+var PackKernel = kernelabi.Kernel{
+	Name:          "Pack",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "src", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "dst", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "9c478fb41f3b42c791fcbf43a45e05a0",
+	Generator: kernelabi.Version,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "p", Type: "PackParams", Size: 272, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, PackParamsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		packFlat(t, kernelabi.UniformValue[PackParams](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1))
+	},
+}
+
 // attentionDecodePagedFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -6066,6 +6150,7 @@ var Kernels = []*kernelabi.Kernel{
 	&LinearTiledKernel,
 	&RMSNormKernel,
 	&SoftmaxKernel,
+	&PackKernel,
 	&AttentionDecodePagedKernel,
 	&AttentionPrefillKernel,
 	&QuantMatMulKernel,
