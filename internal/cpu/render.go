@@ -45,7 +45,7 @@ func renderPass(n *resolvedNode) (err error) {
 	applyLoads(rp, fb)
 
 	for i, d := range rp.Draws {
-		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.indexBytes[i]); err != nil {
+		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.indexBytes[i], n.indirectArgs[i]); err != nil {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
 	}
@@ -104,7 +104,7 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 }
 
 // drawOne rasterizes one draw.
-func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, indices []byte) error {
+func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, indices, args []byte) error {
 	vs, ok := d.Vertex.(kernel.VertexFn)
 	if !ok {
 		return fmt.Errorf("the vertex stage is %T, not a compiled stage", d.Vertex)
@@ -166,6 +166,9 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 		First:         d.FirstVertex,
 		FirstInstance: d.FirstInstance,
 		BaseVertex:    d.BaseVertex,
+	}
+	if d.Indirect {
+		dc.Count, dc.Instances, dc.First, dc.FirstInstance = readIndirectDraw(args, d)
 	}
 	if d.Indexed {
 		dc.Index = decodeIndices(indices, d.IndexWidth)
@@ -346,4 +349,30 @@ func checkIndexRange(d driver.RenderDraw, index []uint32, bufs [][]byte) error {
 		}
 	}
 	return nil
+}
+
+// readIndirectDraw reads the four device-supplied draw arguments and clamps
+// each to the maximum the node recorded.
+//
+// # Why the clamp is unconditional
+//
+// The same reason the indirect dispatch clamp is: specs/033-render-api.md
+// section 4.2 says a count exceeding the maximum is clamped rather than
+// silently truncating, and correctness cannot depend on a debug flag. What a
+// caller gives up by not collecting statistics is being told that a clamp
+// happened, not being protected from one -- which makes the maximum a caller
+// obligation in release mode and a diagnostic in debug.
+//
+// The layout is the one Vulkan, D3D12 and Metal share: vertex count, instance
+// count, first vertex, first instance, as four little-endian uint32.
+func readIndirectDraw(args []byte, d driver.RenderDraw) (count, instances, first, firstInstance int) {
+	read := func(i, limit int) int {
+		v := int(binary.LittleEndian.Uint32(args[i*4:]))
+		if v > limit {
+			return limit
+		}
+		return v
+	}
+	return read(0, d.VertexCount), read(1, d.InstanceCount),
+		read(2, d.FirstVertex), read(3, d.FirstInstance)
 }

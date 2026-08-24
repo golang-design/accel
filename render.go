@@ -467,6 +467,12 @@ type drawCall struct {
 	indexFmt   IndexFormat
 	baseVertex int
 
+	// indirect and its argument buffer are set for an indirect draw. The
+	// counts above are then the build-time maximum rather than the actual.
+	indirect       bool
+	indirectArgs   BufferView
+	indirectAccess int
+
 	// vertexAccess and indexAccess index the node's access list, so build
 	// lowers these views the way it lowers an attachment. -1 is unbound.
 	vertexAccess []int
@@ -715,6 +721,62 @@ func (p *RenderPass) DrawIndexed(d DrawIndexed) {
 		baseVertex: d.BaseVertex,
 		indexed:    true, indexBuf: p.indexBuf, indexFmt: p.indexFmt,
 	})
+}
+
+// DrawIndirect records a draw whose counts the device supplies.
+//
+// # Why a build-time maximum
+//
+// The same reason indirect dispatch has one: a device-written count sits
+// awkwardly with an immutable graph, since without a bound there is nothing to
+// validate at build and exceeding a backend's limit is undefined rather than a
+// clean error. The node records a maximum, the device supplies the actual, and
+// the backend clamps.
+//
+// **Every build mode clamps.** Correctness does not depend on a flag. What
+// [Recorder.CollectRunStats] adds is being told that a clamp happened, which
+// costs a readback — so a graph that did not ask is still protected, and what
+// it gives up is knowing.
+//
+// args names four uint32 in a device buffer: vertex count, instance count,
+// first vertex, first instance. That is the layout Vulkan, D3D12 and Metal all
+// use, so a caller filling it from a compute kernel writes the same four values
+// whatever the backend.
+func (p *RenderPass) DrawIndirect(args BufferView, bound Draw) {
+	if p.failed {
+		return
+	}
+	if p.pipeline == nil {
+		p.r.fail("RenderPass %q: an indirect draw with no pipeline; call SetPipeline "+
+			"first", p.desc.Label)
+		p.failed = true
+		return
+	}
+	if args.Buffer == nil {
+		p.r.fail("RenderPass %q: DrawIndirect with no argument buffer", p.desc.Label)
+		p.failed = true
+		return
+	}
+	if bound.VertexCount <= 0 {
+		p.r.fail("RenderPass %q: an indirect draw with a maximum of %d vertices; the "+
+			"maximum is what the device's count is clamped to, so it bounds the draw",
+			p.desc.Label, bound.VertexCount)
+		p.failed = true
+		return
+	}
+	if need := 4 * 4; args.Count*args.DType.Size() < need {
+		p.r.fail("RenderPass %q: the indirect argument buffer holds %d bytes and four "+
+			"uint32 arguments need %d", p.desc.Label, args.Count*args.DType.Size(), need)
+		p.failed = true
+		return
+	}
+	d := drawCall{
+		vertices: bound.VertexCount, instances: max(bound.InstanceCount, 1),
+		first: bound.FirstVertex, firstInst: bound.FirstInstance,
+		indirect: true, indirectArgs: args,
+	}
+	d.indirectAccess = p.declareRead(args, "indirect arguments")
+	p.record(d)
 }
 
 // Draw records one draw.

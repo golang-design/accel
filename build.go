@@ -469,6 +469,14 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			FirstVertex: d.first, FirstInstance: d.firstInst,
 			Indexed: d.indexed, BaseVertex: d.baseVertex,
 		}
+		if d.indirect {
+			op, err := g.operand(n, n.accesses[d.indirectAccess])
+			if err != nil {
+				return nil, fmt.Errorf("accel: Build: render pass %q draw %d indirect "+
+					"arguments: %w", p.desc.Label, i, err)
+			}
+			rd.Indirect, rd.IndirectArgs = true, op
+		}
 		if d.indexed {
 			op, err := g.indexOperand(n, p, i, d)
 			if err != nil {

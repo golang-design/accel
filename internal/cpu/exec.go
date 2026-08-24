@@ -171,9 +171,12 @@ type resolvedNode struct {
 	// indexBytes is one per draw, nil for a non-indexed one.
 	vertexBytes [][][]byte
 	indexBytes  [][]byte
-	depthAttach []float32
-	args        kernel.Args
-	rows        *driver.RowCopy
+
+	// indirectArgs is one per draw, nil for a direct one.
+	indirectArgs [][]byte
+	depthAttach  []float32
+	args         kernel.Args
+	rows         *driver.RowCopy
 
 	// subgroupSize and diagnostics come from the device's options, so a graph
 	// submitted in developer mode is checked and one in strict mode is not.
@@ -609,6 +612,17 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 			idx = raw
 		}
 		r.indexBytes = append(r.indexBytes, idx)
+
+		var args []byte
+		if d.Indirect {
+			raw, err := e.bytes(d.IndirectArgs)
+			if err != nil {
+				return fmt.Errorf("accel: node %d draw %d indirect arguments: %w",
+					n.ID, di, err)
+			}
+			args = raw
+		}
+		r.indirectArgs = append(r.indirectArgs, args)
 	}
 	return nil
 }

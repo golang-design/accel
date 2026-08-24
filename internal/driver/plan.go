@@ -608,6 +608,12 @@ type RenderDraw struct {
 	IndexWidth int
 	BaseVertex int
 
+	// IndirectArgs names four uint32 -- vertex count, instance count, first
+	// vertex, first instance -- when Indirect is set. The counts above are then
+	// the build-time maximum each is clamped to.
+	Indirect     bool
+	IndirectArgs Operand
+
 	// Blends is one per colour attachment, in the same order as Masks.
 	Blends []Blend
 
