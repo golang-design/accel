@@ -265,11 +265,12 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		if err != nil {
 			return fmt.Errorf("accel/tensor: %s operand %d: %w", n.op, j, err)
 		}
-		if !in.contiguousLayout() && !n.bcast {
+		if !in.contiguousLayout() && !n.bcast && !n.strided {
 			return fmt.Errorf("accel/tensor: %s operand %d is a strided view, and the "+
-				"kernel indexes contiguously; the operators that pack an operand for you "+
-				"are the elementwise ones, because specs/007-tensor-layer.md keeps a copy "+
-				"of a matrix something a caller asks for", n.op, j)
+				"kernel indexes contiguously. Insert Contiguous to pack it, or let an "+
+				"elementwise operator do it -- specs/007-tensor-layer.md keeps a copy of "+
+				"a matrix something a caller asks for rather than something that happens",
+				n.op, j)
 		}
 		// An elementwise operand that is not already the result's shape is
 		// packed into a transient first. Reported in Selections rather than

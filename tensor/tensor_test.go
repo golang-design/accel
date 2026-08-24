@@ -995,9 +995,11 @@ func TestASecondSubmissionInFlightIsRefused(t *testing.T) {
 // never written — so a caller who hit the refusal went looking for an API that
 // is not there. The spec audit of specs/025-tensor-operators.md found it.
 //
-// This asserts the shape of the advice rather than its wording: it must not
-// name Contiguous, and it must say something the caller can actually do.
-func TestReshapeRefusalDoesNotNameAMissingOperator(t *testing.T) {
+// The operator exists now, so the assertion inverts: the refusal *should* name
+// it, and naming it must remain true. A message that advises an operator is a
+// promise the operator is there, and this is the test that keeps the promise
+// and the API from drifting apart again.
+func TestReshapeRefusalNamesAnOperatorThatExists(t *testing.T) {
 	rt := newRuntime(t)
 	b := rt.NewBuilder("reshape")
 	x := tensor.Input(b, tensor.ValueDesc{
@@ -1011,10 +1013,22 @@ func TestReshapeRefusalDoesNotNameAMissingOperator(t *testing.T) {
 	if err == nil {
 		t.Fatal("reshaping a strided view was accepted")
 	}
-	if strings.Contains(err.Error(), "Contiguous") {
-		t.Errorf("the refusal names an operator that does not exist: %v", err)
+	if !strings.Contains(err.Error(), "Contiguous") {
+		t.Errorf("the refusal should name the operator that fixes it: %v", err)
 	}
 	if !strings.Contains(err.Error(), "reshape before") {
-		t.Errorf("the refusal should say what to do instead: %v", err)
+		t.Errorf("the refusal should also give the free alternative: %v", err)
+	}
+
+	// And the advice works: packing first makes the same reshape legal.
+	ok := rt.NewBuilder("packed")
+	y := tensor.Input(ok, tensor.ValueDesc{
+		Name: "y", DType: accel.F32, Shape: tensor.Shape{4, 6},
+	})
+	tensor.Output(ok, "out",
+		tensor.Reshape(ok, tensor.Contiguous(ok, tensor.Transpose(ok, y, 0, 1)),
+			tensor.Shape{24}))
+	if err := ok.Err(); err != nil {
+		t.Errorf("the advice the refusal gives does not work: %v", err)
 	}
 }

@@ -169,6 +169,17 @@ type node struct {
 	// which operator wanted a value nobody bound.
 	reads []string
 
+	// strided says this node's kernel indexes through the operand's strides
+	// rather than contiguously, so a strided input is what it is for.
+	//
+	// Stated as a property of the node rather than as an exemption in the
+	// check, because the check reads "every operand must be contiguous unless
+	// it broadcasts" -- and an exemption-shaped guard is wrong at the first
+	// case outside its shape, which here is Contiguous itself: the one operator
+	// whose whole job is to accept a view was refused by the rule meant to
+	// protect the others.
+	strided bool
+
 	// grid computes the workgroup count from the result. Nil means one
 	// invocation per output element, which is what an elementwise kernel wants
 	// and what most of the corpus is.

@@ -12,14 +12,13 @@ package tensor
 // only thing that has to be true is that the kernel reading it can index what
 // the view describes.
 //
-// specs/024-tensor-bringup.md's lowering refuses a non-contiguous operand.
-// Packing one into contiguous storage needs a gather operator that does not
-// exist yet, so today such an operand is refused and there is no way to convert
-// it -- see specs/025-tensor-operators.md's open questions. Refusing rather than
-// silently copying is the choice specs/007-tensor-layer.md makes -- "v0 requires unit
+// specs/024-tensor-bringup.md's lowering refuses a non-contiguous operand, and
+// [Contiguous] is how a caller converts one. Refusing rather than silently
+// copying is the choice specs/007-tensor-layer.md makes -- "v0 requires unit
 // stride ... which admits ordinary contiguous row-major operands without
 // silently materializing either one" -- because a copy nobody asked for is a
-// cost nobody can see.
+// cost nobody can see. Calling Contiguous is how a caller says the copy is
+// worth it.
 
 // view returns a tensor over the same storage with a different layout.
 func (t *Tensor) view(shape Shape, strides []int, offset int) *Tensor {
@@ -65,8 +64,8 @@ func Reshape(b *Builder, x *Tensor, shape Shape) *Tensor {
 	if !x.contiguousLayout() {
 		return b.fail(1, "Reshape", "the operand is a strided view, whose elements are "+
 			"not adjacent, so a different extent over them names different elements. "+
-			"There is no operator that packs one yet, so reshape before the transpose or "+
-			"slice that made it strided")
+			"Either reshape before the transpose or slice that made it strided, or "+
+			"insert Contiguous to pack it first")
 	}
 	return x.view(shape, contiguous(shape), x.offset)
 }
