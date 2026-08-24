@@ -284,3 +284,77 @@ func TestStageNamesEveryBitItHolds(t *testing.T) {
 		}
 	}
 }
+
+// A barrier names the stage of the access that needs it, not the whole node's.
+//
+// A pass that waits for a vertex buffer waits at vertex input. Naming the pass
+// instead names the colour and depth stages too, which stalls two stages on a
+// hazard neither one has -- and on a backend with real stage masks that is a
+// pipeline drain per frame, not a lost optimization.
+func TestABarrierNamesTheStageOfTheAccessThatNeedsIt(t *testing.T) {
+	const w, h = 4, 4
+	d := stageTestDevice(t)
+
+	colour := stageTestBuffer(t, d, "colour", w*h*4)
+	verts := stageTestBuffer(t, d, "vertices", 9)
+
+	r := d.NewRecorder()
+	// Node 0 writes the vertices. Node 1 is the pass, whose only hazard is the
+	// read-after-write on them: its attachment is cleared and nothing wrote it.
+	r.UploadToBuffer(verts, make([]float32, 9))
+	p := r.RenderPass(RenderPassDescriptor{
+		Color: []ColorAttachment{{View: colour, Load: LoadClear}},
+		Width: w, Height: h, Label: "waits at vertex input",
+	})
+	p.SetPipeline(stageTestPipeline(t, d))
+	p.SetVertexBuffer(0, verts)
+	p.Draw(Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer func() { _ = g.Close() }()
+
+	b := g.barriersBefore[p.Node()]
+	if b == nil {
+		t.Fatal("no barrier before the pass, and it reads what node 0 wrote")
+	}
+	if b.src != stageTransfer {
+		t.Errorf("the barrier's source is %v, want %v: an upload is a staged blit", b.src, stageTransfer)
+	}
+	if b.dst != stageVertexInput {
+		t.Errorf("the barrier's destination is %v, want %v: the pass waits where it "+
+			"fetches attributes, and its colour stage has no hazard to wait for",
+			b.dst, stageVertexInput)
+	}
+}
+
+// The head-of-submission barrier covers every stage.
+//
+// It stands for the previous submission, whose work this one knows nothing
+// about, so anything narrower is a hole: a graphics stage left out of it would
+// be one this submission never waits for and no test on either current backend
+// could see.
+func TestTheHeadOfSubmissionBarrierCoversEveryStage(t *testing.T) {
+	d := stageTestDevice(t)
+	src := stageTestBuffer(t, d, "src", 4)
+	dst := stageTestBuffer(t, d, "dst", 4)
+
+	r := d.NewRecorder()
+	r.CopyBuffer(dst, src)
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer func() { _ = g.Close() }()
+
+	b := g.barriersBefore[0]
+	if b == nil {
+		t.Fatal("no head-of-submission barrier")
+	}
+	if b.src != stageAll || b.dst != stageAll {
+		t.Errorf("the head barrier orders %v against %v, want %v on both sides",
+			b.src, b.dst, stageAll)
+	}
+}
