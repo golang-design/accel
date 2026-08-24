@@ -420,8 +420,19 @@ Since then: the load-action edges are asserted on the graph, blended draw order
 is checked with two overlapping draws whose result depends on it, blend state is
 exposed and fixed at pipeline creation, indexed draws with `BaseVertex` match the
 direct draw they replace, indirect draws clamp a device-written count to the
-recorded maximum in every build mode, and **Metal runs the whole surface** —
+recorded maximum in every build mode, and **Metal ran the whole surface** —
 compared against the CPU rasterizer pixel by pixel over seven cases.
+
+**2026-08-24, and the tense above is deliberate.**
+[045](045-texture-attachments.md) made an attachment a `TextureView`, which
+§3's tables always described and the type never did. Two consequences land here:
+the attachment-format check below is now real — it is
+[003](003-command-graph.md)'s **V13**, and it compares the *view's* format so
+that writing a linear texture through an sRGB view is the pipeline's format
+rather than the texture's — and the Metal differential is **paused**, because
+only the CPU backend lowers a texture attachment today. Those entries skip
+naming 045 rather than being deleted, so the seven-case comparison resumes on
+the day the Metal slice lands. 045 §8.4 records what the pause costs.
 
 **Outstanding**, and why this spec stays *in progress*:
 
@@ -469,8 +480,8 @@ they honour it differently, because the shapes differ:
 
 | | CPU | Metal |
 | --- | --- | --- |
-| `LoadDontCare`, untouched pixel | the framebuffer aliases the caller's buffer, so prior contents remain | a fresh texture, so whatever that memory held |
-| `StoreDiscard` | nothing to skip; the pass already wrote the caller's buffer | the blit back is skipped, so the buffer is untouched |
+| `LoadDontCare`, untouched pixel | the attachment is decoded into the framebuffer whatever the load action says, so prior contents remain | a fresh texture, so whatever that memory held |
+| `StoreDiscard` | nothing to skip; the framebuffer is encoded back over the attachment either way | the blit back is skipped, so the buffer is untouched |
 
 Neither is wrong. The rule is therefore stated rather than tested away:
 
