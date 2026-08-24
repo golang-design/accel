@@ -194,6 +194,67 @@ On unified memory the mapping *is* device memory, so the upload is free rather
 than fast, which is what the report observed about
 [006](006-backends.md) §2.2's hardware.
 
+## 9. The same rule, one level up: extents — 2026-08-24
+
+Three later reports asked for three different features and want the same thing.
+Recording it here rather than in each, because the shared concept is worth more
+than the three kernels and because this spec's rule already predicted it.
+
+| Report | Asked for | The value that differs per row |
+| --- | --- | --- |
+| [#16](https://github.com/golang-design/accel/issues/16) | a dispatch mixing prefill chunks with decode steps | how many **query tokens** a sequence contributes |
+| [#18](https://github.com/golang-design/accel/issues/18) | a grouped GEMM for mixture-of-experts | how many **tokens routed** to an expert |
+| [#17](https://github.com/golang-design/accel/issues/17) | a chunked scan for linear attention | (partly — see below) |
+
+§2's line was *a value every row of a dispatch shares is a scalar, and a value
+that differs per row is a tensor*. It was applied to **quantities**: lengths,
+positions, page tables, draws. These three apply it to an **extent** — how many
+elements a row *has* — which is the same statement one level up and the one
+place §2 did not look.
+
+An extent that is device data is the definition of a ragged operation, and the
+shape every serving stack converges on is the same in all three cases: a flat
+buffer, plus one count per row, plus the prefix sum of those counts.
+
+$$x : \Big[\textstyle\sum_r n_r,\ \ldots\Big], \qquad n : [R], \qquad \text{offset}(r) = \sum_{j<r} n_j$$
+
+**What this means for the design, and it is not "write three kernels".** A
+segmented extent is one concept. If it is expressed once — a tensor whose
+leading axis is ragged, carrying its counts — then a ragged attention, a grouped
+GEMM and a segmented scan are three *uses* of it rather than three special
+cases, and the operator surface does not grow by three. That is §3's
+orthogonality test applied before the fact rather than after: after a segmented
+extent exists there should be no question of the form *which of the two matmuls
+do I use?*
+
+The alternative, which is what happens by default, is three kernels with three
+spellings of the same count array, and a fourth report that needs a fourth.
+
+**What is genuinely different in [#17](https://github.com/golang-design/accel/issues/17),
+and it is not the extent.** A linear-attention layer carries a matrix-valued
+recurrent state per head — `[keyHeadDim, valueHeadDim]`, not per position. That
+is a second finding and a sharper one: **[007](007-tensor-layer.md)'s `State`
+conflates two things.**
+
+| | a cache | a recurrent state |
+| --- | --- | --- |
+| shape | one value per **position** | one value per **sequence** |
+| grows with context | yes | no — which is the entire appeal |
+| indexable at a position | yes, and `ScatterRows` does | **no**; resuming means restoring it, not indexing it |
+| pageable | yes, `Pages` addresses positions | there are no positions to address |
+
+`State`, `ScatterRows` and `AttentionOptions.Pages` all assume the left column.
+A hybrid model — three linear-attention layers for every full-attention one — has
+**both kinds at once**, so its cache is not one thing and `Pages` covers only the
+quarter that is full attention. That is a type-level distinction this library
+does not currently have a name for, and naming it is prior to any kernel.
+
+**Neither is scheduled.** Both reports say no urgency and both asked for a scope
+answer rather than an implementation; [010](010-kernel-corpus.md) carries the
+rows. What is decided here is that if they are built, the extent is built **once**
+and the state distinction is made **before** the first recurrent kernel, not
+after three of them have assumed the wrong one.
+
 ## 8. Done
 
 - `RoPE` rotates each row at its own position, and a two-sequence batch with
