@@ -455,6 +455,60 @@ const (
 )
 ```
 
+**The stage is a property of the access, not of the node.** That is why it sits
+in `accessDecl` above and not beside the node kind, and the distinction is not
+academic: a render pass is one node that writes a colour attachment, tests
+depth, fetches attributes and fetches draw arguments, and those are four
+different points in a pipeline. A node-wide stage cannot name any of them
+correctly. The builder carried one until
+[042](042-surface-completion.md) §5.3 found it, and the consequence was that
+every render pass was classified `StageTransfer` by fallthrough.
+
+**The mask is a set because one access is legitimately in more than one stage.**
+A depth attachment is touched by both fragment-test stages, and one buffer range
+bound in two roles — an argument buffer a draw also fetches attributes from — is
+one access with two bits, not two accesses. The second point matters to the
+hazard count a caller reads: splitting one range into two accesses on stage
+alone would count its hazard against an earlier writer twice.
+
+#### What the builder classifies, and what it does not yet
+
+| Declared access | Stage |
+| --- | --- |
+| copy source, copy destination, host write | `StageTransfer` |
+| a compute pipeline's bindings | `StageCompute` |
+| an indirect dispatch's count buffer | `StageIndirectFetch` |
+| a draw's indirect argument buffer | `StageIndirectFetch` |
+| a vertex buffer, an index buffer | `StageVertexInput` |
+| a colour attachment | `StageColourOutput` |
+| a depth attachment | `StageEarlyDepth \| StageLateDepth` |
+
+Three of the ten names above are not produced by any declaration yet, and are
+left unimplemented rather than declared as constants nothing sets — which is the
+defect class [042](042-surface-completion.md) exists to remove:
+
+- **`StageHost`.** A host write is staged through an upload pool and reaches the
+  queue as a blit, so its queue-side stage is genuinely `StageTransfer`. A
+  host-visible write that is not a queue operation at all is the case that needs
+  this bit, and it arrives with the residency question, not before it.
+- **`StageVertex` and `StageFragment`.** Nothing a pass declares is read by a
+  shader stage: uniforms are by-value and there is no texel fetch. They arrive
+  with the accesses that produce them — a uniform buffer in a pass, and
+  [033](033-render-api.md)'s texture attachments.
+
+A depth attachment names both fragment-test stages rather than one. Which of the
+two actually runs the test depends on whether the pipeline's fragment stage can
+discard or write depth, which is not known where the attachment is declared, and
+a barrier naming only one is wrong for half the pipelines a caller can build.
+
+**Widening this changed no inferred edge, no hazard count and no barrier count**,
+which is worth recording because [042](042-surface-completion.md) §5.3 predicted
+it would change all three. Edge inference reads only the access mode and the
+range; barrier *existence* is decided by the same two. The stage decides only
+what a barrier names on each side, so the whole change is confined to `src` and
+`dst`. The prediction was the reason to do the work before a Vulkan backend
+exists, and it was wrong about the risk.
+
 **`AtomicRMW` is one bit, not read plus write.** An atomic is both, but a run of
 atomics on the same range from consecutive nodes needs no barrier between them on
 any target backend, and classifying it as a plain write would insert one per
@@ -887,6 +941,14 @@ Layout is derived by this table:
 | `ReadCopySrc` | `StageTransfer` | `CopySrc` |
 | `WriteCopyDst` | `StageTransfer` | `CopyDst` |
 | external write with a `Present` final state | end of graph | `Present` |
+
+An ordering point that names no particular access names **every** stage on both
+sides. Three do: the head-of-submission acquire, the conservative
+record-order plan of [015](015-graph-recording.md) §3, and an aliasing
+handover's source. Each stands for work outside the accesses the builder can
+see — a previous submission, or the bytes a different transient last held — so a
+stage left out of one is a stage the submission never waits for, and neither
+current backend can show it.
 
 ### Batching, and why it collapses most barriers
 
@@ -1543,7 +1605,7 @@ size is a heuristic with no bound proved here.
 
 | Before | Reason | src | dst | Also covers |
 | --- | --- | --- | --- | --- |
-| n0 | head-of-submission acquire (external reads) | prior submission | transfer, compute | The cross-submission WAW on the transient pool, since last submission's `t5` occupies `t0`'s bytes. |
+| n0 | head-of-submission acquire (external reads) | prior submission, every stage | every stage | The cross-submission WAW on the transient pool, since last submission's `t5` occupies `t0`'s bytes. |
 | n1 | RAW on `params` | transfer, write | compute, uniform read | |
 | n2 | RAW on `t0` | compute, storage write | compute, storage read | **`n3`'s read of `t0`**: the barrier is queue-wide and `n3` follows `n2` in the stream. |
 | n4 | RAW on `t1` | compute, write | compute, read | **`n5`'s read of `t2`** (written by `n3`, which precedes this barrier), and `n4`'s RAW on `params`. |
