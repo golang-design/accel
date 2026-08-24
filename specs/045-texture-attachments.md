@@ -218,20 +218,40 @@ no test reached, found in a coverage report rather than by a failure. It works;
 it is now compared against the oracle with two overlapping triangles at
 different depths.
 
-**And one that is left open, deliberately.** Metal's render write-back does not
-align a row to 256 bytes where `ReadTexture` does, so an attachment whose row is
-narrower reads back partly blank: at 4×4 an RGBA32Float row is 64 bytes and
-three quarters of the image is lost, at 8×8 it is half, and at 16×16 and above
-it is exact. The differential and the format test are pinned to sizes above the
-boundary and say why. This is a real bug with a known shape, and it is recorded
-here rather than fixed in the same commit as the change that revealed it.
+**The row-pitch bug, found and fixed.** An attachment whose row was narrower
+than the device's alignment read back partly blank: at 4×4 an RGBA32Float row is
+64 bytes and three quarters of the image was lost, at 8×8 half of it.
 
-**`internal/metal` is at 89.8%**, from 72.3% before this work, and the 90% gate
-is not met. Every function in the package is exercised — there are no
-uncovered functions — and the shortfall is 84 statements across 31 error arms
-that need an allocation or an encoder to fail. Recorded rather than papered
-over: the gate is right and the number is honest, and closing it wants fault
-injection rather than another test.
+A render target's rows are tight and the caller's attachment buffer is laid out
+at the pitch the device reports, padded to an alignment. The write-back blitted
+at the *texture's* pitch, so every row after the first landed in the wrong
+place. The CPU backend had honoured `ColorPitch` since the plan carried it;
+Metal ignored it.
+
+Isolated rather than guessed. A buffer→texture→buffer round trip is exact at
+every one of those extents, which ruled out the copy path and left the render
+write-back — and that is why the round trip written in §6 was right all along.
+Both blit wrappers now take a destination pitch, with zero meaning the texture's
+own.
+
+The format differential is pinned at **4×4**, the extent where the defect took
+three quarters of the image. A larger extent passes either way, which is exactly
+why the small one is the one to keep.
+
+**On the coverage gate.** `internal/metal` sits at 90.0% against a gate that
+wants *above* 90, up from 72.3% before this work. Four reachable refusals gained
+tests — an unbound slot, an operand past its binding, an acquire after close, a
+nil layer — and each is an ordinary caller mistake rather than a fault-injection
+case.
+
+What is left is not a testing gap of the usual kind, and the measurement says so:
+`pipelineFor` is **100% covered by its own package's tests and 0% in the
+`-coverpkg=./...` profile the gate reads**. The two profiles measure different
+things and each covers what the other misses, so the gated number understates
+what is exercised. That is worth knowing before anyone spends a day writing
+tests against it: the remaining statements are error arms needing an allocation
+or an encoder to fail, and the honest closing move is fault injection or a
+correction to what the gate measures, not more tests.
 
 ## 7. Done
 
