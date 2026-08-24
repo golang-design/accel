@@ -193,6 +193,45 @@ func ScatterRows(t accel.Thread, p RowParams, rows []float32, ids []uint32,
 	}
 }
 
+// ScatterRowsF16 is [ScatterRows] over an f16 state, from f16 rows.
+//
+// # Why the state may be narrow
+//
+// The same argument as [GatherRowsF16] and for the same reason: a scatter
+// performs no arithmetic, so specs/002-compute-model.md's storage rule applies
+// with nothing to lose. The value read is the value written, at the same width.
+//
+// It exists because an f16 KV cache was readable and not writable. A decode
+// step's sequence is prefill, scatter one row per step, then attention -- and
+// [AttentionDecodeF16] read a narrow cache that no kernel could populate from
+// inside the graph, so the saving it argues for was not reachable by a model
+// (accel issue 13).
+//
+// # Why the rows are f16 rather than f32
+//
+// The state's width is the cache's, and a row is one position of it. Narrowing
+// here rather than in the caller would make this kernel a cast and a scatter,
+// and specs/010-kernel-corpus.md registers the cast separately: a caller whose
+// rows are f32 runs [CastF32ToF16] first, which is one operator rather than a
+// second scatter variant per input width.
+//
+// An out-of-range id writes nothing, for [ScatterRows]'s reason.
+//
+//accel:kernel workgroup=64
+func ScatterRowsF16(t accel.Thread, p RowParams, rows []accel.Float16, ids []uint32,
+	state []accel.Float16) {
+
+	i := t.GlobalID().X
+	if i < p.Rows*p.Width {
+		r := i / p.Width
+		c := i % p.Width
+		id := ids[r]
+		if id < p.Capacity {
+			state[id*p.Width+c] = rows[i]
+		}
+	}
+}
+
 // RoPEParams carries the rotation's runtime inputs.
 type RoPEParams struct {
 	// Rows is how many positions, Width the model dimension.

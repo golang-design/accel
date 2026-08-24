@@ -2629,6 +2629,78 @@ kernel void ScatterRows(
 	},
 }
 
+// scatterRowsF16Flat is the generated flat lowering of ScatterRowsF16.
+//
+// It is what the CPU backend runs. The authored ScatterRowsF16 is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func scatterRowsF16Flat(t accel.Thread, p RowParams, rows []accel.Float16, ids []uint32, state []accel.Float16) {
+	var i uint32 = t.GlobalID().X
+	if i < (p.Rows * p.Width) {
+		var r uint32 = (i / p.Width)
+		var c uint32 = (i % p.Width)
+		var id uint32 = ids[r]
+		if id < p.Capacity {
+			state[((id * p.Width) + c)] = rows[i]
+		}
+	}
+}
+
+// ScatterRowsF16Kernel is the compiled form of ScatterRowsF16.
+var ScatterRowsF16Kernel = kernelabi.Kernel{
+	Name:          "ScatterRowsF16",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "rows", DType: kernelabi.F16, Access: kernelabi.Read},
+		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "state", DType: kernelabi.F16, Access: kernelabi.Write},
+	},
+	Digest:    "8b5221c21d0b431256d5904d3efa55ea",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowParams {
+    uint Rows;
+    uint Width;
+    uint Capacity;
+    char _tail[4];
+};
+
+kernel void ScatterRowsF16(
+    const device half *rows [[buffer(0)]],
+    const device uint *ids [[buffer(1)]],
+    device half *state [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowParams &p [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < (p.Rows * p.Width))) {
+        uint r = (i / p.Width);
+        uint c = (i % p.Width);
+        uint id = ids[r];
+        if ((id < p.Capacity)) {
+            state[((id * p.Width) + c)] = rows[i];
+        }
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "p", Type: "RowParams", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowParamsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		scatterRowsF16Flat(t, kernelabi.UniformValue[RowParams](a, 0), kernelabi.Slice[accel.Float16](a, 0), kernelabi.Slice[uint32](a, 1), kernelabi.Slice[accel.Float16](a, 2))
+	},
+}
+
 // roPEFlat is the generated flat lowering of RoPE.
 //
 // It is what the CPU backend runs. The authored RoPE is never registered as
@@ -7542,6 +7614,7 @@ var Kernels = []*kernelabi.Kernel{
 	&GatherRowsKernel,
 	&GatherRowsF16Kernel,
 	&ScatterRowsKernel,
+	&ScatterRowsF16Kernel,
 	&RoPEKernel,
 	&MatMulTiledKernel,
 	&MatMulTiledF32Kernel,

@@ -663,6 +663,45 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("ScatterRowsF16", func(t *testing.T) {
+		const capacity, width, rows = 8, 4, 3
+		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: capacity}
+		in := make([]accel.Float16, rows*width)
+		for i := range in {
+			in[i] = accel.ToFloat16(float32(i)*0.375 - 5)
+		}
+		// The last id is past the state, so the two forms have to agree about
+		// the range check and not merely about the addressing.
+		ids := []uint32{5, 0, capacity + 1}
+
+		authored := make([]accel.Float16, capacity*width)
+		generated := make([]accel.Float16, capacity*width)
+		// A state a scatter does not cover keeps what it held, so both copies
+		// start from the same non-zero contents: a dropped write is then
+		// visible as the old value rather than hidden by a zero.
+		for i := range authored {
+			authored[i] = accel.ToFloat16(float32(i) - 20)
+			generated[i] = authored[i]
+		}
+
+		n := rows * width
+		for i := range n {
+			testkernels.ScatterRowsF16(flatThread(i, n), p, in, ids, authored)
+		}
+		if err := kernel.Dispatch(&testkernels.ScatterRowsF16Kernel, accel.ID3{X: 1},
+			kernelabi.Args{
+				Slices: []any{in, ids, generated}, Uniforms: []any{p},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i].Bits() != generated[i].Bits() {
+				t.Fatalf("element %d: authored %#04x, generated %#04x",
+					i, authored[i].Bits(), generated[i].Bits())
+			}
+		}
+	})
+
 	t.Run("GatherRowsF16", func(t *testing.T) {
 		const vocab, width, rows = 8, 4, 3
 		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: vocab}

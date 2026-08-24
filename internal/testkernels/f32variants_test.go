@@ -140,6 +140,65 @@ func TestTheF16AttentionMatchesTheF32OneExactly(t *testing.T) {
 	}
 }
 
+// The f16 scatter places the same rows the f32 scatter does, and drops the same
+// write.
+//
+// A scatter performs no arithmetic, so the two widths must agree exactly on
+// every element -- the ones written and the ones left alone. The state starts
+// at a value no write produces, which is what makes a dropped write visible
+// rather than hidden behind a zero, and one id is past the capacity so the
+// range check is compared and not merely the addressing.
+func TestTheF16ScatterMatchesTheF32OneExactly(t *testing.T) {
+	const rows, width, capacity = 3, 4, 8
+	p := testkernels.RowParams{Rows: rows, Width: width, Capacity: capacity}
+
+	in16 := make([]accel.Float16, rows*width)
+	in32 := make([]float32, len(in16))
+	for i := range in16 {
+		in16[i] = accel.ToFloat16(float32(i)*0.375 - 5)
+		in32[i] = in16[i].F32()
+	}
+	ids := []uint32{5, 0, capacity + 1} // the last is past the state
+
+	state16 := make([]accel.Float16, capacity*width)
+	state32 := make([]float32, len(state16))
+	for i := range state16 {
+		state16[i] = accel.ToFloat16(-1) // a value no write produces
+		state32[i] = state16[i].F32()
+	}
+
+	n := rows * width
+	groups := accel.ID3{X: uint32((n + 63) / 64)}
+	if err := kernel.Dispatch(&testkernels.ScatterRowsKernel, groups,
+		kernelabi.Args{Slices: []any{in32, ids, state32}, Uniforms: []any{p}}); err != nil {
+		t.Fatalf("f32 dispatch: %v", err)
+	}
+	if err := kernel.Dispatch(&testkernels.ScatterRowsF16Kernel, groups,
+		kernelabi.Args{Slices: []any{in16, ids, state16}, Uniforms: []any{p}}); err != nil {
+		t.Fatalf("f16 dispatch: %v", err)
+	}
+
+	for i := range state32 {
+		if got := state16[i].F32(); got != state32[i] {
+			t.Fatalf("element %d is %v in an f32 state and %v in an f16 one holding the "+
+				"same values; a scatter does no arithmetic, so the two must agree exactly",
+				i, state32[i], got)
+		}
+	}
+	// And the scatter actually moved something, so the comparison above is not
+	// two untouched states agreeing.
+	moved := 0
+	for i := range state16 {
+		if state16[i].F32() != -1 {
+			moved++
+		}
+	}
+	if moved != 2*width {
+		t.Fatalf("%d elements changed; two of the three ids are inside the state, so "+
+			"%d should have", moved, 2*width)
+	}
+}
+
 // The authored form of each new kernel agrees with its generated lowering.
 //
 // This is specs/012-kernel-pipeline.md's obligation on every kernel, and it is

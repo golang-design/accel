@@ -219,6 +219,21 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The same scatter into an f16 state from f16 rows. A scatter does
+			// no arithmetic and this one does not even convert -- the two
+			// lowerings move the same sixteen bits -- so nothing here reaches a
+			// bounded primitive and the ceiling stays zero.
+			kernel: &testkernels.ScatterRowsF16Kernel, counts: []int{4 * 16, 4, 8 * 16},
+			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 16, Capacity: 8}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return float32(i % 8)
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			// Positions first, then the buffer it rotates. Four rows at four
 			// different positions, which a shared offset could not express and
 			// which is the whole point of specs/043-per-row-values.md.
