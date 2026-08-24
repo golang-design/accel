@@ -163,7 +163,7 @@ rec.Dispatch(pipeline, bindings, nil, accel.WorkgroupCount{X: 1024})
 g, err := rec.Build() // validates, plans memory, computes barriers
 
 for range steps {
-	g.Rebind(nextInputs)
+	g.Bind(nextInputs...)
 	dev.Queue().Submit(g).Wait()
 }
 ```

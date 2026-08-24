@@ -14,7 +14,7 @@ if err != nil {
 }
 defer weights.Close()
 
-w, err := weights.Alloc(accel.BufferDescriptor{
+w, err := weights.AllocBuffer(accel.BufferDescriptor{
 	DType: accel.F16,
 	Count: 4096 * 4096,
 	Usage: accel.BufferStorage | accel.BufferCopyDst,

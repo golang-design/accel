@@ -87,7 +87,7 @@ in := r.Slot(accel.SlotDescriptor{
 	DType: accel.F32, Access: accel.AccessRead, MinCount: n,
 })
 // ...
-g.Rebind([]accel.Binding{{Slot: in, Buffer: thisFrame}})
+g.Bind(accel.SlotBinding{Slot: in, Buffer: thisFrame})
 ```
 
 ## Try it

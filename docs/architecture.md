@@ -79,7 +79,7 @@ g, err := rec.Build()
 
 // submit it as many times as you like
 for range tokens {
-    g.Rebind(newInputs)
+    g.Bind(newInputs...)
     dev.Queue().Submit(g).Wait()
 }
 ```
