@@ -22,7 +22,14 @@ and stopped one operation short of a token.
 A sampler needs randomness. The obvious design generates it on the device — a
 counter-based PRNG seeded per invocation, which is what most inference runtimes
 do. This spec does the opposite: the caller supplies one uniform value in
-`[0, 1)` per sampled token, as an ordinary runtime scalar.
+`[0, 1)` per sampled token.
+
+> **Amended 2026-08-24.** This said "as an ordinary runtime scalar". The
+> decision below — that the draw is an *input* — survives unchanged;
+> [043](043-per-row-values.md) corrected the *shape* of it. One draw per
+> dispatch is one draw for a whole batch, which keeps reproducibility exactly
+> and destroys independence. The draw is a tensor, one value per row. §6 records
+> the operator that takes it.
 
 Three reasons, in the order they matter:
 
@@ -181,3 +188,135 @@ distinct values would have compared equal whatever either backend did.
   is relative to its input's own total so it composes after a top-k; and
 - a truncation asking for more than the bound keeps what it can, which is pinned
   rather than discovered.
+
+## 6. Outcome — 2026-08-24: the promotion to the tensor layer
+
+Section 4.1 recorded the kernels. This records the operators, because
+[039](039-sampling-policy.md) §1 found the gap that made the kernels useless:
+they lived in `internal/testkernels` and were reachable only through
+`kernel.Dispatch`, so **no `Plan` could produce a token**. A consumer building
+an inference framework read the whole logits vector back to the host every
+decode step — 608 KB per token on their vocabulary — and sampled in Go. Their
+conformance register carried it as row C3, "sampling of any kind at the tensor
+layer".
+
+`tensor/sample.go` now exports:
+
+```go
+func Argmax(b *Builder, logits *Tensor) *Tensor
+func SampleCategorical(b *Builder, weights, draws *Tensor) *Tensor
+func TopKMask(b *Builder, weights *Tensor, k int) *Tensor
+func TopPMask(b *Builder, weights *Tensor, p float32) *Tensor
+const TopMaxRounds = 128
+```
+
+Logits are f32 and the token is `u32`, as §1 of 039 requires. The last axis is
+the vocabulary and every axis before it is a sequence, so a batch of one is
+`[vocab]` and gets a one-element token buffer — the same path rather than a
+special case, which is [043](043-per-row-values.md) §3's orthogonality test.
+
+### 6.1 Three deviations, each deliberate
+
+**The masks became batched kernels.** `TopKMask` and `TopPMask` indexed their
+buffers from zero and were dispatched as one workgroup, so two sequences needed
+two dispatches. They now take the row from the group id, exactly as
+`SampleArgmax` always has. The row count deliberately stays out of `TopDims`:
+the grid is already the statement of how many rows there are, and a second
+statement of it could disagree with the first.
+
+Top-p carries the offset in **three** loops rather than two, and the sum is the
+one that matters. A threshold computed from another row's total gives a mask
+over the right vocabulary, with a plausible number of entries, that is simply
+the wrong set.
+
+**`k` and `p` are recorded values, not named scalars.** [039](039-sampling-policy.md)
+§7 prices them as per-step scalars that cost nothing. They cost nothing to
+*bind*; what they cost is the refusal. `Plan.bind` validates a scalar's kind and
+never its range, so a `k` of `vocab` bound as a scalar reaches the kernel, is
+clamped to `TopMaxRounds`, and leaves the caller running top-128 while believing
+they turned truncation off — which 039 §9 names as a mutation a test must catch,
+and which no tensor-layer test could catch through a scalar. Recorded, it is one
+refusal line, as `RMSNorm` already refuses a non-positive `eps`.
+
+The price is a plan per `(k, p)`. That is the price 039 §7 already accepts for
+top-k being present or absent, and the digest fix below is what makes it safe.
+
+**`k` and `p` are shared by the batch; only the draw is per row.**
+[039](039-sampling-policy.md) §10 left open "whether per-sequence `k` and `p` are
+worth their bindings or a batch shares one policy". A truncation parameter is a
+property of a request's policy and a draw is a property of a sequence's position
+in its own stream, so only the draw has to differ per row for two sequences to
+decode independently. Moving `k` and `p` to bindings later adds an operand and
+removes nothing.
+
+### 6.2 What building it found: a plan cache that could not tell two policies apart
+
+`Builder.Identity` covered operands, kernels, shapes, ports and scalars, and
+**could not see a value an operator recorded** and handed to its kernel through
+the uniform closure. `PlanCache.Compile` records a graph to learn its identity
+and, on a hit, discards what it just recorded and returns the cached plan. So:
+
+$$
+\text{Identity}(\texttt{TopKMask}(x, 40)) = \text{Identity}(\texttt{TopKMask}(x, 5))
+$$
+
+and a serving process that compiled top-40 for one request drew the next
+request's token from forty candidates. Nothing failed and the token was
+plausible — the accept-and-silently-wrong class.
+
+It was not this spec's operators that introduced it. Three operators already had
+it: `RMSNorm`'s `eps`, `RoPE`'s `rotaryDim`, and the paged `Attention`'s `Block`.
+
+```mermaid
+flowchart LR
+    G["recorded graph"] --> I["Identity()"]
+    G --> U["uniform closure<br/>eps, rotaryDim, Block, k, p"]
+    I -.->|"could not see"| U
+    I --> K["PlanCache key"]
+    K --> P["a plan compiled<br/>at somebody else's k"]
+```
+
+`node.attrs []uint64` is where such a value goes now — uniformly `uint64` so the
+digest has one encoding, and a float through `math.Float32bits` because `1e-5`
+and `1e-2` are the same integer. `Identity` moves to **v3**, for the reason its
+own comment already gives about v2: a key computed by an older build must not
+stay valid.
+
+`reaches_test.go`'s `Block` row could not have caught this. It compares a graph
+with no page table against one with a table *and* a block size, so it moved on
+the table's presence whatever `Block` did. The new row holds the table fixed.
+
+### 6.3 What is asserted, and what each assertion catches
+
+Every operator is checked against a **host oracle written from the definitions
+above** rather than from the kernel, and `Plan.Selections()` is asserted
+alongside the values — a graph that compiled says nothing about which kernel it
+picked, and 039 §5's composition order is a property of the plan rather than of
+the token.
+
+Each was confirmed by reinstating the fault:
+
+| Reinstated | What failed |
+| --- | --- |
+| top-p's sum loop indexing from zero | the batched kernel case: row 1 kept one token instead of its nucleus |
+| `Argmax`'s grid as `perRow` (one workgroup) | rows 1 and 2 of a three-row batch |
+| `SampleDims.Rows` pinned to 1 | every batched case |
+| `TopKMask`'s grid as `perElement` | the mask and the composed pipeline |
+| the `k > TopMaxRounds` refusal removed | the refusal table |
+| the draws-per-row length check removed | the refusal table |
+| a rank-1 input yielding a rank-0 token shape | the batch-of-one case |
+| the f32 logits refusal removed | the refusal table |
+| `attrs` dropped from `Identity` | all five digest rows, and the cache returned a top-40 mask for a top-5 request |
+| `uint64(p)` instead of `Float32bits(p)` | the top-p digest row alone |
+| a renormalizing `Softmax` after the mask | the kept set went from 8 entries to all 64 |
+
+The differential table gained a **two-row** case for each mask. The existing
+single-row cases were blind to the change by construction: at group zero the
+offset is zero and the batched form is byte for byte the unbatched one.
+
+### 6.4 What is still 039's
+
+Temperature, the `T = 0` branch, the penalties and their count-first two passes,
+`Stream`/`Derive`, `SamplingOptions` and its `Validate`. This spec promoted the
+primitives; the policy that composes them into a reproducible *sequence* remains
+drafted.
