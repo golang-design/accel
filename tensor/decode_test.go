@@ -296,6 +296,54 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "how many positions one holds is required",
 	}, {
+		// A prefill read row zero and ignored the rest: a value the caller
+		// supplied that reached nothing, found while adding the batch axis
+		// (accel issue 12).
+		name: "more lengths than sequences",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+			o := tensor.AttentionOptions{
+				Lengths: u32(b, "len", 4), ScaleName: "scale", BaseName: "base",
+			}
+			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 4, 2, 8),
+				cache(b, "v", 4, 2, 8), o)
+		},
+		want: "one length per sequence",
+	}, {
+		name: "a batch with no page table",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := tensor.AttentionOptions{Lengths: u32(b, "len", 3), ScaleName: "scale"}
+			tensor.Attention(b, f32(b, "q", 3, 1, 4, 8), cache(b, "k", 16, 2, 8),
+				cache(b, "v", 16, 2, 8), o)
+		},
+		want: "a contiguous cache would pad every sequence to the longest",
+	}, {
+		name: "a batched prefill",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := tensor.AttentionOptions{
+				Lengths: u32(b, "len", 3), ScaleName: "scale",
+				Pages: u32(b, "pages", 3, 2), Block: 4,
+			}
+			tensor.Attention(b, f32(b, "q", 3, 5, 4, 8), cache(b, "k", 16, 2, 8),
+				cache(b, "v", 16, 2, 8), o)
+		},
+		want: "a batched *prefill* is specs/040-batch-scheduler.md's",
+	}, {
+		name: "a page table whose rows are not the batch",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := tensor.AttentionOptions{
+				Lengths: u32(b, "len", 3), ScaleName: "scale",
+				Pages: u32(b, "pages", 2, 2), Block: 4,
+			}
+			tensor.Attention(b, f32(b, "q", 3, 1, 4, 8), cache(b, "k", 16, 2, 8),
+				cache(b, "v", 16, 2, 8), o)
+		},
+		want: "one row of block ids per sequence",
+	}, {
 		name: "a layer that does not exist",
 		build: func(b *tensor.Builder) {
 			tensor.LayerState(b, cache(b, "c", 2, 8, 4), 5)
@@ -916,6 +964,123 @@ func TestAPagedPrefillFeedsAPagedDecode(t *testing.T) {
 			if math.Abs(g-want[i]) > 1e-4*(1+math.Abs(want[i])) {
 				t.Fatalf("query %d element %d is %v, want about %v: a paged prefill "+
 					"attends over the blocks its table names", s, i, g, want[i])
+			}
+		}
+	}
+}
+
+// A batch of sequences steps together, each over its own pages and its own
+// length.
+//
+// accel issue 12: everything around attention was already batched -- Lengths is
+// per sequence, Pages is [s][i], RoPE takes per-row positions, the samplers
+// draw per row -- and q's shape was the one thing that was not, so a batched
+// decode was read as a prefill and refused. The kernel had been in the corpus
+// and tested since 030 with no operator reaching it.
+//
+// The lengths differ on purpose. That is what continuous batching *is*, and a
+// batch padded to its longest sequence would be the allocation paging exists to
+// avoid.
+func TestABatchOfSequencesStepsTogether(t *testing.T) {
+	const (
+		batch, qHeads, kvHeads, headDim = 3, 4, 2, 8
+		block, maxPages                 = 4, 3
+		poolBlocks                      = 16
+		width                           = kvHeads * headDim
+	)
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("batched")
+
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+	q := tensor.Input(b, tensor.ValueDesc{
+		Name: "q", DType: accel.F32, Shape: tensor.Shape{batch, 1, qHeads, headDim},
+	})
+	pages := tensor.Input(b, tensor.ValueDesc{
+		Name: "pages", DType: accel.U32, Shape: tensor.Shape{batch, maxPages},
+	})
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{batch},
+	})
+	kc := tensor.NewState(b, tensor.StateDesc{
+		Name: "kpool", DType: accel.F32,
+		Shape: tensor.Shape{poolBlocks * block, kvHeads, headDim},
+	})
+	vc := tensor.NewState(b, tensor.StateDesc{
+		Name: "vpool", DType: accel.F32,
+		Shape: tensor.Shape{poolBlocks * block, kvHeads, headDim},
+	})
+	tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+		Lengths: lengths, Pages: pages, Block: block, ScaleName: "scale",
+	}))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "batched"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	sel := plan.Selections()
+	if len(sel) != 1 || sel[0].Kernel != "AttentionDecodeBatched" {
+		t.Fatalf("selections are %+v, want the batched kernel", sel)
+	}
+
+	rng := rand.New(rand.NewPCG(13, 29))
+	pk := make([]float32, poolBlocks*block*width)
+	pv := make([]float32, len(pk))
+	for i := range pk {
+		pk[i] = float32(rng.NormFloat64())
+		pv[i] = float32(rng.NormFloat64())
+	}
+	qs := make([]float32, batch*qHeads*headDim)
+	for i := range qs {
+		qs[i] = float32(rng.NormFloat64())
+	}
+	// Disjoint, scattered page rows, so a sequence reading another's blocks is
+	// a wrong answer rather than a coincidence.
+	table := []uint32{
+		9, 2, 14,
+		0, 11, 5,
+		7, 3, 12,
+	}
+	lens := []uint32{10, 3, 7} // deliberately unequal, and none a block multiple
+	scale := float32(1 / math.Sqrt(headDim))
+
+	out := f32Buffer(t, d, "out", make([]float32, batch*qHeads*headDim))
+	f := plan.Submit(d.Queue(), tensor.Bindings{
+		Buffers: map[string]accel.BufferView{
+			"q": f32Buffer(t, d, "q", qs), "kpool": f32Buffer(t, d, "kpool", pk),
+			"vpool": f32Buffer(t, d, "vpool", pv),
+			"pages": u32Buffer(t, d, "pages", table),
+			"len":   u32Buffer(t, d, "len", lens),
+			"out":   out,
+		},
+		Scalars: map[string]tensor.ScalarValue{"scale": tensor.F32(scale)},
+	})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, batch*qHeads*headDim)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+
+	for s := range batch {
+		n := int(lens[s])
+		keys := make([][]float32, n)
+		vals := make([][]float32, n)
+		for j := range n {
+			phys := int(table[s*maxPages+j/block])*block + j%block
+			keys[j] = pk[phys*width : (phys+1)*width]
+			vals[j] = pv[phys*width : (phys+1)*width]
+		}
+		want := attentionReference(qs[s*qHeads*headDim:(s+1)*qHeads*headDim],
+			keys, vals, qHeads, kvHeads, headDim, float64(scale))
+		for i := range qHeads * headDim {
+			g := float64(got[s*qHeads*headDim+i])
+			if math.Abs(g-want[i]) > 1e-4*(1+math.Abs(want[i])) {
+				t.Fatalf("sequence %d (length %d) element %d is %v, want about %v",
+					s, n, i, g, want[i])
 			}
 		}
 	}

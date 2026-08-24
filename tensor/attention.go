@@ -106,23 +106,44 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		return b.fail(1, "Attention", "the cache is %v; the registered kernels read f32 or "+
 			"f16", cacheDType)
 	}
-	// [qHeads, headDim] is one token and [qSeq, qHeads, headDim] is a prefill.
-	// Which one a caller wrote decides which kernel runs, and Selections says
-	// so: a rank is not a hint, it is the shape of the computation.
-	qSeq := 1
-	prefill := false
+	// q's rank says which computation this is, and Selections says which kernel
+	// ran: a rank is not a hint, it is the shape of the computation.
+	//
+	//	[qHeads, headDim]                  one sequence, one token   -- a decode
+	//	[qSeq, qHeads, headDim]            one sequence, many tokens -- a prefill
+	//	[batch, qSeq, qHeads, headDim]     several sequences         -- batched
+	//
+	// The batch axis is rank 4 rather than rank 3 because rank 3 already means
+	// a prefill, and a consumer reported what that cost: everything *around*
+	// attention was already batched -- Lengths is per sequence, Pages is
+	// [s][i], RoPE takes per-row positions, the samplers draw per row -- and
+	// the shape was the one thing that was not, so a batched decode was read as
+	// a prefill and refused for a missing BaseName (accel issue 12).
+	//
+	// qSeq is carried in the batched form rather than dropped so that a batched
+	// prefill is this shape with qSeq > 1 when specs/040-batch-scheduler.md
+	// builds it, rather than a fifth rank.
+	qSeq, batch := 1, 1
+	prefill, batched := false, false
+	flatten := func(from int) {
+		shape := Shape{q.shape[from], q.shape[from+1]}
+		q = &Tensor{
+			b: b, dtype: q.dtype, shape: shape,
+			strides: contiguous(shape), node: q.node, port: q.port, win: q.win,
+		}
+	}
 	switch len(q.shape) {
 	case 2:
 	case 3:
 		qSeq, prefill = q.shape[0], true
-		q = &Tensor{
-			b: b, dtype: q.dtype, shape: Shape{q.shape[1], q.shape[2]},
-			strides: contiguous(Shape{q.shape[1], q.shape[2]}), node: q.node, port: q.port,
-			win: q.win,
-		}
+		flatten(1)
+	case 4:
+		batch, qSeq, batched = q.shape[0], q.shape[1], true
+		flatten(2)
 	default:
-		return b.fail(1, "Attention", "q is %v; it is [qHeads, headDim] for one token or "+
-			"[qSeq, qHeads, headDim] for a prefill", q.shape)
+		return b.fail(1, "Attention", "q is %v; it is [qHeads, headDim] for one token, "+
+			"[qSeq, qHeads, headDim] for a prefill, or [batch, qSeq, qHeads, headDim] "+
+			"for several sequences stepping together", q.shape)
 	}
 	if len(k.shape) != 3 || !k.shape.Equal(v.shape) {
 		return b.fail(1, "Attention", "the key cache is %v and the value cache is %v; both "+
@@ -175,6 +196,76 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 				"addresses blocks, so how many positions one holds is required",
 				opts.Block)
 		}
+	}
+
+	// One length per sequence, which is one row unless a batch axis says
+	// otherwise. Unchecked until now, and a prefill quietly read row zero and
+	// ignored the rest -- a value the caller supplied that reached nothing,
+	// which is the shape of defect this operator has had six of.
+	if got := opts.Lengths.shape.Elements(); got != batch {
+		return b.fail(1, "Attention", "Lengths holds %d entries and this step has %d "+
+			"sequence(s); it is one length per sequence", got, batch)
+	}
+
+	if batched {
+		// One kernel is registered for a batch and it reads a page table.
+		// That is not an accident of the corpus: sequences that step together
+		// have different lengths and cannot share a contiguous cache without
+		// padding every one of them to the longest, which is the allocation
+		// paging exists to avoid (specs/030-paged-kv.md).
+		if opts.Pages == nil {
+			return b.fail(1, "Attention", "a batch of %d sequences needs Pages: they have "+
+				"different lengths, so a contiguous cache would pad every sequence to the "+
+				"longest. specs/010-kernel-corpus.md registers the batched decode over a "+
+				"page table and no contiguous variant", batch)
+		}
+		if qSeq != 1 {
+			return b.fail(1, "Attention", "q is %v: a batched step takes one token per "+
+				"sequence, and a batched *prefill* is specs/040-batch-scheduler.md's. "+
+				"The shape has room for it -- qSeq is this axis -- and no kernel does",
+				Shape{batch, qSeq, qHeads, headDim})
+		}
+		if cacheDType != accel.F32 {
+			return b.fail(1, "Attention", "the cache is %v and the batched decode kernel "+
+				"reads f32; specs/010-kernel-corpus.md owns the narrow variant",
+				cacheDType)
+		}
+		if len(opts.Pages.shape) != 2 || opts.Pages.shape[0] != batch {
+			return b.fail(1, "Attention", "Pages is %v and the batch is %d; a batched page "+
+				"table is [batch, maxPages], one row of block ids per sequence",
+				opts.Pages.shape, batch)
+		}
+		maxPages := opts.Pages.shape[1]
+		return b.record(node{
+			op: "Attention",
+			// Pages before lengths, which is the kernel's binding order.
+			inputs: []*Tensor{
+				q, readState(b, k), readState(b, v), opts.Pages, opts.Lengths,
+			},
+			kernel: &testkernels.AttentionDecodeBatchedKernel,
+			reads:  []string{opts.ScaleName},
+			uniform: func(vals map[string]ScalarValue) any {
+				return testkernels.BatchedDims{
+					Batch: uint32(batch), QHeads: uint32(qHeads),
+					KVHeads: uint32(kvHeads), HeadDim: uint32(headDim),
+					Block: uint32(opts.Block), MaxPages: uint32(maxPages),
+					Scale: vals[opts.ScaleName].F32,
+				}
+			},
+			grid: func(*Tensor) accel.WorkgroupCount {
+				// Sequence-major, so one sequence's heads are adjacent and read
+				// the same page-table row.
+				return accel.WorkgroupCount{X: batch * qHeads}
+			},
+			reason: fmt.Sprintf("the batched paged decode kernel: %d sequences of %d heads "+
+				"step together over blocks of %d, one workgroup per (sequence, head)",
+				batch, qHeads, opts.Block),
+			rejected: []string{
+				"the single-sequence decode kernels: they take one sequence per dispatch, " +
+					"so a batch would be one submission each and read every weight once " +
+					"per sequence",
+			},
+		}, accel.F32, Shape{batch, qHeads, headDim})
 	}
 
 	out := Shape{qHeads, headDim}
