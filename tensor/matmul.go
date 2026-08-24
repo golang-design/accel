@@ -20,13 +20,25 @@ import (
 // graph, a quantized variant against an unquantized one -- so it is worth
 // getting right on the one case v0 has.
 //
-// # Why the operands are f16
+// # Which width pairs multiply
 //
-// specs/010-kernel-corpus.md registers a tiled GEMM that reads f16 and
-// accumulates in f32, which is what a transformer's weights are. 007 admits f16
-// *or* f32 storage; the f32 GEMM is a corpus kernel that does not exist, and
-// adding one belongs to 010 rather than to an improvisation here. The refusal
-// says which spec owns it.
+// Three, and specs/010-kernel-corpus.md registers a GEMM for each: f16 times
+// f16, f32 times f32, and f32 activations times f16 weights. The third is the
+// pair a transformer actually has. Its activations are f32 because every other
+// operator in this package is -- RMSNorm, Softmax, RoPE, Attention, the
+// residual Add -- and its weights are f16 because a four billion parameter
+// model is 16 GB in f32, so f32 weights are not a precision choice but the
+// choice not to load the model. A rule that the two agree therefore made the
+// graph pay for the weight's memory decision, in four casts per layer (accel
+// issue 14).
+//
+// The rule stays exactly right for two operands that are both activations,
+// which is why the relaxation is asymmetric rather than "any two widths". An
+// activation is produced by the graph and a weight is loaded from a file, and
+// `MatMul(b, x, w)` already says which is which by position: the *first*
+// operand may be the wider one. A weight wider than the activation it
+// multiplies is the memory decision made in the expensive direction, and stays
+// refused.
 
 // matShape checks a matrix multiplication's operands and returns M, N, K.
 func matShape(b *Builder, op string, x, w *Tensor) (m, n, k int, ok bool) {
@@ -41,21 +53,60 @@ func matShape(b *Builder, op string, x, w *Tensor) (m, n, k int, ok bool) {
 			x.shape, w.shape, x.shape[1], w.shape[0])
 		return 0, 0, 0, false
 	}
-	if x.dtype != w.dtype {
-		b.fail(2, op, "operands are %v and %v; one kernel reads both, so they share a "+
-			"dtype -- Cast one of them", x.dtype, w.dtype)
-		return 0, 0, 0, false
-	}
-	// Both widths, because a consumer reported the cost of only having f16:
-	// every other operator here is f32, so a transformer cast before each
-	// projection and back after -- seven casts per layer, each a full pass over
-	// the activations that existed only to satisfy this check.
-	if x.dtype != accel.F16 && x.dtype != accel.F32 {
-		b.fail(2, op, "operands are %v; the registered GEMMs read f16 or f32 and "+
-			"accumulate in f32", x.dtype)
+	if !gemmPair(x.dtype, w.dtype) {
+		if x.dtype == accel.F16 && w.dtype == accel.F32 {
+			b.fail(2, op, "the activations are %v and the weight is %v; a weight wider "+
+				"than the activation it multiplies has no registered GEMM, because that "+
+				"is the memory decision made in the expensive direction -- the mixed "+
+				"kernel widens the activation, not the weight", x.dtype, w.dtype)
+			return 0, 0, 0, false
+		}
+		b.fail(2, op, "operands are %v and %v; specs/010-kernel-corpus.md registers f16 "+
+			"times f16, f32 times f32, and f32 activations times f16 weights, all "+
+			"accumulating in f32", x.dtype, w.dtype)
 		return 0, 0, 0, false
 	}
 	return x.shape[0], w.shape[1], x.shape[1], true
+}
+
+// gemmPair reports whether a registered GEMM reads this pair of widths.
+//
+// A table rather than a pair of independent checks, because the pairs are what
+// the corpus registers: a rule reading only x's width would admit an f16
+// activation against an f32 weight, and a selection reading only x's width
+// would then bind an f16 buffer to an f32 binding and produce a plausible
+// matrix. [gemmKernel] switches on the same pair for that reason.
+func gemmPair(x, w DType) bool {
+	switch {
+	case x == accel.F16 && w == accel.F16:
+		return true
+	case x == accel.F32 && w == accel.F32:
+		return true
+	case x == accel.F32 && w == accel.F16:
+		return true
+	}
+	return false
+}
+
+// gemmKernel picks the GEMM the operand *pair* registers, and says why.
+//
+// The pair and not x's width alone. Binding an f16 weight to the f32 kernel's
+// f32 binding is not a compile error at any layer below this one -- it is a
+// buffer of the wrong element size read as the right one, which produces a
+// matrix rather than a diagnostic.
+func gemmKernel(x, w DType, m, n int) (*accel.Kernel, string) {
+	tiles := fmt.Sprintf("a %dx%d output in %dx%d tiles", m, n,
+		testkernels.TileM, testkernels.TileN)
+	switch {
+	case x == accel.F32 && w == accel.F16:
+		return &testkernels.MatMulTiledF32F16Kernel,
+			"the mixed tiled GEMM, f32 activations against f16 weights, over " + tiles
+	case x == accel.F32:
+		return &testkernels.MatMulTiledF32Kernel,
+			"the tiled GEMM over f32 operands, " + tiles
+	}
+	return &testkernels.MatMulTiledKernel,
+		"the portable tiled GEMM over " + tiles
 }
 
 // gemmGrid covers the output in tiles, which is what the tiled kernel expects:
@@ -89,10 +140,14 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 	// so a tile eight rows tall would leave seven idle; the M=1 kernel gives
 	// each output column a workgroup instead.
 	//
-	// Only for f16, because the matrix-vector kernel is f16 and a second
-	// variant of it would be a kernel added for a shape the tiled one already
-	// computes correctly. The f32 path takes the tile and Selections says the
-	// rows are idle, which is the cost reported rather than hidden.
+	// Only for the f16 pair, because the matrix-vector kernel reads f16 on
+	// both operands and a second variant of it would be a kernel added for a
+	// shape the tiled one already computes correctly. The f32 and mixed pairs
+	// take the tile and Selections says the rows are idle, which is the cost
+	// reported rather than hidden. That is a real gap for decode against f16
+	// weights, and it is reported rather than closed here: the quantized path
+	// has its own M=1 kernel because int8 is the width a large model is in,
+	// and a mixed matvec is the same shape of argument at f16.
 	if m == 1 && x.dtype == accel.F16 {
 		return b.record(node{
 			op: "MatMul", inputs: []*Tensor{x, w}, kernel: &testkernels.MatVecKernel,
@@ -106,18 +161,16 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 				"rows idle", testkernels.TileM, testkernels.TileM-1)},
 		}, accel.F32, Shape{m, n})
 	}
-	gemm := &testkernels.MatMulTiledKernel
-	why := fmt.Sprintf("the portable tiled GEMM over a %dx%d output, in %dx%d tiles",
-		m, n, testkernels.TileM, testkernels.TileN)
+	gemm, why := gemmKernel(x.dtype, w.dtype, m, n)
 	rejected := []string{"the matrix-vector kernel: it applies only at M=1"}
-	if x.dtype == accel.F32 {
-		gemm = &testkernels.MatMulTiledF32Kernel
-		why = fmt.Sprintf("the tiled GEMM over f32 operands, a %dx%d output in %dx%d tiles",
-			m, n, testkernels.TileM, testkernels.TileN)
-		if m == 1 {
-			rejected = []string{fmt.Sprintf("the matrix-vector kernel: it reads f16, so "+
-				"%d of this tile's %d rows are idle", testkernels.TileM-1, testkernels.TileM)}
-		}
+	if m == 1 {
+		// Reached only when x is f32: the f16 pair took the MatVec branch
+		// above. The matrix-vector kernel reads f16 on *both* operands, so
+		// neither the f32 nor the mixed pair can use it, and the cost of the
+		// tile is reported rather than hidden.
+		rejected = []string{fmt.Sprintf("the matrix-vector kernel: it reads f16 on both "+
+			"operands, so %d of this tile's %d rows are idle",
+			testkernels.TileM-1, testkernels.TileM)}
 	}
 	return b.record(node{
 		op: "MatMul", inputs: []*Tensor{x, w}, kernel: gemm,
@@ -141,7 +194,7 @@ func Linear(b *Builder, x, w, bias *Tensor) *Tensor {
 	if !ok {
 		return b.poison()
 	}
-	if x.dtype != accel.F16 {
+	if x.dtype != accel.F16 || w.dtype != accel.F16 {
 		return b.fail(1, "Linear", "operands are %v and the fused epilogue reads f16; the "+
 			"composed form -- MatMul then Add -- takes f32 and is the reference this "+
 			"kernel is checked against, so it is the right answer here rather than a "+
