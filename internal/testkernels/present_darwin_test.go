@@ -7,7 +7,6 @@
 package testkernels_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -141,25 +140,6 @@ func presentGraph(t *testing.T, d *accel.Device, s *accel.Surface, w, h int) (*a
 	}
 	t.Cleanup(func() { _ = g.Close() })
 	return g, swap
-}
-
-// A device with no on-screen path reports it rather than failing later.
-//
-// Decision 6: absence is reported, not discovered. The CPU backend has no
-// drawable and never will, so a caller asking for a window surface is told
-// immediately instead of getting one that never shows anything.
-func TestTheCPUBackendReportsNoPresentPath(t *testing.T) {
-	cpu, err := accel.OpenCPU(accel.CPUOptions{})
-	if err != nil {
-		t.Fatalf("OpenCPU: %v", err)
-	}
-	defer cpu.Close()
-
-	_, err = cpu.NewWindowSurface(accel.NativeHandle{Kind: accel.NativeMetalLayer, Ptr: 1},
-		accel.SurfaceDescriptor{Width: 8, Height: 8})
-	if !errors.Is(err, accel.ErrNoPresent) {
-		t.Errorf("the CPU backend gave %v, want ErrNoPresent", err)
-	}
 }
 
 // A handle naming nothing is refused before any drawable is asked for.

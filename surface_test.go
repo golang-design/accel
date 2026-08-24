@@ -411,3 +411,370 @@ func TestAnAttachmentNamesExactlyOneResource(t *testing.T) {
 		})
 	}
 }
+
+// A device with no on-screen path reports it rather than failing later.
+//
+// Decision 6: absence is reported, not discovered. The CPU backend has no
+// drawable and never will, so a caller asking for a window surface is told at
+// the call instead of getting one that never shows anything.
+func TestADeviceWithNoPresentPathSaysSo(t *testing.T) {
+	d := openDevice(t)
+	_, err := d.NewWindowSurface(accel.NativeHandle{
+		Kind: accel.NativeMetalLayer, Ptr: 1,
+	}, accel.SurfaceDescriptor{Width: 8, Height: 8})
+	if !errors.Is(err, accel.ErrNoPresent) {
+		t.Errorf("the CPU backend gave %v, want ErrNoPresent", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), d.Info().Name) {
+		t.Errorf("the error should name the device, got %v", err)
+	}
+}
+
+// A window surface with no extent is refused before a backend is asked.
+//
+// Before, because the refusal belongs to the descriptor rather than to the
+// platform: a zero extent is wrong on every backend, and reporting it as
+// "this device has no present path" would send the caller to the wrong place.
+func TestAWindowSurfaceNeedsAnExtent(t *testing.T) {
+	d := openDevice(t)
+	for _, c := range []struct{ w, h int }{{0, 8}, {8, 0}, {-1, -1}} {
+		_, err := d.NewWindowSurface(accel.NativeHandle{Kind: accel.NativeMetalLayer, Ptr: 1},
+			accel.SurfaceDescriptor{Width: c.w, Height: c.h})
+		if err == nil {
+			t.Errorf("a %dx%d window surface was accepted", c.w, c.h)
+			continue
+		}
+		if errors.Is(err, accel.ErrNoPresent) {
+			t.Errorf("a %dx%d extent was reported as a missing present path, which sends "+
+				"the caller to the wrong place: %v", c.w, c.h, err)
+		}
+	}
+}
+
+// A closed device hands out no surfaces of either kind.
+func TestAClosedDeviceMakesNoSurface(t *testing.T) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	desc := accel.SurfaceDescriptor{Width: 8, Height: 8}
+	if _, err := d.NewHeadlessSurface(desc); err == nil {
+		t.Error("a closed device made a headless surface")
+	}
+	if _, err := d.NewWindowSurface(accel.NativeHandle{
+		Kind: accel.NativeMetalLayer, Ptr: 1,
+	}, desc); err == nil {
+		t.Error("a closed device made a window surface")
+	}
+}
+
+// A headless surface's images rotate, and a discarded frame goes back.
+//
+// Discard exists for the windowed case, where a frame holds a drawable the
+// compositor lent it — but the accounting is the surface's and is the same
+// either way, so it is asserted here where no display is needed: a frame
+// discarded frees its slot, and one already spent cannot be spent again.
+func TestADiscardedFrameGoesBack(t *testing.T) {
+	d := openDevice(t)
+	s := newSurface(t, d, 4, 4, 1)
+
+	first, err := s.Acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	// One image, so nothing else is available until this one goes back.
+	if _, err := s.Acquire(0); !errors.Is(err, accel.ErrAcquireTimeout) {
+		t.Fatalf("the second acquire gave %v, want ErrAcquireTimeout", err)
+	}
+	if err := s.Discard(first); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := s.Acquire(time.Second); err != nil {
+		t.Fatalf("after discarding, acquire gave %v", err)
+	}
+
+	// Spent means spent, whichever way it was spent.
+	if err := s.Discard(first); err == nil {
+		t.Error("a frame was discarded twice")
+	}
+	if err := s.Present(first, nil); err == nil {
+		t.Error("a discarded frame was presented")
+	}
+	if err := s.Discard(nil); err == nil {
+		t.Error("a nil frame was discarded")
+	}
+
+	other := newSurface(t, d, 4, 4, 1)
+	f, err := other.Acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if err := s.Discard(f); err == nil {
+		t.Error("a frame from another surface was discarded")
+	}
+}
+
+// Every refusal the surface constructors and the present slot own.
+//
+// Portable, and deliberately so: none of these needs a display or a drawable,
+// and putting them behind a platform tag would mean the coverage job that runs
+// on Linux never reaches the code a Linux caller can still call.
+func TestSurfaceAndPresentSlotRefusals(t *testing.T) {
+	d := openDevice(t)
+
+	t.Run("a headless surface with no extent", func(t *testing.T) {
+		for _, c := range []struct{ w, h int }{{0, 8}, {8, 0}} {
+			if _, err := d.NewHeadlessSurface(accel.SurfaceDescriptor{
+				Width: c.w, Height: c.h,
+			}); err == nil {
+				t.Errorf("a %dx%d surface was accepted", c.w, c.h)
+			}
+		}
+	})
+
+	t.Run("a surface with a negative image count", func(t *testing.T) {
+		if _, err := d.NewHeadlessSurface(accel.SurfaceDescriptor{
+			Width: 8, Height: 8, Images: -1,
+		}); err == nil {
+			t.Error("a surface with -1 images was accepted")
+		}
+	})
+
+	t.Run("an unlabelled surface still has a label", func(t *testing.T) {
+		s, err := d.NewHeadlessSurface(accel.SurfaceDescriptor{Width: 4, Height: 4})
+		if err != nil {
+			t.Fatalf("NewHeadlessSurface: %v", err)
+		}
+		defer s.Close()
+		// It appears in every error about the surface, so an empty one would
+		// make those errors name nothing.
+		if s.Label() == "" {
+			t.Error("a surface with no label given has none, and its errors name nothing")
+		}
+	})
+
+	t.Run("a resize to nothing", func(t *testing.T) {
+		s := newSurface(t, d, 8, 8, 1)
+		if err := s.Resize(0, 8); err == nil {
+			t.Error("a resize to a zero width was accepted")
+		}
+		if got := s.Generation(); got != 0 {
+			t.Errorf("a refused resize left the generation at %d, and a resize that did "+
+				"not happen must not invalidate a graph", got)
+		}
+	})
+
+	t.Run("a closed surface", func(t *testing.T) {
+		s, err := d.NewHeadlessSurface(accel.SurfaceDescriptor{Width: 4, Height: 4})
+		if err != nil {
+			t.Fatalf("NewHeadlessSurface: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		if err := s.Close(); err != nil {
+			t.Errorf("closing twice gave %v", err)
+		}
+		if err := s.Resize(8, 8); err == nil {
+			t.Error("a closed surface was resized")
+		}
+		if _, err := s.Acquire(time.Second); err == nil {
+			t.Error("a closed surface handed out a frame")
+		}
+	})
+
+	t.Run("a present slot with no surface", func(t *testing.T) {
+		r := d.NewRecorder()
+		if got := r.PresentSlot(nil, "none"); got != 0 {
+			t.Errorf("PresentSlot with no surface returned slot %d", got)
+		}
+		if _, err := r.Build(); err == nil {
+			t.Error("a recorder that failed a PresentSlot still built")
+		}
+	})
+
+	t.Run("a present slot for another device's surface", func(t *testing.T) {
+		other, err := accel.OpenCPU(accel.CPUOptions{})
+		if err != nil {
+			t.Fatalf("OpenCPU: %v", err)
+		}
+		defer other.Close()
+		s, err := other.NewHeadlessSurface(accel.SurfaceDescriptor{Width: 4, Height: 4})
+		if err != nil {
+			t.Fatalf("NewHeadlessSurface: %v", err)
+		}
+		defer s.Close()
+
+		r := d.NewRecorder()
+		r.PresentSlot(s, "foreign")
+		if _, err := r.Build(); err == nil {
+			t.Error("a surface from another device was recorded as a present slot")
+		} else if !strings.Contains(err.Error(), "different device") {
+			t.Errorf("the error should say the surface is another device's, got %v", err)
+		}
+	})
+
+	t.Run("BindPresent with no frame", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		g, swap := trivialPresentGraph(t, d, s)
+		if err := g.BindPresent(swap, nil); err == nil {
+			t.Error("BindPresent accepted no frame")
+		}
+		f, err := s.Acquire(time.Second)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		if err := s.Present(f, nil); err != nil {
+			t.Fatalf("present: %v", err)
+		}
+		if err := g.BindPresent(swap, f); err == nil {
+			t.Error("BindPresent accepted a frame that was already presented")
+		}
+	})
+}
+
+// trivialPresentGraph is the smallest graph with a present slot: an upload into
+// it, which needs no pipeline and no stage.
+func trivialPresentGraph(t *testing.T, d *accel.Device, s *accel.Surface) (*accel.Graph, accel.Slot) {
+	t.Helper()
+	r := d.NewRecorder()
+	swap := r.PresentSlot(s, "swapchain")
+	r.UploadToSlot(swap, 0, 4, make([]float32, 4))
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	return g, swap
+}
+
+// The rest of Present's and PresentSlot's refusals, all portable.
+func TestPresentRefusals(t *testing.T) {
+	d := openDevice(t)
+
+	t.Run("no frame", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		if err := s.Present(nil, nil); err == nil {
+			t.Error("Present accepted no frame")
+		}
+	})
+
+	t.Run("a frame from another surface", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		other := newSurface(t, d, 4, 4, 1)
+		f, err := other.Acquire(time.Second)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		err = s.Present(f, nil)
+		if err == nil {
+			t.Fatal("a frame from another surface was presented")
+		}
+		if !strings.Contains(err.Error(), other.Label()) {
+			t.Errorf("the error should name the surface the frame came from, got %v", err)
+		}
+	})
+
+	t.Run("a submission that failed", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		f, err := s.Acquire(time.Second)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		// A graph that cannot run: the fence carries the failure, and Present
+		// must not show a frame whose contents were never produced.
+		bad := failedFence(t, d)
+		err = s.Present(f, bad)
+		if err == nil {
+			t.Fatal("a frame was presented after the submission that rendered it failed")
+		}
+		if !strings.Contains(err.Error(), "failed") {
+			t.Errorf("the error should say the submission failed, got %v", err)
+		}
+	})
+
+	t.Run("a positive timeout with every image held", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		if _, err := s.Acquire(time.Second); err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		start := time.Now()
+		_, err := s.Acquire(10 * time.Millisecond)
+		if !errors.Is(err, accel.ErrAcquireTimeout) {
+			t.Fatalf("the second acquire gave %v, want ErrAcquireTimeout", err)
+		}
+		// It reports rather than waits out the timeout: with every image held
+		// by the caller there is nothing to wait for, and sleeping would be a
+		// stall with no possible outcome.
+		if elapsed := time.Since(start); elapsed > 5*time.Millisecond {
+			t.Errorf("it waited %v for an image only the caller could return", elapsed)
+		}
+	})
+
+	t.Run("an unnamed present slot still has a name", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		r := d.NewRecorder()
+		slot := r.PresentSlot(s, "")
+		if slot == 0 {
+			t.Fatal("an unnamed present slot was refused")
+		}
+		r.UploadToSlot(slot, 0, 4, make([]float32, 4))
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		for _, gs := range g.Slots() {
+			if gs.Descriptor.Name == "" {
+				t.Error("a slot with no name given has none, and its errors name nothing")
+			}
+		}
+	})
+
+	t.Run("BindPresent on a closed graph", func(t *testing.T) {
+		s := newSurface(t, d, 4, 4, 1)
+		g, swap := trivialPresentGraph(t, d, s)
+		if err := g.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		f, err := s.Acquire(time.Second)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		if err := g.BindPresent(swap, f); err == nil {
+			t.Error("a closed graph bound a present frame")
+		}
+	})
+}
+
+// failedFence returns a fence whose submission failed, for the paths that must
+// not proceed after one.
+func failedFence(t *testing.T, d *accel.Device) *accel.Fence {
+	t.Helper()
+	// A graph submitted twice without waiting: the second is refused, and the
+	// refusal arrives through the fence rather than through the call.
+	r := d.NewRecorder()
+	src := newBuffer(t, d, "src", 16, accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	dst := newBuffer(t, d, "dst", 16, accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	r.CopyBuffer(whole(t, dst), whole(t, src))
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := g.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Submitting a closed graph is refused, and the refusal rides the fence.
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err == nil {
+		t.Fatal("submitting a closed graph succeeded, so this fence carries no failure")
+	}
+	return f
+}
