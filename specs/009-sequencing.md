@@ -1772,6 +1772,56 @@ to give than the feature. On-device sampling policy is throughput over a working
 host path. Vulkan is unscheduled rather than blocked — `polyred` already runs
 cgo-free Vulkan on lavapipe in CI, so the prior art exists.
 
+#### Progress — 2026-08-24
+
+**Wave 0 is closed.** The graphics review ran and its verdict reshaped Wave 2;
+[042](042-surface-completion.md) §5.2 records it. The rasterization measurement
+was **not** run and is deferred rather than done: measuring it means bypassing
+the refusal being measured, and no consumer wants lines — the renderer this
+project reads as evidence keeps its own CPU line path and bypasses its GPU
+entirely. It stays in Wave 2 behind the attachment change.
+
+**Wave 1 is closed**, all three items:
+
+| Item | Outcome |
+| --- | --- |
+| sampling operators | built and batched. Also found that `Builder.Identity` did not cover a value an operator records, so a plan cache served a top-40 plan for a top-5 request — in three shipped operators |
+| subgroup shuffles, broadcasts and scans | built, Metal differential bit for bit. Also found [002](002-compute-model.md) §5.2 wrong twice: rule 3 is unusable as literally written, and rule 5's justification was false |
+| `UniformBuffer` | **moved to Wave 2**, because its missing half is a draw and not a dispatch |
+
+**Wave 2's two pre-items are closed**, and the first corrected this spec:
+
+- the barrier stage moved off the node and onto the access. Widening it changed
+  **no** inferred edge, no hazard count and no barrier count — measured over six
+  graphs, byte-identical. The M9 text above said it would change every one of
+  them; that was reasoning presented as measurement, and both places that
+  claimed it now say so. The schedule was right and the stated reason was not;
+  what deferring would have cost is a wrong barrier to debug during a bring-up;
+- the texture-origin entry is written and **skips**, self-activating the day
+  Metal lowers a texture copy. Writing it found that the texture path has no GPU
+  comparison at all.
+
+**Wave 2 proper is under way.** [045](045-texture-attachments.md) is drafted and
+its §5 step 1 — `TextureView`, and the format-compatibility rule — is built.
+
+#### A note on the review's own reliability
+
+Three of its findings did not survive contact, and that is worth recording
+because the next audit will be read the same way:
+
+- the panic it reported was real and its reported *message* was not, which was
+  found by reproducing it rather than quoting it;
+- its undeclared-vertex-slot finding named a real defect and the **wrong fix**;
+  the refusal it asked for broke a legitimate pattern, and an existing test said
+  so;
+- it called `capability_truth_test.go` vacuous. The test compares the capability
+  against what the device accepts, which is the right shape; it cannot fail only
+  because both backends currently agree.
+
+Everything else it found held under spot-checking, including the three that
+decided the wave order. **An audit is evidence, not a verdict** — the same rule
+this project applies to a consumer's reports, applied to its own.
+
 #### What this milestone must not repeat
 
 Every M9 item lands with the checks M8 learned the hard way, because each was
