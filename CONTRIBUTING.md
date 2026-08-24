@@ -142,6 +142,25 @@ go test -coverprofile=cover.out -coverpkg=./... ./...
 go run ./internal/conformance/cover/covercheck -profile=cover.out
 ```
 
+**On a Mac, that number is higher than the one CI computes.** The Metal
+differential runs here and not on Linux, and it is what exercises many kernels'
+generated lowerings — so a package can pass locally and fail the gate on CI, and
+the first sign is a coverage percentage rather than a named failure. It has
+happened twice.
+
+Reproduce the Linux number before pushing a new kernel:
+
+```sh
+go test ./internal/testkernels/ -skip 'Metal|Darwin' \
+  -coverprofile=cover.out -coverpkg=./internal/testkernels/
+go tool cover -func=cover.out | tail -1
+```
+
+The usual cause is a kernel whose **authored** Go function nothing calls: the
+generated lowering runs in every test, and the authored form runs only where a
+test calls it directly. `TestAuthoredFormsAgreeWithTheirLowerings` is where that
+comparison goes, and a new kernel needs an entry in it.
+
 ## How the repository is organised
 
 | Path | What it is | Who it is for |

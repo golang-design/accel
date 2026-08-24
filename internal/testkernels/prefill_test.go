@@ -616,6 +616,119 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("AttentionPrefillPaged", func(t *testing.T) {
+		const qHeads, kvHeads, headDim, block, qSeq = 2, 1, 8, 2, 4
+		const poolBlocks = 6
+		dims := testkernels.PagedPrefillDims{
+			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, QSeq: qSeq,
+			Base: 0, Block: block, Scale: float32(1) / float32(math.Sqrt(headDim)),
+		}
+		q := make([]float32, qSeq*qHeads*headDim)
+		pk := make([]float32, poolBlocks*block*kvHeads*headDim)
+		pv := make([]float32, len(pk))
+		for i := range q {
+			q[i] = float32(math.Sin(float64(i) * 0.37))
+		}
+		for i := range pk {
+			pk[i] = float32(math.Cos(float64(i) * 0.13))
+			pv[i] = float32(i%9) - 4
+		}
+		pages := []uint32{4, 1} // out of order, so the addressing is compared
+		lengths := []uint32{qSeq}
+
+		authored := make([]float32, len(q))
+		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
+		for g := range groups.X {
+			var scores, red [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+				groups, 128, func(th kernel.Thread) {
+					testkernels.AttentionPrefillPaged(th, dims, q, pk, pv, pages,
+						lengths, authored, &scores, &red)
+				})
+		}
+		generated := make([]float32, len(q))
+		if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillPagedKernel,
+			accel.ID3{X: groups.X},
+			kernelabi.Args{
+				Slices:   []any{q, pk, pv, pages, lengths, generated},
+				Uniforms: []any{dims},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("GatherRowsF16", func(t *testing.T) {
+		const vocab, width, rows = 8, 4, 3
+		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: vocab}
+		table := make([]accel.Float16, vocab*width)
+		for i := range table {
+			table[i] = accel.ToFloat16(float32(i)*0.375 - 5)
+		}
+		ids := []uint32{5, 0, vocab + 1} // the last is out of range
+		n := rows * width
+
+		authored := make([]float32, n)
+		for i := range authored {
+			testkernels.GatherRowsF16(flatThread(i, n), p, table, ids, authored)
+		}
+		generated := make([]float32, n)
+		if err := kernel.Dispatch(&testkernels.GatherRowsF16Kernel, accel.ID3{X: 1},
+			kernelabi.Args{
+				Slices: []any{table, ids, generated}, Uniforms: []any{p},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("QuantMatVec", func(t *testing.T) {
+		const n, k = 8, 32
+		d := testkernels.GEMMDims{M: 1, N: n, K: k}
+		a := make([]accel.Float16, k)
+		bq := make([]int8, k*n)
+		bs := make([]accel.Float16, k*n/testkernels.QuantBlock)
+		for i := range a {
+			a[i] = accel.ToFloat16(float32(math.Sin(float64(i) * 0.21)))
+		}
+		for i := range bq {
+			bq[i] = int8(i%201 - 100)
+		}
+		for i := range bs {
+			bs[i] = accel.ToFloat16(0.25 + float32(i%3)/8)
+		}
+
+		authored := make([]float32, n)
+		for col := range uint32(n) {
+			var sh [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: col},
+				kernel.ID3{X: n, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+					testkernels.QuantMatVec(th, d, a, bq, bs, authored, &sh)
+				})
+		}
+		generated := make([]float32, n)
+		if err := kernel.DispatchCooperative(&testkernels.QuantMatVecKernel,
+			accel.ID3{X: n},
+			kernelabi.Args{
+				Slices: []any{a, bq, bs, generated}, Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i] != generated[i] {
+				t.Fatalf("column %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
 }
 
 // flatThread is one invocation of a flat kernel, at global index i.
