@@ -8,19 +8,32 @@ import "golang.design/x/accel"
 
 // SampleDims is a sampler's shape.
 type SampleDims struct {
-	// Vocab is how many logits there are.
+	// Vocab is how many logits each row holds.
 	Vocab uint32
 
-	// Draw is a uniform value in [0, 1), supplied by the caller rather than
-	// generated here. specs/028-sampling.md gives the reason: a token is
-	// reproducible only if the randomness is an input, and the two backends can
-	// agree on a token only if neither is running a PRNG.
-	Draw float32
+	// Rows is how many independent sequences are sampled together. One is a
+	// single sequence, which is the same path rather than a special case.
+	Rows uint32
 }
+
+// The draw is a binding rather than a field here, and specs/043-per-row-values.md
+// says why.
+//
+// specs/028-sampling.md's decision to make the randomness an *input* is the
+// right one -- a token is reproducible only if the caller supplies it, and two
+// backends agree on a token only if neither runs a PRNG. What was wrong was the
+// *shape*: one draw per dispatch.
+//
+// A shared draw keeps reproducibility and destroys independence. Two sequences
+// whose distributions are similar -- common for a well-trained model answering
+// related prompts -- draw against the same u and emit the same token. Their
+// contexts then converge, so the next distributions are more similar still, and
+// two users get the same answer. Every test passed, because reproducibility is
+// what they check and reproducibility is exactly what was preserved.
 
 // SampleArgmax writes the index of the largest logit.
 //
-//	out[0] = argmaxᵢ logits[i]
+//	out[r] = argmaxᵢ logits[r][i]
 //
 // # Ties go to the lowest index
 //
@@ -39,12 +52,18 @@ func SampleArgmax(t accel.Thread, d SampleDims, logits []float32, out []uint32,
 
 	lane := t.LocalID().X
 
+	// One workgroup per row, so the rows of a batch reduce independently and
+	// never share a partial. The index kept is within the row, which is what a
+	// caller wants back: a token id, not an offset into the batch.
+	r := t.GroupID().X
+	base := r * d.Vocab
+
 	// Each lane's own best over its strided slice, scanning upward so the
 	// first of an equal pair is the one kept.
 	v := float32(-3.4e38)
 	idx := uint32(0)
 	for i := lane; i < d.Vocab; i += RowWidth {
-		x := logits[i]
+		x := logits[base+i]
 		if x > v {
 			v = x
 			idx = i
@@ -72,13 +91,13 @@ func SampleArgmax(t accel.Thread, d SampleDims, logits []float32, out []uint32,
 	}
 
 	if lane == 0 {
-		out[0] = at[0]
+		out[r] = at[0]
 	}
 }
 
 // SampleCategorical draws an index from a distribution.
 //
-//	out[0] = min{ i : Σⱼ≤ᵢ probs[j] > draw }
+//	out[r] = min{ i : Σⱼ≤ᵢ probs[r][j] > draws[r] }
 //
 // # Why the walk is sequential
 //
@@ -111,12 +130,16 @@ func SampleArgmax(t accel.Thread, d SampleDims, logits []float32, out []uint32,
 // which no partial sum exceeds, so it is clamped just below.
 //
 //accel:kernel workgroup=1
-func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, out []uint32) {
-	if t.GlobalID().X != 0 {
+func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, draws []float32,
+	out []uint32) {
+
+	r := t.GlobalID().X
+	if r >= d.Rows {
 		return
 	}
+	base := r * d.Vocab
 
-	draw := d.Draw
+	draw := draws[r]
 	if draw < float32(0) {
 		draw = float32(0)
 	}
@@ -126,7 +149,7 @@ func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, out []uint
 
 	total := float32(0)
 	for i := uint32(0); i < d.Vocab; i++ {
-		total = total + probs[i]
+		total = total + probs[base+i]
 	}
 	target := draw * total
 
@@ -134,7 +157,7 @@ func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, out []uint
 	chosen := d.Vocab - 1
 	found := false
 	for i := uint32(0); i < d.Vocab; i++ {
-		acc = acc + probs[i]
+		acc = acc + probs[base+i]
 		// Strictly greater, so a draw landing exactly on a cumulative boundary
 		// moves on to the next index rather than stopping short of it. A
 		// zero-weight entry can never be chosen, because its partial sum does
@@ -144,5 +167,5 @@ func SampleCategorical(t accel.Thread, d SampleDims, probs []float32, out []uint
 			found = true
 		}
 	}
-	out[0] = chosen
+	out[r] = chosen
 }

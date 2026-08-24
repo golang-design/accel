@@ -252,7 +252,7 @@ func (SampleDimsCodec) EncodedSize() int { return SampleDimsBlockSize }
 func (SampleDimsCodec) Encode(dst []byte, value SampleDims) error {
 	w := accel.NewUniformWriter(dst)
 	w.U32(0, value.Vocab)
-	w.F32(4, value.Draw)
+	w.U32(4, value.Rows)
 	return w.Err()
 }
 
@@ -4352,13 +4352,15 @@ kernel void ReduceSum(
 type sampleArgmaxFrame struct {
 	pc      int
 	lane0   uint32
-	v1      float32
-	idx2    uint32
-	i3      uint32
-	x4      float32
-	stride5 uint32
-	a6      float32
-	b7      float32
+	r1      uint32
+	base2   uint32
+	v3      float32
+	idx4    uint32
+	i5      uint32
+	x6      float32
+	stride7 uint32
+	a8      float32
+	b9      float32
 }
 
 // sampleArgmaxCoop runs one invocation of SampleArgmax to its next suspension point.
@@ -4372,58 +4374,60 @@ func sampleArgmaxCoop(t accel.Thread, d SampleDims, logits []float32, out []uint
 		switch f.pc {
 		case 0:
 			f.lane0 = t.LocalID().X
-			f.v1 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			f.idx2 = uint32(0)
+			f.r1 = t.GroupID().X
+			f.base2 = (f.r1 * d.Vocab)
+			f.v3 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx4 = uint32(0)
 			{
-				f.i3 = f.lane0
-				for ; f.i3 < d.Vocab; f.i3 = (f.i3 + uint32(128)) {
-					f.x4 = logits[f.i3]
-					if f.x4 > f.v1 {
-						f.v1 = f.x4
-						f.idx2 = f.i3
+				f.i5 = f.lane0
+				for ; f.i5 < d.Vocab; f.i5 = (f.i5 + uint32(128)) {
+					f.x6 = logits[(f.base2 + f.i5)]
+					if f.x6 > f.v3 {
+						f.v3 = f.x6
+						f.idx4 = f.i5
 					}
 				}
 			}
 			tr.Write(0, int(f.lane0))
-			best[f.lane0] = f.v1
+			best[f.lane0] = f.v3
 			tr.Write(1, int(f.lane0))
-			at[f.lane0] = f.idx2
+			at[f.lane0] = f.idx4
 			f.pc = 1
 			continue
 		case 1:
 			f.pc = 2
-			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "sample.go:55:2"}
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "sample.go:74:2"}
 			return true
 		case 2:
-			f.stride5 = uint32(64)
+			f.stride7 = uint32(64)
 			f.pc = 6
 			continue
 		case 3:
-			if f.lane0 < f.stride5 {
-				f.a6 = best[tr.ReadAt(0, int(f.lane0))]
-				f.b7 = best[tr.ReadAt(0, int((f.lane0+f.stride5)))]
-				if f.b7 > f.a6 {
+			if f.lane0 < f.stride7 {
+				f.a8 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b9 = best[tr.ReadAt(0, int((f.lane0+f.stride7)))]
+				if f.b9 > f.a8 {
 					tr.Write(0, int(f.lane0))
-					best[f.lane0] = f.b7
+					best[f.lane0] = f.b9
 					tr.Write(1, int(f.lane0))
-					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride5)))]
-				} else if (f.b7 == f.a6) && (at[tr.ReadAt(1, int((f.lane0+f.stride5)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride7)))]
+				} else if (f.b9 == f.a8) && (at[tr.ReadAt(1, int((f.lane0+f.stride7)))] < at[tr.ReadAt(1, int(f.lane0))]) {
 					tr.Write(1, int(f.lane0))
-					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride5)))]
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride7)))]
 				}
 			}
 			f.pc = 4
 			continue
 		case 4:
 			f.pc = 5
-			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "sample.go:71:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "sample.go:90:3"}
 			return true
 		case 5:
-			f.stride5 = (f.stride5 / uint32(2))
+			f.stride7 = (f.stride7 / uint32(2))
 			f.pc = 6
 			continue
 		case 6:
-			if f.stride5 > uint32(0) {
+			if f.stride7 > uint32(0) {
 				f.pc = 3
 				continue
 			}
@@ -4431,7 +4435,7 @@ func sampleArgmaxCoop(t accel.Thread, d SampleDims, logits []float32, out []uint
 			continue
 		case 7:
 			if f.lane0 == uint32(0) {
-				out[int32(0)] = at[tr.ReadAt(1, int(int32(0)))]
+				out[f.r1] = at[tr.ReadAt(1, int(int32(0)))]
 			}
 			return false
 		}
@@ -4447,7 +4451,7 @@ var SampleArgmaxKernel = kernelabi.Kernel{
 		{Name: "logits", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "38a17a045d073eecc00e91497b635658",
+	Digest:    "32bb3985ce23afe8216936496e9591ff",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4455,7 +4459,7 @@ using namespace metal;
 
 struct SampleDims {
     uint Vocab;
-    float Draw;
+    uint Rows;
     char _tail[8];
 };
 
@@ -4473,10 +4477,12 @@ kernel void SampleArgmax(
     threadgroup float best[128];
     threadgroup uint at[128];
     uint lane = _lid.x;
+    uint r = _wid.x;
+    uint base = (r * d.Vocab);
     float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     uint idx = uint(0);
     for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
-        float x = logits[i];
+        float x = logits[(base + i)];
         if ((x > v)) {
             v = x;
             idx = i;
@@ -4500,7 +4506,7 @@ kernel void SampleArgmax(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if ((lane == uint(0))) {
-        out[int(0)] = at[int(0)];
+        out[r] = at[int(0)];
     }
 }
 `,
@@ -4534,11 +4540,13 @@ kernel void SampleArgmax(
 // It is what the CPU backend runs. The authored SampleCategorical is never registered as
 // an executable: it supplies the typed source this was built from, and it is
 // run only by the test that checks the two agree.
-func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, out []uint32) {
-	if t.GlobalID().X != uint32(0) {
+func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, draws []float32, out []uint32) {
+	var r uint32 = t.GlobalID().X
+	if r >= d.Rows {
 		return
 	}
-	var draw float32 = d.Draw
+	var base uint32 = (r * d.Vocab)
+	var draw float32 = draws[r]
 	if draw < float32(0) {
 		draw = float32(0)
 	}
@@ -4549,7 +4557,7 @@ func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, out []
 	{
 		var i uint32 = uint32(0)
 		for ; i < d.Vocab; i = (i + uint32(1)) {
-			total = float32(total + probs[i])
+			total = float32(total + probs[(base+i)])
 		}
 	}
 	var target float32 = (draw * total)
@@ -4559,14 +4567,14 @@ func sampleCategoricalFlat(t accel.Thread, d SampleDims, probs []float32, out []
 	{
 		var i uint32 = uint32(0)
 		for ; i < d.Vocab; i = (i + uint32(1)) {
-			acc = float32(acc + probs[i])
+			acc = float32(acc + probs[(base+i)])
 			if !found && (acc > target) {
 				chosen = i
 				found = true
 			}
 		}
 	}
-	out[int32(0)] = chosen
+	out[r] = chosen
 }
 
 // SampleCategoricalKernel is the compiled form of SampleCategorical.
@@ -4575,9 +4583,10 @@ var SampleCategoricalKernel = kernelabi.Kernel{
 	WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1},
 	Bindings: []kernelabi.Binding{
 		{Name: "probs", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "draws", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "cacb11472247b3862dcde1c18ec8ec88",
+	Digest:    "f8515807a4808052e7a9b2554f9c91c6",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4585,25 +4594,28 @@ using namespace metal;
 
 struct SampleDims {
     uint Vocab;
-    float Draw;
+    uint Rows;
     char _tail[8];
 };
 
 kernel void SampleCategorical(
     const device float *probs [[buffer(0)]],
-    device uint *out [[buffer(1)]],
-    constant uint *_lens [[buffer(2)]],
-    constant SampleDims &d [[buffer(3)]],
+    const device float *draws [[buffer(1)]],
+    device uint *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant SampleDims &d [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
-    if ((_gid.x != uint(0))) {
+    uint r = _gid.x;
+    if ((r >= d.Rows)) {
         return;
     }
-    float draw = d.Draw;
+    uint base = (r * d.Vocab);
+    float draw = draws[r];
     if ((draw < float(0))) {
         draw = float(0);
     }
@@ -4612,20 +4624,20 @@ kernel void SampleCategorical(
     }
     float total = float(0);
     for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
-        total = (total + probs[i]);
+        total = (total + probs[(base + i)]);
     }
     float target = (draw * total);
     float acc = float(0);
     uint chosen = (d.Vocab - uint(1));
     bool found = false;
     for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
-        acc = (acc + probs[i]);
+        acc = (acc + probs[(base + i)]);
         if ((!found && (acc > target))) {
             chosen = i;
             found = true;
         }
     }
-    out[int(0)] = chosen;
+    out[r] = chosen;
 }
 `,
 	Uniforms: []kernelabi.Uniform{
@@ -4634,7 +4646,7 @@ kernel void SampleCategorical(
 		}},
 	},
 	Flat: func(t accel.Thread, a kernelabi.Args) {
-		sampleCategoricalFlat(t, kernelabi.UniformValue[SampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[uint32](a, 1))
+		sampleCategoricalFlat(t, kernelabi.UniformValue[SampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[uint32](a, 2))
 	},
 }
 

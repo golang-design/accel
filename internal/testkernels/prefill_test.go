@@ -367,13 +367,16 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 
 	t.Run("SampleCategorical", func(t *testing.T) {
 		probs := []float32{0.1, 0.2, 0.3, 0.4}
-		d := testkernels.SampleDims{Vocab: uint32(len(probs)), Draw: 0.35}
+		draws := []float32{0.35}
+		d := testkernels.SampleDims{Vocab: uint32(len(probs)), Rows: 1}
 
 		authored := make([]uint32, 1)
-		testkernels.SampleCategorical(flatThread(0, 1), d, probs, authored)
+		testkernels.SampleCategorical(flatThread(0, 1), d, probs, draws, authored)
 		generated := make([]uint32, 1)
 		if err := kernel.Dispatch(&testkernels.SampleCategoricalKernel, accel.ID3{X: 1},
-			kernelabi.Args{Slices: []any{probs, generated}, Uniforms: []any{d}}); err != nil {
+			kernelabi.Args{
+				Slices: []any{probs, draws, generated}, Uniforms: []any{d},
+			}); err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
 		if authored[0] != generated[0] {

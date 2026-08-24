@@ -322,13 +322,16 @@ func diffCases() []diffCase {
 			},
 		},
 		{
-			kernel: &testkernels.SampleCategoricalKernel, counts: []int{256, 1},
-			uniforms: []any{testkernels.SampleDims{Vocab: 256, Draw: 0.5}},
+			kernel: &testkernels.SampleCategoricalKernel, counts: []int{256, 1, 1},
+			uniforms: []any{testkernels.SampleDims{Vocab: 256, Rows: 1}},
 			groups:   accel.WorkgroupCount{X: 1},
 			// A distribution with equal masses, so the boundary the draw lands
 			// on is one an in-order walk and a parallel scan would place
 			// differently.
 			seed: func(b, i int) float32 {
+				if b == 1 {
+					return 0.5 // the draw
+				}
 				if b != 0 {
 					return 0
 				}

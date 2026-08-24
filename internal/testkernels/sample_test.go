@@ -19,8 +19,10 @@ func argmax(t *testing.T, logits []float32) uint32 {
 	out := make([]uint32, 1)
 	err := kernel.DispatchCooperative(&testkernels.SampleArgmaxKernel, accel.ID3{X: 1},
 		kernelabi.Args{
-			Slices:   []any{logits, out},
-			Uniforms: []any{testkernels.SampleDims{Vocab: uint32(len(logits))}},
+			Slices: []any{logits, out},
+			Uniforms: []any{testkernels.SampleDims{
+				Vocab: uint32(len(logits)), Rows: 1,
+			}},
 		})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -33,8 +35,10 @@ func categorical(t *testing.T, probs []float32, draw float32) uint32 {
 	out := make([]uint32, 1)
 	err := kernel.Dispatch(&testkernels.SampleCategoricalKernel, accel.ID3{X: 1},
 		kernelabi.Args{
-			Slices:   []any{probs, out},
-			Uniforms: []any{testkernels.SampleDims{Vocab: uint32(len(probs)), Draw: draw}},
+			Slices: []any{probs, []float32{draw}, out},
+			Uniforms: []any{testkernels.SampleDims{
+				Vocab: uint32(len(probs)), Rows: 1,
+			}},
 		})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -178,6 +182,94 @@ func TestSamplingFollowsTheDistribution(t *testing.T) {
 		if got := float64(counts[i]); math.Abs(got-want) > 2 {
 			t.Errorf("index %d was drawn %v times over a sweep and its probability predicts "+
 				"%v", i, got, want)
+		}
+	}
+}
+
+// Two rows with identical distributions and different draws emit different
+// tokens.
+//
+// This is the failure a shared draw produced and no test caught. specs/028's
+// choice to make the randomness an input is right — a token is reproducible
+// only if the caller supplies it — but one draw per *dispatch* keeps
+// reproducibility and destroys **independence**: two sequences whose
+// distributions are similar, which is common for a well-trained model answering
+// related prompts, draw against the same u and emit the same token. Their
+// contexts converge, the next distributions are more similar still, and two
+// users get the same answer.
+//
+// Every existing test passed, because reproducibility is what they check and
+// reproducibility is exactly what was preserved. So the assertion here is the
+// one they could not make: identical rows, different draws, different tokens.
+func TestABatchedSampleDrawsIndependentlyPerRow(t *testing.T) {
+	const vocab, rows = 8, 3
+	// The same distribution in every row, so nothing but the draw can separate
+	// the results.
+	probs := make([]float32, rows*vocab)
+	for r := range rows {
+		for i := range vocab {
+			probs[r*vocab+i] = 1.0 / vocab
+		}
+	}
+	// Draws in different buckets of a uniform distribution over eight.
+	draws := []float32{0.05, 0.45, 0.95}
+
+	out := make([]uint32, rows)
+	err := kernel.Dispatch(&testkernels.SampleCategoricalKernel, accel.ID3{X: rows},
+		kernelabi.Args{
+			Slices:   []any{probs, draws, out},
+			Uniforms: []any{testkernels.SampleDims{Vocab: vocab, Rows: rows}},
+		})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if out[0] == out[1] && out[1] == out[2] {
+		t.Fatalf("three rows with identical distributions and draws %v all emitted token "+
+			"%d; a shared draw makes two users get the same answer", draws, out[0])
+	}
+	// And each is the token its own draw selects, so this is per-row rather
+	// than merely varied.
+	for r := range rows {
+		want := uint32(float64(draws[r]) * vocab)
+		if out[r] != want {
+			t.Errorf("row %d drew %v over a uniform distribution and got token %d, want %d",
+				r, draws[r], out[r], want)
+		}
+	}
+}
+
+// A batched argmax reduces each row independently and returns an index within
+// that row.
+//
+// Within the row, because what a caller wants back is a token id rather than an
+// offset into the batch — and a reduction that shared partials across rows
+// would return the batch's best for every row, which looks like a model that
+// suddenly agrees with itself.
+func TestABatchedArgmaxIsPerRow(t *testing.T) {
+	const vocab, rows = 16, 3
+	logits := make([]float32, rows*vocab)
+	want := []uint32{2, 11, 7}
+	for r := range rows {
+		for i := range vocab {
+			logits[r*vocab+i] = float32(i%5) - 3
+		}
+		logits[r*vocab+int(want[r])] = 100
+	}
+
+	out := make([]uint32, rows)
+	err := kernel.DispatchCooperative(&testkernels.SampleArgmaxKernel, accel.ID3{X: rows},
+		kernelabi.Args{
+			Slices:   []any{logits, out},
+			Uniforms: []any{testkernels.SampleDims{Vocab: vocab, Rows: rows}},
+		})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for r := range rows {
+		if out[r] != want[r] {
+			t.Errorf("row %d picked %d, want %d; an index outside [0,%d) would be an "+
+				"offset into the batch rather than a token id", r, out[r], want[r], vocab)
 		}
 	}
 }
