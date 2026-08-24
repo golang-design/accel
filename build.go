@@ -471,6 +471,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		}
 		for _, t := range pipe.desc.Targets {
 			rd.Masks = append(rd.Masks, uint8(t.Mask.resolved()))
+			rd.Blends = append(rd.Blends, driver.Blend(t.Blend))
 		}
 		vu, err := stageUniforms(p.desc.Label, i, pipe.desc.Vertex, d.vertexU, "SetVertexUniform")
 		if err != nil {

@@ -595,6 +595,9 @@ type RenderDraw struct {
 	VertexBuffers []Operand
 	VertexLayouts []VertexLayout
 
+	// Blends is one per colour attachment, in the same order as Masks.
+	Blends []Blend
+
 	// VertexUniforms and FragmentUniforms are the stages' by-value parameters,
 	// one slice per stage because each stage indexes its own from zero.
 	VertexUniforms   []any
@@ -657,6 +660,48 @@ const (
 	// depth buffer out to memory every frame.
 	StoreDiscard
 )
+
+// BlendFactor scales one side of a blend, and BlendOp combines the two sides.
+//
+// Here rather than in the public package for the reason LoadOp is: a backend
+// acts on the value and cannot import that package. internal/raster declares
+// its own, because it is a leaf that knows nothing about plans; internal/cpu
+// maps one onto the other, and the mapping is checked by a test that walks
+// every value rather than by the two lists happening to agree.
+type BlendFactor uint8
+
+const (
+	FactorZero BlendFactor = iota
+	FactorOne
+	FactorSrcColor
+	FactorOneMinusSrcColor
+	FactorSrcAlpha
+	FactorOneMinusSrcAlpha
+	FactorDstColor
+	FactorOneMinusDstColor
+	FactorDstAlpha
+	FactorOneMinusDstAlpha
+)
+
+// BlendOp combines the two scaled sides.
+type BlendOp uint8
+
+const (
+	BlendAdd BlendOp = iota
+	BlendSubtract
+	BlendReverseSubtract
+	BlendMin
+	BlendMax
+)
+
+// Blend is one attachment's fixed-function read-modify-write.
+type Blend struct {
+	Enabled            bool
+	SrcColor, DstColor BlendFactor
+	ColorOp            BlendOp
+	SrcAlpha, DstAlpha BlendFactor
+	AlphaOp            BlendOp
+}
 
 // checkRenderPass reports why a render pass node cannot be compiled.
 //

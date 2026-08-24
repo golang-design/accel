@@ -128,6 +128,9 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 	for _, m := range d.Masks {
 		ps.Mask = append(ps.Mask, raster.WriteMask(m))
 	}
+	for _, b := range d.Blends {
+		ps.Blend = append(ps.Blend, rasterBlend(b))
+	}
 
 	fetch := newFetcher(d, bufs)
 
@@ -222,4 +225,63 @@ func newFetcher(d driver.RenderDraw, bufs [][]byte) func(index, instance uint32)
 		}
 		return out
 	}
+}
+
+// rasterBlend maps a plan's blend state onto the rasterizer's.
+//
+// Written out rather than converted numerically. The two enumerations agree
+// today, and a conversion that relies on that agreement is a silent
+// mistranslation the day one of them gains a value in the middle -- every blend
+// after the insertion would shift, and the result is a plausible image rather
+// than an error. TestBlendFactorsMapOneToOne checks every value.
+func rasterBlend(b driver.Blend) raster.Blend {
+	return raster.Blend{
+		Enabled:  b.Enabled,
+		SrcColor: rasterFactor(b.SrcColor), DstColor: rasterFactor(b.DstColor),
+		ColorOp:  rasterOp(b.ColorOp),
+		SrcAlpha: rasterFactor(b.SrcAlpha), DstAlpha: rasterFactor(b.DstAlpha),
+		AlphaOp: rasterOp(b.AlphaOp),
+	}
+}
+
+func rasterFactor(f driver.BlendFactor) raster.BlendFactor {
+	switch f {
+	case driver.FactorZero:
+		return raster.FactorZero
+	case driver.FactorOne:
+		return raster.FactorOne
+	case driver.FactorSrcColor:
+		return raster.FactorSrcColor
+	case driver.FactorOneMinusSrcColor:
+		return raster.FactorOneMinusSrcColor
+	case driver.FactorSrcAlpha:
+		return raster.FactorSrcAlpha
+	case driver.FactorOneMinusSrcAlpha:
+		return raster.FactorOneMinusSrcAlpha
+	case driver.FactorDstColor:
+		return raster.FactorDstColor
+	case driver.FactorOneMinusDstColor:
+		return raster.FactorOneMinusDstColor
+	case driver.FactorDstAlpha:
+		return raster.FactorDstAlpha
+	case driver.FactorOneMinusDstAlpha:
+		return raster.FactorOneMinusDstAlpha
+	}
+	return raster.FactorZero
+}
+
+func rasterOp(o driver.BlendOp) raster.BlendOp {
+	switch o {
+	case driver.BlendAdd:
+		return raster.BlendAdd
+	case driver.BlendSubtract:
+		return raster.BlendSubtract
+	case driver.BlendReverseSubtract:
+		return raster.BlendReverseSubtract
+	case driver.BlendMin:
+		return raster.BlendMin
+	case driver.BlendMax:
+		return raster.BlendMax
+	}
+	return raster.BlendAdd
 }

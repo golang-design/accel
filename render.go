@@ -123,7 +123,74 @@ type DepthStencilState struct {
 type ColorTargetState struct {
 	Format Format
 	Mask   ColorWriteMask
+
+	// Blend combines a fragment with what the attachment already holds. The
+	// zero value does not blend, which is what makes a target that says nothing
+	// about blending replace rather than accumulate.
+	Blend BlendState
 }
+
+// BlendState is fixed-function attachment read-modify-write.
+//
+// It is fixed at pipeline creation because D3D12, Vulkan and Metal all take it
+// as a compile-time input: changing it per draw would mean a backend that
+// silently recompiles mid-frame, which is a notorious stutter source, or one
+// that fails at a call the API said was legal.
+//
+// Colour and alpha have separate factors and operations because premultiplied
+// compositing needs them to differ: the usual "over" blend is source alpha on
+// colour and one on alpha, and a single pair cannot say that.
+type BlendState struct {
+	// Enabled is what separates blending from replacing. A zero BlendState with
+	// Enabled true would multiply everything by zero, so the flag is not
+	// inferred from the factors.
+	Enabled bool
+
+	SrcColor, DstColor BlendFactor
+	ColorOp            BlendOp
+
+	SrcAlpha, DstAlpha BlendFactor
+	AlphaOp            BlendOp
+}
+
+// AlphaBlend is the "over" operator, which is what most callers mean by
+// blending: source colour weighted by source alpha, over what is already there.
+func AlphaBlend() BlendState {
+	return BlendState{
+		Enabled:  true,
+		SrcColor: FactorSrcAlpha, DstColor: FactorOneMinusSrcAlpha, ColorOp: BlendAdd,
+		SrcAlpha: FactorOne, DstAlpha: FactorOneMinusSrcAlpha, AlphaOp: BlendAdd,
+	}
+}
+
+// BlendFactor scales one side of a blend.
+type BlendFactor = driver.BlendFactor
+
+// The blend factors. Named for what they scale by, not for where they appear:
+// FactorSrcAlpha on the destination side is a legal and useful combination.
+const (
+	FactorZero             = driver.FactorZero
+	FactorOne              = driver.FactorOne
+	FactorSrcColor         = driver.FactorSrcColor
+	FactorOneMinusSrcColor = driver.FactorOneMinusSrcColor
+	FactorSrcAlpha         = driver.FactorSrcAlpha
+	FactorOneMinusSrcAlpha = driver.FactorOneMinusSrcAlpha
+	FactorDstColor         = driver.FactorDstColor
+	FactorOneMinusDstColor = driver.FactorOneMinusDstColor
+	FactorDstAlpha         = driver.FactorDstAlpha
+	FactorOneMinusDstAlpha = driver.FactorOneMinusDstAlpha
+)
+
+// BlendOp combines the two scaled sides.
+type BlendOp = driver.BlendOp
+
+const (
+	BlendAdd             = driver.BlendAdd
+	BlendSubtract        = driver.BlendSubtract
+	BlendReverseSubtract = driver.BlendReverseSubtract
+	BlendMin             = driver.BlendMin
+	BlendMax             = driver.BlendMax
+)
 
 // ColorWriteMask is which channels of an attachment a fragment may write. The
 // zero value writes every channel, because a target nobody configured should be
