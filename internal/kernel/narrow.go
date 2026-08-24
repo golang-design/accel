@@ -89,10 +89,18 @@ func ToFloat16(x float32) Float16 {
 		shift := uint32(-exp - 14)
 		return Float16{bits: sign | uint16(roundShift(mant, 13+shift))}
 	default:
-		half := uint32(exp+15)<<10 | roundShift(mant, 13)
-		// Rounding the mantissa can carry into the exponent, and if that carries
-		// out of the exponent the result is an infinity. Letting it wrap would
-		// turn the largest finite f16 into a zero.
+		// Added, not OR-ed. roundShift returns 1024 when the mantissa rounds up
+		// out of ten bits, and that has to *carry* into the exponent. An OR
+		// puts the bit into the exponent's low position instead: where that bit
+		// was already set the OR does nothing, so a value just under a power of
+		// two -- 1.9997 -- kept its exponent with a zero mantissa and became
+		// 1.0, half its magnitude.
+		//
+		// Addition also gets the overflow right, which is what the sentence
+		// below was always describing: an exponent carrying out of five bits
+		// lands on 0x7c00, the infinity encoding, rather than wrapping the
+		// largest finite f16 to zero.
+		half := uint32(exp+15)<<10 + roundShift(mant, 13)
 		return Float16{bits: sign | uint16(half)}
 	}
 }
