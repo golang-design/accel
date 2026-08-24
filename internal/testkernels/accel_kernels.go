@@ -4686,6 +4686,41 @@ var GeometryVSStage = accel.Stage{
 		pos, vary := geometryVSFlat(v, u[0].(StageTransform), [3]float32(a[0]), [2]float32(a[1]))
 		return pos, flattenVaryings(vary)
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct StageTransform {
+    float Scale;
+    char _pad1[4];
+    float Offset[2];
+};
+
+struct GeometryVS_out {
+    float4 _pos [[position]];
+    float4 Colour [[user(v0)]];
+    float2 UV [[user(v1)]];
+};
+
+struct GeometryVS_in {
+    float3 pos [[attribute(0)]];
+    float2 uv [[attribute(1)]];
+};
+
+vertex GeometryVS_out GeometryVS(
+    GeometryVS_in _in [[stage_in]],
+    constant StageTransform &xf [[buffer(0)]],
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    float3 pos = _in.pos;
+    float2 uv = _in.uv;
+    GeometryVS_out _out;
+    _out._pos = float4(((pos[int(0)] * xf.Scale) + xf.Offset[int(0)]), ((pos[int(1)] * xf.Scale) + xf.Offset[int(1)]), pos[int(2)], float(1));
+    _out.Colour = float4(pos[int(0)], pos[int(1)], pos[int(2)], float(1));
+    _out.UV = uv;
+    return _out;
+}
+`,
 	Digest:    "fa00db3070303ba0b70ca8dc3c4f1d72",
 	Generator: kernelabi.Version,
 }
@@ -4716,6 +4751,31 @@ var FullScreenVSStage = accel.Stage{
 		pos, vary := fullScreenVSFlat(v)
 		return pos, flattenNoVaryings(vary)
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct FullScreenVS_out {
+    float4 _pos [[position]];
+};
+
+vertex FullScreenVS_out FullScreenVS(
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    FullScreenVS_out _out;
+    uint i = _vid;
+    float x = float(-1);
+    float y = float(-1);
+    if ((i == uint(1))) {
+        x = float(3);
+    }
+    if ((i == uint(2))) {
+        y = float(3);
+    }
+    _out._pos = float4(x, y, float(0), float(1));
+    return _out;
+}
+`,
 	Digest:    "084938b28ae49efc1a106628f70700ba",
 	Generator: kernelabi.Version,
 }
@@ -4742,6 +4802,32 @@ var ShadeFSStage = accel.Stage{
 		out := shadeFSFlat(f, unflattenVaryings(vv))
 		return [][4]float32{out.Albedo, out.Normal}
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct ShadeFS_in {
+    float4 _pos [[position]];
+    float4 Colour [[user(v0)]];
+    float2 UV [[user(v1)]];
+};
+
+struct ShadeFS_out {
+    float4 Albedo [[color(0)]];
+    float4 Normal [[color(1)]];
+};
+
+fragment ShadeFS_out ShadeFS(
+    ShadeFS_in _in [[stage_in]],
+    bool _front [[front_facing]]) {
+    ShadeFS_in in = _in;
+    ShadeFS_out _out;
+    float4 c = _in._pos;
+    _out.Albedo = in.Colour;
+    _out.Normal = float4(in.UV[int(0)], in.UV[int(1)], c[int(2)], float(1));
+    return _out;
+}
+`,
 	Digest:    "dc2adcd7b97a614657d79b40760b3295",
 	Generator: kernelabi.Version,
 }
@@ -4771,6 +4857,30 @@ var HalfTriangleVSStage = accel.Stage{
 		pos, vary := halfTriangleVSFlat(v)
 		return pos, flattenNoVaryings(vary)
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct HalfTriangleVS_out {
+    float4 _pos [[position]];
+};
+
+vertex HalfTriangleVS_out HalfTriangleVS(
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    HalfTriangleVS_out _out;
+    float x = float(-1);
+    float y = float(-1);
+    if ((_vid == uint(1))) {
+        x = float(1);
+    }
+    if ((_vid == uint(2))) {
+        y = float(1);
+    }
+    _out._pos = float4(x, y, as_type<float>(0x3F000000u) /* 0.5 */, float(1));
+    return _out;
+}
+`,
 	Digest:    "b865f928f01efe880d86bfb690f23584",
 	Generator: kernelabi.Version,
 }
@@ -4795,6 +4905,27 @@ var SolidFSStage = accel.Stage{
 		out := solidFSFlat(f, unflattenNoVaryings(vv))
 		return [][4]float32{out.Colour}
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct SolidFS_in {
+    float4 _pos [[position]];
+};
+
+struct SolidFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment SolidFS_out SolidFS(
+    SolidFS_in _in [[stage_in]],
+    bool _front [[front_facing]]) {
+    SolidFS_in in = _in;
+    SolidFS_out _out;
+    _out.Colour = float4(as_type<float>(0x3E800000u) /* 0.25 */, as_type<float>(0x3F000000u) /* 0.5 */, as_type<float>(0x3F400000u) /* 0.75 */, float(1));
+    return _out;
+}
+`,
 	Digest:    "af43db087da681e27d713ad79268d39f",
 	Generator: kernelabi.Version,
 }
@@ -4820,6 +4951,32 @@ var AttributeVSStage = accel.Stage{
 		pos, vary := attributeVSFlat(v, [3]float32(a[0]), [4]float32(a[1]))
 		return pos, flattenColourVaryings(vary)
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct AttributeVS_out {
+    float4 _pos [[position]];
+    float4 Tint [[user(v0)]];
+};
+
+struct AttributeVS_in {
+    float3 pos [[attribute(0)]];
+    float4 tint [[attribute(1)]];
+};
+
+vertex AttributeVS_out AttributeVS(
+    AttributeVS_in _in [[stage_in]],
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    float3 pos = _in.pos;
+    float4 tint = _in.tint;
+    AttributeVS_out _out;
+    _out._pos = float4(pos[int(0)], pos[int(1)], pos[int(2)], float(1));
+    _out.Tint = tint;
+    return _out;
+}
+`,
 	Digest:    "07f4590d8e263615e631368241b1911d",
 	Generator: kernelabi.Version,
 }
@@ -4844,6 +5001,28 @@ var TintFSStage = accel.Stage{
 		out := tintFSFlat(f, unflattenColourVaryings(vv))
 		return [][4]float32{out.Colour}
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct TintFS_in {
+    float4 _pos [[position]];
+    float4 Tint [[user(v0)]];
+};
+
+struct TintFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment TintFS_out TintFS(
+    TintFS_in _in [[stage_in]],
+    bool _front [[front_facing]]) {
+    TintFS_in in = _in;
+    TintFS_out _out;
+    _out.Colour = in.Tint;
+    return _out;
+}
+`,
 	Digest:    "b078a031784853ff457d0c9c754d57d4",
 	Generator: kernelabi.Version,
 }
@@ -4871,6 +5050,35 @@ var ScaledVSStage = accel.Stage{
 		pos, vary := scaledVSFlat(v, u[0].(StageTransform), [3]float32(a[0]))
 		return pos, flattenNoVaryings(vary)
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct StageTransform {
+    float Scale;
+    char _pad1[4];
+    float Offset[2];
+};
+
+struct ScaledVS_out {
+    float4 _pos [[position]];
+};
+
+struct ScaledVS_in {
+    float3 pos [[attribute(0)]];
+};
+
+vertex ScaledVS_out ScaledVS(
+    ScaledVS_in _in [[stage_in]],
+    constant StageTransform &xf [[buffer(0)]],
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    float3 pos = _in.pos;
+    ScaledVS_out _out;
+    _out._pos = float4(((pos[int(0)] * xf.Scale) + xf.Offset[int(0)]), ((pos[int(1)] * xf.Scale) + xf.Offset[int(1)]), pos[int(2)], float(1));
+    return _out;
+}
+`,
 	Digest:    "23de7018632e135d68621adaa6e207a0",
 	Generator: kernelabi.Version,
 }
@@ -4898,6 +5106,32 @@ var TintedFSStage = accel.Stage{
 		out := tintedFSFlat(f, unflattenNoVaryings(vv), u[0].(StageTint))
 		return [][4]float32{out.Colour}
 	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct StageTint {
+    float Colour[4];
+};
+
+struct TintedFS_in {
+    float4 _pos [[position]];
+};
+
+struct TintedFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment TintedFS_out TintedFS(
+    TintedFS_in _in [[stage_in]],
+    constant StageTint &tint [[buffer(0)]],
+    bool _front [[front_facing]]) {
+    TintedFS_in in = _in;
+    TintedFS_out _out;
+    _out.Colour = float4(tint.Colour[0], tint.Colour[1], tint.Colour[2], tint.Colour[3]);
+    return _out;
+}
+`,
 	Digest:    "ecd833083023eb5fc2b0c150fc0c357b",
 	Generator: kernelabi.Version,
 }
@@ -5821,4 +6055,20 @@ var Kernels = []*kernelabi.Kernel{
 	&SubgroupReduceFallbackKernel,
 	&TopKMaskKernel,
 	&TopPMaskKernel,
+}
+
+// Stages is every graphics stage this package generated, in source order.
+//
+// Generated rather than written, so that a pass over the whole corpus cannot
+// silently miss a stage somebody added.
+var Stages = []*accel.Stage{
+	&GeometryVSStage,
+	&FullScreenVSStage,
+	&ShadeFSStage,
+	&HalfTriangleVSStage,
+	&SolidFSStage,
+	&AttributeVSStage,
+	&TintFSStage,
+	&ScaledVSStage,
+	&TintedFSStage,
 }

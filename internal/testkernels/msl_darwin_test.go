@@ -84,3 +84,53 @@ func corpus() []*accel.Kernel {
 	}
 	return out
 }
+
+// Every stage the MSL emitter produced source for compiles on the device.
+//
+// The same argument as the kernel case and the same compiler:
+// -newLibraryWithSource: is what accepts the text in production. What differs is
+// that a stage cannot go through Compile -- a vertex or fragment function is not
+// a compute kernel and -newComputePipelineStateWithFunction: rejects one -- so
+// this resolves the function instead, which also catches source that parses but
+// declares the entry point under another name.
+//
+// A render pipeline state would prove more and needs more: both stages together
+// plus attachment formats. That belongs with the Metal render path; this is the
+// claim the emitter alone can make.
+func TestEveryEmittedStageCompilesOnTheDevice(t *testing.T) {
+	devs, err := mtl.Devices()
+	if err != nil || len(devs) == 0 {
+		if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+			t.Fatalf("this job promises Metal and found no device (err=%v)", err)
+		}
+		t.Skipf("no Metal device on this machine (err=%v)", err)
+	}
+	d := devs[0]
+	defer func() {
+		for _, x := range devs {
+			x.Close()
+		}
+	}()
+
+	var withMSL int
+	for _, s := range testkernels.Stages {
+		if s.MSL == "" {
+			t.Errorf("stage %s carries no MSL; every stage in the corpus is inside the "+
+				"subset, so an empty one is a lowering that silently stopped working",
+				s.Name)
+			continue
+		}
+		withMSL++
+		t.Run(s.Name, func(t *testing.T) {
+			f, err := d.CompileFunction(s.MSL, s.Name)
+			if err != nil {
+				t.Fatalf("the device compiler rejected the emitted MSL:\n%v\n\n%s",
+					err, s.MSL)
+			}
+			f.Close()
+		})
+	}
+	if withMSL == 0 {
+		t.Fatal("no stage in the corpus carries MSL, so this test proves nothing")
+	}
+}

@@ -170,3 +170,59 @@ func (p *Pipeline) Close() {
 	release(p.lib)
 	p.id, p.fn, p.lib = 0, 0, 0
 }
+
+// CompileFunction compiles MSL and resolves one named function, without
+// building a pipeline state around it.
+//
+// A graphics stage cannot go through Compile: a vertex or fragment function is
+// not a compute kernel, and -newComputePipelineStateWithFunction: rejects one.
+// A render pipeline state would need attachment formats and both stages
+// together, which is more than "does this text compile" needs to know.
+//
+// What this proves is what specs/021-metal-bringup.md section 1 argues is worth
+// proving: -newLibraryWithSource: *is* the Metal compiler, so text it accepts
+// here is text it accepts in production. Resolving the function on top of that
+// catches the case a bare compile misses -- source that parses but declares the
+// entry point under another name, or not at all.
+func (d *Device) CompileFunction(source, name string) (*Function, error) {
+	f := &Function{name: name}
+	var err error
+	withPool(func() {
+		var nsErr objc.ID
+		opts := compileOptions()
+		defer release(opts)
+		f.lib = d.id.Send(selNewLibraryWithSource, nsstring(source), opts, unsafe.Pointer(&nsErr))
+		if f.lib == 0 {
+			err = describe("compiling MSL", nsErr)
+			return
+		}
+		f.fn = f.lib.Send(selNewFunctionWithName, nsstring(name))
+		if f.fn == 0 {
+			err = fmt.Errorf("accel/mtl: the compiled library has no function named %q", name)
+		}
+	})
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// Function is a compiled MSL function that is not a compute pipeline.
+type Function struct {
+	name string
+	lib  objc.ID
+	fn   objc.ID
+}
+
+// Name is the entry point this function was resolved by.
+func (f *Function) Name() string { return f.name }
+
+// Close releases the function and its library.
+func (f *Function) Close() {
+	withPool(func() {
+		release(f.fn)
+		release(f.lib)
+	})
+	f.fn, f.lib = 0, 0
+}
