@@ -96,10 +96,14 @@ the tell was two assignments to the blank identifier in the middle of the graph.
 
 ## 5. Where v0 is narrower than 007
 
-1. **`LayerState` builds the view and cannot be bound.** A slot binds a whole
-   resource rather than a range of one, so a per-layer cache needs one state per
-   layer until the device layer can bind a sub-range. The view arithmetic is
-   built and tested; what is missing is underneath it.
+1. ~~**`LayerState` builds the view and cannot be bound.**~~ **Closed 2026-08-24.**
+   The diagnosis was wrong and the consequence was right. A slot binds an
+   `accel.BufferView`, which has always carried an offset and a count, so the
+   device layer could bind a sub-range the whole time; what was missing is one
+   layer up, where `LayerState` computed an offset and the compiler never read
+   it. A **window** -- a port plus a range -- is now what a graph slot binds,
+   and a plan with no layer view has one window per port and takes the path it
+   always did. See [007](007-tensor-layer.md)'s correction.
 2. **`Rows`, `ScatterRows`, `RMSNorm`, `Softmax`, `RoPE` and `Attention` are
    f32**, and `MatMul` is f16. That is what [010](010-kernel-corpus.md)
    registers.

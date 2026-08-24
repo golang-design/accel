@@ -35,8 +35,10 @@ import (
 // A committed golden would be digits nobody could evaluate: a failure would say
 // the answer changed and not whether the new one is wrong.
 //
-// One state per layer rather than a layered cache, because a slot binds a whole
-// resource and specs/026-tensor-decode.md records that gap.
+// One state per layer rather than one layered cache. Both work now that a slot
+// binds a window of a port (specs/026-tensor-decode.md section 5); this stays as
+// it is because TestALayeredCacheBindsOnce covers the layered form, and a model
+// test that also changed its cache layout would be testing two things.
 func TestATwoLayerModelProducesLogits(t *testing.T) {
 	const (
 		layers   = 2

@@ -935,6 +935,21 @@ absent, both for want of a registered kernel. And `Attention` does not fall back
 to the composed score-softmax-value graph; it selects the fused kernel or
 refuses, and says which in `Selections`.
 
+> **Correction, 2026-08-24.** Three of those four are closed and one was never
+> true as stated. `Contiguous` is built. `Attention`'s composed fallback is not
+> merely unbuilt but unbuildable, and 007 is corrected — see the consumer-report
+> section below. And the `LayerState` sentence had the right consequence with
+> the wrong cause: a slot binds an `accel.BufferView`, which carries an offset
+> and a count, so the device layer could always bind a sub-range. What was
+> missing sat one layer up, where the offset `LayerState` computed reached
+> nothing. A graph slot now binds a *window* of a port.
+>
+> Left as written above rather than edited, because this spec's maintenance rule
+> is that a recorded outcome is not tidied. What is worth carrying is that a
+> carried-forward gap can be wrong about *why*, and that a diagnosis nobody
+> retests is the kind of claim that survives longest: this one was quoted into
+> three specs and two refusal messages before anyone checked it.
+
 **The bug worth carrying forward.** `Plan.Submit` binds synchronously and
 submits asynchronously, so a second submission rebound the first one's slots
 before it ran: two submissions with different inputs and outputs produced one
@@ -1597,6 +1612,7 @@ most orthogonal.
 | `ToFloat16` OR-ed the rounded mantissa into the exponent instead of adding it, so every value in a band below every power of two came back halved | building the f16 KV cache and seeing a 35% discrepancy | it reached weight conversion, the f16 GEMM corpus and quantization scales. The fix is an oracle over all 65536 halves, not a case |
 | the attention block loop's shared arrays are loop-carried, and a pass's writes race the previous pass's reads | reasoning, then confirmed by removing the barrier | 002 §3.4's rendezvous check finds an invocation that fails to *arrive*; this is a race between arrivals, so nothing would have reported it |
 | V23 unimplemented | binding one buffer to a read binding and a write binding of one dispatch, and watching it succeed | a check named in a spec's validation table is not evidence it exists |
+| `LayerState` was refused for four milestones because "a slot binds a whole resource", which was never true — `accel.SlotBinding` takes a `BufferView` with an offset and a count | checking the claim instead of the code, when the consumer's report finally forced the question | a diagnosis nobody retests outlives the condition it described. This one was quoted into three specs and two refusal messages, and each quotation made it look better attested |
 | a timing test asserted `Elapsed > 0` for eight small dispatches, and failed on Windows only | CI, intermittently — the work finished inside one tick of a coarse monotonic clock | a duration assertion is an assertion about the *platform* unless the test knows the clock's resolution. `Elapsed == 0` also turned out to be overloaded: it means both "no timing collected" and "faster than the clock", and nothing above can tell them apart |
 | the attention block loop bounded `base` and not `base+lane`, so a length past the binding's reach was scored by the last block's lanes — reading the next sequence's page-table row, or off the end of the cache | writing the test for a claim that had already been written into two specs | a bound on a loop variable is not a bound on an index derived from it. Where a lane offsets the loop variable, the mask carries the bound |
 

@@ -328,7 +328,7 @@ been a third thing that could disagree with the two kernels.
 | `Contiguous` | a gather kernel with strides in a uniform block; [010](010-kernel-corpus.md) registers none |
 | `Softmax`'s mask and causal | a kernel with a mask binding |
 | `Squeeze`, `Unsqueeze` | `Reshape` expresses both; absent rather than aliased |
-| `LayerState` binding | a slot binds a whole resource, not a range of one; the view arithmetic is built and tested, and a per-layer cache needs one state per layer until the device layer can bind a sub-range |
+| `LayerState` binding | **built, 2026-08-24.** A graph slot binds a *window* of a port -- a range in elements -- so one cache serves every layer and a caller binds it once. The entry above was wrong about the cause: `accel.SlotBinding` takes a `BufferView` and always could express a sub-range; `LayerState`'s offset simply never reached the binding |
 | composed attention as a fallback | not buildable, not merely absent: the composed form needs a matrix multiply per head and 025 does not broadcast leading axes, so it exists only at `kvHeads == 1`. It stays the correctness reference over the shapes it can express. See the correction above and [044](044-unbounded-context.md) deviation 3 |
 | a plan cache | post-v0 by this spec's own §"Ownership and core types" |
 
