@@ -222,6 +222,7 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel.CompareExchangeU32",
 		"accel.ExchangeI32",
 		"accel.ExchangeU32",
+		"accel.Fetch",
 		"accel.Float16.F32",
 		"accel.Fragment.Coord",
 		"accel.Fragment.FrontFacing",

@@ -150,3 +150,44 @@ func ScaledVS(v accel.Vertex, xf StageTransform, pos accel.Vec3) (accel.Clip, ac
 func TintedFS(f accel.Fragment, in accel.NoVaryings, tint StageTint) Solid {
 	return Solid{Colour: tint.Colour}
 }
+
+// TexelVaryings names the texel a fetching stage reads at.
+//
+// Integer coordinates carried as floats, because a varying is interpolated and
+// interpolation is float arithmetic. The stage converts, which is what a real
+// one does: nothing in this ABI carries an integer across the rasterizer.
+type TexelVaryings struct {
+	Texel accel.Vec2
+}
+
+// SampledFS fetches a texel and its left neighbour.
+//
+// The neighbour is the point. At column zero the left fetch is at x = -1, which
+// specs/032-stage-abi.md section 5 says returns zero on every backend, so the
+// alpha channel this writes is the out-of-range rule made visible in a
+// picture. A stage that only ever fetched in range would agree with a backend
+// that read whatever was adjacent in memory.
+//
+//accel:fragment
+func SampledFS(f accel.Fragment, in TexelVaryings, src accel.Texture2D) Solid {
+	x := int32(in.Texel[0])
+	y := int32(in.Texel[1])
+	here := accel.Fetch(src, x, y)
+	left := accel.Fetch(src, x-1, y)
+	return Solid{Colour: accel.Vec4{here[0], here[1], here[2], left[0]}}
+}
+
+// DisplacedVS reads its height from a texture rather than from a vertex buffer.
+//
+// A vertex stage rather than a second fragment one, because the two stages
+// declare their texture in different argument positions and reach different
+// halves of the emitter: a fragment stage's varyings come first, and a vertex
+// stage has attributes it could be confused with.
+//
+//accel:vertex
+func DisplacedVS(v accel.Vertex, height accel.Texture2D) (accel.Clip, TexelVaryings) {
+	i := int32(v.VertexIndex())
+	h := accel.Fetch(height, i, 0)
+	return accel.Clip{h[0], h[1], h[2], 1},
+		TexelVaryings{Texel: accel.Vec2{float32(i), 0}}
+}

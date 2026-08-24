@@ -370,26 +370,120 @@ Those are two different operations, and this spec admits exactly one of them:
 
 | | Admitted | Why |
 | --- | --- | --- |
-| **Texel fetch** — integer coordinate, explicit mip level, no filter, no addressing mode | **Yes** | It is an indexed load. Given the same texture and the same integer coordinate, every backend returns the same texel. There is nothing to reconcile, so there is no tolerance. |
+| **Texel fetch** — integer coordinate, one subresource, no filter, no addressing mode | **Yes** | It is an indexed load. Given the same texture and the same integer coordinate, every backend returns the same texel. There is nothing to reconcile, so there is no tolerance. |
 | **Sample** — normalized coordinate, filter, LOD selection, addressing mode | **No** | 004's evidence: half-texel addressing, an off-by-one in LOD, and uint8-truncating lerps at every tap. Each is a per-vendor difference the oracle would have to absorb as tolerance. |
 
 So the kernel language gains one intrinsic and one binding kind:
 
 ```go
-// In a compute kernel or a fragment stage.
-texel := accel.Fetch(gbuf, accel.IVec2{X: x, Y: y}, 0) // level 0
+//accel:fragment
+func Blit(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
+	c := f.Coord()
+	return Solid{Colour: accel.Fetch(src, int32(c[0]), int32(c[1]))}
+}
 ```
 
-- `accel.Texture2D` and friends are new binding types, distinct from slices, so
-  the compiler can tell an image binding from a storage buffer.
-- Out-of-range coordinates return zero rather than being undefined. Every
-  backend can guarantee that (a clamp-to-border-zero fetch, or an explicit
-  bounds test in emitted code) and it is the one addressing question a fetch
-  still has. Undefined here would be the same unreproducible class the sampler
-  refusal exists to avoid.
-- The returned type comes from the texture's format through the same
-  format-to-dtype table [001](001-device-resources.md) already owns. A format
-  whose fetch type does not match the destination is a generation error.
+- `accel.Texture2D` is a new binding type, distinct from a slice and from a
+  by-value uniform, so the compiler can tell an image binding from a storage
+  buffer by type alone.
+- **Out-of-range coordinates return zero rather than being undefined.** Every
+  backend can guarantee it with a bounds test it has to emit anyway, and it is
+  the one addressing question a fetch still has. Undefined here would be the
+  same unreproducible class the sampler refusal exists to avoid.
+
+### 5.1 What shipped, and where this section was wrong
+
+Built for [045](045-texture-attachments.md) §3. Three things this section wrote
+did not survive contact, and each is recorded here rather than quietly changed.
+
+**No level operand.** This section wrote `accel.Fetch(gbuf, coord, 0)` with an
+explicit mip level. 045 §2, written later, puts `Mip` and `Layer` on the
+`TextureView` a pipeline binds, so one shape names a subresource. A level
+argument would be a second shape naming the same thing — the failure mode 045 §2
+names — and it would make the subresource a *runtime* value, which
+[033](033-render-api.md) §3.3's feedback rejection cannot read, because that rule
+compares subresources when a pipeline is built. The shipped intrinsic is
+`Fetch(tex, x, y)`, and a call with four arguments is refused by name.
+
+**Scalar coordinates, not `accel.IVec2`.** The struct spelling contradicted
+§2.3's own convention — vectors are array aliases so the compiler has one
+spelling for a vector — and, decisively, a coordinate struct needs a composite
+literal at the call site, which the subset admits **only in a graphics stage**.
+Scalars work wherever a fetch does and invent no type.
+
+**The coordinates are signed.** An unsigned coordinate cannot represent `-1`,
+and the fetch that reaches `-1` is the ordinary one: a neighbourhood read at the
+left or top edge. Making it unrepresentable moves the defect from a zero the
+implementation returns to a wrap it cannot see. This is also the sharpest edge
+in the MSL lowering: `get_width()` returns `uint`, so comparing an `int`
+coordinate against it directly is an *unsigned* comparison under C's usual
+arithmetic conversions, `-1` becomes 4294967295, and the guard passes. The
+emitted helper therefore tests the sign first and converts only afterwards:
+
+```c
+static float4 _accel_fetch2d(texture2d<float> t, int x, int y) {
+    if (x < 0 || y < 0) { return float4(0.0); }
+    if (uint(x) >= t.get_width() || uint(y) >= t.get_height()) { return float4(0.0); }
+    return t.read(uint2(uint(x), uint(y)));
+}
+```
+
+Its text is asserted by a test rather than left to the golden, because the
+golden records a wrong guard as happily as a right one — and because no render
+pass binds a texture on Metal yet, so nothing on the device *runs* a fetch. The
+CPU implementation is the oracle and the emitted guard is read.
+
+**One element type.** `Fetch` returns `accel.Vec4` whatever the bound format is,
+and the MSL is `texture2d<float>`. This section said the returned type comes from
+the format-to-dtype table; it does not. A float-typed texture decodes its format
+in fixed function and hands the shader four floats, which is what MSL, GLSL and
+HLSL all do, and one spelling covers every format in 001's table. An
+integer-typed texture would be a second binding type with a second intrinsic, and
+nothing asks for one.
+
+**A short texel slice shortens the extent.** Not asked for by this section, and
+recorded because it is behaviour a caller can observe: `NewTexture2D` does not
+copy its texels — the point is that a fetch reads the pass's own attachment
+rather than a snapshot — so a slice shorter than `width*height*4` would make the
+last row index past the end. Whole rows are dropped instead, keeping the extent
+and the storage in agreement, and `Height()` reports what is actually there.
+Every coordinate past the shortened extent is out of range and returns zero,
+which is the rule this section already fixes rather than a second one. The
+alternative, letting the declared extent stand, turns a backend's bind-time
+mistake into a panic inside a fragment.
+
+**No capability.** A texel read from a float 2D texture is baseline on every
+target this project emits for. Per [020](020-cooperative-atomics.md) §3 a
+capability is inferred from the intrinsic table and never declared; this
+intrinsic's `Cap` is zero, so a fetch refuses no device.
+
+**Stages only, for now.** This section said "in a compute kernel or a fragment
+stage". A compute dispatch fills an argument set by index and nothing in it names
+a texture, so a kernel declaring one would compile to a binding no caller could
+supply — the accepted-and-unreachable shape [042](042-surface-completion.md)
+§5.2 spent a review removing. A texture in a compute kernel is refused by name
+until that argument set can carry one.
+
+### 5.2 What the binding half still owes
+
+The stage half is complete: the authored surface, the intrinsic, both lowerings,
+and the record a pipeline reads. A texture cannot yet *reach* a running stage,
+and three things are outstanding, all of them in the render API rather than here.
+
+1. **The flat form needs a texture channel.** `kernel.VertexFn` and
+   `kernel.FragmentFn` carry a uniform slice and interpolated floats and have
+   nowhere to put a texture, so a stage that declares one carries **no**
+   `RunVertex` or `RunFragment` at all. That is deliberate: an adapter passing an
+   empty texture would fetch out of range on every pixel and produce black
+   without failing anything. Adding a `[]Texture2D` parameter to both function
+   types, and passing it from the CPU rasterizer, is the change.
+2. **A pipeline must refuse a stage whose textures are unbound**, beside the
+   existing stage-kind check in `NewRenderPipeline`. Until then a stage with a
+   non-empty `Stage.Textures` reaches a nil adapter.
+3. **A `TextureView` must resolve to a `Texture2D`.** `Stage.Textures` gives the
+   dense index a backend binds against — Metal's `[[texture(n)]]`, from
+   `mslabi.StageTextureIndex` — and the render path supplies the subresource's
+   texels, its extent, and the format decode 045 §2.1 puts on the view.
 
 **Sequencing note.** Texel fetch is new front-end, IR, and emitter work, and
 005's handoff has a second variant that needs none of it: a transfer node

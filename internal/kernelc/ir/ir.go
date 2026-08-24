@@ -70,11 +70,18 @@ const (
 	Array
 	// Slice is a storage-buffer binding.
 	Slice
+	// Texture2D is a shader-visible texture binding, distinct from Slice so the
+	// compiler can tell an image binding from a storage buffer. It carries no
+	// element type: the fetch that reads it returns four floats whatever the
+	// bound format is, the way every target's float-sampled texture does. See
+	// specs/032-stage-abi.md section 5.
+	Texture2D
 )
 
 var kindNames = [...]string{
 	Invalid: "invalid", Bool: "bool", I32: "i32", U32: "u32", F32: "f32",
 	I8: "i8", U8: "u8", F16: "f16", BF16: "bf16", ID3Kind: "ID3", Struct: "struct", Array: "array", Slice: "slice",
+	Texture2D: "texture2d",
 }
 
 // IsAtomic reports whether an opcode is an atomic read-modify-write.
@@ -507,6 +514,19 @@ const (
 	OpFragCoord
 	OpFrontFacing
 
+	// OpTexelFetch is an indexed load from a texture at a signed integer
+	// coordinate: no filter, no LOD selection, no addressing mode. The
+	// subresource is the binding's, not the operation's, so there is no level
+	// operand -- specs/045-texture-attachments.md section 2 puts the mip and
+	// the layer on the view so that the feedback rule comparing an attachment
+	// against a shader-visible binding has one shape to read, and reads it when
+	// a pipeline is built rather than when a fragment runs.
+	//
+	// Out of range is zero, in all four directions. Not undefined: an
+	// out-of-range fetch returning whatever is adjacent in memory is the class
+	// of defect the sampler refusal exists to avoid.
+	OpTexelFetch
+
 	// Cooperative. Recognized so that a kernel using one is rejected by name
 	// with a position, rather than failing as an unknown call. See
 	// specs/012-kernel-pipeline.md.
@@ -529,6 +549,7 @@ var opcodeNames = [...]string{
 	OpInstanceIndex:            "InstanceIndex",
 	OpFragCoord:                "FragCoord",
 	OpFrontFacing:              "FrontFacing",
+	OpTexelFetch:               "Fetch",
 	OpLocalID:                  "LocalID",
 	OpGroupID:                  "GroupID",
 	OpGlobalIndex:              "GlobalIndex",
@@ -654,6 +675,31 @@ type Binding struct {
 	Read, Write bool
 }
 
+// TextureBinding is one shader-visible texture a signature declares.
+//
+// Index is the dense position among the function's textures, which is what a
+// backend binds against -- not the parameter position, since the receiver, the
+// varyings, the attributes and any uniforms are interleaved with them in the
+// signature. It is the same rule [Attribute] follows and for the same reason.
+type TextureBinding struct {
+	Name  string
+	Index int
+
+	// Param is the parameter position, which a diagnostic names and the
+	// generated lowering's signature is built from.
+	Param int
+
+	// Reads is whether the body fetches from it. A texture nothing reads is a
+	// resource the caller has to bind for no reason, and it is also what tells
+	// the graph whether a pass depends on the subresource -- which is the
+	// barrier specs/045-texture-attachments.md section 3 draws between a pass
+	// that writes an attachment and a pass that fetches it.
+	//
+	// Inferred from the body, never declared, for the reason [Binding]'s access
+	// is.
+	Reads bool
+}
+
 // SharedMem is one workgroup-shared array a kernel's signature declares.
 //
 // Its extent is fixed at pipeline creation on every backend -- it appears in
@@ -739,6 +785,12 @@ type Func struct {
 	// is silent -- a kernel using a feature the device lacks produces wrong
 	// results rather than an error, because nothing checked.
 	Caps uint32
+
+	// Textures are the shader-visible texture bindings the signature declares,
+	// in signature order. A texture is a distinct resource kind from a slice
+	// binding and from a uniform, so the three are distinguishable by type
+	// alone.
+	Textures []*TextureBinding
 
 	// Attributes are a vertex stage's per-vertex inputs, in signature order.
 	// They are the by-value array parameters; a uniform is a by-value struct and

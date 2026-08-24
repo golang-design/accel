@@ -69,6 +69,14 @@ func preimage(k *ir.Func) string {
 		fmt.Fprintf(&b, "binding\t%d\t%s\t%s\t%s\n", bind.Index, bind.Name, bind.Type, accessName(bind))
 	}
 
+	// Textures carry their inferred read for the reason bindings carry their
+	// access: it is part of what a backend is told, and a body edit that stops
+	// fetching from one must make the file stale. The loop emits nothing for a
+	// kernel with no texture, so adding it does not reissue the corpus.
+	for _, tx := range k.Textures {
+		fmt.Fprintf(&b, "texture\t%d\t%s\t%d\t%v\n", tx.Index, tx.Name, tx.Param, tx.Reads)
+	}
+
 	// Intrinsics by authored spelling, in first-use order. The authored spelling
 	// rather than the resolved path, so that relocating a type does not
 	// invalidate every committed digest.

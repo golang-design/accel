@@ -31,7 +31,7 @@ import (
 // generated adapter compiled against one shape of this package and loaded by
 // another is a wrong-answer bug, and there is no version of it that is a
 // compile error.
-const ABIVersion = 1
+const ABIVersion = 2
 
 // ID3 is a three-dimensional invocation identifier.
 //

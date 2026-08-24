@@ -46,6 +46,20 @@ type Stage struct {
 	// is expressed.
 	Outputs []StageOutput
 
+	// Textures are the shader-visible texture bindings this stage declares, in
+	// signature order.
+	//
+	// A non-empty list is what tells a render pipeline that this stage needs a
+	// texture bound, and it is also why [Stage.RunVertex] and
+	// [Stage.RunFragment] are nil for such a stage: the flat form a rasterizer
+	// calls carries a uniform slice and interpolated varyings and has nowhere
+	// to put a texture, so a stage that fetches one cannot be run through it.
+	// Leaving the adapter nil states that; emitting one that fetched from an
+	// unbound texture would return black for every pixel and fail nothing.
+	//
+	// See specs/032-stage-abi.md section 5.
+	Textures []StageTexture
+
 	// Discards reports that the body reaches a discard, so a backend does not
 	// promise an early depth test this stage cannot have.
 	Discards bool
@@ -127,6 +141,22 @@ type StageUniform struct {
 	// codec, which would disagree with it eventually.
 	Size   int
 	Encode func(dst []byte, v any) error
+}
+
+// StageTexture is one shader-visible texture a stage declares.
+//
+// Index is the dense position among the stage's textures, which is what a
+// pipeline binds against — not the parameter position, since the receiver, the
+// varyings, the attributes and any uniforms are interleaved with them in the
+// authored signature. It is the rule [StageAttribute] follows.
+type StageTexture struct {
+	Name  string
+	Index int
+
+	// Reads is whether the body fetches from it, inferred rather than declared.
+	// A texture nothing reads is a resource a caller has to bind for no reason,
+	// and it is what tells the graph whether a pass depends on the subresource.
+	Reads bool
 }
 
 // StageOutput is one colour attachment a fragment stage writes.

@@ -123,14 +123,15 @@ import (
 	"golang.design/x/accel/internal/driver"
 )
 
-// StageKind, StageAttribute, StageUniform and StageOutput describe a compiled
-// graphics stage. A caller reads them from a generated [Stage] and never builds
-// one.
+// StageKind, StageAttribute, StageUniform, StageOutput and StageTexture
+// describe a compiled graphics stage. A caller reads them from a generated
+// [Stage] and never builds one.
 type (
 	StageKind      = kernel.StageKind
 	StageAttribute = kernel.StageAttribute
 	StageUniform   = kernel.StageUniform
 	StageOutput    = kernel.StageOutput
+	StageTexture   = kernel.StageTexture
 )
 
 // The two graphics stages a [Stage] can be.
