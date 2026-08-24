@@ -315,3 +315,52 @@ func TestAVertexSlotOutsideTheLayoutIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A vertex buffer bound at a slot the pipeline does not fetch does not order
+// the graph against whatever wrote it.
+//
+// It did. RenderPass.record declared a read on every bound buffer while the
+// lowering fetches only the slots the pipeline's layout names, so a buffer
+// nobody fetched still reached the node -- moving barriers and stretching a
+// transient's live range for a fetch that does not happen.
+//
+// Binding one is not a mistake, which is why the answer is to declare what is
+// read rather than to refuse the binding: a caller may bind for the widest
+// pipeline in a pass and draw with a narrower one, and each draw copies the
+// state standing at the time.
+func TestAnUnfetchedVertexBufferDoesNotOrderTheGraph(t *testing.T) {
+	d := openDevice(t)
+	target := newBuffer(t, d, "target", 4*4*4,
+		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	// Written by an earlier node, so an unwanted read of it is an edge that
+	// shows up as a dependency rather than as nothing.
+	stray := newBuffer(t, d, "stray", 12, accel.BufferStorage|accel.BufferCopyDst)
+
+	r := d.NewRecorder()
+	src := newBuffer(t, d, "src", 12, accel.BufferStorage|accel.BufferCopySrc)
+	r.CopyBuffer(whole(t, stray), whole(t, src))
+
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: whole(t, target)}},
+		Width: 4, Height: 4, Label: "unfetched",
+	})
+	p.SetPipeline(solidPipeline(t, d))
+	p.SetVertexBuffer(2, whole(t, stray))
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	// solidPipeline declares no vertex buffers, so nothing fetches slot 2 and
+	// the pass must not depend on the copy that wrote it.
+	edges := g.Edges()
+	for _, succ := range edges[0] {
+		if succ == p.Node() {
+			t.Fatalf("node 0 (the copy that wrote a buffer nothing fetches) has the "+
+				"pass as a successor; edges: %v", edges)
+		}
+	}
+}

@@ -856,10 +856,24 @@ func (p *RenderPass) record(d drawCall) {
 	// RenderPass, because a draw is what names them and the node exists before
 	// any draw is recorded: a pass that did not declare them would run
 	// unordered against whatever wrote the vertices.
+	// Only the slots this draw's pipeline actually fetches. A buffer bound at a
+	// slot the layout does not read is not fetched by the lowering, so
+	// declaring a read of it would order this node against whatever wrote it
+	// for a fetch that does not happen -- moving barriers and stretching a
+	// transient's live range on a binding nobody consumes.
+	//
+	// Bound-but-unfetched is legitimate rather than a mistake: a caller may
+	// bind for the widest pipeline in a pass and draw with a narrower one, and
+	// each draw copies the state standing at the time. So the answer is to
+	// declare what is read rather than to refuse the binding.
 	d.vertexAccess = make([]int, len(d.vertexBuf))
+	declared := 0
+	if d.pipeline != nil {
+		declared = len(d.pipeline.desc.VertexBuffers)
+	}
 	for i, v := range d.vertexBuf {
 		d.vertexAccess[i] = -1
-		if v.Buffer != nil {
+		if v.Buffer != nil && i < declared {
 			d.vertexAccess[i] = p.declareRead(v, fmt.Sprintf("vertex buffer %d", i))
 		}
 	}
