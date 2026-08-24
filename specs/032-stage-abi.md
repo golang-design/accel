@@ -587,7 +587,7 @@ parameters were `*[N]T`. A vertex attribute is a by-value array, so indexing one
 emitted a call to a shared-memory tracker no stage has. It now requires the name
 to be one the kernel declared as shared.
 
-### 12.1 The MSL target — emitted and compiled, not differentially verified
+### 12.1 The MSL target — emitted, compiled, and differentially verified
 
 Built 2026-08-24. Every stage in the corpus lowers to MSL, and every one of
 those compiles on a real device: `-newLibraryWithSource:` **is** the Metal
@@ -595,14 +595,33 @@ compiler, so text it accepts here is text it accepts in production. Resolving
 the function on top of that catches source which parses but declares the entry
 point under another name.
 
-**What is not yet proved, and the distinction matters.** No fragment emitted by
-this target has ever *executed*. The compute corpus is checked differentially —
-the generated Go lowering and the MSL run against the same inputs and must
-agree, which is what makes the CPU path an oracle. A stage has no such check,
-because running one needs the Metal render path. So "one IR, two lowerings" is
-true of the *source* and is not yet a checked invariant of the *results*. The
-differential arrives with the render path, and until then a stage's MSL is
-evidence that it compiles and nothing more.
+**Differentially verified since the Metal render path landed the same day.** The
+two lowerings render the same graph and are compared pixel by pixel, within a
+derived bound rather than exactly — the two rasterizers are free to compute
+barycentric weights differently. So "one IR, two lowerings" is now a checked
+invariant of the results and not only of the source.
+
+**The differential found two bugs that nothing else could have.** Both compiled,
+both built a pipeline, and both drew a picture.
+
+*The uniform index collided with vertex buffer zero.* A Metal vertex stage's
+uniforms and its vertex buffers share one buffer index space, and this target
+put uniform $i$ at `buffer(i)`. A stage then read its geometry as a transform.
+The split is now a constant in `internal/mslabi` that both the emitter and the
+backend call, rather than a computation, because the emitter cannot know how
+many buffers a pipeline binds — that is pipeline state and this is stage state.
+
+*The clip depth range was Metal's, not this spec's.* §2.3 fixes clip depth as
+$-w \le z \le w$, which is OpenGL's and what the CPU rasterizer implements.
+Metal's is $0 \le z \le w$. The emitted vertex stage now converts:
+
+$$
+z_{\text{Metal}} = \frac{z + w}{2}
+$$
+
+Without it, geometry straddling the near plane loses its near half — which reads
+as a broken projection rather than as a convention mismatch, and is exactly the
+symptom `docs/conventions.md` names.
 
 What the emitter needed that the compute path did not:
 

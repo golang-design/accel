@@ -1434,6 +1434,58 @@ validation layer calls `assert`. So the Metal render path must validate a
 descriptor itself before handing it over — an omission there is not a bad error
 message, it is the caller's process gone.
 
+#### Graphics on the GPU — 2026-08-24
+
+Metal runs a render pass. The pass renders into private textures and blits them
+into the caller's buffers, because `MTLRenderPassDescriptor` takes textures and
+[033](033-render-api.md) makes an attachment a buffer view — the texture is
+entirely inside the backend, which is what 033's "the shape a caller writes does
+not change" licenses.
+
+**And with it, the graphics differential.** The CPU rasterizer is now an oracle
+for Metal rather than the only implementation: seven cases render the same graph
+on both and compare pixel by pixel, within a derived bound because the two are
+free to compute barycentric weights differently.
+
+```
+   one IR ──┬──▶ generated Go ──▶ internal/raster ──▶ pixels ──┐
+            │                                                  ├──▶ compared
+            └──▶ MSL ──▶ Metal render encoder ──▶ pixels ──────┘
+```
+
+**It found two bugs on its first run, and nothing else could have found either.**
+Both compiled, both built a pipeline, and both drew a picture.
+
+1. **The vertex uniform index collided with vertex buffer zero.** A Metal vertex
+   stage's uniforms and its vertex buffers share one buffer index space, and the
+   emitter put uniform $i$ at `buffer(i)`. The stage read its geometry as a
+   transform. Neither side errs: the MSL compiles and the pipeline builds.
+
+2. **The clip depth range was Metal's, not this project's.**
+   [032](032-stage-abi.md) §2.3 fixes $-w \le z \le w$; Metal's is $0 \le z \le w$.
+   Geometry straddling the near plane lost its near half, which reads as a broken
+   projection rather than a convention mismatch — the symptom
+   `docs/conventions.md` names, met for real.
+
+**The rule both illustrate.** A text golden accepts anything that looks right; a
+compiler check accepts anything that parses; only running both lowerings on the
+same input catches a *disagreement*. Each rung catches what the one below cannot,
+and the corpus now stands on all three:
+
+| Rung | Catches |
+| --- | --- |
+| golden | the emitter changed |
+| device compiler | the emitter emits something Metal rejects |
+| differential | the two lowerings disagree about what a program means |
+
+**Two hazards recorded before they cost anything.**
+`newRenderPipelineStateWithDescriptor:` aborts the process on an invalid
+descriptor rather than returning an error, so every field Metal's validator
+inspects is checked in Go first. And a Metal class looked up at package
+initialization is zero, because the framework is not loaded yet — and a message
+to nil is answered with zero rather than crashing, so the symptom was a
+descriptor that "could not be created" from a call that never reached Metal.
+
 #### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
 
 Two of the completed items name a follow-on, and both are already placed after

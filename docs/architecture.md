@@ -257,11 +257,15 @@ by-value stage parameters, depth testing and blending all go through the graph
 to the CPU reference rasterizer, and a headless surface rotates images through
 acquire, render and present.
 
-It runs only there. Metal has no render path, so nothing rasterizes on a GPU,
-and the surface has no window — enough to test the whole frame loop in CI, not
-enough to show anyone a picture. Indirect draws and multisampling are specified
-and unbuilt. If you need GPU rasterization today, this is not it. Neither are
-the Vulkan, D3D12, OpenGL and WebGPU backends.
+Metal runs the same passes, and the two are compared pixel by pixel — which
+makes the CPU rasterizer an oracle for graphics the way it already was for
+compute, rather than the only implementation.
+
+What is missing is a window. The surface is headless: a frame comes back in a
+buffer you read, which is enough for offscreen rendering and for testing the
+whole acquire-render-present loop in CI, and not enough to show anyone a
+picture. Multisampling is specified and unbuilt, and so are the Vulkan, D3D12,
+OpenGL and WebGPU backends.
 
 The row-by-row breakdown is the [status table in the
 README](../README.md#what-works-today). The order the work was done in, and the

@@ -24,7 +24,8 @@ weights, sampling, a paged KV cache, and prefill and decode attention.
 Graphics is being built: its five child designs are written, and the CPU backend
 now runs a whole frame — vertex and index buffers, attributes, by-value stage
 parameters, depth, blending, and a headless surface through acquire and present.
-The Metal render path, indirect draws and multisampling are unbuilt.
+Metal runs the same passes and is compared against the CPU rasterizer pixel by
+pixel. What is unbuilt is a windowed surface and multisampling.
 [009](009-sequencing.md) records what has landed, in what order, and the
 deviations taken.
 
@@ -32,8 +33,8 @@ deviations taken.
 narrower than this directory: compute only, on the CPU backend and Metal.
 [005](005-graphics.md) is the parent of graphics; its five child designs are
 written — [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md), plus
-[041](041-msaa.md) — and the CPU backend renders a frame end to end, through a
-headless surface. No GPU rasterizes yet. [006](006-backends.md) specifies three remaining synchronous
+[041](041-msaa.md) — and both backends render, with the CPU rasterizer as the
+oracle Metal is checked against. [006](006-backends.md) specifies three remaining synchronous
 backends plus a deferred asynchronous WebGPU shape; all are unbuilt. A spec being
 here means its scope and current decisions are reviewable, not that its code is
 next.

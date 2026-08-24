@@ -21,9 +21,9 @@ it on whichever backend the machine has — today the CPU or Metal — with
 
 > [!IMPORTANT]
 > **Early. The API will change.** Compute works end to end and is tested on
-> every push. Graphics runs a whole frame loop on the CPU backend — vertex
-> and index buffers, uniforms, blending, depth, and a headless surface — and
-> runs nowhere else: there is no GPU render path yet.
+> every push. Graphics runs on the CPU backend and on Metal, compared pixel by
+> pixel — but there is no window yet, so a frame goes to a buffer you read
+> back, not to a screen.
 > Vulkan, D3D12, OpenGL and WebGPU are designed and not started. The
 > [status table](#what-works-today) says which is which.
 
@@ -193,9 +193,9 @@ position.
 | Use int8 quantized weights | yes |
 | Sample a token (argmax, categorical, top-k, top-p) | yes; temperature and repetition penalties are not built |
 | Page a KV cache, and batch several sequences in one step | yes |
-| Draw triangles | yes, on the CPU backend: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending |
-| Render a frame loop with acquire and present | yes, headless — no window, and no GPU render path |
-| Draw triangles on a GPU | not yet |
+| Draw triangles | yes, on both backends: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending, indexed and indirect draws |
+| Render a frame loop with acquire and present | yes, headless — the pixels come back in a buffer, not to a window |
+| Show a frame in a window | not yet |
 | Use Vulkan, D3D12, OpenGL or WebGPU | not yet |
 
 Every "yes" has tests that fail without it and an end-to-end case through the
@@ -216,9 +216,9 @@ runs anywhere.
 - **You need peak throughput.** cgo-free rules out cuBLAS, cuDNN and GGML. Every
   kernel is written here, and it will not beat vendor libraries for a long time,
   possibly ever.
-- **You need rasterization on a GPU today.** The CPU backend rasterizes, and
-  the Metal render path is not built. There is also no window: the surface is
-  headless, which is enough for CI and not for showing anyone a picture.
+- **You need to put a frame on a screen.** Both backends rasterize, and the
+  surface is headless: a frame comes back in a buffer. Enough for offscreen
+  rendering and for CI, not enough to show anyone a picture.
 - **You expected `wgpu`.** The submission model is deliberately different and the
   API does not aim to match it.
 
