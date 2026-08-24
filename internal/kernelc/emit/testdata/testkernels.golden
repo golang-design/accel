@@ -4649,6 +4649,19 @@ func geometryVSFlat(v accel.Vertex, xf StageTransform, pos [3]float32, uv [2]flo
 	return [4]float32{float32(float32(pos[int32(0)]*xf.Scale) + xf.Offset[int32(0)]), float32(float32(pos[int32(1)]*xf.Scale) + xf.Offset[int32(1)]), pos[int32(2)], float32(1)}, Varyings{[4]float32{pos[int32(0)], pos[int32(1)], pos[int32(2)], float32(1)}, uv}
 }
 
+// GeometryVSStage is the compiled form of GeometryVS.
+var GeometryVSStage = accel.Stage{
+	Name:     "GeometryVS",
+	Kind:     accel.StageVertex,
+	Varyings: "Varyings",
+	Attributes: []accel.StageAttribute{
+		{Name: "pos", Index: 0, Components: 3},
+		{Name: "uv", Index: 1, Components: 2},
+	},
+	Digest:    "fa00db3070303ba0b70ca8dc3c4f1d72",
+	Generator: kernelabi.Version,
+}
+
 // fullScreenVSFlat is the generated lowering of the vertex stage FullScreenVS.
 //
 // specs/032-stage-abi.md. The authored FullScreenVS supplies the typed source this
@@ -4666,6 +4679,15 @@ func fullScreenVSFlat(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
 	return [4]float32{x, y, float32(0), float32(1)}, accel.NoVaryings{}
 }
 
+// FullScreenVSStage is the compiled form of FullScreenVS.
+var FullScreenVSStage = accel.Stage{
+	Name:      "FullScreenVS",
+	Kind:      accel.StageVertex,
+	Varyings:  "NoVaryings",
+	Digest:    "084938b28ae49efc1a106628f70700ba",
+	Generator: kernelabi.Version,
+}
+
 // shadeFSFlat is the generated lowering of the fragment stage ShadeFS.
 //
 // specs/032-stage-abi.md. The authored ShadeFS supplies the typed source this
@@ -4673,6 +4695,19 @@ func fullScreenVSFlat(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
 func shadeFSFlat(f accel.Fragment, in Varyings) Targets {
 	var c [4]float32 = f.Coord()
 	return Targets{in.Colour, [4]float32{in.UV[int32(0)], in.UV[int32(1)], c[int32(2)], float32(1)}}
+}
+
+// ShadeFSStage is the compiled form of ShadeFS.
+var ShadeFSStage = accel.Stage{
+	Name:     "ShadeFS",
+	Kind:     accel.StageFragment,
+	Varyings: "Varyings",
+	Outputs: []accel.StageOutput{
+		{Name: "Albedo", Index: 0},
+		{Name: "Normal", Index: 1},
+	},
+	Digest:    "dc2adcd7b97a614657d79b40760b3295",
+	Generator: kernelabi.Version,
 }
 
 // subgroupReduceFrame is one invocation's saved state between suspension points.
