@@ -380,7 +380,26 @@ better than a caller's.
 | render area outside an attachment extent | graph build |
 | feedback: overlapping subresource as attachment and shader-visible | graph build, naming both views |
 | a draw with no pipeline set | graph build |
-| a vertex buffer bound at a slot the pipeline does not declare | graph build |
+| ~~a vertex buffer bound at a slot the pipeline does not declare~~ | **withdrawn 2026-08-24**; see below |
+
+**The withdrawn row.** It was never implemented, and building it broke an
+existing test that was right. Binding a buffer a draw does not fetch is
+legitimate rather than a mistake: a caller may bind for the widest pipeline in a
+pass and draw with a narrower one, and each draw copies the pass state standing
+at the time, so the narrow draw carries a binding its layout does not name.
+Refusing that would break a working pattern.
+
+The defect the row was reaching for is real and was elsewhere. `RenderPass`
+declared a read on every *bound* buffer while the lowering fetches only the
+slots the layout names, so an unfetched binding still reached the node — an edge
+against whatever wrote it, for a fetch that does not happen. That is fixed where
+it is caused: a draw declares the reads it fetches. A binding nobody fetches now
+costs nothing rather than an edge, and needs no refusal.
+
+Recorded rather than deleted because the row is the second validation rule in
+this project to be withdrawn for the same reason as check V23 — a rule that
+sounds obviously right, forbids something a caller legitimately does, and was
+never tested against a caller who does it.
 
 Nothing in that table arrives at submission. That is 003's obligation restated:
 an error that says only "type mismatch" is a defect in this design, and every one
