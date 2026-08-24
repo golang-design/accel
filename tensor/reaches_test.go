@@ -106,6 +106,11 @@ func TestEveryAttentionOptionReachesTheKernelOrIsRefused(t *testing.T) {
 		// was refused on a prefill before that, and silently ignored before
 		// *that* -- which is the case this test exists for (accel issue 10).
 		"Pages": {set: func(s *setup) { s.opts.Pages, s.opts.Block = s.pages, 2 }},
+		// This row moves the digest by adding the page table, so on its own it
+		// would pass for a Block that reached nothing. Block's own row lives in
+		// TestARecordedAttributeReachesTheIdentity, where the page table is
+		// present in both halves and only the block size differs -- and it
+		// failed until node.attrs existed.
 		"Block": {set: func(s *setup) { s.opts.Pages, s.opts.Block = s.pages, 4 }},
 
 		"ScaleName": {set: func(s *setup) { s.opts.ScaleName = "other" }},

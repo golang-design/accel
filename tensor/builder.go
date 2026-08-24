@@ -172,6 +172,24 @@ type node struct {
 	// which operator wanted a value nobody bound.
 	reads []string
 
+	// attrs are the operator's *structural* values -- the ones an operator
+	// recorded rather than read from a scalar, and which therefore cannot
+	// change between submissions of one plan. An eps, a rotary width, a top-k,
+	// a page-block size.
+	//
+	// They exist because [Builder.Identity] has to cover them and has nowhere
+	// else to find them. A recorded value reaches the kernel through the
+	// uniform closure, which is opaque to a digest, so two graphs differing
+	// only in one of these hashed alike and a [PlanCache] answered one with the
+	// other -- a top-k of 40 serving a request that asked for 5, with a
+	// plausible token to show for it.
+	//
+	// Uniformly uint64 so the digest has one encoding rather than one per type.
+	// A float goes in as math.Float32bits, which distinguishes values a
+	// conversion to uint64 would collide: 1e-5 and 1e-2 are both zero as
+	// integers.
+	attrs []uint64
+
 	// strided says this node's kernel indexes through the operand's strides
 	// rather than contiguously, so a strided input is what it is for.
 	//

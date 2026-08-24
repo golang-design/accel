@@ -61,6 +61,13 @@ func TopKMask(t accel.Thread, d TopDims, weights []float32, out []float32,
 
 	lane := t.LocalID().X
 
+	// One workgroup per row, exactly as [SampleArgmax] does it, so the rows of
+	// a batch extract independently and never share a frontier. The row count
+	// is not in [TopDims] and is not read here: the dispatch grid is the only
+	// statement of how many rows there are, which is what makes a batch of one
+	// the same path rather than a special case.
+	base := t.GroupID().X * d.Vocab
+
 	// The running frontier: the (value, index) of the smallest entry kept so
 	// far. The first round has no frontier, which is what the huge initial
 	// value means -- everything is below it.
@@ -76,7 +83,7 @@ func TopKMask(t accel.Thread, d TopDims, weights []float32, out []float32,
 		v := float32(-3.4e38)
 		idx := d.Vocab
 		for i := lane; i < d.Vocab; i += RowWidth {
-			w := weights[i]
+			w := weights[base+i]
 			below := w < frontV
 			if w == frontV && i > frontI {
 				below = true
@@ -117,15 +124,15 @@ func TopKMask(t accel.Thread, d TopDims, weights []float32, out []float32,
 	// The frontier now names the k-th largest. Everything at or above it, in
 	// the same lexicographic order, is kept.
 	for i := lane; i < d.Vocab; i += RowWidth {
-		w := weights[i]
+		w := weights[base+i]
 		keep := w > frontV
 		if w == frontV && i <= frontI {
 			keep = true
 		}
 		if keep {
-			out[i] = w
+			out[base+i] = w
 		} else {
-			out[i] = float32(0)
+			out[base+i] = float32(0)
 		}
 	}
 }
@@ -148,10 +155,16 @@ func TopPMask(t accel.Thread, d TopDims, weights []float32, out []float32,
 
 	lane := t.LocalID().X
 
+	// One workgroup per row, as in [TopKMask]. Three loops carry the offset
+	// here rather than two, and the *sum* is the one that matters most: a
+	// nucleus computed from another row's total is a mask that keeps a
+	// plausible number of plausible entries and is simply the wrong set.
+	base := t.GroupID().X * d.Vocab
+
 	// The total, so the threshold is a fraction of what is actually there.
 	sum := float32(0)
 	for i := lane; i < d.Vocab; i += RowWidth {
-		sum = sum + weights[i]
+		sum = sum + weights[base+i]
 	}
 	best[lane] = sum
 	t.Barrier()
@@ -184,7 +197,7 @@ func TopPMask(t accel.Thread, d TopDims, weights []float32, out []float32,
 		v := float32(-3.4e38)
 		idx := d.Vocab
 		for i := lane; i < d.Vocab; i += RowWidth {
-			w := weights[i]
+			w := weights[base+i]
 			below := w < frontV
 			if w == frontV && i > frontI {
 				below = true
@@ -229,15 +242,15 @@ func TopPMask(t accel.Thread, d TopDims, weights []float32, out []float32,
 	}
 
 	for i := lane; i < d.Vocab; i += RowWidth {
-		w := weights[i]
+		w := weights[base+i]
 		keep := w > frontV
 		if w == frontV && i <= frontI {
 			keep = true
 		}
 		if keep {
-			out[i] = w
+			out[base+i] = w
 		} else {
-			out[i] = float32(0)
+			out[base+i] = float32(0)
 		}
 	}
 }

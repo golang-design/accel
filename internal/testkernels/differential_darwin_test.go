@@ -356,6 +356,49 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The same two masks over *two* rows, because the row offset is
+			// the only part of them a single-row case cannot see: at group
+			// zero the offset is zero and the batched form is byte for byte
+			// the unbatched one. Metal launches the second workgroup for real,
+			// so this is where a group id the transform dropped shows up.
+			//
+			// The rows differ in scale, which is what top-p is sensitive to:
+			// its threshold is a fraction of its own row's total, so a row
+			// reading another row's sum keeps a plausible mask that is the
+			// wrong set.
+			kernel: &testkernels.TopKMaskKernel, counts: []int{512, 512},
+			uniforms: []any{testkernels.TopDims{Vocab: 256, K: 12}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				v := float32(i%11) - 5
+				if i%16 == 3 {
+					v = 7
+				}
+				if i >= 256 {
+					v = 8 * (v + 6) // row 1: larger, and shifted positive
+				}
+				return v
+			},
+		},
+		{
+			kernel: &testkernels.TopPMaskKernel, counts: []int{512, 512},
+			uniforms: []any{testkernels.TopDims{Vocab: 256, P: 0.6}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				v := float32(i%13) + 1
+				if i >= 256 {
+					v = 16 * v
+				}
+				return v
+			},
+		},
+		{
 			// Argmax over a vocabulary with a deliberate plateau at the top.
 			// A tie rule that differed between the backends would move the
 			// answer, which is the one thing this kernel must not do -- and a
@@ -386,6 +429,35 @@ func diffCases() []diffCase {
 			seed: func(b, i int) float32 {
 				if b == 1 {
 					return 0.5 // the draw
+				}
+				if b != 0 {
+					return 0
+				}
+				return 1.0 / 256
+			},
+		},
+		{
+			// Two rows of the same distribution against two different draws,
+			// which is specs/043-per-row-values.md section 8's assertion made
+			// cross-backend. The single-row case above cannot see it: at one
+			// row the draws binding has one element and the walk's row base is
+			// zero, so a kernel that ignored the row entirely would agree with
+			// itself.
+			//
+			// Equal masses again, so the boundary each draw lands on is one an
+			// in-order walk and a parallel scan would place differently.
+			kernel: &testkernels.SampleCategoricalKernel, counts: []int{512, 2, 2},
+			uniforms: []any{testkernels.SampleDims{Vocab: 256, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					// Far apart, so the two rows must land on tokens roughly a
+					// hundred indices apart rather than merely on different
+					// ones.
+					if i == 0 {
+						return 0.2
+					}
+					return 0.8
 				}
 				if b != 0 {
 					return 0

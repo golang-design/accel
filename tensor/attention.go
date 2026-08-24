@@ -265,6 +265,10 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 					"so a batch would be one submission each and read every weight once " +
 					"per sequence",
 			},
+			// The page-block size is recorded rather than bound, so the digest
+			// has to carry it: two graphs differing only in Block addressed the
+			// pool at two strides and hashed alike.
+			attrs: []uint64{uint64(opts.Block)},
 		}, accel.F32, Shape{batch, qHeads, headDim})
 	}
 
@@ -331,6 +335,10 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			},
 			reason:   prefillWhy,
 			rejected: prefillRejected,
+			// Zero when no page table was supplied, which is what a contiguous
+			// prefill records; the two are different plans either way, because
+			// they select different kernels.
+			attrs: []uint64{uint64(opts.Block)},
 		}, accel.F32, out)
 	}
 
@@ -395,5 +403,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		reason: fmt.Sprintf("%s: one workgroup per query head over %d cached positions",
 			decodeWhy, k.shape[0]),
 		rejected: rejected,
+		attrs:    []uint64{uint64(opts.Block)},
 	}, accel.F32, out)
 }

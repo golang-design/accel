@@ -8131,22 +8131,23 @@ kernel void SubgroupReduceFallback(
 type topKMaskFrame struct {
 	pc       int
 	lane0    uint32
-	frontV1  float32
-	frontI2  uint32
-	rounds3  uint32
-	r4       uint32
-	v5       float32
-	idx6     uint32
-	i7       uint32
-	w8       float32
-	below9   bool
-	better10 bool
-	stride11 uint32
-	a12      float32
-	b13      float32
-	i14      uint32
-	w15      float32
-	keep16   bool
+	base1    uint32
+	frontV2  float32
+	frontI3  uint32
+	rounds4  uint32
+	r5       uint32
+	v6       float32
+	idx7     uint32
+	i8       uint32
+	w9       float32
+	below10  bool
+	better11 bool
+	stride12 uint32
+	a13      float32
+	b14      float32
+	i15      uint32
+	w16      float32
+	keep17   bool
 }
 
 // topKMaskCoop runs one invocation of TopKMask to its next suspension point.
@@ -8160,45 +8161,46 @@ func topKMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 		switch f.pc {
 		case 0:
 			f.lane0 = t.LocalID().X
-			f.frontV1 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
-			f.frontI2 = uint32(0)
-			f.rounds3 = d.K
-			if f.rounds3 > uint32(128) {
-				f.rounds3 = uint32(128)
+			f.base1 = (t.GroupID().X * d.Vocab)
+			f.frontV2 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
+			f.frontI3 = uint32(0)
+			f.rounds4 = d.K
+			if f.rounds4 > uint32(128) {
+				f.rounds4 = uint32(128)
 			}
 			f.pc = 1
 			continue
 		case 1:
-			f.r4 = uint32(0)
+			f.r5 = uint32(0)
 			f.pc = 12
 			continue
 		case 2:
-			f.v5 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			f.idx6 = d.Vocab
+			f.v6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx7 = d.Vocab
 			{
-				f.i7 = f.lane0
-				for ; f.i7 < d.Vocab; f.i7 = (f.i7 + uint32(128)) {
-					f.w8 = weights[f.i7]
-					f.below9 = (f.w8 < f.frontV1)
-					if (f.w8 == f.frontV1) && (f.i7 > f.frontI2) {
-						f.below9 = true
+				f.i8 = f.lane0
+				for ; f.i8 < d.Vocab; f.i8 = (f.i8 + uint32(128)) {
+					f.w9 = weights[(f.base1 + f.i8)]
+					f.below10 = (f.w9 < f.frontV2)
+					if (f.w9 == f.frontV2) && (f.i8 > f.frontI3) {
+						f.below10 = true
 					}
-					if f.below9 {
-						f.better10 = (f.w8 > f.v5)
-						if (f.w8 == f.v5) && (f.i7 < f.idx6) {
-							f.better10 = true
+					if f.below10 {
+						f.better11 = (f.w9 > f.v6)
+						if (f.w9 == f.v6) && (f.i8 < f.idx7) {
+							f.better11 = true
 						}
-						if f.better10 {
-							f.v5 = f.w8
-							f.idx6 = f.i7
+						if f.better11 {
+							f.v6 = f.w9
+							f.idx7 = f.i8
 						}
 					}
 				}
 			}
 			tr.Write(0, int(f.lane0))
-			best[f.lane0] = f.v5
+			best[f.lane0] = f.v6
 			tr.Write(1, int(f.lane0))
-			at[f.lane0] = f.idx6
+			at[f.lane0] = f.idx7
 			f.pc = 3
 			continue
 		case 3:
@@ -8206,21 +8208,21 @@ func topKMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: ""}
 			return true
 		case 4:
-			f.stride11 = uint32(64)
+			f.stride12 = uint32(64)
 			f.pc = 8
 			continue
 		case 5:
-			if f.lane0 < f.stride11 {
-				f.a12 = best[tr.ReadAt(0, int(f.lane0))]
-				f.b13 = best[tr.ReadAt(0, int((f.lane0+f.stride11)))]
-				if f.b13 > f.a12 {
+			if f.lane0 < f.stride12 {
+				f.a13 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b14 = best[tr.ReadAt(0, int((f.lane0+f.stride12)))]
+				if f.b14 > f.a13 {
 					tr.Write(0, int(f.lane0))
-					best[f.lane0] = f.b13
+					best[f.lane0] = f.b14
 					tr.Write(1, int(f.lane0))
-					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride11)))]
-				} else if (f.b13 == f.a12) && (at[tr.ReadAt(1, int((f.lane0+f.stride11)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride12)))]
+				} else if (f.b14 == f.a13) && (at[tr.ReadAt(1, int((f.lane0+f.stride12)))] < at[tr.ReadAt(1, int(f.lane0))]) {
 					tr.Write(1, int(f.lane0))
-					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride11)))]
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride12)))]
 				}
 			}
 			f.pc = 6
@@ -8230,19 +8232,19 @@ func topKMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: ""}
 			return true
 		case 7:
-			f.stride11 = (f.stride11 / uint32(2))
+			f.stride12 = (f.stride12 / uint32(2))
 			f.pc = 8
 			continue
 		case 8:
-			if f.stride11 > uint32(0) {
+			if f.stride12 > uint32(0) {
 				f.pc = 5
 				continue
 			}
 			f.pc = 9
 			continue
 		case 9:
-			f.frontV1 = best[tr.ReadAt(0, int(int32(0)))]
-			f.frontI2 = at[tr.ReadAt(1, int(int32(0)))]
+			f.frontV2 = best[tr.ReadAt(0, int(int32(0)))]
+			f.frontI3 = at[tr.ReadAt(1, int(int32(0)))]
 			f.pc = 10
 			continue
 		case 10:
@@ -8250,11 +8252,11 @@ func topKMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 10, Pos: ""}
 			return true
 		case 11:
-			f.r4 = (f.r4 + uint32(1))
+			f.r5 = (f.r5 + uint32(1))
 			f.pc = 12
 			continue
 		case 12:
-			if f.r4 < f.rounds3 {
+			if f.r5 < f.rounds4 {
 				f.pc = 2
 				continue
 			}
@@ -8262,17 +8264,17 @@ func topKMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			continue
 		case 13:
 			{
-				f.i14 = f.lane0
-				for ; f.i14 < d.Vocab; f.i14 = (f.i14 + uint32(128)) {
-					f.w15 = weights[f.i14]
-					f.keep16 = (f.w15 > f.frontV1)
-					if (f.w15 == f.frontV1) && (f.i14 <= f.frontI2) {
-						f.keep16 = true
+				f.i15 = f.lane0
+				for ; f.i15 < d.Vocab; f.i15 = (f.i15 + uint32(128)) {
+					f.w16 = weights[(f.base1 + f.i15)]
+					f.keep17 = (f.w16 > f.frontV2)
+					if (f.w16 == f.frontV2) && (f.i15 <= f.frontI3) {
+						f.keep17 = true
 					}
-					if f.keep16 {
-						out[f.i14] = f.w15
+					if f.keep17 {
+						out[(f.base1 + f.i15)] = f.w16
 					} else {
-						out[f.i14] = float32(0)
+						out[(f.base1 + f.i15)] = float32(0)
 					}
 				}
 			}
@@ -8290,7 +8292,7 @@ var TopKMaskKernel = kernelabi.Kernel{
 		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "2aa8715db98c289f6ab296fcb5be2066",
+	Digest:    "0be0f60f2c6b5722d98b4536d5f7769f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8317,6 +8319,7 @@ kernel void TopKMask(
     threadgroup float best[128];
     threadgroup uint at[128];
     uint lane = _lid.x;
+    uint base = (_wid.x * d.Vocab);
     float frontV = as_type<float>(0x7F7FC99Eu) /* 3.4e+38 */;
     uint frontI = uint(0);
     uint rounds = d.K;
@@ -8327,7 +8330,7 @@ kernel void TopKMask(
         float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         uint idx = d.Vocab;
         for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
-            float w = weights[i];
+            float w = weights[(base + i)];
             bool below = (w < frontV);
             if (((w == frontV) && (i > frontI))) {
                 below = true;
@@ -8365,15 +8368,15 @@ kernel void TopKMask(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
-        float w = weights[i];
+        float w = weights[(base + i)];
         bool keep = (w > frontV);
         if (((w == frontV) && (i <= frontI))) {
             keep = true;
         }
         if (keep) {
-            out[i] = w;
+            out[(base + i)] = w;
         } else {
-            out[i] = float(0);
+            out[(base + i)] = float(0);
         }
     }
 }
@@ -8411,26 +8414,27 @@ kernel void TopKMask(
 type topPMaskFrame struct {
 	pc       int
 	lane0    uint32
-	sum1     float32
-	i2       uint32
-	stride3  uint32
-	target4  float32
-	frontV5  float32
-	frontI6  uint32
-	kept7    float32
-	r8       uint32
-	v9       float32
-	idx10    uint32
-	i11      uint32
-	w12      float32
-	below13  bool
-	better14 bool
-	stride15 uint32
-	a16      float32
-	b17      float32
-	i18      uint32
-	w19      float32
-	keep20   bool
+	base1    uint32
+	sum2     float32
+	i3       uint32
+	stride4  uint32
+	target5  float32
+	frontV6  float32
+	frontI7  uint32
+	kept8    float32
+	r9       uint32
+	v10      float32
+	idx11    uint32
+	i12      uint32
+	w13      float32
+	below14  bool
+	better15 bool
+	stride16 uint32
+	a17      float32
+	b18      float32
+	i19      uint32
+	w20      float32
+	keep21   bool
 }
 
 // topPMaskCoop runs one invocation of TopPMask to its next suspension point.
@@ -8444,15 +8448,16 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 		switch f.pc {
 		case 0:
 			f.lane0 = t.LocalID().X
-			f.sum1 = float32(0)
+			f.base1 = (t.GroupID().X * d.Vocab)
+			f.sum2 = float32(0)
 			{
-				f.i2 = f.lane0
-				for ; f.i2 < d.Vocab; f.i2 = (f.i2 + uint32(128)) {
-					f.sum1 = float32(f.sum1 + weights[f.i2])
+				f.i3 = f.lane0
+				for ; f.i3 < d.Vocab; f.i3 = (f.i3 + uint32(128)) {
+					f.sum2 = float32(f.sum2 + weights[(f.base1+f.i3)])
 				}
 			}
 			tr.Write(0, int(f.lane0))
-			best[f.lane0] = f.sum1
+			best[f.lane0] = f.sum2
 			f.pc = 1
 			continue
 		case 1:
@@ -8460,13 +8465,13 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: ""}
 			return true
 		case 2:
-			f.stride3 = uint32(64)
+			f.stride4 = uint32(64)
 			f.pc = 6
 			continue
 		case 3:
-			if f.lane0 < f.stride3 {
+			if f.lane0 < f.stride4 {
 				tr.Write(0, int(f.lane0))
-				best[f.lane0] = float32(best[tr.ReadAt(0, int(f.lane0))] + best[tr.ReadAt(0, int((f.lane0+f.stride3)))])
+				best[f.lane0] = float32(best[tr.ReadAt(0, int(f.lane0))] + best[tr.ReadAt(0, int((f.lane0+f.stride4)))])
 			}
 			f.pc = 4
 			continue
@@ -8475,18 +8480,18 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: ""}
 			return true
 		case 5:
-			f.stride3 = (f.stride3 / uint32(2))
+			f.stride4 = (f.stride4 / uint32(2))
 			f.pc = 6
 			continue
 		case 6:
-			if f.stride3 > uint32(0) {
+			if f.stride4 > uint32(0) {
 				f.pc = 3
 				continue
 			}
 			f.pc = 7
 			continue
 		case 7:
-			f.target4 = (best[tr.ReadAt(0, int(int32(0)))] * d.P)
+			f.target5 = (best[tr.ReadAt(0, int(int32(0)))] * d.P)
 			f.pc = 8
 			continue
 		case 8:
@@ -8494,42 +8499,42 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: ""}
 			return true
 		case 9:
-			f.frontV5 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
-			f.frontI6 = uint32(0)
-			f.kept7 = float32(0)
+			f.frontV6 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
+			f.frontI7 = uint32(0)
+			f.kept8 = float32(0)
 			f.pc = 10
 			continue
 		case 10:
-			f.r8 = uint32(0)
+			f.r9 = uint32(0)
 			f.pc = 21
 			continue
 		case 11:
-			f.v9 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			f.idx10 = d.Vocab
+			f.v10 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx11 = d.Vocab
 			{
-				f.i11 = f.lane0
-				for ; f.i11 < d.Vocab; f.i11 = (f.i11 + uint32(128)) {
-					f.w12 = weights[f.i11]
-					f.below13 = (f.w12 < f.frontV5)
-					if (f.w12 == f.frontV5) && (f.i11 > f.frontI6) {
-						f.below13 = true
+				f.i12 = f.lane0
+				for ; f.i12 < d.Vocab; f.i12 = (f.i12 + uint32(128)) {
+					f.w13 = weights[(f.base1 + f.i12)]
+					f.below14 = (f.w13 < f.frontV6)
+					if (f.w13 == f.frontV6) && (f.i12 > f.frontI7) {
+						f.below14 = true
 					}
-					if f.below13 {
-						f.better14 = (f.w12 > f.v9)
-						if (f.w12 == f.v9) && (f.i11 < f.idx10) {
-							f.better14 = true
+					if f.below14 {
+						f.better15 = (f.w13 > f.v10)
+						if (f.w13 == f.v10) && (f.i12 < f.idx11) {
+							f.better15 = true
 						}
-						if f.better14 {
-							f.v9 = f.w12
-							f.idx10 = f.i11
+						if f.better15 {
+							f.v10 = f.w13
+							f.idx11 = f.i12
 						}
 					}
 				}
 			}
 			tr.Write(0, int(f.lane0))
-			best[f.lane0] = f.v9
+			best[f.lane0] = f.v10
 			tr.Write(1, int(f.lane0))
-			at[f.lane0] = f.idx10
+			at[f.lane0] = f.idx11
 			f.pc = 12
 			continue
 		case 12:
@@ -8537,21 +8542,21 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: ""}
 			return true
 		case 13:
-			f.stride15 = uint32(64)
+			f.stride16 = uint32(64)
 			f.pc = 17
 			continue
 		case 14:
-			if f.lane0 < f.stride15 {
-				f.a16 = best[tr.ReadAt(0, int(f.lane0))]
-				f.b17 = best[tr.ReadAt(0, int((f.lane0+f.stride15)))]
-				if f.b17 > f.a16 {
+			if f.lane0 < f.stride16 {
+				f.a17 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b18 = best[tr.ReadAt(0, int((f.lane0+f.stride16)))]
+				if f.b18 > f.a17 {
 					tr.Write(0, int(f.lane0))
-					best[f.lane0] = f.b17
+					best[f.lane0] = f.b18
 					tr.Write(1, int(f.lane0))
-					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride15)))]
-				} else if (f.b17 == f.a16) && (at[tr.ReadAt(1, int((f.lane0+f.stride15)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride16)))]
+				} else if (f.b18 == f.a17) && (at[tr.ReadAt(1, int((f.lane0+f.stride16)))] < at[tr.ReadAt(1, int(f.lane0))]) {
 					tr.Write(1, int(f.lane0))
-					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride15)))]
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride16)))]
 				}
 			}
 			f.pc = 15
@@ -8561,21 +8566,21 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: ""}
 			return true
 		case 16:
-			f.stride15 = (f.stride15 / uint32(2))
+			f.stride16 = (f.stride16 / uint32(2))
 			f.pc = 17
 			continue
 		case 17:
-			if f.stride15 > uint32(0) {
+			if f.stride16 > uint32(0) {
 				f.pc = 14
 				continue
 			}
 			f.pc = 18
 			continue
 		case 18:
-			if f.kept7 < f.target4 {
-				f.frontV5 = best[tr.ReadAt(0, int(int32(0)))]
-				f.frontI6 = at[tr.ReadAt(1, int(int32(0)))]
-				f.kept7 = float32(f.kept7 + f.frontV5)
+			if f.kept8 < f.target5 {
+				f.frontV6 = best[tr.ReadAt(0, int(int32(0)))]
+				f.frontI7 = at[tr.ReadAt(1, int(int32(0)))]
+				f.kept8 = float32(f.kept8 + f.frontV6)
 			}
 			f.pc = 19
 			continue
@@ -8584,11 +8589,11 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 19, Pos: ""}
 			return true
 		case 20:
-			f.r8 = (f.r8 + uint32(1))
+			f.r9 = (f.r9 + uint32(1))
 			f.pc = 21
 			continue
 		case 21:
-			if f.r8 < uint32(128) {
+			if f.r9 < uint32(128) {
 				f.pc = 11
 				continue
 			}
@@ -8596,17 +8601,17 @@ func topPMaskCoop(t accel.Thread, d TopDims, weights []float32, out []float32, b
 			continue
 		case 22:
 			{
-				f.i18 = f.lane0
-				for ; f.i18 < d.Vocab; f.i18 = (f.i18 + uint32(128)) {
-					f.w19 = weights[f.i18]
-					f.keep20 = (f.w19 > f.frontV5)
-					if (f.w19 == f.frontV5) && (f.i18 <= f.frontI6) {
-						f.keep20 = true
+				f.i19 = f.lane0
+				for ; f.i19 < d.Vocab; f.i19 = (f.i19 + uint32(128)) {
+					f.w20 = weights[(f.base1 + f.i19)]
+					f.keep21 = (f.w20 > f.frontV6)
+					if (f.w20 == f.frontV6) && (f.i19 <= f.frontI7) {
+						f.keep21 = true
 					}
-					if f.keep20 {
-						out[f.i18] = f.w19
+					if f.keep21 {
+						out[(f.base1 + f.i19)] = f.w20
 					} else {
-						out[f.i18] = float32(0)
+						out[(f.base1 + f.i19)] = float32(0)
 					}
 				}
 			}
@@ -8624,7 +8629,7 @@ var TopPMaskKernel = kernelabi.Kernel{
 		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "fef46ab3cb02a566f0a62def8b867f3f",
+	Digest:    "aa61df707c1bd5e6a6a25344018f002f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8651,9 +8656,10 @@ kernel void TopPMask(
     threadgroup float best[128];
     threadgroup uint at[128];
     uint lane = _lid.x;
+    uint base = (_wid.x * d.Vocab);
     float sum = float(0);
     for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
-        sum = (sum + weights[i]);
+        sum = (sum + weights[(base + i)]);
     }
     best[lane] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -8672,7 +8678,7 @@ kernel void TopPMask(
         float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         uint idx = d.Vocab;
         for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
-            float w = weights[i];
+            float w = weights[(base + i)];
             bool below = (w < frontV);
             if (((w == frontV) && (i > frontI))) {
                 below = true;
@@ -8713,15 +8719,15 @@ kernel void TopPMask(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
-        float w = weights[i];
+        float w = weights[(base + i)];
         bool keep = (w > frontV);
         if (((w == frontV) && (i <= frontI))) {
             keep = true;
         }
         if (keep) {
-            out[i] = w;
+            out[(base + i)] = w;
         } else {
-            out[i] = float(0);
+            out[(base + i)] = float(0);
         }
     }
 }

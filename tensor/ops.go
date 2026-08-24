@@ -5,6 +5,8 @@
 package tensor
 
 import (
+	"math"
+
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/testkernels"
 )
@@ -129,6 +131,9 @@ func RMSNorm(b *Builder, x, gain *Tensor, eps float32) *Tensor {
 		},
 		grid:   perRow,
 		reason: "the cooperative row reduction, one workgroup per row",
+		// eps is recorded rather than bound, so it is part of what a plan *is*
+		// and the digest has to carry it.
+		attrs: []uint64{uint64(math.Float32bits(eps))},
 	}, x.dtype, x.shape)
 }
 
@@ -251,6 +256,7 @@ func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, positions *Tens
 			return accel.WorkgroupCount{X: (pairs + wg - 1) / wg}
 		},
 		reason: "the in-place rotation, preceded by a copy because a tensor is a value",
+		attrs:  []uint64{uint64(rotaryDim)},
 	}, x.dtype, x.shape)
 }
 

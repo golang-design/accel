@@ -115,7 +115,7 @@ numbered in.
 | [025-tensor-operators.md](025-tensor-operators.md) | Implemented | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
 | [026-tensor-decode.md](026-tensor-decode.md) | Implemented | M7 child: persistent state as versions, the KV cache, attention, and the decode step |
 | [027-quantization.md](027-quantization.md) | Implemented | M8: the symmetric int8 block representation, its derived error bound, and quantized Rows and GEMM |
-| [028-sampling.md](028-sampling.md) | Implemented | M8: argmax, categorical sampling, and top-k/top-p truncation, with the random draw as an input so a token is reproducible |
+| [028-sampling.md](028-sampling.md) | Implemented | M8: argmax, categorical sampling, and top-k/top-p truncation, with the random draw as an input so a token is reproducible — public `tensor` operators, batched, one draw per row |
 | [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
 | [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
 | [043-per-row-values.md](043-per-row-values.md) | Implemented | M8: the one line behind five consumer reports — a value every row of a dispatch shares is a scalar, and a value that differs per row is a tensor |

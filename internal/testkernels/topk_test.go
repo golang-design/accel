@@ -244,3 +244,72 @@ func TestTruncationRespectsItsBound(t *testing.T) {
 		}
 	}
 }
+
+// Each row of a batch is truncated against its own distribution.
+//
+// The masks used to index from zero and their whole grid was one workgroup, so
+// a batch was not expressible at all. Now the grid is one workgroup per row and
+// the row offset comes from the group id, which is the arrangement
+// [testkernels.SampleArgmax] has always used.
+//
+// The rows here differ in *scale* rather than in shape, which is what makes
+// this catch the interesting fault. Top-p accumulates a fraction of its row's
+// own total, so a sum loop left indexing from zero gives row 1 row 0's
+// threshold: with row 1 ten times larger, that threshold is reached by its
+// first entry alone and the mask keeps one token instead of the nucleus. The
+// result is a plausible mask over the right vocabulary, and only a comparison
+// against the same row run alone finds it.
+func TestTruncationBatchesByRow(t *testing.T) {
+	rowA := []float32{1, 2, 3, 4, 5, 6}
+	rowB := []float32{60, 10, 50, 20, 40, 30}
+
+	batched := func(k *accel.Kernel, d testkernels.TopDims, rows ...[]float32) [][]float32 {
+		t.Helper()
+		vocab := len(rows[0])
+		in := make([]float32, 0, len(rows)*vocab)
+		for _, r := range rows {
+			in = append(in, r...)
+		}
+		out := make([]float32, len(in))
+		d.Vocab = uint32(vocab)
+		if err := kernel.DispatchCooperative(k, accel.ID3{X: uint32(len(rows))},
+			kernelabi.Args{
+				Slices: []any{in, out}, Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		split := make([][]float32, len(rows))
+		for i := range rows {
+			split[i] = out[i*vocab : (i+1)*vocab]
+		}
+		return split
+	}
+
+	t.Run("TopKMask", func(t *testing.T) {
+		got := batched(&testkernels.TopKMaskKernel, testkernels.TopDims{K: 2}, rowA, rowB)
+		// Each row alone is the oracle: a batch of two must equal two batches
+		// of one, element for element.
+		for i, row := range [][]float32{rowA, rowB} {
+			want := topK(t, row, 2)
+			for j := range want {
+				if got[i][j] != want[j] {
+					t.Fatalf("row %d element %d: batched %v, alone %v",
+						i, j, got[i][j], want[j])
+				}
+			}
+		}
+	})
+
+	t.Run("TopPMask", func(t *testing.T) {
+		got := batched(&testkernels.TopPMaskKernel, testkernels.TopDims{P: 0.5}, rowA, rowB)
+		for i, row := range [][]float32{rowA, rowB} {
+			want := topP(t, row, 0.5)
+			for j := range want {
+				if got[i][j] != want[j] {
+					t.Fatalf("row %d element %d: batched %v, alone %v",
+						i, j, got[i][j], want[j])
+				}
+			}
+		}
+	})
+}
