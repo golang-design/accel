@@ -62,3 +62,36 @@ func ShadeFS(f accel.Fragment, in Varyings) Targets {
 		Normal: accel.Vec4{in.UV[0], in.UV[1], c[2], 1},
 	}
 }
+
+// HalfTriangleVS covers the lower-left half of the viewport, and covers it from
+// the vertex index alone.
+//
+// Half rather than all of it on purpose: a stage that covers everything cannot
+// tell a rasterizer that works from one that ignores its input and writes every
+// pixel. The uncovered half is the part of the assertion that has teeth.
+//
+//accel:vertex
+func HalfTriangleVS(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
+	x := float32(-1)
+	y := float32(-1)
+	if v.VertexIndex() == 1 {
+		x = 1
+	}
+	if v.VertexIndex() == 2 {
+		y = 1
+	}
+	return accel.Clip{x, y, 0.5, 1}, accel.NoVaryings{}
+}
+
+// Solid is a single colour attachment.
+type Solid struct {
+	Colour accel.Vec4
+}
+
+// SolidFS writes one constant colour, so what a test reads back is decided by
+// coverage alone.
+//
+//accel:fragment
+func SolidFS(f accel.Fragment, in accel.NoVaryings) Solid {
+	return Solid{Colour: accel.Vec4{0.25, 0.5, 0.75, 1}}
+}

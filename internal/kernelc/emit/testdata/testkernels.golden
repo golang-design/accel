@@ -4722,6 +4722,59 @@ var ShadeFSStage = accel.Stage{
 	Generator: kernelabi.Version,
 }
 
+// halfTriangleVSFlat is the generated lowering of the vertex stage HalfTriangleVS.
+//
+// specs/032-stage-abi.md. The authored HalfTriangleVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func halfTriangleVSFlat(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
+	var x float32 = float32(-1)
+	var y float32 = float32(-1)
+	if v.VertexIndex() == uint32(1) {
+		x = float32(1)
+	}
+	if v.VertexIndex() == uint32(2) {
+		y = float32(1)
+	}
+	return [4]float32{x, y, math.Float32frombits(0x3F000000 /* 0.5 */), float32(1)}, accel.NoVaryings{}
+}
+
+// HalfTriangleVSStage is the compiled form of HalfTriangleVS.
+var HalfTriangleVSStage = accel.Stage{
+	Name:     "HalfTriangleVS",
+	Kind:     accel.StageVertex,
+	Varyings: "NoVaryings",
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+		pos, vary := halfTriangleVSFlat(v)
+		return pos, flattenNoVaryings(vary)
+	},
+	Digest:    "b865f928f01efe880d86bfb690f23584",
+	Generator: kernelabi.Version,
+}
+
+// solidFSFlat is the generated lowering of the fragment stage SolidFS.
+//
+// specs/032-stage-abi.md. The authored SolidFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func solidFSFlat(f accel.Fragment, in accel.NoVaryings) Solid {
+	return Solid{[4]float32{math.Float32frombits(0x3E800000 /* 0.25 */), math.Float32frombits(0x3F000000 /* 0.5 */), math.Float32frombits(0x3F400000 /* 0.75 */), float32(1)}}
+}
+
+// SolidFSStage is the compiled form of SolidFS.
+var SolidFSStage = accel.Stage{
+	Name:     "SolidFS",
+	Kind:     accel.StageFragment,
+	Varyings: "NoVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+		out := solidFSFlat(f, unflattenNoVaryings(vv))
+		return [][4]float32{out.Colour}
+	},
+	Digest:    "af43db087da681e27d713ad79268d39f",
+	Generator: kernelabi.Version,
+}
+
 // subgroupReduceFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
