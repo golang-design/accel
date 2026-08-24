@@ -357,6 +357,12 @@ func inferAccess(k *ir.Func) {
 			walkValue(v.Y)
 		case *ir.Convert:
 			walkValue(v.X)
+		case *ir.Composite:
+			// A stage constructs what it returns, so a resource access inside a
+			// literal is the common case rather than an exotic one.
+			for _, e := range v.Elems {
+				walkValue(e)
+			}
 		case *ir.Len:
 			// Deliberately not a read of the elements.
 		case *ir.Call:
@@ -418,6 +424,14 @@ func inferAccess(k *ir.Func) {
 			walkStmt(s.Body)
 		case *ir.Return:
 			walkValue(s.Value)
+			// A graphics stage returns through Values rather than Value, and
+			// what it returns is usually a literal built in place. A stage
+			// whose only fetch is inside the struct it returns -- which is the
+			// ordinary shape of a fragment stage -- would otherwise record no
+			// read at all.
+			for _, v := range s.Values {
+				walkValue(v)
+			}
 		}
 	}
 	walkStmt(k.Body)
