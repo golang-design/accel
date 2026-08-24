@@ -128,6 +128,7 @@ var (
 	selSetRenderPipeline   = objc.RegisterName("setRenderPipelineState:")
 	selSetDepthStencil     = objc.RegisterName("setDepthStencilState:")
 	selSetVertexBuffer     = objc.RegisterName("setVertexBuffer:offset:atIndex:")
+	selSetFragmentBuffer   = objc.RegisterName("setFragmentBuffer:offset:atIndex:")
 	selSetCullMode         = objc.RegisterName("setCullMode:")
 	selSetWinding          = objc.RegisterName("setFrontFacingWinding:")
 	selDrawPrimitives      = objc.RegisterName("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:")
@@ -137,6 +138,24 @@ var (
 	selCopyBufferToTexture = objc.RegisterName("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
 	selCopyTextureToBuffer = objc.RegisterName("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:")
 )
+
+// bytesPerPixel is a render target format's size.
+//
+// A table rather than "sixteen unless it is depth", which is what this was: a
+// BGRA8 target then took a stride four times too large, and the blit that reads
+// it back writes past the end of the destination. Every format this package
+// creates is listed, and an unlisted one is refused rather than guessed.
+func bytesPerPixel(format int) int {
+	switch format {
+	case PixelFormatRGBA32Float:
+		return 16
+	case PixelFormatDepth32Float:
+		return 4
+	case PixelFormatBGRA8Unorm:
+		return 4
+	}
+	return 0
+}
 
 // Texture is a render target.
 type Texture struct {
@@ -155,10 +174,13 @@ func (d *Device) NewRenderTarget(format, w, h int) (*Texture, error) {
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("accel/mtl: a %dx%d render target", w, h)
 	}
-	t := &Texture{width: w, height: h, bpp: 16}
-	if format == PixelFormatDepth32Float {
-		t.bpp = 4
+	bpp := bytesPerPixel(format)
+	if bpp == 0 {
+		return nil, fmt.Errorf("accel/mtl: pixel format %d has no known size, and a blit "+
+			"needs one: a stride computed from a guess reads or writes the wrong bytes",
+			format)
 	}
+	t := &Texture{width: w, height: h, bpp: bpp}
 	withPool(func() {
 		desc := objc.ID(clsTextureDescriptor).Send(selTexture2D,
 			uintptr(format), uintptr(w), uintptr(h), uintptr(0))
@@ -466,6 +488,13 @@ func (e *RenderEncoder) SetDepthState(s *DepthState) {
 // SetVertexBuffer binds a buffer the vertex stage fetches from.
 func (e *RenderEncoder) SetVertexBuffer(b *Buffer, offset, index int) {
 	e.id.Send(selSetVertexBuffer, b.id, uintptr(offset), uintptr(index))
+}
+
+// SetFragmentBuffer binds a buffer the fragment stage reads.
+func (e *RenderEncoder) SetFragmentBuffer(b *Buffer, offset, index int) {
+	withPool(func() {
+		e.id.Send(selSetFragmentBuffer, b.id, uintptr(offset), uintptr(index))
+	})
 }
 
 // SetCull selects the cull mode: 0 none, 1 front, 2 back.
