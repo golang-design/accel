@@ -28,7 +28,13 @@ func (b *Builder) Identity() Identity {
 	// Versioned, so a change to what this digest covers cannot collide with a
 	// key computed by an older build. Without it, adding a component to the
 	// digest would leave old keys valid for plans that no longer match them.
-	writeString(h, "accel/tensor identity v1")
+	//
+	// v2 added the window a value occupies within its port. v1 covered the port
+	// name and the view's offset, and a layer view carries neither -- its
+	// offset is the *binding's* -- so two plans differing only in which layer
+	// of a cache they address hashed alike, and a cache would have answered one
+	// with the other.
+	writeString(h, "accel/tensor identity v2")
 
 	for _, d := range b.ports {
 		writeString(h, "port")
@@ -62,6 +68,9 @@ func (b *Builder) Identity() Identity {
 		writeUint(h, boolBit(n.inPlace)|boolBit(n.bcast)<<1)
 		if n.outPort != "" {
 			writeString(h, n.outPort)
+			// Which range of that port, because a write to layer 3 and a write
+			// to layer 0 are the same operator over the same shapes.
+			writeUint(h, uint64(n.outOff))
 		}
 		for _, r := range n.reads {
 			writeString(h, r)
@@ -123,6 +132,16 @@ func writeTensor(h io.Writer, t *Tensor) {
 	// producers do not look alike.
 	writeUint(h, uint64(int64(t.node)+1))
 	writeString(h, t.port)
+	// The window within that port. A layer view is contiguous from its own
+	// element zero and carries no view offset, so without this a read of layer
+	// 3 is indistinguishable from a read of layer 0.
+	if t.win == nil {
+		writeString(h, "whole")
+	} else {
+		writeString(h, "window")
+		writeUint(h, uint64(t.win.off))
+		writeUint(h, uint64(t.win.count))
+	}
 }
 
 func boolBit(b bool) uint64 {
