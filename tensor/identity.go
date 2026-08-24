@@ -34,7 +34,14 @@ func (b *Builder) Identity() Identity {
 	// offset is the *binding's* -- so two plans differing only in which layer
 	// of a cache they address hashed alike, and a cache would have answered one
 	// with the other.
-	writeString(h, "accel/tensor identity v2")
+	//
+	// v3 added the attributes an operator records rather than reads from a
+	// scalar. Those reach the kernel through a closure the digest cannot see,
+	// so a top-k of 40 and a top-k of 5, an RMSNorm at two epsilons, a RoPE at
+	// two rotary widths and a paged attention at two block sizes were each one
+	// key -- and [PlanCache.Compile] discards the graph it just recorded on a
+	// hit, so the second caller ran the first caller's configuration.
+	writeString(h, "accel/tensor identity v3")
 
 	for _, d := range b.ports {
 		writeString(h, "port")
@@ -74,6 +81,12 @@ func (b *Builder) Identity() Identity {
 		}
 		for _, r := range n.reads {
 			writeString(h, r)
+		}
+		// The recorded attributes. Length-prefixed like everything else, so an
+		// operator with two of them cannot hash like the next node's first.
+		writeUint(h, uint64(len(n.attrs)))
+		for _, a := range n.attrs {
+			writeUint(h, a)
 		}
 	}
 	for _, o := range b.outputs {
