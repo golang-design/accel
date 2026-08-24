@@ -823,6 +823,7 @@ kernel void AttentionDecode(
 `,
 	Suspensions: 5,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -1133,6 +1134,7 @@ kernel void AttentionDecodeBatched(
 `,
 	Suspensions: 5,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -1335,6 +1337,7 @@ kernel void Exchange(
 `,
 	Suspensions: 1,
 	SharedSizes: []int{64},
+	SharedBytes: 256,
 	NewShared: func() []any {
 		var s0 [64]float32
 		kernelabi.Poison(s0[:])
@@ -1460,6 +1463,7 @@ kernel void ReduceLoop(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{64},
+	SharedBytes: 256,
 	NewShared: func() []any {
 		var s0 [64]float32
 		kernelabi.Poison(s0[:])
@@ -1642,6 +1646,7 @@ kernel void ReduceUnrolled(
 `,
 	Suspensions: 7,
 	SharedSizes: []int{64},
+	SharedBytes: 256,
 	NewShared: func() []any {
 		var s0 [64]float32
 		kernelabi.Poison(s0[:])
@@ -2339,6 +2344,7 @@ kernel void MatMulTiled(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{128, 256},
+	SharedBytes: 768,
 	NewShared: func() []any {
 		var s0 [128]accel.Float16
 		kernelabi.Poison(s0[:])
@@ -2498,6 +2504,7 @@ kernel void MatVec(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{128},
+	SharedBytes: 512,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -2710,6 +2717,7 @@ kernel void LinearTiled(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{128, 256},
+	SharedBytes: 768,
 	NewShared: func() []any {
 		var s0 [128]accel.Float16
 		kernelabi.Poison(s0[:])
@@ -2881,6 +2889,7 @@ kernel void RMSNorm(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{128},
+	SharedBytes: 512,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -3113,6 +3122,7 @@ kernel void Softmax(
 `,
 	Suspensions: 5,
 	SharedSizes: []int{128},
+	SharedBytes: 512,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -3406,6 +3416,7 @@ kernel void AttentionDecodePaged(
 `,
 	Suspensions: 5,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -3703,6 +3714,7 @@ kernel void AttentionPrefill(
 `,
 	Suspensions: 5,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -4233,6 +4245,7 @@ kernel void ReduceSum(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{128},
+	SharedBytes: 512,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -4410,6 +4423,7 @@ kernel void SampleArgmax(
 `,
 	Suspensions: 2,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -5596,6 +5610,7 @@ kernel void TopKMask(
 `,
 	Suspensions: 3,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])
@@ -5943,6 +5958,7 @@ kernel void TopPMask(
 `,
 	Suspensions: 6,
 	SharedSizes: []int{128, 128},
+	SharedBytes: 1024,
 	NewShared: func() []any {
 		var s0 [128]float32
 		kernelabi.Poison(s0[:])

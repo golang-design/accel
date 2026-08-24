@@ -131,6 +131,23 @@ type Field struct {
 	Type *Type
 }
 
+// Bytes is a scalar kind's size in memory.
+//
+// Zero for a kind that is not a scalar, which makes "not a scalar" answerable
+// rather than a guess: a caller summing shared-memory bytes needs to know the
+// difference between an eight-bit type and a struct it cannot size.
+func (k Kind) Bytes() int {
+	switch k {
+	case I8, U8, Bool:
+		return 1
+	case F16, BF16:
+		return 2
+	case I32, U32, F32:
+		return 4
+	}
+	return 0
+}
+
 func (t *Type) String() string {
 	switch t.Kind {
 	case Array:

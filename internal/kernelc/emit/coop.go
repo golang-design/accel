@@ -717,6 +717,17 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 			e.printf("%d", sh.Type.Len)
 		}
 		e.printf("},\n")
+		total := 0
+		for _, sh := range k.Shared {
+			b := sh.Type.Elem.Kind.Bytes()
+			if b == 0 {
+				e.fail("shared %s has element type %v, which has no size, so the "+
+					"shared-memory budget cannot be checked against it", sh.Name, sh.Type.Elem)
+				return
+			}
+			total += sh.Type.Len * b
+		}
+		e.printf("\tSharedBytes: %d,\n", total)
 		e.printf("\tNewShared: func() []any {\n")
 		for i, sh := range k.Shared {
 			e.printf("\t\tvar s%d %s\n", i, e.goType(sh.Type))

@@ -295,6 +295,16 @@ type Kernel struct {
 	// knows it.
 	SharedSizes []int
 
+	// SharedBytes is what every declared shared array occupies together, which
+	// is what a device's shared-memory budget is expressed in.
+	//
+	// Separate from SharedSizes because that holds element *counts* and a count
+	// cannot be converted without the element size, which the record did not
+	// carry. specs/016-graph-execution.md's validation rule V11 was stated and
+	// could not fire for exactly that reason: the number it compares against
+	// the device budget did not exist.
+	SharedBytes int
+
 	// Suspensions is how many barriers the body reaches, which is what the
 	// scheduler uses to size an epoch bound. Zero for a flat kernel.
 	Suspensions int

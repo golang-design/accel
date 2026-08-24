@@ -95,6 +95,7 @@ func requirementsOf(k *Kernel) Requirements {
 		Caps:                 Capability(k.Caps),
 		WorkgroupSize:        [3]uint32{s.X, s.Y, s.Z},
 		WorkgroupInvocations: s.X * s.Y * s.Z,
+		SharedBytes:          uint32(k.SharedBytes),
 	}
 }
 
