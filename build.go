@@ -291,6 +291,14 @@ func (g *Graph) lower() error {
 				return err
 			}
 			node.Dispatch = d
+		case NodeRenderPass:
+			node.Op = driver.OpRenderPass
+			rp, err := g.renderOperands(n)
+			if err != nil {
+				return err
+			}
+			node.Render = rp
+
 		default:
 			return fmt.Errorf("accel: Build: node %d is a %v, which is not yet lowered "+
 				"(specs/009-sequencing.md)", n.id, n.kind)
@@ -384,4 +392,136 @@ func (g *Graph) releaseTransients() {
 	}
 	pool.Free()
 	g.dev.countImplicit(-1)
+}
+
+// renderOperands lowers a render pass node.
+//
+// The attachments become ordinary operands, so the planner places and barriers
+// them without knowing they are attachments — which is the point of declaring
+// access rather than kind. What the backend has to understand is the draw list
+// and the stage adapters, and those are as opaque to the planner as a kernel's
+// entry point is.
+func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
+	p := n.pass
+	if p == nil {
+		return nil, fmt.Errorf("accel: Build: node %d is a render pass with nothing recorded",
+			n.id)
+	}
+	if len(p.draws) == 0 {
+		return nil, fmt.Errorf("accel: Build: render pass %q records no draws", p.desc.Label)
+	}
+
+	out := &driver.RenderPass{
+		Label: p.desc.Label, Width: p.desc.Width, Height: p.desc.Height,
+	}
+	for i, c := range p.desc.Color {
+		op, err := g.operand(n, n.accesses[i])
+		if err != nil {
+			return nil, err
+		}
+		if err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i), c.View, 4); err != nil {
+			return nil, err
+		}
+		out.Color = append(out.Color, op)
+		out.ColorLoad = append(out.ColorLoad, uint8(c.Load))
+		out.ColorClear = append(out.ColorClear, c.Clear)
+	}
+	if p.desc.Depth != nil {
+		op, err := g.operand(n, n.accesses[len(p.desc.Color)])
+		if err != nil {
+			return nil, err
+		}
+		if err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View, 1); err != nil {
+			return nil, err
+		}
+		out.Depth = &op
+		out.DepthLoad = uint8(p.desc.Depth.Load)
+		out.DepthClear = p.desc.Depth.Clear
+		if c := p.desc.Depth.Clear; c < 0 || c > 1 {
+			return nil, fmt.Errorf("accel: Build: render pass %q clears depth to %v, and "+
+				"stored window depth is in [0, 1] — clip space is [-1, 1] and they are "+
+				"different ranges", p.desc.Label, c)
+		}
+	}
+
+	for i, d := range p.draws {
+		pipe := d.pipeline
+		if len(pipe.desc.Targets) != len(p.desc.Color) {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the pipeline %q "+
+				"has %d colour targets and the pass has %d attachments",
+				p.desc.Label, i, pipe.label, len(pipe.desc.Targets), len(p.desc.Color))
+		}
+		if (pipe.desc.DepthStencil != nil) != (p.desc.Depth != nil) {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the pipeline %q "+
+				"%s depth state and the pass %s depth attachment", p.desc.Label, i,
+				pipe.label, has(pipe.desc.DepthStencil != nil), has(p.desc.Depth != nil))
+		}
+		rd := driver.RenderDraw{
+			Vertex: pipe.desc.Vertex.RunVertex, Fragment: pipe.desc.Fragment.RunFragment,
+			Topology:    uint8(pipe.desc.Primitive.Topology),
+			FrontFace:   uint8(pipe.desc.Primitive.FrontFace),
+			Cull:        uint8(pipe.desc.Primitive.Cull),
+			VertexCount: d.vertices, InstanceCount: d.instances,
+			FirstVertex: d.first, FirstInstance: d.firstInst,
+		}
+		if ds := pipe.desc.DepthStencil; ds != nil {
+			rd.DepthTest, rd.DepthWrite = ds.Test, ds.Write
+			rd.DepthCompare = uint8(ds.Compare)
+		}
+		for _, t := range pipe.desc.Targets {
+			rd.Masks = append(rd.Masks, uint8(t.Mask.resolved()))
+		}
+		// A stage that declares a by-value parameter cannot be drawn, and this
+		// is where the value would have been needed. specs/033-render-api.md
+		// deviation 1: the draw-time uniform channel was removed, and the
+		// mechanism the spec does describe -- a uniform buffer at a recorded
+		// offset, section 6 -- is unbuilt. Refused rather than passed an empty
+		// slice, because the generated adapter would then index past its end
+		// and the diagnostic would come from the backend.
+		for _, s := range []*Stage{pipe.desc.Vertex, pipe.desc.Fragment} {
+			if len(s.Uniforms) > 0 {
+				return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s declares "+
+					"the by-value parameter %q, and no render path supplies one yet "+
+					"(specs/033-render-api.md deviation 1)",
+					p.desc.Label, i, s.Name, s.Uniforms[0].Name)
+			}
+		}
+		if len(pipe.desc.Vertex.Attributes) > 0 {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s reads the "+
+				"vertex attribute %q, and the vertex layout that would fetch it is "+
+				"unbuilt (specs/033-render-api.md deviation 1)",
+				p.desc.Label, i, pipe.desc.Vertex.Name,
+				pipe.desc.Vertex.Attributes[0].Name)
+		}
+		out.Draws = append(out.Draws, rd)
+	}
+	return out, nil
+}
+
+// has renders one half of the depth-agreement message.
+//
+// It carries the article, because "has no" and "has a" take different ones and
+// a shared "a" in the format string produced "has no a depth attachment".
+func has(b bool) string {
+	if b {
+		return "has a"
+	}
+	return "has no"
+}
+
+// checkAttachment validates one attachment against the render area.
+//
+// components is what one pixel occupies: four for a colour attachment and one
+// for depth. Checked here rather than only in a backend, because an undersized
+// attachment is a recording mistake and every backend would report it in its
+// own words at its own moment -- and a backend that did not check it would read
+// past the end of a buffer instead.
+func (g *Graph) checkAttachment(p *RenderPass, what string, v BufferView, components int) error {
+	want := p.desc.Width * p.desc.Height * components
+	if v.Count < want {
+		return fmt.Errorf("accel: Build: render pass %q %s holds %d elements and a %dx%d "+
+			"area at %d components per pixel needs %d",
+			p.desc.Label, what, v.Count, p.desc.Width, p.desc.Height, components, want)
+	}
+	return nil
 }

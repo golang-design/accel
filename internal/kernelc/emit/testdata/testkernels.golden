@@ -4658,6 +4658,9 @@ var GeometryVSStage = accel.Stage{
 		{Name: "pos", Index: 0, Components: 3},
 		{Name: "uv", Index: 1, Components: 2},
 	},
+	Uniforms: []accel.StageUniform{
+		{Name: "xf", Type: "StageTransform", Index: 0},
+	},
 	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
 		pos, vary := geometryVSFlat(v, u[0].(StageTransform), [3]float32(a[0]), [2]float32(a[1]))
 		return pos, flattenVaryings(vary)

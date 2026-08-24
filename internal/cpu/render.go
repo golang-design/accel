@@ -135,12 +135,13 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw)
 		ps.Mask = append(ps.Mask, raster.WriteMask(m))
 	}
 
-	// The vertex function, in the form primitive assembly takes. Attributes are
-	// not bound yet — 033 leaves the vertex layout to the pipeline and no
-	// buffer reaches here — so a stage that reads one gets an empty slice
-	// rather than another vertex's data.
+	// The vertex function, in the form primitive assembly takes. Both nil
+	// arguments are refusals upstream rather than omissions here: graph build
+	// rejects a draw whose stages declare uniforms or attributes, because
+	// specs/033-render-api.md deviation 1 leaves both channels unbuilt and a
+	// generated adapter would index past the end of an empty slice.
 	vertexFn := func(index, instance, base uint32) raster.Vertex {
-		pos, vary := vs(kernel.NewVertex(index, instance), d.Uniforms, nil)
+		pos, vary := vs(kernel.NewVertex(index, instance), nil, nil)
 		return raster.Vertex{
 			Pos:      raster.Clip{X: pos[0], Y: pos[1], Z: pos[2], W: pos[3]},
 			Varyings: vary,
@@ -150,7 +151,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw)
 	shade := func(f raster.Fragment) raster.Shaded {
 		out := fs(kernel.NewFragment(
 			kernel.Vec4{float32(f.X) + 0.5, float32(f.Y) + 0.5, f.Depth, f.InvW},
-			f.Front), d.Uniforms, f.Varyings)
+			f.Front), nil, f.Varyings)
 		return raster.Shaded{Color: out}
 	}
 

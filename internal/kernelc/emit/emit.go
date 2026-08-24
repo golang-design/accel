@@ -286,6 +286,13 @@ func (e *emitter) stage(k *ir.Func) {
 		}
 		e.printf("\t},\n")
 	}
+	if len(k.Uniforms) > 0 {
+		e.printf("\tUniforms: []accel.StageUniform{\n")
+		for i, u := range k.Uniforms {
+			e.printf("\t\t{Name: %q, Type: %q, Index: %d},\n", u.Name, u.TypeName, i)
+		}
+		e.printf("\t},\n")
+	}
 	if len(k.Outputs) > 0 {
 		e.printf("\tOutputs: []accel.StageOutput{\n")
 		for _, o := range k.Outputs {

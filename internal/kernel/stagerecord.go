@@ -31,6 +31,16 @@ type Stage struct {
 	// Attributes are a vertex stage's per-vertex inputs, in signature order.
 	Attributes []StageAttribute
 
+	// Uniforms are the by-value parameters, in the order the generated adapter
+	// indexes them.
+	//
+	// Recorded for the same reason [Kernel] records its own: a caller supplies
+	// a uniform by index, and without the list the render path had nothing to
+	// place against and appended values in the order the caller happened to
+	// write them -- so two uniforms passed out of order bound to each other's
+	// parameters, and a subset shifted every one after it.
+	Uniforms []StageUniform
+
 	// Outputs are a fragment stage's colour attachments, one per field of its
 	// result struct, in declaration order. One field per attachment is how MRT
 	// is expressed.
@@ -87,6 +97,17 @@ type StageAttribute struct {
 	Name       string
 	Index      int
 	Components int
+}
+
+// StageUniform is one by-value parameter a stage declares.
+//
+// Index is the position in the uniforms slice the generated adapter indexes,
+// not the parameter position: the receiver and any attributes are interleaved
+// with the uniforms in the authored signature.
+type StageUniform struct {
+	Name  string
+	Type  string
+	Index int
 }
 
 // StageOutput is one colour attachment a fragment stage writes.

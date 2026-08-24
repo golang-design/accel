@@ -592,9 +592,6 @@ type RenderDraw struct {
 
 	// Vertex is the attribute source, one operand per bound slot.
 	VertexBuffers []Operand
-
-	// Uniforms are the stages' by-value parameters.
-	Uniforms []any
 }
 
 // checkRenderPass reports why a render pass node cannot be compiled.

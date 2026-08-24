@@ -369,7 +369,6 @@ type drawCall struct {
 	instances int
 	first     int
 	firstInst int
-	uniforms  []UniformValue
 	vertexBuf []BufferView
 }
 
@@ -433,6 +432,7 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 	}
 
 	p.id = r.node(NodeRenderPass, label, accesses, nil)
+	r.state.nodes[p.id].pass = p
 	return p
 }
 
@@ -460,7 +460,7 @@ func (p *RenderPass) vertexBuffers() []BufferView { return p.buffers }
 //
 // It executes in the order recorded, and the builder never reorders it: blending
 // is order dependent, and so is any reasoning about overdraw.
-func (p *RenderPass) Draw(d Draw, uniforms ...UniformValue) {
+func (p *RenderPass) Draw(d Draw) {
 	if p.failed {
 		return
 	}
@@ -478,15 +478,15 @@ func (p *RenderPass) Draw(d Draw, uniforms ...UniformValue) {
 	instances := d.InstanceCount
 	if instances == 0 {
 		// The non-instanced case is the instanced case with a count of one, so
-		// an omitted count is one rather than nothing drawn. Zero stays
-		// available and means what it says: a graph recorded for a fixed
-		// maximum draws nothing for an absent object.
+		// an omitted count is one rather than nothing drawn. Go cannot tell an
+		// omitted field from an explicit zero, so there is no way to draw zero
+		// instances and no need for one: a caller with nothing to draw records
+		// no draw.
 		instances = 1
 	}
 	p.draws = append(p.draws, drawCall{
 		pipeline: p.pipeline, vertices: d.VertexCount, instances: instances,
 		first: d.FirstVertex, firstInst: d.FirstInstance,
-		uniforms:  append([]UniformValue(nil), uniforms...),
 		vertexBuf: append([]BufferView(nil), p.buffers...),
 	})
 }
