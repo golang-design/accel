@@ -1,6 +1,6 @@
 ---
 title: "Attention over a cache larger than a workgroup"
-status: drafted
+status: implemented
 layer: tensor
 depends_on:
   - 002-compute-model.md
@@ -204,3 +204,122 @@ because it is the option that would have made this invisible again.
   produces the same result as the composed graph, which is what the running
   maximum is for; and
 - `Selections()` names the kernel and the tile count.
+
+## 8. Outcome, 2026-08-24
+
+Built, in five kernels and one operator. `Attention` accepts a cache of any
+capacity the device can allocate; a 4096-position decode runs end to end through
+the public operator and matches an f64 reference.
+
+The measured properties §7 asked for:
+
+| §7 asked | outcome |
+| --- | --- |
+| the refusal is gone | `tensor/attention.go` no longer bounds `k.shape[0]` |
+| a long decode matches the reference | 4096 positions with the length at 2001, mid-block, against f64 |
+| exact at capacities the single-tile kernel also accepts | bit-identical, and by construction rather than by measurement -- see deviation 2 |
+| correct at a boundary that is not a tile multiple | lengths 129, 300, 512 and a paged 300 over a 38-entry table |
+| shared memory does not grow with capacity | two `[128]` arrays, unchanged; the accumulator is a local |
+| a score range wide enough to overflow one-pass softmax | the running maximum, exercised by the rescale test in deviation 4 |
+| `Selections()` names the kernel and the tile count | **not done.** The reason string still names the kernel and not the count |
+
+### Deviation 1: the loop is bounded by the binding, not by the length
+
+§3's pseudocode reads `for base := 0; base < KVLen; base += 128`. That cannot be
+compiled. [002](002-compute-model.md) §3.3 seeds every storage load as
+non-uniform, `KVLen` is a load -- [043](043-per-row-values.md) made it one, and
+correctly -- and the loop body holds fourteen barriers, so the uniformity
+analysis rejects it. §3.3 names this exact case as one of its two known false
+rejections.
+
+What is used instead is a bound that is workgroup-uniform by §3.3's own seed
+table, and each kernel takes it from the right place:
+
+| kernel | bound | why that quantity |
+| --- | --- | --- |
+| `AttentionDecode`, `AttentionDecodeF16` | `len(k) / (KVHeads·HeadDim)` | the cache binding's extent |
+| `AttentionDecodePaged` | `len(pages) · Block` | the table's reach. **Not** the pool's extent: a pool holds every sequence's blocks and is sized for total concurrency |
+| `AttentionDecodeBatched` | `MaxPages · Block` | the same reach, from the uniform struct because the table is a `Batch × MaxPages` array |
+| `AttentionPrefill` | `min(Base + s + 1, capacity)` | the causal limit. A query at `Base+s` may see nothing past it |
+
+The distinction that makes this sound where the tempting alternative is not: a
+binding's **size** is fixed when the node is recorded, while its **contents** can
+be changed during the dispatch by an aliased write. See deviation 3.
+
+**The cost, stated.** Positions between the length and the bound are masked per
+lane rather than skipped, so an empty block still pays its barriers. Work is
+proportional to the bound, not to the length. For a cache 90% empty that is
+roughly ten times the barriers, of an operation whose arithmetic it does not
+touch. A caller who wants the tight bound sizes the cache to the context, and
+`Attention` accepting any capacity is what makes that possible.
+
+### Deviation 2: one block is the closed form, not a separate case
+
+§3 writes `r := exp(m - mNew)` with the comment "1 on the first tile". It is
+zero on the first tile, because `m` starts at `-3.4e38` -- and that is the
+better value: it multiplies away accumulators that are already zero, so the
+first block needs no special case, and `ℓ` and `o` come out as the single-pass
+kernel's sum and weighted sum term for term and in the same order.
+
+The consequence is worth more than the tidiness: **every test written against
+the 128-position kernel keeps its exact numbers.** The block loop is a longer
+reach rather than a different answer, and that is a property of the arithmetic
+rather than of a tolerance.
+
+### Deviation 3: §6's composed fallback cannot be built
+
+§6 says the composed graph "is now expressible" with `Contiguous` landed, and
+recommends it as the cheap route if this spec were delayed. That is wrong, and
+[007](007-tensor-layer.md) is corrected with it.
+
+Grouped-query attention has several query heads sharing one key/value head, so
+the composed form needs one matrix multiply per head.
+[025](025-tensor-operators.md) multiplies two matrices and does not broadcast
+leading axes, so the composition exists only at `kvHeads == 1` -- which no model
+this serves uses. The composed path remains the correctness reference over the
+shapes it can express, which is what the corpus tests run.
+
+**A route not taken, and why it is recorded.** Making a load from a *read-only*
+binding workgroup-uniform would have admitted §3's `KVLen` bound directly and
+retired one of 002 §3.3's two false rejections. It is unsound here: soundness
+needs no other binding of the node to write that memory, and the library permits
+exactly that alias -- `TestInPlaceWorkOnAWrittenTransientIsFine` binds one
+transient to a read binding and a write binding of one dispatch, deliberately.
+003's check V23 would forbid it and is **not implemented**; implementing it as
+worded would delete in-place work. 002 §3.3 and 003 record this.
+
+### Deviation 4: the shared arrays are loop-carried, and that is a new hazard
+
+Not in §3 at all. The arrays are per-tile workspace, so a pass's writes race the
+previous pass's reads of them. One barrier at the top of the loop body orders
+them.
+
+Nothing else would have reported it. The CPU backend's rendezvous check
+([002](002-compute-model.md) §3.4) detects an invocation that fails to *arrive*
+at a barrier, and this is a race between arrivals. It was confirmed by removing
+the barrier and watching the long-cache test fail, which is also how the missing
+rescale and a page lookup that dropped its block offset were confirmed.
+
+### Deviation 5: the accumulator is a local, and the prefill needs no Positions
+
+§3 puts `o` in registers and the first implementation put it in a third shared
+array; the array cost a barrier and 512 bytes on all five kernels for nothing,
+since each lane owns one element no other lane reads. It is a local, which the
+resumable lowering carries across a suspension point.
+
+§3.1 says the prefill's causal bound "moves from a uniform to a per-row value,
+which is 043's rule already applied -- `Positions` supplies it". It does not
+need to. `Base` is a field of the uniform struct and the query position comes
+from the group id, so the limit is already workgroup-uniform and bounds the loop
+directly. No new operand.
+
+### What this did not close
+
+- `Selections()` still reports the kernel without the block count.
+- Issue 9, the `LayerState` view, is untouched: `Attention` still refuses a
+  non-zero offset.
+- [040](040-batch-scheduler.md)'s second length cap changed shape rather than
+  going away. The batched kernel's loop now stops at `MaxPages·Block`, so a
+  length past the page-table row is **truncated** instead of reading the next
+  sequence's row. A silently short answer is better than another conversation's
+  keys and is still wrong, so admission still owes the check.

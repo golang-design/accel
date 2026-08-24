@@ -116,7 +116,7 @@ state; `scatter_rows` first executes through a public graph in M3.
 | `matmul` | naive reference, tiled `16x8x16` | M/N/K guarded; required inner strides are 1 | Portable f16/f32 storage, f32 accumulation. |
 | `linear` | tiled with bias epilogue | MatMul rules; broadcast-compatible bias | Shares tile body with MatMul, distinct stable ID. |
 | `matvec` | row/vector | selected exactly when M=1 | Decode-specialized MatMul implementation. |
-| `attention_decode` | fused contiguous KV | qSeq=1, headDim divisible by 8 and <=128, qHeads%kvHeads=0 | Optional selection path required on CPU and Metal v0; composed path remains mandatory. |
+| `attention_decode` | fused contiguous KV | qSeq=1, headDim divisible by 8 and <=128, qHeads%kvHeads=0; any cache capacity | Required on CPU and Metal v0. The cache is walked a block at a time with a running softmax ([044](044-unbounded-context.md)), so the workgroup bounds a block and not a cache. The composed path is the reference where it is expressible, which is `kvHeads == 1`. |
 
 The `16x8x16` GEMM tile means a 16-wide output-N tile, eight output rows, and a
 16-wide K step, for 128 invocations and a portable shared-memory footprint.

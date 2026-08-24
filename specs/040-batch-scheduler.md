@@ -214,15 +214,20 @@ sits on the other side of that line and says so.
 | worst-case blocks exceed the whole pool | refuse — it can never be admitted, so queueing it is a hang |
 | no free slot, or not enough free blocks right now | **wait**, in arrival order |
 
-**There are two length caps, and admission owes the tighter one.** The decode
-kernels are `workgroup=128` and score one cached position per lane, which caps a
-cache at 128 positions; `tensor.Attention` already refuses past it. The batched
-kernel adds a second cap: it reads `pages[pageBase + lane/Block]` with
-`pageBase = seq*MaxPages`, so a length above `MaxPages·Block` indexes into slot
-`seq+1`'s page-table row — another conversation's physical blocks — and runs off
-the buffer for the last slot. Under `MaxPages = 2, Block = 16` the real cap is
-32, and an admission checking only the lane cap takes a 100-token request. The
-refusal names which of the two bound, because they move independently.
+**One length cap remains, and admission owes it.** The 128-position cap is gone:
+[044](044-unbounded-context.md) made the decode kernels walk the cache a block
+at a time, so `workgroup=128` bounds a block and not a cache.
+
+The batched kernel's cap is the one that is left, and it changed shape rather
+than going away. It reads `pages[pageBase + pos/Block]` with
+`pageBase = seq*MaxPages`, so a length above `MaxPages·Block` used to index into
+slot `seq+1`'s page-table row — another conversation's physical blocks — and run
+off the buffer for the last slot. The kernel's loop now stops at `MaxPages·Block`,
+so such a length is **truncated** instead: the answer attends over a prefix of
+the sequence. That is better than another conversation's keys and is still
+wrong, and the kernel cannot tell — the length is device data. Under `MaxPages = 2, Block = 16` the cap is 32,
+and an admission that checked only the cache's capacity takes a 100-token
+request and silently answers over its first 32.
 
 **Above the reservation bound, eviction never fires.** $L_{\max}$ makes a
 sequence's worst case known at admission, so

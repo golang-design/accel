@@ -329,7 +329,7 @@ been a third thing that could disagree with the two kernels.
 | `Softmax`'s mask and causal | a kernel with a mask binding |
 | `Squeeze`, `Unsqueeze` | `Reshape` expresses both; absent rather than aliased |
 | `LayerState` binding | a slot binds a whole resource, not a range of one; the view arithmetic is built and tested, and a per-layer cache needs one state per layer until the device layer can bind a sub-range |
-| composed attention as a fallback | `Attention` selects the fused kernel or refuses; it does not lower the score-softmax-value graph, and `Selections` says so rather than implying a choice was weighed |
+| composed attention as a fallback | not buildable, not merely absent: the composed form needs a matrix multiply per head and 025 does not broadcast leading axes, so it exists only at `kvHeads == 1`. It stays the correctness reference over the shapes it can express. See the correction above and [044](044-unbounded-context.md) deviation 3 |
 | a plan cache | post-v0 by this spec's own §"Ownership and core types" |
 
 **One rule this spec states that the built layer had to enforce rather than
@@ -447,10 +447,25 @@ length must be at least qSeq and no greater than maxSeq. The result has q's shap
 The composed definition is score MatMul, Softmax, and value MatMul and is the
 correctness reference.
 
-Fused attention is **runtime kernel selection**, not a device capability.
-`Compile` selects it only when a registered kernel variant supports the concrete
-dtype, shape, limits, and required primitive capabilities. Otherwise it selects
-the composed graph. `Plan.Selections` reports the decision and reason.
+**Correction, 2026-08-24: it is the reference and not a fallback.** This spec
+said fused attention is "runtime kernel selection, not a device capability", and
+that `Compile` "otherwise selects the composed graph". The second half cannot be
+built. Grouped-query attention has several query heads sharing one key/value
+head, so the composed form needs one matrix multiply per head, and
+[025](025-tensor-operators.md) multiplies two matrices with no leading-axes
+broadcast. The composition therefore exists only at `kvHeads == 1`, which no
+model this serves uses.
+
+What holds: the composed graph is the correctness reference, and the corpus
+tests run it over the shapes it can express. What replaces the fallback: nothing
+needs to. [044](044-unbounded-context.md) removed the shape the fallback existed
+to catch — a cache longer than a workgroup — by making the fused kernels walk
+the cache a block at a time, so the fused path takes every capacity. A shape a
+registered variant genuinely cannot take is refused by name.
+
+`Plan.Selections` still reports which variant ran and why, which is the part of
+"runtime kernel selection" that was real: the contiguous, paged, f16 and prefill
+kernels are selected from one operator call.
 
 ## Prefill and decode plans
 

@@ -60,13 +60,19 @@ and a `Tensor` does not.
 **Fusion is a selection**, which [007](007-tensor-layer.md) states plainly:
 "runtime kernel selection, not a device capability". v0 selects the fused decode
 kernel when the shapes fit and reports that it did. It does **not** fall back to
-the composed score-softmax-value graph — which remains the correctness reference
-— and says so in `Selections` rather than implying a choice was weighed.
+the composed score-softmax-value graph, and cannot: several query heads share
+one key/value head, so the composed form needs a matrix multiply per head and
+[025](025-tensor-operators.md) does not broadcast leading axes. The composed
+graph remains the correctness reference over the shapes it can express, which is
+`kvHeads == 1`. See [044](044-unbounded-context.md) deviation 3.
 
-Two bounds come from the kernel rather than from the model, and each is refused
-by name: the cache is scored one position per lane, so a capacity above the
-workgroup needs a looping variant [010](010-kernel-corpus.md) does not register;
-and the query is one token, because a longer one is the prefill plan's.
+One bound comes from the kernel rather than from the model, and is refused by
+name: the query is one token, because a longer one is the prefill plan's.
+
+The cache had a second: it was scored one position per lane, so a capacity above
+the workgroup was refused. [044](044-unbounded-context.md) removed it — the
+kernels walk the cache a block at a time — and any capacity the device can
+allocate is now accepted.
 
 ## 4. The two-layer stack, and the operator it is missing
 
