@@ -776,6 +776,15 @@ func (c *checker) param(k *ir.Func, index int, id *ast.Ident, obj types.Object) 
 		return nil, false
 	}
 
+	// A texture is classified before the struct case below, because Texture2D's
+	// underlying type is a struct and a uniform block is what that case makes
+	// of one. Classifying by underlying shape alone would place a texture as a
+	// std140 block, and the diagnostic would be about a layout the author never
+	// asked for.
+	if isKernelType(t, "Texture2D") {
+		return c.textureParam(k, index, id, obj)
+	}
+
 	switch u := types.Unalias(t).Underlying().(type) {
 	case *types.Slice:
 		elem, err := elementKind(u.Elem())
@@ -802,6 +811,29 @@ func (c *checker) param(k *ir.Func, index int, id *ast.Ident, obj types.Object) 
 	c.errorf(id.Pos(), "kernel %s: parameter %q has type %s, which is not a resource: a binding is "+
 		"a slice, and the first parameter is accel.Thread", k.Name, id.Name, t)
 	return nil, false
+}
+
+// textureParam places a shader-visible texture binding.
+//
+// Only a graphics stage may declare one. specs/032-stage-abi.md section 5 also
+// names a compute kernel as a place a fetch belongs, and that half is not
+// built: a compute dispatch fills an argument set by index and nothing in it
+// names a texture, so a kernel declaring one would compile to a binding no
+// caller could supply. Refused by name here rather than accepted and left
+// unreachable, which is the shape specs/042-surface-completion.md section 5.2
+// spent a review removing.
+func (c *checker) textureParam(k *ir.Func, index int, id *ast.Ident, obj types.Object) (*ir.Param, bool) {
+	if !k.Stage.Graphics() {
+		c.errorf(id.Pos(), "%s %s: %q is an accel.Texture2D, and a texture binding reaches a "+
+			"vertex or fragment stage only, because a compute dispatch has no way to bind one",
+			k.Stage, k.Name, id.Name)
+		return nil, false
+	}
+	it := &ir.Type{Kind: ir.Texture2D}
+	k.Textures = append(k.Textures, &ir.TextureBinding{
+		Name: id.Name, Index: len(k.Textures), Param: index,
+	})
+	return ir.NewParam(id.Pos(), it, index, id.Name, obj), true
 }
 
 // sharedParam places a pointer-to-array parameter as workgroup-shared memory.

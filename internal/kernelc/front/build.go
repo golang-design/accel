@@ -303,12 +303,37 @@ func atomicBinding(v *ir.IntrinsicCall) (int, bool) {
 	return p.Index, true
 }
 
+// textureRead reports which texture parameter a fetch reads.
+//
+// A fetch's first argument is the texture itself rather than an index
+// expression, so the same walk that misses an atomic's buffer misses this one —
+// and a texture that looks unread is a subresource the graph draws no edge to,
+// which is the barrier specs/045-texture-attachments.md section 3 puts between
+// the pass that writes an attachment and the pass that fetches it.
+func textureRead(v *ir.IntrinsicCall) (int, bool) {
+	if v.Op != ir.OpTexelFetch || len(v.Args) == 0 {
+		return 0, false
+	}
+	p, ok := v.Args[0].(*ir.Param)
+	if !ok || p.Type() == nil || p.Type().Kind != ir.Texture2D {
+		return 0, false
+	}
+	return p.Index, true
+}
+
 func inferAccess(k *ir.Func) {
 	mark := func(binding int, read, write bool) {
 		for _, b := range k.Bindings {
 			if b.Index == binding {
 				b.Read = b.Read || read
 				b.Write = b.Write || write
+			}
+		}
+	}
+	markTexture := func(param int) {
+		for _, t := range k.Textures {
+			if t.Param == param {
+				t.Reads = true
 			}
 		}
 	}
@@ -349,6 +374,9 @@ func inferAccess(k *ir.Func) {
 			// barrier, which is a race. See specs/003-command-graph.md.
 			if b, ok := atomicBinding(v); ok {
 				mark(b, true, true)
+			}
+			if p, ok := textureRead(v); ok {
+				markTexture(p)
 			}
 			walkValue(v.Recv)
 			for _, a := range v.Args {
