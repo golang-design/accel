@@ -1705,8 +1705,16 @@ forever — so the hardware is asked first.
 | Item | Owner | Why it is not blocked |
 | --- | --- | --- |
 | Sampling operators | [028](028-sampling.md) | the kernels exist and are tested; only the operator is missing, which is `tgo`'s C3 |
-| `UniformBuffer` dispatch path | [042](042-surface-completion.md) §3.1 | the type is exported and connects to nothing — the seventh instance of the defect class, and the one this project shipped itself |
+| `UniformBuffer` — see the note below | [042](042-surface-completion.md) §3.1 | **moved to Wave 2.** The missing half is a *draw* at a recorded offset, not a dispatch; 042 §3.1 said dispatch and its own argument does not support it |
 | Subgroup shuffles and scans | [020](020-atomics-subgroups.md) | intrinsics a kernel author cannot call; compute-side, both backends |
+
+`UniformBuffer[T]` is worth naming as the eighth instance of the defect class,
+and the one this project shipped itself: it is exported, allocates, encodes, and
+returns a `BufferView` that no draw can be parameterised by, because
+[033](033-render-api.md) deviation 1 removed the draw-time uniform channel and
+replaced it with pass state — one value per pass where the case needs one per
+draw. Found while sequencing this milestone, by asking what the item in Wave 1
+actually connected to.
 
 **Wave 2 — the graphics chain, and it is a chain.** Texel fetch
 ([032](032-stage-abi.md) §5) unblocks both texture attachments

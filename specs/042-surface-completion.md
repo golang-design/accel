@@ -59,6 +59,7 @@ means it exists and should not.
 | Line and point rasterization | [035](035-cpu-rasterizer.md) §10 | needs a measurement first — see below |
 | Texture attachments | [033](033-render-api.md) | attachments are buffer views "at this milestone" |
 | Texel fetch in a stage | [032](032-stage-abi.md) §5 | also unblocks 033's feedback rejection |
+| A draw at a recorded uniform offset | [033](033-render-api.md) §4.1 | the half `UniformBuffer[T]` is missing; see §3.1's correction |
 
 Line and point rasterization moved out of this table. Landing it means *stating*
 a rule [035](035-cpu-rasterizer.md) §10 deliberately leaves open, and a rule the
@@ -94,13 +95,31 @@ building the missing half would answer it by default.
 The argument for removing them is that a by-value parameter already carries a
 std140 block, so a uniform *buffer* adds a resource kind for no expressive gain.
 
-The argument for keeping them is [033](033-render-api.md) §6's N-object frame,
+The argument for keeping them is [033](033-render-api.md) §4.1's N-object frame,
 and it is decisive: a thousand objects with a fixed byte offset each is
 precisely what a by-value parameter cannot express, because the value travels
 with the node and a thousand values per frame is the cost the offsets exist to
 avoid. Removing uniform buffers would remove the only mechanism that case has.
 
-So they stay, and the missing half — a dispatch that reads one — is built.
+So they stay, and the missing half is built.
+
+**Correction, 2026-08-24: the missing half is a *draw*, not a dispatch.** This
+section said "a dispatch that reads one", and the argument above does not
+support that. What the N-object frame needs is a **draw parameterised by a
+recorded byte offset** into a uniform buffer — 033 §4.1's
+$\text{offset}(i) = i \cdot \text{align}(\text{sizeof}(T), \text{minUniformBufferOffsetAlignment})$
+— and 033 deviation 1 removed the draw-time uniform channel that would have
+carried it, replacing it with per-stage pass state that is one value per pass
+rather than one per draw.
+
+A compute dispatch has no equivalent need: its by-value parameter already
+carries a std140 block, and nothing has asked for a thousand of them.
+
+So this item is **graphics-side**, it is blocked behind the same review as every
+other graphics item, and it is one instance of the defect class this project
+found seven of in its own surface: `UniformBuffer[T]` is exported, allocates,
+encodes, and hands back a `BufferView` that no draw can be parameterised by.
+The type is not wrong; the half that would use it was removed and not replaced.
 
 ## 4. The `Kernel` shape change
 
