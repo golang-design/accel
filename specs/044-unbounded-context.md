@@ -217,7 +217,7 @@ The measured properties §7 asked for:
 | --- | --- |
 | the refusal is gone | `tensor/attention.go` no longer bounds `k.shape[0]` |
 | a long decode matches the reference | 4096 positions with the length at 2001, mid-block, against f64 |
-| exact at capacities the single-tile kernel also accepts | bit-identical, and by construction rather than by measurement -- see deviation 2 |
+| exact at capacities the single-tile kernel also accepts | bit-identical, asserted at zero tolerance against a float32 reference that reproduces the kernel's reduction order and its rounding -- `TestOneBlockIsExactlyTheSinglePassForm` |
 | correct at a boundary that is not a tile multiple | lengths 129, 300, 512 and a paged 300 over a 38-entry table |
 | shared memory does not grow with capacity | two `[128]` arrays, unchanged; the accumulator is a local |
 | a score range wide enough to overflow one-pass softmax | the running maximum, exercised by the rescale test in deviation 4 |
@@ -319,7 +319,31 @@ directly. No new operand.
 - Issue 9, the `LayerState` view, is untouched: `Attention` still refuses a
   non-zero offset.
 - [040](040-batch-scheduler.md)'s second length cap changed shape rather than
-  going away. The batched kernel's loop now stops at `MaxPages·Block`, so a
-  length past the page-table row is **truncated** instead of reading the next
-  sequence's row. A silently short answer is better than another conversation's
-  keys and is still wrong, so admission still owes the check.
+  going away. A length past the page-table row is **truncated** instead of
+  reading the next sequence's row. A silently short answer is better than
+  another conversation's keys and is still wrong, so admission still owes the
+  check.
+
+### Deviation 6: the loop bound does not bound the lane, and that was a bug
+
+Recorded as a deviation because the first implementation of this spec shipped
+with it, and because the shape of the mistake outlives it.
+
+The loop advances `base` by `AttnBlock`, and each lane scores `base + lane`. So
+the bound limits `base` and the lanes of the last block reach `AttnBlock - 1`
+positions **past** it. A length larger than the binding's reach was therefore
+scored by those lanes rather than stopped by the loop: for the paged kernels
+that read the next sequence's page-table row -- the exact failure 040 names --
+and for the contiguous ones it read off the end of the cache.
+
+The claim that the loop bound alone truncated was written into this spec and
+into 040 before anything checked it. What makes it true is an explicit clamp of
+the length to the reach, in all five kernels.
+
+The generalization: **a bound on a loop variable is not a bound on the index
+derived from it.** Where a lane offsets the loop variable, the mask carries the
+bound and the loop does not.
+
+Found by writing the test for a claim that had been reasoned rather than
+measured. It is the second time in this spec that reasoning about barrier-shaped
+code was wrong in a way only a test showed -- see deviation 4.

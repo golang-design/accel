@@ -1597,6 +1597,7 @@ most orthogonal.
 | `ToFloat16` OR-ed the rounded mantissa into the exponent instead of adding it, so every value in a band below every power of two came back halved | building the f16 KV cache and seeing a 35% discrepancy | it reached weight conversion, the f16 GEMM corpus and quantization scales. The fix is an oracle over all 65536 halves, not a case |
 | the attention block loop's shared arrays are loop-carried, and a pass's writes race the previous pass's reads | reasoning, then confirmed by removing the barrier | 002 §3.4's rendezvous check finds an invocation that fails to *arrive*; this is a race between arrivals, so nothing would have reported it |
 | V23 unimplemented | binding one buffer to a read binding and a write binding of one dispatch, and watching it succeed | a check named in a spec's validation table is not evidence it exists |
+| the attention block loop bounded `base` and not `base+lane`, so a length past the binding's reach was scored by the last block's lanes — reading the next sequence's page-table row, or off the end of the cache | writing the test for a claim that had already been written into two specs | a bound on a loop variable is not a bound on an index derived from it. Where a lane offsets the loop variable, the mask carries the bound |
 
 ## An unverified commit range
 

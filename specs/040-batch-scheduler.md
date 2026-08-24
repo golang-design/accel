@@ -222,9 +222,12 @@ The batched kernel's cap is the one that is left, and it changed shape rather
 than going away. It reads `pages[pageBase + pos/Block]` with
 `pageBase = seq*MaxPages`, so a length above `MaxPages·Block` used to index into
 slot `seq+1`'s page-table row — another conversation's physical blocks — and run
-off the buffer for the last slot. The kernel's loop now stops at `MaxPages·Block`,
-so such a length is **truncated** instead: the answer attends over a prefix of
-the sequence. That is better than another conversation's keys and is still
+off the buffer for the last slot. The kernel now clamps the length to
+`MaxPages·Block`, so such a length is **truncated** instead: the answer attends
+over a prefix of the sequence. The clamp is explicit and not a consequence of
+the loop bound — the loop advances by a block and each lane offsets it, so the
+bound stops `base` and not `base+lane`. See [044](044-unbounded-context.md)
+deviation 6. That is better than another conversation's keys and is still
 wrong, and the kernel cannot tell — the length is device data. Under `MaxPages = 2, Block = 16` the cap is 32,
 and an admission that checked only the cache's capacity takes a 100-token
 request and silently answers over its first 32.
