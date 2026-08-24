@@ -190,7 +190,8 @@ position.
 | Multiply matrices (tiled GEMM) | yes, on both backends |
 | Build a tensor graph and run inference | yes — decode and prefill, with a KV cache |
 | Use int8 quantized weights | yes |
-| Sample a token (argmax, categorical, top-k, top-p) | not yet — the kernels are built and tested, and no operator reaches them |
+| Sample a token (argmax, categorical, top-k, top-p) | yes, batched — one row per sequence, with the random draw supplied so a token is reproducible |
+| Run a whole sampling policy on device | yes — temperature, softmax, top-k, top-p and the draw compose into one submission, so a decode step reads back a token rather than a vocabulary of logits |
 | Page a KV cache, and batch several sequences in one step | yes |
 | Draw triangles | yes, on both backends: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending, indexed and indirect draws |
 | Render a frame loop with acquire and present | yes, headless — the pixels come back in a buffer |
