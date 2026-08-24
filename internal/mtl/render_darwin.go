@@ -34,7 +34,14 @@ import (
 // is checked here first, and the error says which one.
 
 const (
-	// PixelFormatRGBA32Float is the only colour format this path renders, and
+	// PixelFormatRGBA8Unorm and its sRGB pair. The two differ only in whether
+	// the hardware converts on write and on read, which is what makes them a
+	// view's choice rather than a texture's -- see
+	// specs/045-texture-attachments.md section 2.1.
+	PixelFormatRGBA8Unorm     = 70
+	PixelFormatRGBA8UnormSRGB = 71
+
+	// PixelFormatRGBA32Float was the only colour format this path rendered, and
 	// it is the one specs/035-cpu-rasterizer.md's reference rasterizer writes:
 	// four float32 per pixel, so the blit back into a caller's F32 buffer is a
 	// copy rather than a conversion.
@@ -152,6 +159,8 @@ func bytesPerPixel(format int) int {
 	case PixelFormatDepth32Float:
 		return 4
 	case PixelFormatBGRA8Unorm:
+		return 4
+	case PixelFormatRGBA8Unorm, PixelFormatRGBA8UnormSRGB:
 		return 4
 	}
 	return 0

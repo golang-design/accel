@@ -753,17 +753,12 @@ func (g *Graph) checkAttachment(p *RenderPass, what string, v TextureView, s Slo
 			ErrFormat, p.desc.Label, what, v.Format)
 	}
 
-	// The backend gate, and it is honest rather than defensive: only the CPU
-	// backend lowers a texture attachment today. specs/045-texture-attachments.md
-	// section 4 gives the Metal path its own slice, and until it lands a Metal
-	// device would stage a texture allocation through a buffer path that
-	// assumes RGBA32Float and tight rows -- a plausible image rather than an
-	// error. Decision 6: absence is reported, not discovered.
-	if g.dev.info.Backend != BackendCPU {
-		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is texture %q, and %q does "+
-			"not lower a texture attachment at specs/045-texture-attachments.md section 4",
-			ErrUnsupported, p.desc.Label, what, t.desc.Label, g.dev.info.Name)
-	}
+	// Both backends lower a texture attachment. The gate that stood here
+	// refused every non-CPU device while the Metal path was unwritten, which
+	// was right at the time and is recorded in
+	// specs/045-texture-attachments.md section 6.1 along with what it cost: the
+	// render differential skipped, so graphics was verified on one backend
+	// while the commit before it verified two.
 	return v.Format, pitch, nil
 }
 

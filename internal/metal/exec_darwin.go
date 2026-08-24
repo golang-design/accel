@@ -45,7 +45,7 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 	for i := range p.Nodes {
 		n := &p.Nodes[i]
 		switch n.Op {
-		case driver.OpCopy:
+		case driver.OpCopy, driver.OpCopyRows:
 		case driver.OpHostWrite:
 			// Staged rather than written into the mapping. A host write has a
 			// place in the plan's order, and a memcpy at encode time happens
@@ -322,6 +322,26 @@ func (e *executable) encode(p *pass) error {
 				return fmt.Errorf("accel: node %d source: %w", n.ID, err)
 			}
 			p.blit().Copy(dst.buf, dst.off, src.buf, src.off, src.size)
+
+		case driver.OpCopyRows:
+			// A rectangle whose two sides step by different pitches. Metal's
+			// blit encoder copies a contiguous range, so this is that copy once
+			// per row -- the same encoder and no new API, which is why it costs
+			// a loop rather than a texture path.
+			dst, err := e.operand(n.Dst)
+			if err != nil {
+				return fmt.Errorf("accel: node %d destination: %w", n.ID, err)
+			}
+			src, err := e.operand(n.Src)
+			if err != nil {
+				return fmt.Errorf("accel: node %d source: %w", n.ID, err)
+			}
+			r := n.Rows
+			blit := p.blit()
+			for row := 0; row < r.Rows; row++ {
+				blit.Copy(dst.buf, dst.off+row*r.DstPitch,
+					src.buf, src.off+row*r.SrcPitch, r.RowBytes)
+			}
 
 		case driver.OpDispatch:
 			if err := e.dispatch(p, n); err != nil {

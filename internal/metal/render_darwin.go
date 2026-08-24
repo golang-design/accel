@@ -126,7 +126,14 @@ type renderAttachments struct {
 func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, error) {
 	var out renderAttachments
 	for i := range rp.Color {
-		t, err := e.dev.dev.NewRenderTarget(mtl.PixelFormatRGBA32Float, rp.Width, rp.Height)
+		pf, err := metalPixelFormat(rp.ColorFormat[i])
+		if err != nil {
+			for _, done := range out.textures {
+				done.Close()
+			}
+			return renderAttachments{}, fmt.Errorf("colour attachment %d: %w", i, err)
+		}
+		t, err := e.dev.dev.NewRenderTarget(pf, rp.Width, rp.Height)
 		if err != nil {
 			for _, done := range out.textures {
 				done.Close()
@@ -161,6 +168,36 @@ func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, er
 		}
 	}
 	return out, nil
+}
+
+// metalPixelFormat maps a plan's attachment format onto Metal's.
+//
+// It refuses what it cannot spell rather than defaulting, and that is the whole
+// point of it existing: this path used to hardcode RGBA32Float for every colour
+// attachment, so a caller who declared RGBA8Unorm got a pipeline that compiled,
+// rendered, and read back sixteen bytes per pixel where they had asked for
+// four. A silently wrong image is the failure specs/042-surface-completion.md
+// section 5.2 found eight of on this surface.
+//
+// The formats absent here are absent because Metal's constants for them are not
+// in internal/mtl yet, not because Metal lacks them. Adding one is a constant
+// and a bytesPerPixel row; the refusal names the format so the next caller to
+// want one is told what is missing rather than left with a wrong picture.
+func metalPixelFormat(f driver.Format) (int, error) {
+	switch f {
+	case driver.RGBA32Float:
+		return mtl.PixelFormatRGBA32Float, nil
+	case driver.RGBA8Unorm:
+		return mtl.PixelFormatRGBA8Unorm, nil
+	case driver.RGBA8UnormSRGB:
+		return mtl.PixelFormatRGBA8UnormSRGB, nil
+	case driver.BGRA8Unorm:
+		return mtl.PixelFormatBGRA8Unorm, nil
+	case driver.Depth32Float:
+		return mtl.PixelFormatDepth32Float, nil
+	}
+	return 0, fmt.Errorf("accel: this Metal backend has no pixel format for %v; "+
+		"specs/045-texture-attachments.md section 4 owns the mapping", f)
 }
 
 // metalStoreAction maps a plan's store action onto Metal's.
@@ -329,8 +366,17 @@ func (e *executable) renderPipeline(rp *driver.RenderPass, d driver.RenderDraw) 
 	}
 
 	spec := mtl.RenderPipelineSpec{Vertex: vs, Fragment: fs}
-	for range rp.Color {
-		spec.ColorFormats = append(spec.ColorFormats, mtl.PixelFormatRGBA32Float)
+	// The attachment's format, not a fixed one. Metal validates a pipeline's
+	// colour formats against the pass's attachments at draw time, so a
+	// hardcoded value here and a real format there is a pipeline the device
+	// rejects -- and until attachments carried a format there was nothing else
+	// to write.
+	for i := range rp.Color {
+		pf, err := metalPixelFormat(rp.ColorFormat[i])
+		if err != nil {
+			return nil, fmt.Errorf("colour attachment %d: %w", i, err)
+		}
+		spec.ColorFormats = append(spec.ColorFormats, pf)
 	}
 	for _, m := range d.Masks {
 		spec.WriteMasks = append(spec.WriteMasks, int(m))
@@ -409,9 +455,17 @@ func (e *executable) depthState(d driver.RenderDraw) (*mtl.DepthState, error) {
 }
 
 // renderKey identifies a pipeline state within one plan.
+//
+// The attachment formats are part of it, and were not when every attachment was
+// RGBA32Float. Metal validates a pipeline's colour formats against the pass's
+// attachments at draw time, so two passes differing only in format would share
+// a cached pipeline and the second would be rejected by the device -- a failure
+// that appears only when a plan happens to hold both, which is the kind a cache
+// key omission produces and a test rarely finds.
 func renderKey(rp *driver.RenderPass, d driver.RenderDraw) string {
-	return fmt.Sprintf("%s|%s|%d|%t|%v|%v|%v", d.Vertex.Name, d.Fragment.Name,
-		len(rp.Color), rp.Depth != nil, d.Masks, d.Blends, d.VertexLayouts)
+	return fmt.Sprintf("%s|%s|%d|%t|%v|%v|%v|%v|%v", d.Vertex.Name, d.Fragment.Name,
+		len(rp.Color), rp.Depth != nil, d.Masks, d.Blends, d.VertexLayouts,
+		rp.ColorFormat, rp.DepthFormat)
 }
 
 // metalVertexFormat maps a component count onto MTLVertexFormat.

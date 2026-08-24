@@ -238,10 +238,6 @@ func TestCompileRefusesWhatItCannotLower(t *testing.T) {
 		node driver.PlanNode
 		want string
 	}{
-		{"a row copy", driver.PlanNode{
-			Op: driver.OpCopyRows, Dst: op, Src: op,
-			Rows: &driver.RowCopy{Rows: 1, RowBytes: 16, DstPitch: 16, SrcPitch: 16},
-		}, "row copy"},
 		{"an indirect dispatch", dispatchOf(&testkernels.AddKernel, 3, nil,
 			&driver.Indirect{Count: op, Max: kernel.ID3{X: 1, Y: 1, Z: 1}}), "indirect"},
 		// A synthetic record rather than a corpus one. Every corpus kernel now
@@ -750,5 +746,37 @@ func TestIndirectStatsAreOptional(t *testing.T) {
 			t.Errorf("stats were not requested and %d nodes were reported", len(got))
 		}
 		e.Close()
+	}
+}
+
+// A row copy compiles, because this backend lowers one now.
+//
+// It was in the refusal table above until specs/045-texture-attachments.md
+// needed it: seeding a texture attachment is a row copy, and refusing one meant
+// a texture attachment could not be given prior contents. The lowering is the
+// blit encoder's contiguous copy once per row, which is why it cost a loop
+// rather than a texture path.
+//
+// Asserted as its own case rather than deleted from the table, because a
+// capability that was once refused and is now supported is exactly the pair a
+// reader wants to see stated.
+func TestARowCopyCompiles(t *testing.T) {
+	d := open(t)
+	c := d.(driver.GraphCompiler)
+	b, err := d.Alloc(driver.MemoryDevice, 4096, "rows")
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	defer b.Free()
+	op, err := driver.BlockOperand(b, 0, 1024)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	_, err = c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpCopyRows, Dst: op, Src: op,
+		Rows: &driver.RowCopy{Rows: 2, RowBytes: 16, DstPitch: 32, SrcPitch: 32},
+	}}})
+	if err != nil {
+		t.Fatalf("a row copy should compile: %v", err)
 	}
 }
