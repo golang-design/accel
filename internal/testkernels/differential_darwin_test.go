@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"testing"
+	"time"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/conformance/numeq"
@@ -896,4 +897,152 @@ func runGEMM(t *testing.T, d *accel.Device, m, n, k int, a, b []accel.Float16) [
 		t.Fatalf("readback: %v", err)
 	}
 	return out
+}
+
+// Metal reports device time from the GPU's own clock, not from the wall.
+//
+// The distinction is the whole point of the feature. A wall-clock figure around
+// Commit and Wait includes queueing, driver work and whatever else the process
+// was doing; a caller measuring throughput needs the time the device spent.
+// Metal gives both timestamps on a completed command buffer, so the
+// whole-submission figure costs no timestamp pool.
+//
+// Asserted as a bound rather than a value — device time is not reproducible —
+// and the bound is the one that catches a wall-clock substitute: the GPU cannot
+// have spent longer on the work than the whole call took.
+func TestMetalReportsDeviceTimeFromTheGPUClock(t *testing.T) {
+	const n = 65536
+	d := openMetalDevice(t)
+	q := d.Queue()
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "timed",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+	bufs := make([]accel.BufferView, 3)
+	for i, name := range []string{"a", "b", "out"} {
+		b, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: usage, Label: name,
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer b.Close()
+		v, err := b.View(0, n)
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+		bufs[i] = v
+	}
+
+	r := d.NewRecorder()
+	r.CollectTimings(true)
+	for range 32 {
+		r.Dispatch(p, []accel.Binding{
+			{Index: 0, Buffer: bufs[0]},
+			{Index: 1, Buffer: bufs[1]},
+			{Index: 2, Buffer: bufs[2]},
+		}, nil, p.Workgroups(n))
+	}
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	start := time.Now()
+	f := q.Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	wall := time.Since(start)
+
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Elapsed <= 0 {
+		t.Fatalf("Metal reported %v for 32 dispatches over %d elements", stats.Elapsed, n)
+	}
+	if stats.Elapsed > wall {
+		t.Errorf("the device reported %v and the whole call took %v; device time cannot "+
+			"exceed wall time, so this is a wall-clock figure taken somewhere wider",
+			stats.Elapsed, wall)
+	}
+}
+
+// A Metal graph that did not ask for timings reports none, and a fence read
+// after its executable closes reports none rather than reaching a freed
+// command buffer.
+//
+// The second half is the one worth having: the timing is read from the command
+// buffer, which the executable owns, so a caller holding a fence past Close
+// would otherwise send a message to a released object.
+func TestMetalTimingsAreSilentWhenNotAskedFor(t *testing.T) {
+	const n = 1024
+	d := openMetalDevice(t)
+	q := d.Queue()
+
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "untimed",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer p.Close()
+
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+	bufs := make([]accel.BufferView, 3)
+	for i, name := range []string{"a", "b", "out"} {
+		b, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: usage, Label: name,
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer b.Close()
+		v, err := b.View(0, n)
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+		bufs[i] = v
+	}
+
+	r := d.NewRecorder()
+	// No CollectTimings.
+	r.Dispatch(p, []accel.Binding{
+		{Index: 0, Buffer: bufs[0]}, {Index: 1, Buffer: bufs[1]},
+		{Index: 2, Buffer: bufs[2]},
+	}, nil, p.Workgroups(n))
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	f := q.Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Elapsed != 0 {
+		t.Errorf("a graph that did not ask for timings reported %v", stats.Elapsed)
+	}
+
+	// Closing the graph releases the command buffer the timing came from.
+	// Reading afterwards must report nothing rather than message a freed
+	// object.
+	if err := g.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := f.Stats(); err != nil {
+		t.Errorf("reading stats after the graph closed gave %v", err)
+	}
 }
