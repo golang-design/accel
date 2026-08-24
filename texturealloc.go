@@ -65,17 +65,22 @@ func validateTexture(d *Device, desc TextureDescriptor) error {
 		return fmt.Errorf("accel: texture %q: depth %d is a 3D texture, and every v0 "+
 			"operation addresses a single layer (spec 001 section 4)", desc.Label, d)
 	}
-	// Zero normalizes to one; anything larger is rejected until the public API
-	// can name a subresource. A texture whose mips could be created but not
-	// bound, copied, or transitioned is worse than one that cannot be created.
+	// Zero normalizes to one; anything larger is still rejected, and the reason
+	// is now narrower than it was. [TextureView] names a subresource, so
+	// *binding* one is no longer the obstacle. The rest of the path still
+	// addresses a whole allocation: textureBytes sizes one level, a
+	// texture-buffer copy moves one, and a recorded access covers the texture's
+	// whole byte range. A texture whose mips could be created but not sized,
+	// copied, or hazarded is worse than one that cannot be created, so this
+	// stays until those three follow the view.
 	if desc.MipLevels > 1 {
-		return fmt.Errorf("accel: texture %q: %d mip levels, and v0 addresses the base "+
-			"level only: mip chains are deferred until the API can name a subresource "+
-			"in creation, binding, copying, hazards, and layout (spec 001 section 4)",
-			desc.Label, desc.MipLevels)
+		return fmt.Errorf("accel: texture %q: %d mip levels, and this addresses the base "+
+			"level only: a view names a subresource but the allocation, the copy and the "+
+			"hazard range are still whole-texture (spec 001 section 4, "+
+			"specs/045-texture-attachments.md section 4)", desc.Label, desc.MipLevels)
 	}
 	if desc.ArrayLayers > 1 {
-		return fmt.Errorf("accel: texture %q: %d array layers, and v0 addresses a single "+
+		return fmt.Errorf("accel: texture %q: %d array layers, and this addresses a single "+
 			"layer for the same reason mip chains are deferred (spec 001 section 4)",
 			desc.Label, desc.ArrayLayers)
 	}

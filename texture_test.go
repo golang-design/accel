@@ -237,7 +237,7 @@ func TestTextureValidationRows(t *testing.T) {
 			func(d *accel.TextureDescriptor) { d.Size.Width = 0 }},
 		{"a 3D extent", "every v0 operation addresses a single layer", false,
 			func(d *accel.TextureDescriptor) { d.Size.Depth = 4 }},
-		{"mip levels", "mip chains are deferred", false,
+		{"mip levels", "a view names a subresource but the allocation", false,
 			func(d *accel.TextureDescriptor) { d.MipLevels = 4 }},
 		{"array layers", "array layers", false,
 			func(d *accel.TextureDescriptor) { d.ArrayLayers = 6 }},
