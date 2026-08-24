@@ -378,7 +378,13 @@ const (
 
 // ColorAttachment is one colour target of a render pass.
 type ColorAttachment struct {
-	View  BufferView
+	// View names the attachment directly, and Slot names it through a
+	// rebindable binding point. Exactly one is set, the way exactly one of
+	// [Binding]'s two is: a swapchain image cannot be named at record time,
+	// because which one the frame gets is decided at acquire.
+	View BufferView
+	Slot Slot
+
 	Load  LoadOp
 	Clear [4]float32
 	Store StoreOp
@@ -386,7 +392,9 @@ type ColorAttachment struct {
 
 // DepthAttachment is a pass's depth target.
 type DepthAttachment struct {
-	View  BufferView
+	View BufferView
+	Slot Slot
+
 	Load  LoadOp
 	Clear float32
 	Store StoreOp
@@ -500,12 +508,21 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 	// DontCare is a write only, and DontCare is what makes the
 	// read-after-write edge to its previous writer disappear.
 	var accesses []access
-	declare := func(v BufferView, load LoadOp, what string) {
+	declare := func(v BufferView, slot Slot, load LoadOp, what string, elems int) {
 		mode := AccessWrite
 		if load == LoadKeep {
 			mode = AccessReadWrite
 		}
-		a, ok := r.declare("RenderPass "+label+" "+what, v, mode)
+		op := "RenderPass " + label + " " + what
+		var (
+			a  access
+			ok bool
+		)
+		if slot != 0 {
+			a, ok = r.slotAccess(op, slot, 0, elems*F32.Size(), mode)
+		} else {
+			a, ok = r.declare(op, v, mode)
+		}
 		if !ok {
 			p.failed = true
 			return
@@ -513,20 +530,38 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 		accesses = append(accesses, a)
 	}
 	for i, c := range desc.Color {
-		if c.View.Buffer == nil {
-			r.fail("RenderPass %q: colour attachment %d names no resource", label, i)
+		what := fmt.Sprintf("colour %d", i)
+		if (c.View.Buffer == nil) == (c.Slot == 0) {
+			r.fail("RenderPass %q: %s names %s; an attachment is one resource or one "+
+				"slot", label, what, either(c.View.Buffer != nil, c.Slot != 0))
 			p.failed = true
 			continue
 		}
-		declare(c.View, c.Load, fmt.Sprintf("colour %d", i))
+		declare(c.View, c.Slot, c.Load, what, desc.Width*desc.Height*4)
 	}
-	if desc.Depth != nil {
-		declare(desc.Depth.View, desc.Depth.Load, "depth")
+	if dep := desc.Depth; dep != nil {
+		if (dep.View.Buffer == nil) == (dep.Slot == 0) {
+			r.fail("RenderPass %q: the depth attachment names %s; an attachment is one "+
+				"resource or one slot", label,
+				either(dep.View.Buffer != nil, dep.Slot != 0))
+			p.failed = true
+		} else {
+			declare(dep.View, dep.Slot, dep.Load, "depth", desc.Width*desc.Height)
+		}
 	}
 
 	p.id = r.node(NodeRenderPass, label, accesses, nil)
 	r.state.nodes[p.id].pass = p
 	return p
+}
+
+// either names what an attachment supplied, for an error that has to say which
+// of "neither" and "both" happened.
+func either(hasView, hasSlot bool) string {
+	if hasView && hasSlot {
+		return "both a resource and a slot"
+	}
+	return "no resource"
 }
 
 // SetPipeline selects the pipeline subsequent draws use.

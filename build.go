@@ -78,6 +78,7 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 		dev:          r.state.dev,
 		nodes:        r.state.nodes,
 		slots:        r.state.slots,
+		present:      r.state.present,
 		transients:   r.state.transients,
 		collectStats: r.state.collectStats,
 		shared:       r.state.shared,
@@ -420,8 +421,10 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i), c.View, 4); err != nil {
-			return nil, err
+		if c.View.Buffer != nil {
+			if err := g.checkAttachment(p, fmt.Sprintf("colour attachment %d", i), c.View, 4); err != nil {
+				return nil, err
+			}
 		}
 		out.Color = append(out.Color, op)
 		out.ColorLoad = append(out.ColorLoad, c.Load)
@@ -432,8 +435,10 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View, 1); err != nil {
-			return nil, err
+		if p.desc.Depth.View.Buffer != nil {
+			if err := g.checkAttachment(p, "depth attachment", p.desc.Depth.View, 1); err != nil {
+				return nil, err
+			}
 		}
 		out.Depth = &op
 		out.DepthLoad = p.desc.Depth.Load

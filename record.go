@@ -148,8 +148,12 @@ type transient struct {
 type recorderState struct {
 	dev *Device
 
-	nodes      []recNode
-	slots      []SlotDescriptor
+	nodes []recNode
+	slots []SlotDescriptor
+
+	// present records the extra facts a present slot carries beyond a plain
+	// one: which surface, which generation, and the extent it was built for.
+	present    map[Slot]presentSlot
 	transients []*transient
 
 	// errs are the reasons Build will fail, accumulated in record order so the

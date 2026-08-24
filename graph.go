@@ -301,6 +301,11 @@ type Graph struct {
 	slots      []SlotDescriptor
 	transients []*transient
 
+	// present carries what a present slot records beyond a plain one: the
+	// surface a frame must come from, the generation, and the extent the graph
+	// was built against. specs/034-surface-present.md section 2.
+	present map[Slot]presentSlot
+
 	pool driver.Block
 
 	// shared is the caller-owned pool this graph planned into, or nil when it
