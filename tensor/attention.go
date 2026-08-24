@@ -69,14 +69,20 @@ type AttentionOptions struct {
 // accidentally write the query or read a stale cache: a State carries a version
 // and a Tensor does not.
 //
-// # Fusion is a selection
+// # Fusion is not a selection, because there is nothing to select between
 //
-// specs/007-tensor-layer.md is explicit that fused attention is "runtime kernel
-// selection, not a device capability", and that the composed definition -- score
-// MatMul, Softmax, value MatMul -- is the correctness reference. v0 selects the
-// fused decode kernel when the shapes fit it and reports that it did; it does
-// not yet fall back to the composed graph, and says so rather than pretending
-// the choice was made.
+// specs/007-tensor-layer.md said fused attention is "runtime kernel selection,
+// not a device capability", with the composed definition -- score MatMul,
+// Softmax, value MatMul -- as both the correctness reference and the fallback.
+// The reference half holds and the fallback half does not: several query heads
+// share one key/value head, so the composed form needs a matrix multiply per
+// head, and specs/025-tensor-operators.md multiplies two matrices with no
+// leading axes broadcast. The composition exists only at kvHeads == 1, which no
+// model this serves uses. 007 is corrected; the fused kernels are the only
+// path, and specs/044-unbounded-context.md is why they can be.
+//
+// The composed reference still runs, in the corpus tests, over the shapes it
+// can express. That is what keeps it a reference.
 func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tensor {
 	if poisoned(q) || k == nil || v == nil || k.poison || v.poison {
 		return b.poison()
@@ -153,15 +159,6 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	if k.offset != 0 || v.offset != 0 {
 		return b.fail(1, "Attention", "a layer view binds a range of a resource, which a "+
 			"slot cannot express yet; use one state per layer")
-	}
-
-	// The kernel gives each query head a workgroup and each lane one cached
-	// position, so the capacity it can score is bounded by the workgroup.
-	lanes := int(testkernels.AttentionDecodeKernel.WorkgroupSize.X)
-	if k.shape[0] > lanes {
-		return b.fail(1, "Attention", "the cache holds %d positions and the decode kernel "+
-			"scores one per lane over %d; a longer cache needs the looping variant, which "+
-			"specs/010-kernel-corpus.md does not register", k.shape[0], lanes)
 	}
 
 	out := Shape{qHeads, headDim}

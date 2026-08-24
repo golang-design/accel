@@ -259,14 +259,6 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "for a prefill",
 	}, {
-		name: "a cache longer than the kernel scores",
-		build: func(b *tensor.Builder) {
-			scalars(b)
-			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 512, 2, 8),
-				cache(b, "v", 512, 2, 8), opts(b))
-		},
-		want: "the looping variant",
-	}, {
 		name: "no lengths tensor",
 		build: func(b *tensor.Builder) {
 			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 4, 2, 8),
@@ -387,5 +379,114 @@ func TestAStaleStateVersionIsRefused(t *testing.T) {
 					"inside the package: %v", err)
 			}
 		})
+	}
+}
+
+// A decode step over a cache far longer than a workgroup, end to end through
+// the public operator.
+//
+// This is the case accel issue 8 reported: Attention refused any cache past 128
+// positions, so no model was servable and no test against real weights was
+// writable. 4096 is specs/044-unbounded-context.md section 7's figure, and it
+// is thirty-two blocks rather than one, with the length landing mid-block so
+// the tail is masked rather than aligned.
+func TestADecodeStepOverALongCache(t *testing.T) {
+	const (
+		qHeads   = 4
+		kvHeads  = 2
+		headDim  = 8
+		capacity = 4096
+		kvLen    = 2001
+	)
+	rt := newRuntime(t)
+	d := rt.Device()
+	b := rt.NewBuilder("longdecode")
+
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+	q := tensor.Input(b, tensor.ValueDesc{
+		Name: "q", DType: accel.F32, Shape: tensor.Shape{qHeads, headDim},
+	})
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{1},
+	})
+	kc := tensor.NewState(b, tensor.StateDesc{
+		Name: "kcache", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
+	})
+	vc := tensor.NewState(b, tensor.StateDesc{
+		Name: "vcache", DType: accel.F32, Shape: tensor.Shape{capacity, kvHeads, headDim},
+	})
+	tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+		Lengths: lengths, ScaleName: "scale",
+	}))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "longdecode"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	// The cache is filled past kvLen, so a kernel that ignored the length would
+	// read values that are present rather than zeros and get a different answer
+	// instead of the same one.
+	ks := make([]float32, capacity*kvHeads*headDim)
+	vs := make([]float32, capacity*kvHeads*headDim)
+	for i := range ks {
+		ks[i] = float32(math.Cos(float64(i) * 0.017))
+		vs[i] = float32(math.Sin(float64(i) * 0.013))
+	}
+	qs := make([]float32, qHeads*headDim)
+	for i := range qs {
+		qs[i] = float32(math.Sin(float64(i) * 0.29))
+	}
+	scale := float32(1 / math.Sqrt(headDim))
+
+	out := f32Buffer(t, d, "out", make([]float32, qHeads*headDim))
+	f := plan.Submit(d.Queue(), tensor.Bindings{
+		Buffers: map[string]accel.BufferView{
+			"q":      f32Buffer(t, d, "q", qs),
+			"kcache": f32Buffer(t, d, "kcache", ks),
+			"vcache": f32Buffer(t, d, "vcache", vs),
+			"len":    u32Buffer(t, d, "len", []uint32{kvLen}),
+			"out":    out,
+		},
+		Scalars: map[string]tensor.ScalarValue{"scale": tensor.F32(scale)},
+	})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, qHeads*headDim)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+
+	// The reference, in f64, over exactly the positions the length names.
+	group := qHeads / kvHeads
+	for h := range qHeads {
+		kvHead := h / group
+		scores := make([]float64, kvLen)
+		best := math.Inf(-1)
+		for pos := range kvLen {
+			var acc float64
+			for i := range headDim {
+				acc += float64(qs[h*headDim+i]) *
+					float64(ks[(pos*kvHeads+kvHead)*headDim+i])
+			}
+			scores[pos] = acc * float64(scale)
+			best = math.Max(best, scores[pos])
+		}
+		var sum float64
+		for i := range scores {
+			scores[i] = math.Exp(scores[i] - best)
+			sum += scores[i]
+		}
+		for i := range headDim {
+			var acc float64
+			for pos := range kvLen {
+				acc += scores[pos] / sum * float64(vs[(pos*kvHeads+kvHead)*headDim+i])
+			}
+			if g := float64(got[h*headDim+i]); math.Abs(g-acc) > 1e-4*(1+math.Abs(acc)) {
+				t.Fatalf("head %d element %d is %v, want about %v", h, i, g, acc)
+			}
+		}
 	}
 }
