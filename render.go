@@ -432,9 +432,13 @@ type RenderPass struct {
 	// far, one slice per stage because each stage indexes its own from zero.
 	vertexUniforms   []any
 	fragmentUniforms []any
-	buffers          []BufferView
-	draws            []drawCall
-	failed           bool
+
+	// indexBuf and indexFmt are what an indexed draw reads.
+	indexBuf BufferView
+	indexFmt IndexFormat
+	buffers  []BufferView
+	draws    []drawCall
+	failed   bool
 }
 
 // drawCall is one recorded draw.
@@ -447,6 +451,18 @@ type drawCall struct {
 	vertexBuf []BufferView
 	vertexU   []any
 	fragmentU []any
+
+	// indexed and its buffer are set for an indexed draw. baseVertex applies to
+	// the attribute fetch and not to the index the stage sees.
+	indexed    bool
+	indexBuf   BufferView
+	indexFmt   IndexFormat
+	baseVertex int
+
+	// vertexAccess and indexAccess index the node's access list, so build
+	// lowers these views the way it lowers an attachment. -1 is unbound.
+	vertexAccess []int
+	indexAccess  int
 }
 
 // Draw is one non-instanced or instanced draw's counts.
@@ -579,6 +595,93 @@ func (p *RenderPass) setUniform(dst *[]any, what string, index int, v any) {
 	(*dst)[index] = v
 }
 
+// IndexFormat is the width of one entry in an index buffer.
+type IndexFormat uint8
+
+const (
+	// Index16 is the common case and half the bandwidth. It caps a mesh at
+	// 65536 vertices, which is why it is not the only option.
+	Index16 IndexFormat = iota
+
+	// Index32 addresses any mesh the device can hold.
+	Index32
+)
+
+func (f IndexFormat) String() string {
+	if f == Index32 {
+		return "uint32 indices"
+	}
+	return "uint16 indices"
+}
+
+// size is the width of one index in bytes.
+func (f IndexFormat) size() int {
+	if f == Index32 {
+		return 4
+	}
+	return 2
+}
+
+// SetIndexBuffer binds the index buffer subsequent indexed draws read.
+//
+// The format is given rather than inferred from the buffer's dtype: an index
+// buffer is bytes, and a caller packing uint16 indices into a buffer of uint32
+// elements is doing something ordinary rather than something wrong.
+func (p *RenderPass) SetIndexBuffer(v BufferView, format IndexFormat) {
+	if v.Buffer == nil {
+		p.r.fail("RenderPass %q: SetIndexBuffer with no buffer", p.desc.Label)
+		p.failed = true
+		return
+	}
+	p.indexBuf, p.indexFmt = v, format
+}
+
+// DrawIndexed is one indexed draw.
+//
+// BaseVertex is added to each fetched index before the attribute fetch and is
+// not added to the index the stage sees. specs/032-stage-abi.md section 2.1
+// declines to expose a base-vertex built-in for that reason: backends disagree
+// about whether theirs reports the pre-offset or post-offset value, so the ABI
+// exposes only the one a caller can act on.
+type DrawIndexed struct {
+	IndexCount    int
+	InstanceCount int
+	FirstIndex    int
+	BaseVertex    int
+	FirstInstance int
+}
+
+// DrawIndexed records one indexed draw. See [RenderPass.Draw].
+func (p *RenderPass) DrawIndexed(d DrawIndexed) {
+	if p.failed {
+		return
+	}
+	if p.indexBuf.Buffer == nil {
+		p.r.fail("RenderPass %q: an indexed draw with no index buffer; call "+
+			"SetIndexBuffer first", p.desc.Label)
+		p.failed = true
+		return
+	}
+	if d.IndexCount <= 0 {
+		p.r.fail("RenderPass %q: an indexed draw of %d indices", p.desc.Label, d.IndexCount)
+		p.failed = true
+		return
+	}
+	if d.FirstIndex < 0 || d.BaseVertex < 0 || d.FirstInstance < 0 {
+		p.r.fail("RenderPass %q: an indexed draw with a negative first index (%d), base "+
+			"vertex (%d) or first instance (%d)", p.desc.Label, d.FirstIndex,
+			d.BaseVertex, d.FirstInstance)
+		p.failed = true
+		return
+	}
+	p.record(drawCall{
+		vertices: d.IndexCount, instances: max(d.InstanceCount, 1),
+		first: d.FirstIndex, firstInst: d.FirstInstance,
+		baseVertex: d.BaseVertex,
+		indexed:    true, indexBuf: p.indexBuf, indexFmt: p.indexFmt,
+	})
+}
+
 // Draw records one draw.
 //
 // It executes in the order recorded, and the builder never reorders it: blending
@@ -607,13 +710,65 @@ func (p *RenderPass) Draw(d Draw) {
 		// no draw.
 		instances = 1
 	}
-	p.draws = append(p.draws, drawCall{
-		pipeline: p.pipeline, vertices: d.VertexCount, instances: instances,
+	p.record(drawCall{
+		vertices: d.VertexCount, instances: instances,
 		first: d.FirstVertex, firstInst: d.FirstInstance,
-		vertexBuf: append([]BufferView(nil), p.buffers...),
-		vertexU:   append([]any(nil), p.vertexUniforms...),
-		fragmentU: append([]any(nil), p.fragmentUniforms...),
 	})
+}
+
+// record completes a draw with the pass state and appends it.
+//
+// The state is copied here rather than read at build, so a later SetPipeline or
+// SetVertexUniform does not reach back and change a draw already recorded.
+func (p *RenderPass) record(d drawCall) {
+	d.pipeline = p.pipeline
+	d.vertexBuf = append([]BufferView(nil), p.buffers...)
+	d.vertexU = append([]any(nil), p.vertexUniforms...)
+	d.fragmentU = append([]any(nil), p.fragmentUniforms...)
+
+	// The buffers a draw reads become the pass's declared reads, which is
+	// specs/033-render-api.md section 3's table. Declared here rather than at
+	// RenderPass, because a draw is what names them and the node exists before
+	// any draw is recorded: a pass that did not declare them would run
+	// unordered against whatever wrote the vertices.
+	d.vertexAccess = make([]int, len(d.vertexBuf))
+	for i, v := range d.vertexBuf {
+		d.vertexAccess[i] = -1
+		if v.Buffer != nil {
+			d.vertexAccess[i] = p.declareRead(v, fmt.Sprintf("vertex buffer %d", i))
+		}
+	}
+	d.indexAccess = -1
+	if d.indexed {
+		d.indexAccess = p.declareRead(d.indexBuf, "index buffer")
+	}
+
+	p.draws = append(p.draws, d)
+}
+
+// declareRead adds one read to the pass's node, once per distinct view.
+//
+// Once, because several draws sharing a vertex buffer are one read of it: a
+// duplicate would inflate the hazard count a caller reads, and the builder
+// would compute the same barrier twice.
+// It returns the index into the node's access list, which is how build turns
+// the same view into an operand -- through the same path an attachment takes, so
+// a slot or a transient works here for the reason it works there.
+func (p *RenderPass) declareRead(v BufferView, what string) int {
+	a, ok := p.r.declare("RenderPass "+p.desc.Label+" "+what, v, AccessRead)
+	if !ok {
+		p.failed = true
+		return -1
+	}
+	n := p.r.state.nodes[p.id]
+	for i, have := range n.accesses {
+		if have == a {
+			return i
+		}
+	}
+	n.accesses = append(n.accesses, a)
+	p.r.state.nodes[p.id] = n
+	return len(n.accesses) - 1
 }
 
 // Node is the graph node this pass records into, for a caller who wants to

@@ -45,7 +45,7 @@ func renderPass(n *resolvedNode) (err error) {
 	applyLoads(rp, fb)
 
 	for i, d := range rp.Draws {
-		if err := drawOne(rp, fb, d, n.vertexBytes[i]); err != nil {
+		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.indexBytes[i]); err != nil {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
 	}
@@ -104,7 +104,7 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 }
 
 // drawOne rasterizes one draw.
-func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte) error {
+func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, indices []byte) error {
 	vs, ok := d.Vertex.(kernel.VertexFn)
 	if !ok {
 		return fmt.Errorf("the vertex stage is %T, not a compiled stage", d.Vertex)
@@ -139,7 +139,13 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 	// zero -- one shared slice would give a fragment stage the vertex stage's
 	// parameter 0, and the adapter would assert on the wrong type.
 	vertexFn := func(index, instance, base uint32) raster.Vertex {
-		pos, vary := vs(kernel.NewVertex(index, instance), d.VertexUniforms, fetch(index, instance))
+		// base is added to the fetch and not to the index the stage sees.
+		// specs/032-stage-abi.md section 2.1 declines to expose a base-vertex
+		// built-in because backends disagree about whether theirs reports the
+		// pre-offset or post-offset value; the ABI exposes only the one a
+		// caller can act on, and that is the pre-offset index.
+		pos, vary := vs(kernel.NewVertex(index, instance), d.VertexUniforms,
+			fetch(index+base, instance))
 		return raster.Vertex{
 			Pos:      raster.Clip{X: pos[0], Y: pos[1], Z: pos[2], W: pos[3]},
 			Varyings: vary,
@@ -153,13 +159,21 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 		return raster.Shaded{Color: out}
 	}
 
-	_, err := raster.DrawPrimitives(ps, fb, raster.DrawCall{
+	dc := raster.DrawCall{
 		Topology:      raster.Topology(d.Topology),
 		Count:         d.VertexCount,
 		Instances:     d.InstanceCount,
 		First:         d.FirstVertex,
 		FirstInstance: d.FirstInstance,
-	}, vertexFn, shade)
+		BaseVertex:    d.BaseVertex,
+	}
+	if d.Indexed {
+		dc.Index = decodeIndices(indices, d.IndexWidth)
+		if err := checkIndexRange(d, dc.Index, bufs); err != nil {
+			return err
+		}
+	}
+	_, err := raster.DrawPrimitives(ps, fb, dc, vertexFn, shade)
 	return err
 }
 
@@ -284,4 +298,52 @@ func rasterOp(o driver.BlendOp) raster.BlendOp {
 		return raster.BlendMax
 	}
 	return raster.BlendAdd
+}
+
+// decodeIndices widens an index buffer to what the rasterizer takes.
+//
+// Widened rather than read in place: the rasterizer works in uint32 so a
+// 16-bit buffer would otherwise need a width test in the innermost loop of
+// primitive assembly, and this is once per draw.
+func decodeIndices(raw []byte, width int) []uint32 {
+	out := make([]uint32, len(raw)/width)
+	for i := range out {
+		if width == 4 {
+			out[i] = binary.LittleEndian.Uint32(raw[i*4:])
+		} else {
+			out[i] = uint32(binary.LittleEndian.Uint16(raw[i*2:]))
+		}
+	}
+	return out
+}
+
+// checkIndexRange reports an index that reaches past a vertex buffer.
+//
+// Once per draw rather than per vertex: the indices are already decoded, so the
+// largest is one pass over a slice, and the alternative is a bounds test in the
+// innermost loop of primitive assembly. Build cannot do this -- an indexed
+// draw's vertex range is decided by the index values, which are data.
+func checkIndexRange(d driver.RenderDraw, index []uint32, bufs [][]byte) error {
+	if len(index) == 0 {
+		return nil
+	}
+	var high uint32
+	for _, i := range index {
+		if i > high {
+			high = i
+		}
+	}
+	last := int(high) + d.BaseVertex + 1
+	for i, l := range d.VertexLayouts {
+		if l.PerInstance {
+			continue
+		}
+		if need := last * d.VertexStrides[i]; need > len(bufs[i]) {
+			return fmt.Errorf("index %d with base vertex %d reaches element %d of vertex "+
+				"buffer %d, which holds %d bytes at a stride of %d and has %d elements",
+				high, d.BaseVertex, last-1, i, len(bufs[i]), d.VertexStrides[i],
+				len(bufs[i])/d.VertexStrides[i])
+		}
+	}
+	return nil
 }

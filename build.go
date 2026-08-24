@@ -464,6 +464,14 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			Cull:        uint8(pipe.desc.Primitive.Cull),
 			VertexCount: d.vertices, InstanceCount: d.instances,
 			FirstVertex: d.first, FirstInstance: d.firstInst,
+			Indexed: d.indexed, BaseVertex: d.baseVertex,
+		}
+		if d.indexed {
+			op, err := g.indexOperand(n, p, i, d)
+			if err != nil {
+				return nil, err
+			}
+			rd.Index, rd.IndexWidth = op, d.indexFmt.size()
 		}
 		if ds := pipe.desc.DepthStencil; ds != nil {
 			rd.DepthTest, rd.DepthWrite = ds.Test, ds.Write
@@ -482,7 +490,7 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			return nil, err
 		}
 		rd.VertexUniforms, rd.FragmentUniforms = vu, fu
-		if err := g.vertexOperands(p, i, pipe, d, &rd); err != nil {
+		if err := g.vertexOperands(n, p, i, pipe, d, &rd); err != nil {
 			return nil, err
 		}
 		out.Draws = append(out.Draws, rd)
@@ -537,6 +545,28 @@ func stageUniforms(label string, draw int, s *Stage, set []any, call string) ([]
 	return out, nil
 }
 
+// indexOperand lowers an indexed draw's index buffer.
+//
+// The range is checked against the draw rather than against the buffer, for the
+// reason the vertex range is: a buffer sized for the mesh with a draw that reads
+// past the end of it is the shape that reads as corruption rather than as a
+// mistake in the call.
+func (g *Graph) indexOperand(n *recNode, p *RenderPass, draw int, d drawCall) (driver.Operand, error) {
+	v := d.indexBuf
+	op, err := g.operand(n, n.accesses[d.indexAccess])
+	if err != nil {
+		return driver.Operand{}, fmt.Errorf("accel: Build: render pass %q draw %d index "+
+			"buffer: %w", p.desc.Label, draw, err)
+	}
+	size := v.Count * v.Buffer.DType().Size()
+	if need := (d.first + d.vertices) * d.indexFmt.size(); need > size {
+		return driver.Operand{}, fmt.Errorf("accel: Build: render pass %q draw %d: the "+
+			"index buffer is %d bytes and the draw reads %d %s starting at %d, which "+
+			"needs %d", p.desc.Label, draw, size, d.vertices, d.indexFmt, d.first, need)
+	}
+	return op, nil
+}
+
 // vertexOperands lowers a draw's bound vertex buffers.
 //
 // The layout is the pipeline's and the buffers are the pass's, so this is where
@@ -544,7 +574,7 @@ func stageUniforms(label string, draw int, s *Stage, set []any, call string) ([]
 // reads and no draw bound is refused here rather than fetched as zeros: zeroed
 // attributes put every vertex at the origin, which reads as a broken transform
 // rather than as a missing binding.
-func (g *Graph) vertexOperands(p *RenderPass, draw int, pipe *RenderPipeline, d drawCall, rd *driver.RenderDraw) error {
+func (g *Graph) vertexOperands(n *recNode, p *RenderPass, draw int, pipe *RenderPipeline, d drawCall, rd *driver.RenderDraw) error {
 	for slot, layout := range pipe.desc.VertexBuffers {
 		if slot >= len(d.vertexBuf) || d.vertexBuf[slot].Buffer == nil {
 			return fmt.Errorf("accel: Build: render pass %q draw %d: the pipeline %q reads "+
@@ -552,21 +582,30 @@ func (g *Graph) vertexOperands(p *RenderPass, draw int, pipe *RenderPipeline, d 
 				"before the draw", p.desc.Label, draw, pipe.label, slot)
 		}
 		v := d.vertexBuf[slot]
-		blk, base := blockFor(v.Buffer)
-		size := v.Count * v.Buffer.DType().Size()
-		op, err := driver.BlockOperand(blk, base+v.Offset*v.Buffer.DType().Size(), size)
+		op, err := g.operand(n, n.accesses[d.vertexAccess[slot]])
 		if err != nil {
 			return fmt.Errorf("accel: Build: render pass %q draw %d vertex buffer %d: %w",
 				p.desc.Label, draw, slot, err)
 		}
+		size := v.Count * v.Buffer.DType().Size()
 
 		// The elements the draw reaches must be inside the view. Checked
 		// against the draw's own counts rather than against the buffer, because
 		// a buffer big enough for the geometry and a draw that walks past the
 		// end of it is the common shape and the one that reads as corruption.
+		//
+		// An indexed draw's per-vertex range is decided by the index *values*,
+		// which are data and not structure, so build cannot know it. The
+		// backend checks that range once per draw, against the indices it has
+		// already decoded. The per-instance range is still structural.
 		last := d.first + d.vertices
 		if layout.StepMode == StepInstance {
 			last = d.firstInst + d.instances
+		} else if d.indexed {
+			rd.VertexStrides = append(rd.VertexStrides, layout.Stride)
+			rd.VertexBuffers = append(rd.VertexBuffers, op)
+			rd.VertexLayouts = append(rd.VertexLayouts, lowerLayout(layout))
+			continue
 		}
 		if need := last * layout.Stride; need > size {
 			return fmt.Errorf("accel: Build: render pass %q draw %d: vertex buffer %d is "+
@@ -575,17 +614,24 @@ func (g *Graph) vertexOperands(p *RenderPass, draw int, pipe *RenderPipeline, d 
 				layout.Stride, need)
 		}
 
+		rd.VertexStrides = append(rd.VertexStrides, layout.Stride)
 		rd.VertexBuffers = append(rd.VertexBuffers, op)
-		vl := driver.VertexLayout{Stride: layout.Stride, PerInstance: layout.StepMode == StepInstance}
-		for _, a := range layout.Attributes {
-			vl.Attributes = append(vl.Attributes, driver.VertexAttribute{
-				Location: a.Location, Offset: a.Offset,
-				Components: a.Format.Components(),
-			})
-		}
-		rd.VertexLayouts = append(rd.VertexLayouts, vl)
+		rd.VertexLayouts = append(rd.VertexLayouts, lowerLayout(layout))
 	}
 	return nil
+}
+
+// lowerLayout drops the formats, which have done their job by the time a plan
+// exists: a backend fetches floats, and validating against the stage happened at
+// pipeline creation.
+func lowerLayout(l VertexBufferLayout) driver.VertexLayout {
+	out := driver.VertexLayout{Stride: l.Stride, PerInstance: l.StepMode == StepInstance}
+	for _, a := range l.Attributes {
+		out.Attributes = append(out.Attributes, driver.VertexAttribute{
+			Location: a.Location, Offset: a.Offset, Components: a.Format.Components(),
+		})
+	}
+	return out
 }
 
 // has renders one half of the depth-agreement message.

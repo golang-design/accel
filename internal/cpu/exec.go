@@ -168,7 +168,9 @@ type resolvedNode struct {
 	colorAttach [][]float32
 
 	// vertexBytes is the attribute source, per draw and then per bound slot.
+	// indexBytes is one per draw, nil for a non-indexed one.
 	vertexBytes [][][]byte
+	indexBytes  [][]byte
 	depthAttach []float32
 	args        kernel.Args
 	rows        *driver.RowCopy
@@ -597,6 +599,16 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 			bufs = append(bufs, raw)
 		}
 		r.vertexBytes = append(r.vertexBytes, bufs)
+
+		var idx []byte
+		if d.Indexed {
+			raw, err := e.bytes(d.Index)
+			if err != nil {
+				return fmt.Errorf("accel: node %d draw %d index buffer: %w", n.ID, di, err)
+			}
+			idx = raw
+		}
+		r.indexBytes = append(r.indexBytes, idx)
 	}
 	return nil
 }

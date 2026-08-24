@@ -595,6 +595,19 @@ type RenderDraw struct {
 	VertexBuffers []Operand
 	VertexLayouts []VertexLayout
 
+	// VertexStrides is the same length again, and is what an indexed draw's
+	// range check needs: the backend knows the index values and the operand
+	// size, and build knows neither together.
+	VertexStrides []int
+
+	// Index is the index buffer for an indexed draw, and Indexed says whether
+	// there is one. IndexWidth is 2 or 4 bytes; BaseVertex offsets the
+	// attribute fetch and not the index the stage sees.
+	Indexed    bool
+	Index      Operand
+	IndexWidth int
+	BaseVertex int
+
 	// Blends is one per colour attachment, in the same order as Masks.
 	Blends []Blend
 
