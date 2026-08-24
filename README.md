@@ -50,7 +50,15 @@ it on whichever backend the machine has — today the CPU or Metal — with
 
 ```sh
 go get golang.design/x/accel
+go get -tool golang.design/x/accel/cmd/accel-kernel
 ```
+
+The second line registers the kernel generator as a [tool
+dependency](https://go.dev/doc/modules/managing-dependencies#tools), which is
+what lets `go generate` build it. Without it the generator cannot resolve its
+own dependencies from your module and `go generate` fails — the generator is a
+Go program that type-checks the package it compiles, so it needs the type
+checker in your module graph.
 
 ## Run something
 
@@ -62,7 +70,7 @@ package kernels
 
 import "golang.design/x/accel"
 
-//go:generate go run golang.design/x/accel/cmd/accel-kernel .
+//go:generate go tool accel-kernel .
 
 //accel:kernel workgroup=64
 func Scale(t accel.Thread, in []float32, out []float32) {

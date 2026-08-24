@@ -13,7 +13,7 @@ package kernels
 
 import "golang.design/x/accel"
 
-//go:generate go run golang.design/x/accel/cmd/accel-kernel .
+//go:generate go tool accel-kernel .
 
 //accel:kernel workgroup=64
 func Scale(t accel.Thread, in []float32, out []float32) {
@@ -24,7 +24,16 @@ func Scale(t accel.Thread, in []float32, out []float32) {
 }
 ```
 
-`go generate ./...` turns that into `kernels.ScaleKernel`.
+`go generate ./...` turns that into `kernels.ScaleKernel`. It needs the
+generator registered as a tool dependency of your module, once:
+
+```sh
+go get golang.design/x/accel
+go get -tool golang.design/x/accel/cmd/accel-kernel
+```
+
+The generator type-checks the package it compiles, so it needs a type checker
+in your module graph. `go get -tool` is what puts it there.
 
 Their own package, because the generator type-checks the code it compiles — so
 a package that already mentions `ScaleKernel` cannot be generated the first

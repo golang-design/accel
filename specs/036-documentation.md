@@ -95,6 +95,17 @@ every Go block is parsed, and every `accel.`/`tensor.`/`quant.` symbol named
 anywhere in the pages is checked against `go doc`. Twenty-four blocks, zero
 unknown symbols.
 
+> **Correction, 2026-08-24.** That check was run **once, by hand**, and this
+> paragraph reads as though it repeats. Only the last of the four is automated:
+> `docdrift_test.go` checks that every symbol a document names still exists. A
+> document can therefore name only real symbols and still be a program that does
+> not run, which is exactly what happened — the README's install step omitted
+> the generator's tool dependency, so `go generate` failed on a clean consumer
+> module and its error pointed at an `internal` package a consumer cannot get.
+> Found by extracting the README's program into an empty module and running it,
+> which is the check this paragraph describes and nothing performs on a
+> schedule. Automating it is worth doing and is not done.
+
 Graphics tutorials are **not** in this deck. [033](033-render-api.md) and
 [034](034-surface-present.md) specify a public API that does not exist in code,
 and a tutorial for it would be fiction. They arrive with
