@@ -246,11 +246,33 @@ The distinction that makes this sound where the tempting alternative is not: a
 binding's **size** is fixed when the node is recorded, while its **contents** can
 be changed during the dispatch by an aliased write. See deviation 3.
 
-**The cost, stated.** Positions between the length and the bound are masked per
-lane rather than skipped, so an empty block still pays its barriers. Work is
-proportional to the bound, not to the length. For a cache 90% empty that is
-roughly ten times the barriers, of an operation whose arithmetic it does not
-touch. A caller who wants the tight bound sizes the cache to the context, and
+**The cost, measured.** Positions between the length and the bound are masked
+per lane rather than skipped, so an empty block still pays its barriers and work
+is proportional to the bound rather than to the length.
+
+`BenchmarkAttentionEmptyBlocks` measures it on an Apple M2, at 32 query heads
+over 8 key/value heads with a head dimension of 128, holding the length at 256
+and growing the capacity:
+
+| capacity | length | blocks (empty) | per decode | against a tight capacity |
+| ---: | ---: | ---: | ---: | ---: |
+| 256 | 256 | 2 (0) | 199 µs | — |
+| 1024 | 256 | 8 (6) | 258 µs | 1.3× |
+| 4096 | 256 | 32 (30) | 504 µs | 2.5× |
+| 8192 | 256 | 64 (62) | 837 µs | 4.2× |
+| 4096 | 4096 | 32 (0) | 2622 µs | — |
+
+Fitting the two ends: an **empty block costs about 10 µs and a full one about
+85 µs**, so an empty block is roughly an eighth of a full one — the barriers
+without the arithmetic, which is what the design predicted qualitatively.
+
+Two consequences worth stating, because the ratio alone reads worse than it is.
+The overhead is bounded: a decode over a capacity-$C$ cache never costs more
+than a decode over a *full* capacity-$C$ cache, which is the cost the caller
+already accepted when they sized it. And it shrinks to nothing as the context
+fills, so it is worst on a fresh conversation and absent on a long one.
+
+A caller who wants the tight bound sizes the cache to the context, and
 `Attention` accepting any capacity is what makes that possible.
 
 ### Deviation 2: one block is the closed form, not a separate case
