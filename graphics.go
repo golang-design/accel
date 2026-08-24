@@ -20,14 +20,59 @@ type (
 	Vec4 = kernel.Vec4
 )
 
-// The graphics stage receivers are withdrawn from the public API until a stage
-// can run.
+// Clip is the clip-space position a vertex stage returns, with z in [-w, w].
 //
-// specs/032-stage-abi.md designs Vertex, Fragment, Clip and NoVaryings, and
-// their doc comments showed //accel:vertex and //accel:fragment examples. The
-// front end knows //accel:kernel and //accel:helper only, and drops any other
-// directive with no diagnostic — so a reader who copied the doc comment got a
-// clean exit code and no stage.
+// One convention, presented to every backend: that becomes NDC z in [-1, 1],
+// and the backends whose native range is [0, 1] fold the remap into emitted
+// code. A caller never adjusts a projection matrix for the backend. The depth
+// attachment stores window depth in [0, 1], which is a different range that
+// clears and compares use.
+type Clip = kernel.Clip
+
+// Vertex carries one vertex invocation's identity, and is a vertex stage's
+// first parameter.
 //
-// They come back in the commit that lands 032's front end, which is the point
-// at which naming them is a promise the library can keep.
+//	//accel:vertex
+//	func Geometry(v accel.Vertex, xf Transforms,
+//		pos accel.Vec3, uv accel.Vec2) (accel.Clip, Varyings)
+//
+// Deliberately not [Thread]: a vertex stage has no workgroup, no barrier, no
+// shared memory and no subgroup, so handing it Thread would make three quarters
+// of that type's methods a compile-time trap rather than an unavailable one.
+type Vertex = kernel.Vertex
+
+// Fragment carries one fragment invocation's window coordinate and facing, and
+// is a fragment stage's first parameter.
+//
+//	//accel:fragment
+//	func Shade(f accel.Fragment, in Varyings, mat Material) Targets
+//
+// The returned struct's fields map, in declaration order, onto the pipeline's
+// colour attachments — one field per attachment, which is how MRT is expressed.
+//
+// Its second parameter is the varyings struct **by position**. A varyings struct
+// and a uniform struct are both structs, so nothing else could tell them apart.
+type Fragment = kernel.Fragment
+
+// NoVaryings is the empty varyings struct, for a vertex stage that returns only
+// a position.
+//
+// A named empty struct rather than allowing a stage to return one value,
+// because the no-varyings case being a different signature shape is how a
+// caller ends up writing the two-varying case twice.
+type NoVaryings = kernel.NoVaryings
+
+// NewVertexForTest and NewFragmentForTest build a stage receiver directly.
+//
+// They exist because a stage's receiver has unexported fields — an index a
+// caller can set is an index the backend does not own — and the differential
+// test that checks a generated lowering against its authored source has to hand
+// both the same one. Nothing else should call them: a real invocation's identity
+// comes from the rasterizer, which is specs/035-cpu-rasterizer.md's.
+//
+// Named ForTest rather than hidden behind a build tag, so that the name says
+// what it is at every call site rather than only in the file header.
+func NewVertexForTest(vertex, instance uint32) Vertex { return kernel.NewVertex(vertex, instance) }
+
+// NewFragmentForTest builds a fragment receiver. See [NewVertexForTest].
+func NewFragmentForTest(coord Vec4, front bool) Fragment { return kernel.NewFragment(coord, front) }

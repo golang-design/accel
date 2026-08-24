@@ -71,6 +71,17 @@ const RequiresDirective = "//accel:requires"
 // arrives later rather than that it is unknown.
 const HelperDirective = "//accel:helper"
 
+// VertexDirective and FragmentDirective mark the two graphics stages of
+// specs/032-stage-abi.md.
+//
+// They are recognized here rather than ignored, which is what they were: an
+// unknown //accel: directive was dropped with no diagnostic, so a reader who
+// copied the doc comment on accel.Vertex got a clean exit code and no stage.
+const (
+	VertexDirective   = "//accel:vertex"
+	FragmentDirective = "//accel:fragment"
+)
+
 // Diagnostic is one rejection, positioned.
 //
 // Positioned is not decoration. A diagnostic that names the right problem at
@@ -188,11 +199,23 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 		}
 	}
 	for _, d := range decls {
-		if d.kind == KernelDirective {
+		switch d.kind {
+		case KernelDirective:
 			if k := c.kernel(d.fn, d.extent); k != nil {
 				c.checkRequires(k, d.fn)
 				c.funcs = append(c.funcs, k)
 			}
+		case VertexDirective, FragmentDirective:
+			if k := c.stage(d.fn, d.kind); k != nil {
+				c.checkRequires(k, d.fn)
+				c.funcs = append(c.funcs, k)
+			}
+		case HelperDirective:
+			// Built above, in three passes.
+		default:
+			c.errorf(d.fn.Pos(), "%s: %q is not an accel directive; the set is %s, %s, %s "+
+				"and %s", d.fn.Name.Name, d.kind, KernelDirective, HelperDirective,
+				VertexDirective, FragmentDirective)
 		}
 	}
 	c.checkRecursion()
@@ -298,6 +321,16 @@ func directiveOf(fn *ast.FuncDecl) (kind string, extent [3]uint32, ok bool) {
 			return KernelDirective, e, true
 		case strings.HasPrefix(text, HelperDirective):
 			return HelperDirective, extent, true
+		case strings.HasPrefix(text, VertexDirective):
+			return VertexDirective, extent, true
+		case strings.HasPrefix(text, FragmentDirective):
+			return FragmentDirective, extent, true
+		case strings.HasPrefix(text, "//accel:") && !strings.HasPrefix(text, RequiresDirective):
+			// An unrecognized directive in the reserved namespace is a typo or a
+			// feature that does not exist, and silence turns either into a
+			// function that simply never compiles to anything. Reported with the
+			// name so the reader sees which one.
+			return text, extent, true
 		}
 	}
 	return "", extent, false

@@ -172,6 +172,23 @@ const kmathPkg = "golang.design/x/accel/kmath"
 const accelPkg = "golang.design/x/accel"
 
 var table = map[key]*Intrinsic{
+	// The graphics stage built-ins. specs/032-stage-abi.md section 2.1 and 4.1.
+	{kernelPkg, "Vertex", "VertexIndex"}: {
+		Authored: "accel.Vertex.VertexIndex", Op: ir.OpVertexIndex,
+		Uniformity: PerInvocation, Result: ir.U32,
+	},
+	{kernelPkg, "Vertex", "InstanceIndex"}: {
+		Authored: "accel.Vertex.InstanceIndex", Op: ir.OpInstanceIndex,
+		Uniformity: PerInvocation, Result: ir.U32,
+	},
+	{kernelPkg, "Fragment", "Coord"}: {
+		Authored: "accel.Fragment.Coord", Op: ir.OpFragCoord,
+		Uniformity: PerInvocation, Result: ir.Array,
+	},
+	{kernelPkg, "Fragment", "FrontFacing"}: {
+		Authored: "accel.Fragment.FrontFacing", Op: ir.OpFrontFacing,
+		Uniformity: PerInvocation, Result: ir.Bool,
+	},
 	{kernelPkg, "Thread", "GlobalID"}: {
 		Authored: "accel.Thread.GlobalID", Op: ir.OpGlobalID,
 		Uniformity: PerInvocation, Result: ir.ID3Kind,
@@ -291,19 +308,19 @@ var table = map[key]*Intrinsic{
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupBroadcastFirstF32"}: {
-		Authored: "accel.Thread.BroadcastFirstF32", Op: ir.OpBroadcastFirstF32, Params: 1,
+		Authored: "accel.Thread.SubgroupBroadcastFirstF32", Op: ir.OpBroadcastFirstF32, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupBallot,
 	},
 	{kernelPkg, "Thread", "SubgroupElect"}: {
-		Authored: "accel.Thread.Elect", Op: ir.OpElect,
+		Authored: "accel.Thread.SubgroupElect", Op: ir.OpElect,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupBasic,
 	},
 	{kernelPkg, "Thread", "SubgroupAny"}: {
-		Authored: "accel.Thread.Any", Op: ir.OpSubgroupAny, Params: 1,
+		Authored: "accel.Thread.SubgroupAny", Op: ir.OpSubgroupAny, Params: 1,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},
 	{kernelPkg, "Thread", "SubgroupAll"}: {
-		Authored: "accel.Thread.All", Op: ir.OpSubgroupAll, Params: 1,
+		Authored: "accel.Thread.SubgroupAll", Op: ir.OpSubgroupAll, Params: 1,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},
 

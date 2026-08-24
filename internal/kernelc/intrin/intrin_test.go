@@ -213,37 +213,57 @@ func (*Thread) GlobalID() uint32 { return 0 }
 func TestNamesAndDigestAreStable(t *testing.T) {
 	names := intrin.Names()
 	want := []string{
-		// Thread ids and the barrier.
+		"accel.AddF32",
+		"accel.AddI32",
+		"accel.AddU32",
+		"accel.AndU32",
+		"accel.BFloat16.F32",
+		"accel.CompareExchangeI32",
+		"accel.CompareExchangeU32",
+		"accel.ExchangeI32",
+		"accel.ExchangeU32",
+		"accel.Float16.F32",
+		"accel.Fragment.Coord",
+		"accel.Fragment.FrontFacing",
+		"accel.MaxI32",
+		"accel.MaxU32",
+		"accel.MinI32",
+		"accel.MinU32",
+		"accel.OrU32",
+		"accel.SubI32",
+		"accel.SubU32",
 		"accel.Thread.Barrier",
-		"accel.Thread.GlobalID", "accel.Thread.GlobalIndex",
-		"accel.Thread.GroupID", "accel.Thread.GroupIndex",
-		"accel.Thread.LocalID", "accel.Thread.LocalIndex",
-
-		// Narrow storage conversions.
-		"accel.BFloat16.F32", "accel.Float16.F32",
-		"accel.ToBFloat16", "accel.ToFloat16",
-
-		// Atomics: free functions taking a buffer and an index, since GLSL
-		// cannot form a pointer into a buffer.
-		"accel.AddF32", "accel.AddI32", "accel.AddU32",
-		"accel.AndU32", "accel.OrU32", "accel.XorU32",
-		"accel.CompareExchangeI32", "accel.CompareExchangeU32",
-		"accel.ExchangeI32", "accel.ExchangeU32",
-		"accel.MaxI32", "accel.MaxU32", "accel.MinI32", "accel.MinU32",
-		"accel.SubI32", "accel.SubU32",
-
-		// Subgroup operations. The id accessors combine nothing; the rest are
-		// rendezvous, which is why they make a kernel cooperative.
-		"accel.Thread.SubgroupSize", "accel.Thread.SubgroupIndex",
+		"accel.Thread.GlobalID",
+		"accel.Thread.GlobalIndex",
+		"accel.Thread.GroupID",
+		"accel.Thread.GroupIndex",
+		"accel.Thread.LocalID",
+		"accel.Thread.LocalIndex",
+		"accel.Thread.SubgroupAddF32",
+		"accel.Thread.SubgroupAll",
+		"accel.Thread.SubgroupAny",
+		"accel.Thread.SubgroupBroadcastFirstF32",
+		"accel.Thread.SubgroupElect",
+		"accel.Thread.SubgroupIndex",
 		"accel.Thread.SubgroupLane",
-		"accel.Thread.SubgroupAddF32", "accel.Thread.SubgroupMinF32",
-		"accel.Thread.SubgroupMaxF32", "accel.Thread.BroadcastFirstF32",
-		"accel.Thread.Elect", "accel.Thread.Any", "accel.Thread.All",
-
-		// Bounded and exact scalar math.
-		"accel/kmath.Abs", "accel/kmath.Cos", "accel/kmath.Exp", "accel/kmath.Log",
-		"accel/kmath.Max", "accel/kmath.Min", "accel/kmath.RSqrt",
-		"accel/kmath.Sin", "accel/kmath.Sqrt", "accel/kmath.Tanh",
+		"accel.Thread.SubgroupMaxF32",
+		"accel.Thread.SubgroupMinF32",
+		"accel.Thread.SubgroupSize",
+		"accel.ToBFloat16",
+		"accel.ToFloat16",
+		"accel.Vertex.InstanceIndex",
+		"accel.Vertex.VertexIndex",
+		"accel.XorU32",
+		"accel/kmath.Abs",
+		"accel/kmath.Cos",
+		"accel/kmath.Exp",
+		"accel/kmath.Log",
+		"accel/kmath.Max",
+		"accel/kmath.Min",
+		"accel/kmath.RSqrt",
+		"accel/kmath.Sin",
+		"accel/kmath.Sqrt",
+		"accel/kmath.Tanh",
 	}
 	sort.Strings(want)
 	if len(names) != len(want) {

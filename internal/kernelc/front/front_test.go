@@ -126,6 +126,49 @@ func TestRejections(t *testing.T) {
 		want string // substring of the message
 	}{
 		{
+			name: "unknown accel directive",
+			body: `//accel:geometry
+func K(t accel.Thread, out []float32) { _ = t }`,
+			line: 2, want: "is not an accel directive",
+		},
+		{
+			name: "vertex stage with the wrong receiver",
+			body: `//accel:vertex
+func V(t accel.Thread) (accel.Clip, accel.NoVaryings) { return accel.Clip{}, accel.NoVaryings{} }`,
+			line: 2, want: "the first parameter of a vertex stage is accel.Vertex",
+		},
+		{
+			name: "vertex stage returning one value",
+			body: `//accel:vertex
+func V(v accel.Vertex) accel.Clip { return accel.Clip{} }`,
+			line: 2, want: "a vertex stage returns a clip position and a varyings struct",
+		},
+		{
+			name: "fragment stage with no varyings parameter",
+			body: `//accel:fragment
+func F(f accel.Fragment) accel.Vec4 { return accel.Vec4{} }`,
+			line: 2, want: "has no varyings parameter",
+		},
+		{
+			name: "fragment stage returning a bare vector",
+			body: `type In struct{ C accel.Vec4 }
+
+//accel:fragment
+func F(f accel.Fragment, in In) accel.Vec4 { return in.C }`,
+			line: 4, want: "one field per attachment, even when there is one",
+		},
+		{
+			name: "composite literal in a compute kernel",
+			body: `type P struct{ A float32 }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	p := P{A: 1}
+	out[0] = p.A
+}`,
+			line: 5, want: "only a graphics stage constructs a value to return",
+		},
+		{
 			name: "generic kernel",
 			body: `//accel:kernel workgroup=64
 func K[T any](t accel.Thread, out []float32) { _ = t }`,

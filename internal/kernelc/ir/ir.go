@@ -258,6 +258,22 @@ type IntrinsicCall struct {
 	Args []Value
 }
 
+// Composite is a struct or array literal.
+//
+// Admitted for the graphics stages of specs/032-stage-abi.md and nowhere else.
+// A stage must *construct* what it returns — a clip position, a varyings struct,
+// an attachment struct — and there is no other way to say that. A compute kernel
+// writes through its bindings and has nothing to build, so the subset stays
+// closed there and the front end refuses one.
+//
+// Elems is positional and complete: the front end expands a keyed literal and
+// fills an omitted field with its zero, so an emitter never has to know which
+// spelling the author used.
+type Composite struct {
+	value
+	Elems []Value
+}
+
 // Len is the length of a slice binding. It is a node rather than an intrinsic
 // because every target spells it differently and none of them spells it as a
 // call.
@@ -277,6 +293,7 @@ func (Convert) isValue()       {}
 func (Call) isValue()          {}
 func (IntrinsicCall) isValue() {}
 func (Len) isValue()           {}
+func (Composite) isValue()     {}
 
 // Stmt is a statement. Closed, for the same reason [Value] is.
 type Stmt interface {
@@ -341,7 +358,15 @@ type Continue struct{ stmt }
 // Return is single-value or empty.
 type Return struct {
 	stmt
+
+	// Value is a helper's single result, or nil.
 	Value Value
+
+	// Values is a graphics stage's results: two for a vertex stage, one for a
+	// fragment stage. Separate from Value rather than replacing it, because a
+	// helper returns exactly one thing and folding the two would make every
+	// consumer index a slice to find it.
+	Values []Value
 }
 
 func (Block) isStmt()    {}
@@ -431,6 +456,15 @@ const (
 	OpSubgroupAll
 	OpBallot
 
+	// The graphics stage built-ins of specs/032-stage-abi.md. They sit after the
+	// subgroup range on purpose: IsSubgroup is a bounds check over that range,
+	// and inserting into it would silently make a vertex index a subgroup
+	// operation.
+	OpVertexIndex
+	OpInstanceIndex
+	OpFragCoord
+	OpFrontFacing
+
 	// Cooperative. Recognized so that a kernel using one is rejected by name
 	// with a position, rather than failing as an unknown call. See
 	// specs/012-kernel-pipeline.md.
@@ -440,6 +474,10 @@ const (
 var opcodeNames = [...]string{
 	OpInvalid:                  "invalid",
 	OpGlobalID:                 "GlobalID",
+	OpVertexIndex:              "VertexIndex",
+	OpInstanceIndex:            "InstanceIndex",
+	OpFragCoord:                "FragCoord",
+	OpFrontFacing:              "FrontFacing",
 	OpLocalID:                  "LocalID",
 	OpGroupID:                  "GroupID",
 	OpGlobalIndex:              "GlobalIndex",
@@ -644,6 +682,26 @@ type Func struct {
 	// results rather than an error, because nothing checked.
 	Caps uint32
 
+	// Attributes are a vertex stage's per-vertex inputs, in signature order.
+	// They are the by-value array parameters; a uniform is a by-value struct and
+	// a storage buffer is a slice, so the three are distinguishable by type
+	// alone. See specs/032-stage-abi.md section 2.2.
+	Attributes []*Attribute
+
+	// Varyings is the struct a vertex stage returns as its second result and a
+	// fragment stage takes as its second parameter. The same named type, checked
+	// by object identity rather than structurally: two empty structs are
+	// structurally identical and mean different things.
+	Varyings *Type
+
+	// Outputs are a fragment stage's colour attachments, one per field of its
+	// result struct, in declaration order.
+	Outputs []*Target
+
+	// Discards reports that the body reaches accel.Discard, which stops a
+	// backend promising an early depth test the stage cannot have.
+	Discards bool
+
 	// Intrinsics is every intrinsic the body reaches, in first-use order, by its
 	// authored spelling. The digest records these rather than resolved package
 	// paths, so relocating a type does not invalidate a committed digest.
@@ -754,3 +812,25 @@ func NewBreak(p token.Pos) *Break       { return &Break{stmt{pos{p}}} }
 func NewContinue(p token.Pos) *Continue { return &Continue{stmt{pos{p}}} }
 
 func NewReturn(p token.Pos, v Value) *Return { return &Return{stmt: stmt{pos{p}}, Value: v} }
+
+// Attribute is one per-vertex input of a vertex stage.
+//
+// Index is the dense position among the stage's attributes, which is what the
+// pipeline's vertex layout binds against — not the parameter position, since
+// the receiver and any uniforms are interleaved with them in the signature.
+type Attribute struct {
+	Name  string
+	Index int
+	Type  *Type
+}
+
+// Target is one colour attachment a fragment stage writes.
+//
+// Index is the field's position in the result struct, and that is the whole
+// mapping: one field per attachment, in declaration order. specs/005-graphics.md
+// records that the predecessor proved this shape on Metal.
+type Target struct {
+	Name  string
+	Index int
+	Type  *Type
+}

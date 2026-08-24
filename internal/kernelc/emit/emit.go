@@ -93,10 +93,19 @@ func Generate(p Package) ([]byte, error) {
 			}
 		}
 	}
+	var compute []*ir.Func
 	for _, k := range p.Kernels {
+		if k.Stage.Graphics() {
+			e.stage(k)
+			continue
+		}
+		compute = append(compute, k)
 		e.kernel(k)
 	}
-	e.registry(p.Kernels)
+	// The registry lists compute kernels. A stage is reached through a render
+	// pipeline, which specs/033-render-api.md owns and which does not exist, so
+	// listing one here would advertise something no caller can use.
+	e.registry(compute)
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -176,7 +185,12 @@ func (e *emitter) sharedArray(v ir.Value) (int, bool) {
 	if !ok || p.Type() == nil || p.Type().Kind != ir.Array {
 		return 0, false
 	}
-	return e.sharedIndex[p.Name], true
+	// An array-typed parameter is not automatically shared memory. A vertex
+	// stage's attribute is a by-value array, and reading one through the shared
+	// tracker emits a call to a tracker no stage has — so the name has to be one
+	// this kernel actually declared as shared.
+	i, declared := e.sharedIndex[p.Name]
+	return i, declared
 }
 
 // local is a local's spelling: its own name, or the frame field standing in for
@@ -198,6 +212,63 @@ func (e *emitter) printf(format string, args ...any) {
 	if e.err == nil {
 		fmt.Fprintf(e.buf, format, args...)
 	}
+}
+
+// stage emits one graphics stage's generated lowering.
+//
+// The lowering is what specs/035-cpu-rasterizer.md's rasterizer calls: a plain
+// Go function with the stage's own signature, built from the same IR the shader
+// target is emitted from — which is what makes the CPU path an oracle rather
+// than a second implementation.
+//
+// There is no record beside it yet. A stage is reached through a render
+// pipeline, and specs/033-render-api.md's is not built; emitting a record with
+// no consumer would be a name this package has to keep. The lowering is the
+// half that is useful today, because it is what the rasterizer needs and what
+// the differential test compares against the authored source.
+func (e *emitter) stage(k *ir.Func) {
+	lower := lowerName(k.Name)
+
+	e.printf("// %s is the generated lowering of the %v %s.\n", lower, k.Stage, k.Name)
+	e.printf("//\n")
+	e.printf("// specs/032-stage-abi.md. The authored %s supplies the typed source this\n", k.Name)
+	e.printf("// was built from, and is run only by the test that checks the two agree.\n")
+	e.printf("func %s(", lower)
+	for i, p := range k.Params {
+		if i > 0 {
+			e.printf(", ")
+		}
+		e.printf("%s %s", p.Name, e.goType(p.Type()))
+	}
+	e.printf(") ")
+	switch k.Stage {
+	case ir.StageVertex:
+		e.printf("(accel.Clip, %s)", e.goType(k.Varyings))
+	case ir.StageFragment:
+		if len(k.Outputs) > 0 {
+			e.printf("%s", stageResultName(k))
+		}
+	}
+	e.printf(" {\n")
+	e.block(k.Body, 1)
+	e.printf("}\n\n")
+}
+
+// stageResultName is the authored name of a fragment stage's result struct.
+//
+// Recovered from the source rather than carried on the IR, because the struct
+// is the caller's type and this only needs to spell it.
+func stageResultName(k *ir.Func) string {
+	const marker = ") "
+	i := strings.LastIndex(k.Source, marker)
+	if i < 0 {
+		return "struct{}"
+	}
+	rest := strings.TrimSpace(k.Source[i+len(marker):])
+	if j := strings.Index(rest, " "); j > 0 {
+		return rest[:j]
+	}
+	return rest
 }
 
 // kernel emits one kernel's lowering, record, and entry point.
@@ -556,6 +627,20 @@ func (e *emitter) stmt(s ir.Stmt, depth int) {
 		e.printf("%scontinue\n", indent(depth))
 
 	case *ir.Return:
+		if len(s.Values) > 0 {
+			// A graphics stage returns values rather than writing through a
+			// binding: a vertex stage a position and its varyings, a fragment
+			// stage its attachment struct.
+			e.printf("%sreturn ", indent(depth))
+			for i, v := range s.Values {
+				if i > 0 {
+					e.printf(", ")
+				}
+				e.rounded(v)
+			}
+			e.printf("\n")
+			break
+		}
 		if s.Value == nil {
 			e.printf("%sreturn\n", indent(depth))
 			return
@@ -725,6 +810,19 @@ func (e *emitter) value(v ir.Value) {
 		e.printf("int32(len(")
 		e.value(v.X)
 		e.printf("))")
+
+	case *ir.Composite:
+		// Positional and complete: the front end expanded any keyed literal and
+		// filled every omitted field, so this never has to know which spelling
+		// the author used.
+		e.printf("%s{", e.goType(v.Type()))
+		for i, el := range v.Elems {
+			if i > 0 {
+				e.printf(", ")
+			}
+			e.rounded(el)
+		}
+		e.printf("}")
 
 	case *ir.IntrinsicCall:
 		e.intrinsic(v)
@@ -911,6 +1009,14 @@ var intrinsicMethod = map[ir.Opcode]string{
 	ir.OpGlobalIndex: "GlobalIndex",
 	ir.OpLocalIndex:  "LocalIndex",
 	ir.OpGroupIndex:  "GroupIndex",
+
+	// The graphics stage built-ins. They are methods on accel.Vertex and
+	// accel.Fragment exactly as the compute ones are on accel.Thread, so the
+	// generated lowering calls them the same way.
+	ir.OpVertexIndex:   "VertexIndex",
+	ir.OpInstanceIndex: "InstanceIndex",
+	ir.OpFragCoord:     "Coord",
+	ir.OpFrontFacing:   "FrontFacing",
 }
 
 // intrinsicFunc maps an opcode to the free function the Go lowering calls.
@@ -982,8 +1088,12 @@ func (e *emitter) goType(t *ir.Type) string {
 	case ir.ID3Kind:
 		return "accel.ID3"
 	case ir.Struct:
-		if t.Name == "Thread" {
-			return "accel.Thread"
+		// The three receivers are accel's, and a generated file is in the
+		// caller's package, so they need qualifying. Everything else named here
+		// is a type the caller declared.
+		switch t.Name {
+		case "Thread", "Vertex", "Fragment", "NoVaryings":
+			return "accel." + t.Name
 		}
 		return t.Name
 	case ir.Slice:

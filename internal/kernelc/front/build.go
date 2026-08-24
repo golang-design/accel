@@ -412,6 +412,9 @@ func (c *checker) returnStmt(s *ast.ReturnStmt) ir.Stmt {
 		c.errorf(s.Pos(), "a kernel returns nothing: it writes through its bindings")
 		return nil
 	}
+	if c.current != nil && c.current.Stage.Graphics() {
+		return c.stageReturn(s)
+	}
 	if len(s.Results) > 1 {
 		c.errorf(s.Pos(), "a helper returns one value or none")
 		return nil
@@ -576,8 +579,7 @@ func (c *checker) value(e ast.Expr) ir.Value {
 		c.errorf(e.Pos(), "closures have no spelling on any target")
 		return nil
 	case *ast.CompositeLit:
-		c.errorf(e.Pos(), "composite literals are outside the closed IR node set")
-		return nil
+		return c.composite(e)
 	case *ast.SliceExpr:
 		c.errorf(e.Pos(), "reslicing is outside the closed IR node set: a binding's extent is "+
 			"fixed by its descriptor")
@@ -666,6 +668,19 @@ func (c *checker) selector(e *ast.SelectorExpr) ir.Value {
 			return nil
 		}
 		idx := c.uniformFieldIndex(x.Type().Name, e.Sel.Name)
+		if idx < 0 {
+			// A varyings or attachment struct is not a uniform block, so its
+			// fields are not in the std140 layout table. Its index is its
+			// position in the struct, which is also what the interpolator and
+			// the attachment mapping use.
+			for j, f := range x.Type().Fields {
+				if f.Name == e.Sel.Name {
+					idx = j
+					ft = f.Type
+					break
+				}
+			}
+		}
 		if idx < 0 {
 			c.errorf(e.Pos(), "%s has no field %s that a uniform block can hold",
 				x.Type(), e.Sel.Name)
@@ -942,7 +957,16 @@ func (c *checker) intrinsicCall(e *ast.CallExpr, recvExpr ast.Expr, in *intrin.I
 	if c.current != nil && !slices.Contains(c.current.Intrinsics, in.Authored) {
 		c.current.Intrinsics = append(c.current.Intrinsics, in.Authored)
 	}
-	return ir.NewIntrinsic(e.Pos(), &ir.Type{Kind: in.Result}, in.Op, recv, args)
+	rt := &ir.Type{Kind: in.Result}
+	if in.Result == ir.Array {
+		// An array-kinded intrinsic result needs its element type and extent.
+		// Only Fragment.Coord has one, and it is the four-component window
+		// coordinate accel.Vec4 aliases. A bare Array kind reaches the emitter
+		// as a type with no element and fails there, far from the table that
+		// declared it.
+		rt = &ir.Type{Kind: ir.Array, Len: 4, Elem: &ir.Type{Kind: ir.F32}}
+	}
+	return ir.NewIntrinsic(e.Pos(), rt, in.Op, recv, args)
 }
 
 // conversion builds an explicit conversion.
@@ -1064,3 +1088,147 @@ func (c *checker) constType(t types.Type) (*ir.Type, error) {
 type errType struct{ msg string }
 
 func (e errType) Error() string { return e.msg }
+
+// composite builds a struct or array literal.
+//
+// Admitted only in a graphics stage. A stage has to construct what it returns —
+// a clip position, a varyings struct, an attachment struct — and there is no
+// other way to say that. A compute kernel writes through its bindings and has
+// nothing to build, so the subset stays closed there: admitting literals
+// everywhere would let a kernel allocate a value the target has no storage
+// class for.
+func (c *checker) composite(e *ast.CompositeLit) ir.Value {
+	if c.current == nil || !c.current.Stage.Graphics() {
+		c.errorf(e.Pos(), "composite literals are outside the closed IR node set: a kernel "+
+			"writes through its bindings, and only a graphics stage constructs a value "+
+			"to return")
+		return nil
+	}
+	t := c.info.TypeOf(e)
+	it, err := c.irType(t)
+	if err != nil {
+		// A varyings or attachment struct is not a std140 uniform block and does
+		// not have to satisfy its layout rules, so irType refusing it is not the
+		// answer here. It is a value the stage constructs and hands to
+		// fixed-function hardware, which is what namedStructType describes.
+		if _, isStruct := types.Unalias(t).Underlying().(*types.Struct); !isStruct {
+			c.errorf(e.Pos(), "a literal of %s: %s", t, err)
+			return nil
+		}
+		it = c.namedStructType(t)
+	}
+
+	n := len(it.Fields)
+	if it.Kind == ir.Array {
+		n = it.Len
+	}
+	elems := make([]ir.Value, n)
+
+	for i, el := range e.Elts {
+		idx := i
+		val := el
+		if kv, keyed := el.(*ast.KeyValueExpr); keyed {
+			name, ok := kv.Key.(*ast.Ident)
+			if !ok {
+				c.errorf(kv.Key.Pos(), "a literal key here is a field name")
+				return nil
+			}
+			idx = -1
+			for j, f := range it.Fields {
+				if f.Name == name.Name {
+					idx = j
+					break
+				}
+			}
+			if idx < 0 {
+				c.errorf(kv.Key.Pos(), "%s has no field %s", t, name.Name)
+				return nil
+			}
+			val = kv.Value
+		}
+		if idx >= n {
+			c.errorf(el.Pos(), "a literal of %s takes %d values and this is number %d",
+				t, n, idx+1)
+			return nil
+		}
+		v := c.value(val)
+		if v == nil {
+			return nil
+		}
+		elems[idx] = v
+	}
+
+	// An omitted field is its zero. Filled here rather than left nil so an
+	// emitter never has to know which spelling the author used, and so a
+	// half-initialised literal cannot reach a target as a hole.
+	for i, v := range elems {
+		if v != nil {
+			continue
+		}
+		zt := &ir.Type{Kind: ir.F32}
+		switch {
+		case it.Kind == ir.Array && it.Elem != nil:
+			zt = it.Elem
+		case i < len(it.Fields):
+			zt = it.Fields[i].Type
+		}
+		elems[i] = c.zeroOf(e.Pos(), zt)
+	}
+
+	out := &ir.Composite{Elems: elems}
+	out.P = e.Pos()
+	out.T = it
+	return out
+}
+
+// zeroOf is the zero value of a scalar IR type, as a constant.
+func (c *checker) zeroOf(pos token.Pos, t *ir.Type) ir.Value {
+	k := ir.F32
+	if t != nil {
+		k = t.Kind
+	}
+	var v constant.Value
+	switch k {
+	case ir.Bool:
+		v = constant.MakeBool(false)
+	case ir.I32, ir.U32, ir.I8, ir.U8:
+		v = constant.MakeInt64(0)
+	default:
+		v = constant.MakeFloat64(0)
+	}
+	cst := &ir.Const{Val: v}
+	cst.P = pos
+	cst.T = &ir.Type{Kind: k}
+	return cst
+}
+
+// stageReturn builds a graphics stage's return.
+//
+// A vertex stage returns two values and a fragment stage one, and the shapes
+// were checked against the signature before the body was built — so this only
+// has to build the values and refuse a count the signature did not promise. The
+// count check is here as well as there because a stage may return from more
+// than one place, and a second return with the wrong arity would otherwise
+// reach an emitter.
+func (c *checker) stageReturn(s *ast.ReturnStmt) ir.Stmt {
+	want := 1
+	if c.current.Stage == ir.StageVertex {
+		want = 2
+	}
+	if len(s.Results) != want {
+		c.errorf(s.Pos(), "%s %s returns %d values here and %d in its signature",
+			c.current.Stage, c.current.Name, len(s.Results), want)
+		return nil
+	}
+	vals := make([]ir.Value, 0, want)
+	for _, r := range s.Results {
+		v := c.value(r)
+		if v == nil {
+			return nil
+		}
+		vals = append(vals, v)
+	}
+	out := &ir.Return{Values: vals}
+	out.P = s.Pos()
+	return out
+}

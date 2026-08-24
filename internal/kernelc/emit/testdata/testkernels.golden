@@ -259,6 +259,26 @@ func (ParamsCodec) Encode(dst []byte, value Params) error {
 	return w.Err()
 }
 
+// StageTransformCodec is the generated std140 codec for StageTransform.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type StageTransformCodec struct{}
+
+// StageTransformBlockSize is the encoded size of a StageTransform block, in bytes.
+const StageTransformBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (StageTransformCodec) EncodedSize() int { return StageTransformBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (StageTransformCodec) Encode(dst []byte, value StageTransform) error {
+	w := accel.NewUniformWriter(dst)
+	w.F32(0, value.Scale)
+	w.F32(8, value.Offset[0])
+	w.F32(12, value.Offset[1])
+	return w.Err()
+}
+
 // TopDimsCodec is the generated std140 codec for TopDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -323,7 +343,7 @@ var AddKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "0f375835eb5f09e052a03fb4ccdad8ef",
+	Digest:    "1c80da2bef47cdecf09d30a73c82c09a",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -380,7 +400,7 @@ var HistogramKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "c58b8e810d72612a5bb3a6a2ced5bf9e",
+	Digest:    "8e642465ef468b826d3f30e7589b0a8a",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -444,7 +464,7 @@ var AtomicOpsKernel = kernelabi.Kernel{
 		{Name: "state", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 		{Name: "prev", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "0aba6bc174a6c80b8337fcbe824417a5",
+	Digest:    "30e4ccb23aa8ac48cee5df022c5d4391",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -505,7 +525,7 @@ var CountWorkgroupsKernel = kernelabi.Kernel{
 	Bindings: []kernelabi.Binding{
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "47d72bd7bdfb59678426709378265d54",
+	Digest:    "38191307630ad8d8833e178b8fcfce17",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -699,7 +719,7 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "48aecacdf8522b1e1eed856b1fce7735",
+	Digest:    "a981bddf9a56c6a1f5037105b6edaec8",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -994,7 +1014,7 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "24af3de99f8b5a86e02d4baaac8acd98",
+	Digest:    "0a1c57230ef7f8e68130f945b2da4782",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1134,7 +1154,7 @@ var CastF32ToF16Kernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F16, Access: kernelabi.Write},
 	},
-	Digest:    "8512c3f0137bb5f4304f5b976df24a77",
+	Digest:    "db3b8651815e39c76b532debc542741d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1181,7 +1201,7 @@ var CastF16ToF32Kernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "5afe5c1b8d385561eebf0e43b2fbbd2f",
+	Digest:    "175db04882048db78a6cca25d557f440",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1262,7 +1282,7 @@ var ExchangeKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "52c122f3273e730d29413f27df973817",
+	Digest:    "61111255539b8ef54e7c1d6062331f74",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1385,7 +1405,7 @@ var ReduceLoopKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "914b70591439ab213d1a5be1014dc9bd",
+	Digest:    "af18d0f432d0c6aeb980582c404dd400",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1549,7 +1569,7 @@ var ReduceUnrolledKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "566e979abaa69256f7d7facf98a06b90",
+	Digest:    "e8f6e614c64844a02bc1bc0bda2fa74e",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1637,7 +1657,7 @@ var ElemAddKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "79b8203c685b9622e36c03cd6334a975",
+	Digest:    "2ece3f0688cda74d876db8e6719435df",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1686,7 +1706,7 @@ var ElemMulKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "bedae31be80629d74d6a8fbd10d36c44",
+	Digest:    "8ec2d779bb07f400e0a4e861e987ae9b",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1734,7 +1754,7 @@ var ElemScaleKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "a72e33949a25dbeb05d5d482b51799f9",
+	Digest:    "0061e943226afc5e028fc54f7520be1c",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1793,7 +1813,7 @@ var SiLUKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ef8fbc78a8fa1fe08e3aca417996f047",
+	Digest:    "7e0c51d33afd9cc2b9e9b64434534992",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1843,7 +1863,7 @@ var SwiGLUKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "5119e378e2aa1b695dd759dfcb6fd0a1",
+	Digest:    "49bd81f60bda1155cf4f8aaa95c9c8c7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1900,7 +1920,7 @@ var GatherRowsKernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "91db555c8049690d08b02f1bd69cdaea",
+	Digest:    "020af84fb3fefee2b356c16a187f90cb",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1974,7 +1994,7 @@ var ScatterRowsKernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "042eaaa96b3bd703c2645cde3c7e6752",
+	Digest:    "c957bfe1d5170583c91b8ae5ee06814b",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2053,7 +2073,7 @@ var RoPEKernel = kernelabi.Kernel{
 	Bindings: []kernelabi.Binding{
 		{Name: "inout", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "d34ece5f001ad7463551cb65d479bf1a",
+	Digest:    "00e80181fd0feaa2f9c5a9e89ff39ea7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2230,7 +2250,7 @@ var MatMulTiledKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "6933ff13a34a4950ea19100cf2da4a10",
+	Digest:    "66f3749ea503d62f79c058f0bc8f55b8",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2408,7 +2428,7 @@ var MatVecKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "a5762c926304414748b2181a2f54ebd0",
+	Digest:    "9449f9096da59ae7a55f8f09caf72011",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2600,7 +2620,7 @@ var LinearTiledKernel = kernelabi.Kernel{
 		{Name: "bias", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b9c54d6436dfdf8fb4e675152ef233d2",
+	Digest:    "f072c789a53aa172a6997382cbf65bc5",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2789,7 +2809,7 @@ var RMSNormKernel = kernelabi.Kernel{
 		{Name: "w", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ae0b7a61e551ec773afd028f2af2e5d3",
+	Digest:    "06d46e718f46c13986a6dfbdbea53c0d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3009,7 +3029,7 @@ var SoftmaxKernel = kernelabi.Kernel{
 		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "0dc28e9298e7ddcee9bdf130885fb402",
+	Digest:    "2fe4deae942b41756683231f9ef07bf5",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3273,7 +3293,7 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "52db2aca77f69a908bfee17580037d37",
+	Digest:    "90f31862771a9e6575485e31633cb392",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3569,7 +3589,7 @@ var AttentionPrefillKernel = kernelabi.Kernel{
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "1ae276440c807dd92062e1dd1bf630cc",
+	Digest:    "5c5122620cb6a851097cf47f1c6afff9",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3718,7 +3738,7 @@ var QuantMatMulKernel = kernelabi.Kernel{
 		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "fd8af8f6616b637a643e4bc20d7df119",
+	Digest:    "7cc08b86e4fefdb9c61d9500bad9a30d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3799,7 +3819,7 @@ var QuantRowsKernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "2d35a230fc242b7ca1944b66089b12d8",
+	Digest:    "1ddb154b664a183699432508bfd331dd",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3874,7 +3894,7 @@ var SegmentSumKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "35ea5297498c3ef70ae9514bb37d849f",
+	Digest:    "c0d55009356a513dd6a98b8e083fae24",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3966,7 +3986,7 @@ var CountAboveKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.I32, Access: kernelabi.Write},
 	},
-	Digest:    "c10405677571ad2f91bcec32783b7318",
+	Digest:    "e3d830b8a2a4c7654b92fc0c00a93171",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4037,7 +4057,7 @@ var NormalizeKernel = kernelabi.Kernel{
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "scratch", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "5e836d8086325043cb36a0a88b6fab0f",
+	Digest:    "0d42171679f92eac993663772aff78b4",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4154,7 +4174,7 @@ var ReduceSumKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "dc5041d238a43726f84c2fc56e302b5b",
+	Digest:    "1f8a0f4bd290df8c2b7f3ce9a8523db7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4310,7 +4330,7 @@ var SampleArgmaxKernel = kernelabi.Kernel{
 		{Name: "logits", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "a1edf75dc5d8243fbdfae975ceb8a767",
+	Digest:    "38a17a045d073eecc00e91497b635658",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4439,7 +4459,7 @@ var SampleCategoricalKernel = kernelabi.Kernel{
 		{Name: "probs", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "a382e53a1195982ba808bbe53b144d16",
+	Digest:    "cacb11472247b3862dcde1c18ec8ec88",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4520,7 +4540,7 @@ var ScaleKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "f7eb2e789e20e9b234cc4bbcbf5e701d",
+	Digest:    "7662a07e78ccc89b9b6851e3f78f9f92",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4575,7 +4595,7 @@ var TransformKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ee491d5acdc6029d3ab6f158969a4f19",
+	Digest:    "4fea6775a09072a3b79667353b1d66be",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4619,6 +4639,40 @@ kernel void Transform(
 	Flat: func(t accel.Thread, a kernelabi.Args) {
 		transformFlat(t, kernelabi.UniformValue[Params](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1))
 	},
+}
+
+// geometryVSFlat is the generated lowering of the vertex stage GeometryVS.
+//
+// specs/032-stage-abi.md. The authored GeometryVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func geometryVSFlat(v accel.Vertex, xf StageTransform, pos [3]float32, uv [2]float32) (accel.Clip, Varyings) {
+	return [4]float32{float32(float32(pos[int32(0)]*xf.Scale) + xf.Offset[int32(0)]), float32(float32(pos[int32(1)]*xf.Scale) + xf.Offset[int32(1)]), pos[int32(2)], float32(1)}, Varyings{[4]float32{pos[int32(0)], pos[int32(1)], pos[int32(2)], float32(1)}, uv}
+}
+
+// fullScreenVSFlat is the generated lowering of the vertex stage FullScreenVS.
+//
+// specs/032-stage-abi.md. The authored FullScreenVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func fullScreenVSFlat(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
+	var i uint32 = v.VertexIndex()
+	var x float32 = float32(-1)
+	var y float32 = float32(-1)
+	if i == uint32(1) {
+		x = float32(3)
+	}
+	if i == uint32(2) {
+		y = float32(3)
+	}
+	return [4]float32{x, y, float32(0), float32(1)}, accel.NoVaryings{}
+}
+
+// shadeFSFlat is the generated lowering of the fragment stage ShadeFS.
+//
+// specs/032-stage-abi.md. The authored ShadeFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func shadeFSFlat(f accel.Fragment, in Varyings) Targets {
+	var c [4]float32 = f.Coord()
+	return Targets{in.Colour, [4]float32{in.UV[int32(0)], in.UV[int32(1)], c[int32(2)], float32(1)}}
 }
 
 // subgroupReduceFrame is one invocation's saved state between suspension points.
@@ -4692,7 +4746,7 @@ var SubgroupReduceKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "f489a47fd3044c330fc767ab48e51950",
+	Digest:    "cb5122410f92eda635f7c886326bebfc",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4772,7 +4826,7 @@ var SubgroupReduceFallbackKernel = kernelabi.Kernel{
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "width", DType: kernelabi.U32, Access: kernelabi.Read},
 	},
-	Digest:    "294b9a4d537816d67a39d5c6ba75bd01",
+	Digest:    "a03fb75989883a901dacb622481a9d11",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4980,7 +5034,7 @@ var TopKMaskKernel = kernelabi.Kernel{
 		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "c0219588fa7da65c5341e7f58eba643e",
+	Digest:    "2aa8715db98c289f6ab296fcb5be2066",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5313,7 +5367,7 @@ var TopPMaskKernel = kernelabi.Kernel{
 		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "bb46324efb08e1d4fb61a555694a1932",
+	Digest:    "fef46ab3cb02a566f0a62def8b867f3f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;

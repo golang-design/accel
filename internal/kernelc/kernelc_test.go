@@ -45,8 +45,10 @@ func TestCommittedFileIsFresh(t *testing.T) {
 	if results[0].Written {
 		t.Error("check mode wrote a file")
 	}
-	// Sorted, so adding a kernel to the corpus does not reorder this.
-	want := []string{"Add", "AtomicOps", "AttentionDecode", "AttentionDecodeBatched", "AttentionDecodePaged", "AttentionPrefill", "CastF16ToF32", "CastF32ToF16", "CountAbove", "CountWorkgroups", "ElemAdd", "ElemMul", "ElemScale", "Exchange", "GatherRows", "Histogram", "LinearTiled", "MatMulTiled", "MatVec", "Normalize", "QuantMatMul", "QuantRows", "RMSNorm", "ReduceLoop", "ReduceSum", "ReduceUnrolled", "RoPE", "SampleArgmax", "SampleCategorical", "Scale", "ScatterRows", "SegmentSum", "SiLU", "Softmax", "SubgroupReduce", "SubgroupReduceFallback", "SwiGLU", "TopKMask", "TopPMask", "Transform"}
+	// Sorted, so adding a kernel to the corpus does not reorder this. The three
+	// stage names are here too: specs/032-stage-abi.md compiles them through the
+	// same front end, and a list that omitted them would let a stage vanish.
+	want := []string{"Add", "AtomicOps", "AttentionDecode", "AttentionDecodeBatched", "AttentionDecodePaged", "AttentionPrefill", "CastF16ToF32", "CastF32ToF16", "CountAbove", "CountWorkgroups", "ElemAdd", "ElemMul", "ElemScale", "Exchange", "FullScreenVS", "GatherRows", "GeometryVS", "Histogram", "LinearTiled", "MatMulTiled", "MatVec", "Normalize", "QuantMatMul", "QuantRows", "RMSNorm", "ReduceLoop", "ReduceSum", "ReduceUnrolled", "RoPE", "SampleArgmax", "SampleCategorical", "Scale", "ScatterRows", "SegmentSum", "ShadeFS", "SiLU", "Softmax", "SubgroupReduce", "SubgroupReduceFallback", "SwiGLU", "TopKMask", "TopPMask", "Transform"}
 	if len(results[0].Kernels) != len(want) {
 		t.Fatalf("kernels = %v, want %v", results[0].Kernels, want)
 	}

@@ -1,0 +1,64 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+package testkernels
+
+import "golang.design/x/accel"
+
+// The graphics stages of specs/032-stage-abi.md, in the corpus so the front end
+// is exercised by code a reader can also read.
+
+// Varyings is what the geometry stages pass to the shading ones.
+type Varyings struct {
+	Colour accel.Vec4
+	UV     accel.Vec2
+}
+
+// StageTransform is a vertex stage's by-value parameter.
+type StageTransform struct {
+	Scale  float32
+	Offset accel.Vec2
+}
+
+// GeometryVS places a vertex and hands its colour and texture coordinate on.
+//
+//accel:vertex
+func GeometryVS(v accel.Vertex, xf StageTransform, pos accel.Vec3, uv accel.Vec2) (accel.Clip, Varyings) {
+	return accel.Clip{pos[0]*xf.Scale + xf.Offset[0], pos[1]*xf.Scale + xf.Offset[1], pos[2], 1},
+		Varyings{Colour: accel.Vec4{pos[0], pos[1], pos[2], 1}, UV: uv}
+}
+
+// FullScreenVS computes its position from the vertex index alone, which is what
+// a vertex-buffer-less pipeline does.
+//
+//accel:vertex
+func FullScreenVS(v accel.Vertex) (accel.Clip, accel.NoVaryings) {
+	i := v.VertexIndex()
+	x := float32(-1)
+	y := float32(-1)
+	if i == 1 {
+		x = 3
+	}
+	if i == 2 {
+		y = 3
+	}
+	return accel.Clip{x, y, 0, 1}, accel.NoVaryings{}
+}
+
+// Targets is a fragment stage's colour attachments, one field each.
+type Targets struct {
+	Albedo accel.Vec4
+	Normal accel.Vec4
+}
+
+// ShadeFS writes two attachments, which is how MRT is expressed.
+//
+//accel:fragment
+func ShadeFS(f accel.Fragment, in Varyings) Targets {
+	c := f.Coord()
+	return Targets{
+		Albedo: in.Colour,
+		Normal: accel.Vec4{in.UV[0], in.UV[1], c[2], 1},
+	}
+}
