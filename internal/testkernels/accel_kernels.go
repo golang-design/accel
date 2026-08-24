@@ -4680,7 +4680,9 @@ var GeometryVSStage = accel.Stage{
 		{Name: "uv", Index: 1, Components: 2},
 	},
 	Uniforms: []accel.StageUniform{
-		{Name: "xf", Type: "StageTransform", Index: 0},
+		{Name: "xf", Type: "StageTransform", Index: 0, Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, StageTransformCodec{}.Encode)
+		}},
 	},
 	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
 		pos, vary := geometryVSFlat(v, u[0].(StageTransform), [3]float32(a[0]), [2]float32(a[1]))
@@ -4709,7 +4711,7 @@ struct GeometryVS_in {
 
 vertex GeometryVS_out GeometryVS(
     GeometryVS_in _in [[stage_in]],
-    constant StageTransform &xf [[buffer(0)]],
+    constant StageTransform &xf [[buffer(16)]],
     uint _vid [[vertex_id]],
     uint _iid [[instance_id]]) {
     float3 pos = _in.pos;
@@ -4718,6 +4720,7 @@ vertex GeometryVS_out GeometryVS(
     _out._pos = float4(((pos[int(0)] * xf.Scale) + xf.Offset[int(0)]), ((pos[int(1)] * xf.Scale) + xf.Offset[int(1)]), pos[int(2)], float(1));
     _out.Colour = float4(pos[int(0)], pos[int(1)], pos[int(2)], float(1));
     _out.UV = uv;
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
     return _out;
 }
 `,
@@ -4773,6 +4776,7 @@ vertex FullScreenVS_out FullScreenVS(
         y = float(3);
     }
     _out._pos = float4(x, y, float(0), float(1));
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
     return _out;
 }
 `,
@@ -4878,6 +4882,7 @@ vertex HalfTriangleVS_out HalfTriangleVS(
         y = float(1);
     }
     _out._pos = float4(x, y, as_type<float>(0x3F000000u) /* 0.5 */, float(1));
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
     return _out;
 }
 `,
@@ -4974,6 +4979,7 @@ vertex AttributeVS_out AttributeVS(
     AttributeVS_out _out;
     _out._pos = float4(pos[int(0)], pos[int(1)], pos[int(2)], float(1));
     _out.Tint = tint;
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
     return _out;
 }
 `,
@@ -5044,7 +5050,9 @@ var ScaledVSStage = accel.Stage{
 		{Name: "pos", Index: 0, Components: 3},
 	},
 	Uniforms: []accel.StageUniform{
-		{Name: "xf", Type: "StageTransform", Index: 0},
+		{Name: "xf", Type: "StageTransform", Index: 0, Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, StageTransformCodec{}.Encode)
+		}},
 	},
 	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
 		pos, vary := scaledVSFlat(v, u[0].(StageTransform), [3]float32(a[0]))
@@ -5070,12 +5078,13 @@ struct ScaledVS_in {
 
 vertex ScaledVS_out ScaledVS(
     ScaledVS_in _in [[stage_in]],
-    constant StageTransform &xf [[buffer(0)]],
+    constant StageTransform &xf [[buffer(16)]],
     uint _vid [[vertex_id]],
     uint _iid [[instance_id]]) {
     float3 pos = _in.pos;
     ScaledVS_out _out;
     _out._pos = float4(((pos[int(0)] * xf.Scale) + xf.Offset[int(0)]), ((pos[int(1)] * xf.Scale) + xf.Offset[int(1)]), pos[int(2)], float(1));
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
     return _out;
 }
 `,
@@ -5097,7 +5106,9 @@ var TintedFSStage = accel.Stage{
 	Kind:     accel.StageFragment,
 	Varyings: "NoVaryings",
 	Uniforms: []accel.StageUniform{
-		{Name: "tint", Type: "StageTint", Index: 0},
+		{Name: "tint", Type: "StageTint", Index: 0, Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, StageTintCodec{}.Encode)
+		}},
 	},
 	Outputs: []accel.StageOutput{
 		{Name: "Colour", Index: 0},
