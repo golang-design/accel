@@ -140,6 +140,352 @@ func TestTheF16AttentionMatchesTheF32OneExactly(t *testing.T) {
 	}
 }
 
+// The f16 prefill matches the f32 one on a cache exact in f16.
+//
+// [TestTheF16AttentionMatchesTheF32OneExactly]'s argument, for the kernel that
+// fills a cache rather than the one that reads a full one: the body is the f32
+// prefill with two loads widened, so on values f16 holds exactly the two must
+// agree bit for bit. A tolerance would pass on a kernel that read the wrong
+// element of the cache, which is the mistake a widening invites.
+//
+// The f32 side is derived from the narrowed values rather than seeded beside
+// them, so the claim holds whatever the seed is: k32[i] is k16[i] widened, and
+// widening is exact.
+//
+// The cases move Base as well as the head geometry, because the causal limit is
+// Base+s and a prefill that extends a cache is where an off-by-one in the mask
+// would first show.
+func TestTheF16PrefillMatchesTheF32OneExactly(t *testing.T) {
+	for _, c := range []struct{ qHeads, kvHeads, headDim, qSeq, base uint32 }{
+		{2, 1, 8, 4, 0},  // a fresh cache
+		{4, 2, 8, 5, 0},  // grouped query heads
+		{2, 2, 16, 3, 2}, // extending a cache: the first query sees three
+	} {
+		name := fmt.Sprintf("q%d_kv%d_d%d_s%d_b%d", c.qHeads, c.kvHeads, c.headDim, c.qSeq, c.base)
+		t.Run(name, func(t *testing.T) {
+			kvLen := c.base + c.qSeq
+			d := testkernels.PrefillDims{
+				QHeads: c.qHeads, KVHeads: c.kvHeads, HeadDim: c.headDim,
+				QSeq: c.qSeq, Base: c.base,
+				Scale: float32(1 / math.Sqrt(float64(c.headDim))),
+			}
+			lengths := []uint32{kvLen}
+
+			q := make([]float32, c.qSeq*c.qHeads*c.headDim)
+			for i := range q {
+				q[i] = float32((i%9)-4) / 8
+			}
+			k16 := make([]accel.Float16, kvLen*c.kvHeads*c.headDim)
+			v16 := make([]accel.Float16, len(k16))
+			k32 := make([]float32, len(k16))
+			v32 := make([]float32, len(k16))
+			for i := range k16 {
+				k16[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.17)))
+				v16[i] = accel.ToFloat16(float32(math.Sin(float64(i) * 0.19)))
+				k32[i] = k16[i].F32()
+				v32[i] = v16[i].F32()
+			}
+
+			groups := accel.ID3{X: c.qSeq * c.qHeads}
+			wide := make([]float32, len(q))
+			narrow := make([]float32, len(q))
+			if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel, groups,
+				kernelabi.Args{
+					Slices: []any{q, k32, v32, lengths, wide}, Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("f32 dispatch: %v", err)
+			}
+			if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillF16Kernel, groups,
+				kernelabi.Args{
+					Slices: []any{q, k16, v16, lengths, narrow}, Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("f16 dispatch: %v", err)
+			}
+			for i := range wide {
+				if wide[i] != narrow[i] {
+					t.Fatalf("element %d is %v with an f32 cache and %v with an f16 one "+
+						"holding the same values; the two must agree bit for bit",
+						i, wide[i], narrow[i])
+				}
+			}
+		})
+	}
+}
+
+// The paged f16 decode matches the paged f32 one on a cache exact in f16.
+//
+// The same argument again, over the kernel where the two savings meet: the page
+// table removes the fragmentation and the narrow element halves what is left.
+// The pages are deliberately out of order and non-adjacent, so a widening that
+// had disturbed the addressing shows here rather than reading the pool in
+// sequence and looking right.
+func TestTheF16PagedDecodeMatchesTheF32OneExactly(t *testing.T) {
+	for _, c := range []struct {
+		qHeads, kvHeads, headDim, block, kvLen uint32
+		pages                                  []uint32
+	}{
+		{2, 1, 8, 4, 6, []uint32{5, 2}},
+		{4, 2, 8, 2, 5, []uint32{3, 0, 6}},
+		{2, 2, 16, 4, 8, []uint32{7, 1}},
+	} {
+		name := fmt.Sprintf("q%d_kv%d_d%d_blk%d_len%d", c.qHeads, c.kvHeads, c.headDim,
+			c.block, c.kvLen)
+		t.Run(name, func(t *testing.T) {
+			const poolBlocks = 8
+			d := testkernels.PagedDims{
+				QHeads: c.qHeads, KVHeads: c.kvHeads, HeadDim: c.headDim, Block: c.block,
+				Scale: float32(1 / math.Sqrt(float64(c.headDim))),
+			}
+			lengths := []uint32{c.kvLen}
+
+			q := make([]float32, c.qHeads*c.headDim)
+			for i := range q {
+				q[i] = float32((i%9)-4) / 8
+			}
+			k16 := make([]accel.Float16, poolBlocks*c.block*c.kvHeads*c.headDim)
+			v16 := make([]accel.Float16, len(k16))
+			k32 := make([]float32, len(k16))
+			v32 := make([]float32, len(k16))
+			for i := range k16 {
+				k16[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.11)))
+				v16[i] = accel.ToFloat16(float32(math.Sin(float64(i) * 0.13)))
+				k32[i] = k16[i].F32()
+				v32[i] = v16[i].F32()
+			}
+
+			groups := accel.ID3{X: c.qHeads}
+			wide := make([]float32, len(q))
+			narrow := make([]float32, len(q))
+			if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedKernel, groups,
+				kernelabi.Args{
+					Slices: []any{q, k32, v32, c.pages, lengths, wide}, Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("f32 dispatch: %v", err)
+			}
+			if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedF16Kernel,
+				groups, kernelabi.Args{
+					Slices: []any{q, k16, v16, c.pages, lengths, narrow}, Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("f16 dispatch: %v", err)
+			}
+			for i := range wide {
+				if wide[i] != narrow[i] {
+					t.Fatalf("element %d is %v with an f32 cache and %v with an f16 one "+
+						"holding the same values; the two must agree bit for bit",
+						i, wide[i], narrow[i])
+				}
+			}
+		})
+	}
+}
+
+// The f16 scatter places the same rows the f32 scatter does, and drops the same
+// write.
+//
+// A scatter performs no arithmetic, so the two widths must agree exactly on
+// every element -- the ones written and the ones left alone. The state starts
+// at a value no write produces, which is what makes a dropped write visible
+// rather than hidden behind a zero, and one id is past the capacity so the
+// range check is compared and not merely the addressing.
+func TestTheF16ScatterMatchesTheF32OneExactly(t *testing.T) {
+	const rows, width, capacity = 3, 4, 8
+	p := testkernels.RowParams{Rows: rows, Width: width, Capacity: capacity}
+
+	in16 := make([]accel.Float16, rows*width)
+	in32 := make([]float32, len(in16))
+	for i := range in16 {
+		in16[i] = accel.ToFloat16(float32(i)*0.375 - 5)
+		in32[i] = in16[i].F32()
+	}
+	ids := []uint32{5, 0, capacity + 1} // the last is past the state
+
+	state16 := make([]accel.Float16, capacity*width)
+	state32 := make([]float32, len(state16))
+	for i := range state16 {
+		state16[i] = accel.ToFloat16(-1) // a value no write produces
+		state32[i] = state16[i].F32()
+	}
+
+	n := rows * width
+	groups := accel.ID3{X: uint32((n + 63) / 64)}
+	if err := kernel.Dispatch(&testkernels.ScatterRowsKernel, groups,
+		kernelabi.Args{Slices: []any{in32, ids, state32}, Uniforms: []any{p}}); err != nil {
+		t.Fatalf("f32 dispatch: %v", err)
+	}
+	if err := kernel.Dispatch(&testkernels.ScatterRowsF16Kernel, groups,
+		kernelabi.Args{Slices: []any{in16, ids, state16}, Uniforms: []any{p}}); err != nil {
+		t.Fatalf("f16 dispatch: %v", err)
+	}
+
+	for i := range state32 {
+		if got := state16[i].F32(); got != state32[i] {
+			t.Fatalf("element %d is %v in an f32 state and %v in an f16 one holding the "+
+				"same values; a scatter does no arithmetic, so the two must agree exactly",
+				i, state32[i], got)
+		}
+	}
+	// And the scatter actually moved something, so the comparison above is not
+	// two untouched states agreeing.
+	moved := 0
+	for i := range state16 {
+		if state16[i].F32() != -1 {
+			moved++
+		}
+	}
+	if moved != 2*width {
+		t.Fatalf("%d elements changed; two of the three ids are inside the state, so "+
+			"%d should have", moved, 2*width)
+	}
+}
+
+// An f16 cache is written from inside the graph and then read back.
+//
+// This is accel issue 13's sequence, end to end and at f16 throughout: a
+// prefill's KV is scattered into the cache, attention reads it, one decode
+// step's row is scattered on top, and attention reads the longer cache. Every
+// step is a kernel, so a model can do this on the device rather than uploading
+// the cache from the host -- which is what the issue reports was missing, and
+// what tensor/f16cache_test.go's host-populated cache could not have caught.
+//
+// The f32 path runs the same sequence over the widened values and the two must
+// agree bit for bit, for [TestTheF16AttentionMatchesTheF32OneExactly]'s reason.
+func TestAnF16CacheIsWrittenByKernelsAndThenRead(t *testing.T) {
+	const qHeads, kvHeads, headDim = 2, 1, 8
+	const capacity, prompt = 8, 4
+	const width = kvHeads * headDim // one cached position
+
+	// The prompt's KV, as a model would have computed it, plus one more
+	// position for the decode step that follows.
+	newK16 := make([]accel.Float16, (prompt+1)*width)
+	newV16 := make([]accel.Float16, len(newK16))
+	newK32 := make([]float32, len(newK16))
+	newV32 := make([]float32, len(newK16))
+	for i := range newK16 {
+		newK16[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.23)))
+		newV16[i] = accel.ToFloat16(float32(math.Sin(float64(i) * 0.29)))
+		newK32[i] = newK16[i].F32()
+		newV32[i] = newV16[i].F32()
+	}
+	q := make([]float32, prompt*qHeads*headDim)
+	for i := range q {
+		q[i] = float32((i%9)-4) / 8
+	}
+
+	k16 := make([]accel.Float16, capacity*width)
+	v16 := make([]accel.Float16, capacity*width)
+	k32 := make([]float32, capacity*width)
+	v32 := make([]float32, capacity*width)
+
+	// Scatter n rows starting at position base, at both widths.
+	scatter := func(base, n uint32, srcOff int) {
+		p := testkernels.RowParams{Rows: n, Width: width, Capacity: capacity}
+		ids := make([]uint32, n)
+		for i := range ids {
+			ids[i] = base + uint32(i)
+		}
+		count := int(n * width)
+		groups := accel.ID3{X: uint32((count + 63) / 64)}
+		for _, c := range []struct {
+			src, dst any
+			f16      bool
+		}{
+			{newK16[srcOff : srcOff+count], k16, true},
+			{newV16[srcOff : srcOff+count], v16, true},
+			{newK32[srcOff : srcOff+count], k32, false},
+			{newV32[srcOff : srcOff+count], v32, false},
+		} {
+			kern := &testkernels.ScatterRowsKernel
+			if c.f16 {
+				kern = &testkernels.ScatterRowsF16Kernel
+			}
+			if err := kernel.Dispatch(kern, groups, kernelabi.Args{
+				Slices: []any{c.src, ids, c.dst}, Uniforms: []any{p},
+			}); err != nil {
+				t.Fatalf("scatter %s: %v", kern.Name, err)
+			}
+		}
+	}
+
+	// The prompt's KV goes in at positions 0..prompt-1.
+	scatter(0, prompt, 0)
+
+	pd := testkernels.PrefillDims{
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim, QSeq: prompt, Base: 0,
+		Scale: float32(1 / math.Sqrt(headDim)),
+	}
+	groups := accel.ID3{X: prompt * qHeads}
+	wide := make([]float32, len(q))
+	narrow := make([]float32, len(q))
+	if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillKernel, groups,
+		kernelabi.Args{
+			Slices: []any{q, k32, v32, []uint32{prompt}, wide}, Uniforms: []any{pd},
+		}); err != nil {
+		t.Fatalf("f32 prefill: %v", err)
+	}
+	if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillF16Kernel, groups,
+		kernelabi.Args{
+			Slices: []any{q, k16, v16, []uint32{prompt}, narrow}, Uniforms: []any{pd},
+		}); err != nil {
+		t.Fatalf("f16 prefill: %v", err)
+	}
+	for i := range wide {
+		if wide[i] != narrow[i] {
+			t.Fatalf("prefill element %d is %v over an f32 cache and %v over an f16 one "+
+				"the kernels filled with the same values", i, wide[i], narrow[i])
+		}
+	}
+	// The cache holds what was scattered, so the prefill read a populated cache
+	// rather than the zeros an unwritten one would have held.
+	zero := true
+	for i := range prompt * width {
+		if k16[i].F32() != 0 || v16[i].F32() != 0 {
+			zero = false
+			break
+		}
+	}
+	if zero {
+		t.Fatal("the f16 cache is still zero after the scatter, so the prefill above " +
+			"agreed about an empty cache and proves nothing")
+	}
+
+	// One decode step: its row is scattered on top, and attention reads the
+	// cache one position longer.
+	scatter(prompt, 1, prompt*width)
+
+	ad := testkernels.AttnDims{
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+		Scale: float32(1 / math.Sqrt(headDim)),
+	}
+	step := q[:qHeads*headDim]
+	lengths := []uint32{prompt + 1}
+	wideStep := make([]float32, qHeads*headDim)
+	narrowStep := make([]float32, qHeads*headDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
+		accel.ID3{X: qHeads}, kernelabi.Args{
+			Slices: []any{step, k32, v32, lengths, wideStep}, Uniforms: []any{ad},
+		}); err != nil {
+		t.Fatalf("f32 decode: %v", err)
+	}
+	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeF16Kernel,
+		accel.ID3{X: qHeads}, kernelabi.Args{
+			Slices: []any{step, k16, v16, lengths, narrowStep}, Uniforms: []any{ad},
+		}); err != nil {
+		t.Fatalf("f16 decode: %v", err)
+	}
+	for i := range wideStep {
+		if wideStep[i] != narrowStep[i] {
+			t.Fatalf("decode element %d is %v over an f32 cache and %v over an f16 one",
+				i, wideStep[i], narrowStep[i])
+		}
+	}
+	// The step read the row the scatter had just written, which is what makes
+	// this a decode over a cache the graph grew rather than one it was given.
+	if narrowStep[0] == narrow[0] {
+		t.Fatal("the decode step matches the prefill's first row, so the position " +
+			"scattered between them changed nothing and the cache did not grow")
+	}
+}
+
 // The authored form of each new kernel agrees with its generated lowering.
 //
 // This is specs/012-kernel-pipeline.md's obligation on every kernel, and it is

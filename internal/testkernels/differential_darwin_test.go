@@ -219,6 +219,21 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The same scatter into an f16 state from f16 rows. A scatter does
+			// no arithmetic and this one does not even convert -- the two
+			// lowerings move the same sixteen bits -- so nothing here reaches a
+			// bounded primitive and the ceiling stays zero.
+			kernel: &testkernels.ScatterRowsF16Kernel, counts: []int{4 * 16, 4, 8 * 16},
+			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 16, Capacity: 8}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return float32(i % 8)
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			// Positions first, then the buffer it rotates. Four rows at four
 			// different positions, which a shared offset could not express and
 			// which is the whole point of specs/043-per-row-values.md.
@@ -457,6 +472,20 @@ func diffCases() []diffCase {
 			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
 		},
 		{
+			// The same prefill over an f16 cache. Both backends read the same
+			// halves, so this compares the two lowerings of the widening
+			// conversion rather than the conversion itself -- and the widening
+			// is exact, so the ceiling is the f32 kernel's.
+			kernel: &testkernels.AttentionPrefillF16Kernel,
+			counts: []int{4 * 2 * 8, 4 * 1 * 8, 4 * 1 * 8, 1, 4 * 2 * 8},
+			uniforms: []any{testkernels.PrefillDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, QSeq: 4, Base: 0,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 4 * 2},
+			ulp:    32, why: "a softmax over a masked row, per section 8's propagation",
+		},
+		{
 			// The same prefill through a page table, with the pages out of
 			// order so the two backends must agree about the addressing and
 			// not only about the attention.
@@ -516,6 +545,26 @@ func diffCases() []diffCase {
 				if b == 3 {
 					// The page table: logical block 0 lives at physical 5 and
 					// logical block 1 at physical 2.
+					return []float32{5, 2}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
+		},
+		{
+			// The paged decode over an f16 cache, where the two memory savings
+			// meet. The page table is out of order for the case above's reason,
+			// and the ceiling is the f32 kernel's because the widening is
+			// exact.
+			kernel: &testkernels.AttentionDecodePagedF16Kernel,
+			counts: []int{2 * 8, 8 * 4 * 1 * 8, 8 * 4 * 1 * 8, 2, 1, 2 * 8},
+			uniforms: []any{testkernels.PagedDims{
+				QHeads: 2, KVHeads: 1, HeadDim: 8, Block: 4,
+				Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b == 3 {
 					return []float32{5, 2}[i]
 				}
 				return defaultSeed(b, i)

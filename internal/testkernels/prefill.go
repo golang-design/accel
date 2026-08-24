@@ -202,6 +202,166 @@ func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v
 	}
 }
 
+// AttentionPrefillF16 is [AttentionPrefill] over an f16 cache.
+//
+// The body is [AttentionPrefill]'s with the two cache loads widened, and
+// [AttentionDecodeF16] carries the argument for why K and V may be narrow where
+// an accumulator may not: they are operands, and the accumulation stays f32.
+//
+// # Why the prefill needed the variant too
+//
+// A cache is written before it is read. Only the decode kernel read a narrow
+// one, so an f16 cache could hold what a model had already computed and nothing
+// could put a prompt's KV there from inside the graph -- which made the memory
+// saving unreachable for the operation every request begins with (accel issue
+// 13).
+//
+// The loop bound is the causal limit, unchanged. It is worth saying that len()
+// on a narrow binding reports elements and not bytes, because this kernel's
+// capacity divides len(k) by the head geometry: a length counted in bytes would
+// double the reach and score a cache twice its size.
+//
+//accel:kernel workgroup=128
+func AttentionPrefillF16(t accel.Thread, d PrefillDims, q []float32, k []accel.Float16,
+	v []accel.Float16, lengths []uint32, out []float32,
+	scores *[AttnBlock]float32, red *[AttnBlock]float32) {
+	group := t.GroupID().X
+	// A prefill is one sequence, so its cache length is the first entry. A
+	// binding rather than a uniform so that there is exactly one way to say
+	// "how much of the cache is real" across every attention kernel --
+	// specs/043-per-row-values.md. Batched prefill is
+	// specs/040-batch-scheduler.md's, and when it arrives this indexes by
+	// sequence like the decode kernels do.
+	kvLen := lengths[0]
+	lane := t.LocalID().X
+
+	// The workgroup's output row: which query position, and which head.
+	s := group / d.QHeads
+	h := group % d.QHeads
+
+	kvHead := h / (d.QHeads / d.KVHeads)
+
+	// The last cached position this query may see. Causal masking is this
+	// bound and nothing else: a lane past it contributes nothing.
+	limit := d.Base + s
+
+	// How far the loop walks. The causal limit, or the cache's extent if the
+	// limit reaches past it -- both workgroup-uniform, which is what lets the
+	// loop hold barriers. See the note above.
+	capacity := uint32(len(k)) / (d.KVHeads * d.HeadDim)
+	bound := limit + 1
+	if bound > capacity {
+		bound = capacity
+	}
+
+	// The length is clamped to what the binding can reach. A caller's length is
+	// device data and nothing above has checked it against the cache -- and the
+	// loop bound below limits `base`, not `base+lane`, so an unclamped length
+	// past the reach is scored by the lanes of the last block rather than
+	// stopped by the loop. For the paged kernels that means reading the *next*
+	// sequence's page-table row, which is the failure
+	// specs/040-batch-scheduler.md names; for the contiguous ones it is a read
+	// past the end of the cache.
+	//
+	// Clamping truncates: the answer attends over a prefix. That is wrong, and
+	// it is the wrong that can be bounded here -- the kernel cannot tell a
+	// length that is too large from one that is right.
+	if kvLen > capacity {
+		kvLen = capacity
+	}
+
+	// The running softmax, carried across blocks. See [AttentionDecode] for the
+	// recurrence and for why one block reproduces the single-pass form exactly.
+	m := float32(-3.4e38)
+	l := float32(0)
+
+	// The output accumulator is a local, not a shared array: each lane owns
+	// exactly one element of the row and no other lane reads it, so there is
+	// nothing to publish and no barrier to pay. The resumable lowering carries
+	// a local across a suspension point, which is what makes this available
+	// inside a loop that holds barriers.
+	o := float32(0)
+
+	for base := uint32(0); base < bound; base += AttnBlock {
+		pos := base + lane
+
+		// A masked lane contributes a value that cannot win the maximum: the
+		// identity is negative infinity and the smallest finite f32 serves,
+		// because a real score below it would already have overflowed.
+		score := float32(-3.4e38)
+		visible := pos <= limit && pos < kvLen
+		if visible {
+			dot := float32(0)
+			for i := uint32(0); i < d.HeadDim; i++ {
+				qi := q[(s*d.QHeads+h)*d.HeadDim+i]
+				ki := k[pos*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i].F32()
+				dot = dot + qi*ki
+			}
+			score = dot * d.Scale
+		}
+
+		// The shared arrays are loop-carried, so this pass's writes have to be
+		// ordered against the previous pass's reads of them. See
+		// [AttentionDecode].
+		t.Barrier()
+		scores[lane] = score
+		red[lane] = score
+		t.Barrier()
+
+		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
+			if lane < stride {
+				red[lane] = kmath.Max(red[lane], red[lane+stride])
+			}
+			t.Barrier()
+		}
+		blockMax := red[0]
+
+		next := kmath.Max(m, blockMax)
+		alpha := kmath.Exp(m - next)
+
+		// A masked lane contributes zero, which for a sum is the identity and
+		// is therefore correct where it was not for the maximum.
+		e := float32(0)
+		if visible {
+			e = kmath.Exp(score - next)
+		}
+		t.Barrier()
+		scores[lane] = e
+		red[lane] = e
+		t.Barrier()
+
+		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
+			if lane < stride {
+				red[lane] = red[lane] + red[lane+stride]
+			}
+			t.Barrier()
+		}
+		l = alpha*l + red[0]
+		m = next
+
+		// The weighted sum of V, parallel over the head's dimensions: every
+		// lane can read every probability now, and each owns one output
+		// element.
+		//
+		// The bound on j is a range check and not a mask. A position past the
+		// cache already has a probability of zero, so dropping it changes no
+		// arithmetic -- it reads V past its end, which the CPU backend reports
+		// as an out-of-range index and a device would not report at all.
+		if lane < d.HeadDim {
+			o = alpha * o
+			for j := uint32(0); j < AttnBlock; j++ {
+				if base+j <= limit && base+j < kvLen {
+					o = o + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane].F32()
+				}
+			}
+		}
+	}
+
+	if lane < d.HeadDim {
+		out[(s*d.QHeads+h)*d.HeadDim+lane] = o / l
+	}
+}
+
 // PagedPrefillDims is a paged prefill's shape: [PrefillDims] plus the block
 // size, which is the only thing the addressing needs that the contiguous form
 // does not.

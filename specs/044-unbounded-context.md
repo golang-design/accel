@@ -238,9 +238,9 @@ table, and each kernel takes it from the right place:
 | kernel | bound | why that quantity |
 | --- | --- | --- |
 | `AttentionDecode`, `AttentionDecodeF16` | `len(k) / (KVHeads·HeadDim)` | the cache binding's extent |
-| `AttentionDecodePaged` | `len(pages) · Block` | the table's reach. **Not** the pool's extent: a pool holds every sequence's blocks and is sized for total concurrency |
+| `AttentionDecodePaged`, `AttentionDecodePagedF16` | `len(pages) · Block` | the table's reach. **Not** the pool's extent: a pool holds every sequence's blocks and is sized for total concurrency |
 | `AttentionDecodeBatched` | `MaxPages · Block` | the same reach, from the uniform struct because the table is a `Batch × MaxPages` array |
-| `AttentionPrefill` | `min(Base + s + 1, capacity)` | the causal limit. A query at `Base+s` may see nothing past it |
+| `AttentionPrefill`, `AttentionPrefillF16` | `min(Base + s + 1, capacity)` | the causal limit. A query at `Base+s` may see nothing past it |
 
 The distinction that makes this sound where the tempting alternative is not: a
 binding's **size** is fixed when the node is recorded, while its **contents** can

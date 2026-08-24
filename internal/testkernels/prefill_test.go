@@ -663,6 +663,145 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 	})
 
+	t.Run("ScatterRowsF16", func(t *testing.T) {
+		const capacity, width, rows = 8, 4, 3
+		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: capacity}
+		in := make([]accel.Float16, rows*width)
+		for i := range in {
+			in[i] = accel.ToFloat16(float32(i)*0.375 - 5)
+		}
+		// The last id is past the state, so the two forms have to agree about
+		// the range check and not merely about the addressing.
+		ids := []uint32{5, 0, capacity + 1}
+
+		authored := make([]accel.Float16, capacity*width)
+		generated := make([]accel.Float16, capacity*width)
+		// A state a scatter does not cover keeps what it held, so both copies
+		// start from the same non-zero contents: a dropped write is then
+		// visible as the old value rather than hidden by a zero.
+		for i := range authored {
+			authored[i] = accel.ToFloat16(float32(i) - 20)
+			generated[i] = authored[i]
+		}
+
+		n := rows * width
+		for i := range n {
+			testkernels.ScatterRowsF16(flatThread(i, n), p, in, ids, authored)
+		}
+		if err := kernel.Dispatch(&testkernels.ScatterRowsF16Kernel, accel.ID3{X: 1},
+			kernelabi.Args{
+				Slices: []any{in, ids, generated}, Uniforms: []any{p},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range generated {
+			if authored[i].Bits() != generated[i].Bits() {
+				t.Fatalf("element %d: authored %#04x, generated %#04x",
+					i, authored[i].Bits(), generated[i].Bits())
+			}
+		}
+	})
+
+	t.Run("AttentionPrefillF16", func(t *testing.T) {
+		const qHeads, kvHeads, headDim, qSeq = 2, 1, 8, 4
+		dims := testkernels.PrefillDims{
+			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+			QSeq: qSeq, Base: 0,
+			Scale: float32(1) / float32(math.Sqrt(headDim)),
+		}
+		q := make([]float32, qSeq*qHeads*headDim)
+		k := make([]accel.Float16, qSeq*kvHeads*headDim)
+		v := make([]accel.Float16, qSeq*kvHeads*headDim)
+		for i := range q {
+			q[i] = float32(math.Sin(float64(i) * 0.29))
+		}
+		for i := range k {
+			k[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.13)))
+			v[i] = accel.ToFloat16(float32(i%5) - 2)
+		}
+
+		lengths := []uint32{qSeq}
+		authored := make([]float32, len(q))
+		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
+		for g := range groups.X {
+			var scores, red [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+				groups, 128, func(th kernel.Thread) {
+					testkernels.AttentionPrefillF16(th, dims, q, k, v, lengths, authored,
+						&scores, &red)
+				})
+		}
+
+		generated := make([]float32, len(q))
+		if err := kernel.DispatchCooperative(&testkernels.AttentionPrefillF16Kernel,
+			accel.ID3{X: groups.X},
+			kernelabi.Args{
+				Slices: []any{q, k, v, lengths, generated}, Uniforms: []any{dims},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// The f32 prefill's ceiling above, unchanged. The two forms differ by
+		// the product roundings a contraction saves: the authored Go may fuse a
+		// multiply-add and the generated Go's explicit f32 rounding points
+		// forbid it (specs/008-numerics.md section 5). The widening adds
+		// nothing to that -- TestTheF16PrefillMatchesTheF32OneExactly compares
+		// the two storage widths bit for bit.
+		for i := range generated {
+			if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+				t.Fatalf("element %d: authored %v, generated %v; both halves of "+
+					"specs/004-kernel-authoring.md's fifth level must agree",
+					i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("AttentionDecodePagedF16", func(t *testing.T) {
+		const qHeads, kvHeads, headDim, block, kvLen, blocks = 2, 1, 8, 4, 6, 8
+		d := testkernels.PagedDims{
+			QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+			Block: block, Scale: float32(1) / float32(math.Sqrt(headDim)),
+		}
+		q := make([]float32, qHeads*headDim)
+		pk := make([]accel.Float16, blocks*block*kvHeads*headDim)
+		pv := make([]accel.Float16, len(pk))
+		for i := range q {
+			q[i] = float32(math.Sin(float64(i) * 0.3))
+		}
+		for i := range pk {
+			pk[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.11)))
+			pv[i] = accel.ToFloat16(float32(i%7) - 3)
+		}
+		// Out of order, so the two forms agree about the addressing.
+		pages := []uint32{5, 2}
+		lengths := []uint32{kvLen}
+
+		authored := make([]float32, qHeads*headDim)
+		for g := range uint32(qHeads) {
+			var scores, red [128]float32
+			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+				kernel.ID3{X: qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+					testkernels.AttentionDecodePagedF16(th, d, q, pk, pv, pages, lengths,
+						authored, &scores, &red)
+				})
+		}
+		generated := make([]float32, qHeads*headDim)
+		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodePagedF16Kernel,
+			accel.ID3{X: qHeads},
+			kernelabi.Args{
+				Slices: []any{q, pk, pv, pages, lengths, generated}, Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		// The paged f32 decode's ceiling above, unchanged, for the reason given
+		// in the prefill case: a contraction the authored form may take and the
+		// generated one may not.
+		for i := range generated {
+			if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+				t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+			}
+		}
+	})
+
 	t.Run("GatherRowsF16", func(t *testing.T) {
 		const vocab, width, rows = 8, 4, 3
 		p := testkernels.RowParams{Rows: rows, Width: width, Capacity: vocab}
