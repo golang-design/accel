@@ -82,3 +82,43 @@ func QuantRows(t accel.Thread, p RowParams, tq []int8, ts []accel.Float16,
 		}
 	}
 }
+
+// QuantMatMulF32 is [QuantMatMul] over f32 activations.
+//
+//	out[m,n] = Σₖ a[m,k] · (bq[k,n] · bs[(k·N+n)/32])
+//
+// # Why the activation width is the thing that varies
+//
+// An activation is produced by the graph and a weight is loaded from a file, so
+// they answer to different pressures. Every other operator in the tensor layer
+// produces f32, and int8 is the width a model reaches for exactly because it is
+// too large to hold otherwise. Requiring the two to agree therefore inserted a
+// Cast in front of every projection of the configuration least able to afford
+// one (accel issue 14).
+//
+// The body is [QuantMatMul]'s with the activation load already wide. Nothing
+// else moves: the products still widen to f32 before accumulating, because the
+// scale varies per block and an integer accumulator would be summing quants
+// that mean different things, and specs/027-quantization.md's error bound is
+// stated against this evaluation. On activations f16 holds exactly the two
+// kernels agree bit for bit, which is what the test asserts.
+//
+//accel:kernel workgroup=64
+func QuantMatMulF32(t accel.Thread, d GEMMDims, a []float32, bq []int8,
+	bs []accel.Float16, out []float32) {
+
+	i := t.GlobalID().X
+	if i < d.M*d.N {
+		row := i / d.N
+		col := i % d.N
+
+		acc := float32(0)
+		for k := uint32(0); k < d.K; k++ {
+			w := k*d.N + col
+			q := float32(bq[w])
+			s := bs[w/QuantBlock].F32()
+			acc = acc + a[row*d.K+k]*(q*s)
+		}
+		out[i] = acc
+	}
+}

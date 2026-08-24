@@ -43,3 +43,26 @@ func CastF16ToF32(t accel.Thread, in []accel.Float16, out []float32) {
 		out[i] = in[i].F32()
 	}
 }
+
+// CastBF16ToF32 widens bf16 storage to f32, exactly.
+//
+// # Why bf16 only widens
+//
+// A checkpoint ships bf16 -- Qwen3 does -- and nothing in the corpus reads it,
+// so a loader had to convert on the host. Converting to f32 is a 16-bit shift
+// and loses nothing, because bf16 is f32's top half: the same eight-bit
+// exponent, a seven-bit mantissa, and the low sixteen bits zero. Converting to
+// f16 instead is the one lossy step in this pipeline, since f16 carries a
+// five-bit exponent and a bf16 value can be outside its range entirely.
+//
+// So the widening is registered and the narrowing is not. A caller who wants
+// f16 writes the two casts and sees where the error enters, which is the same
+// argument specs/007-tensor-layer.md makes for Cast existing at all.
+//
+//accel:kernel workgroup=64
+func CastBF16ToF32(t accel.Thread, in []accel.BFloat16, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		out[i] = in[i].F32()
+	}
+}
