@@ -118,6 +118,9 @@ numbered in.
 | [028-sampling.md](028-sampling.md) | Implemented | M8: argmax, categorical sampling, and top-k/top-p truncation, with the random draw as an input so a token is reproducible |
 | [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
 | [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
+| [043-per-row-values.md](043-per-row-values.md) | Implemented | M8: the one line behind five consumer reports — a value every row of a dispatch shares is a scalar, and a value that differs per row is a tensor |
+| [044-unbounded-context.md](044-unbounded-context.md) | Implemented | M8: attention over a cache larger than a workgroup, and why the loop is bounded by a binding's extent rather than by the length |
+| [042-surface-completion.md](042-surface-completion.md) | In progress | Completing the public surface: what each exported declaration does, refuses, or is still owed |
 | [039-sampling-policy.md](039-sampling-policy.md) | Drafted | Post-v0: temperature, penalties, the composition order, and a seeded stream that makes a whole sequence reproducible rather than one token |
 | [040-batch-scheduler.md](040-batch-scheduler.md) | Drafted | Post-v0: slots over 030's pool, one plan at max batch with parked idle slots, admission, eviction, and the drain a membership-size change costs |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |

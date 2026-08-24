@@ -1559,6 +1559,45 @@ a policy layer is a caller of this API and not a change to it. That is the
 property worth having at the boundary, and it is why deferring them costs
 nothing that has to be undone.
 
+## The consumer reports, and what they were actually about — 2026-08-24
+
+A consumer building an inference framework on this library filed nine issues.
+Six are closed, and [043](043-per-row-values.md) and
+[044](044-unbounded-context.md) are the specs behind them. What is worth
+recording here is not the fixes but what found them, because that generalizes.
+
+**Every gap was a place the library was only ever exercised at a shape no real
+workload has.** One sequence, 128 cached positions, f32 everything, one state
+per layer. Each is a legitimate test shape and each was the *only* shape, so a
+parameter that had to vary per row could be a scalar and nothing noticed. The
+corpus tests all passed throughout.
+
+**Drift runs in both directions and nothing checks either.** In three of the
+nine the spec was right and the code stopped short of it: 007 drew RoPE with a
+positions tensor and the kernel took a scalar offset; 030 registered
+`AttentionDecodeBatched` and no operator called it; 007 specified the composed
+attention fallback and no path lowered it. In the other direction, this session
+found 003's check **V23** specified and never implemented — and then found it
+was not implementable, since the alias it forbids is how in-place work is
+expressed. A spec ahead of the code and a spec that overreached the code look
+identical from inside the code.
+
+**The wall was not the hardest report, and it was ranked last.** Issue 8 —
+`Attention` capping the cache at 128 positions — was worked after five others
+because those were the more interesting surface questions. The reporter's own
+ranking was right: at 128 positions no model is servable and no test against
+real weights is writable, so every other fix improved something that could not
+run. Prioritise by what a consumer cannot do at all, not by which change is the
+most orthogonal.
+
+### Bugs worth recording
+
+| Bug | What found it | Why it generalizes |
+| --- | --- | --- |
+| `ToFloat16` OR-ed the rounded mantissa into the exponent instead of adding it, so every value in a band below every power of two came back halved | building the f16 KV cache and seeing a 35% discrepancy | it reached weight conversion, the f16 GEMM corpus and quantization scales. The fix is an oracle over all 65536 halves, not a case |
+| the attention block loop's shared arrays are loop-carried, and a pass's writes race the previous pass's reads | reasoning, then confirmed by removing the barrier | 002 §3.4's rendezvous check finds an invocation that fails to *arrive*; this is a race between arrivals, so nothing would have reported it |
+| V23 unimplemented | binding one buffer to a read binding and a write binding of one dispatch, and watching it succeed | a check named in a spec's validation table is not evidence it exists |
+
 ## An unverified commit range
 
 **Everything after `accel: textures, formats, and the row-pitch guarantee` has
