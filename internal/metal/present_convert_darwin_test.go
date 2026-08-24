@@ -9,6 +9,7 @@ package metal
 import (
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,4 +217,43 @@ func TestThePresentTargetStateMachine(t *testing.T) {
 			t.Error("a closed target was reconfigured")
 		}
 	})
+}
+
+// Acquiring from a closed present target is refused rather than reaching a
+// released layer.
+//
+// A surface outlives the frames taken from it, so a caller who closes one and
+// then asks for another image is making an ordinary lifetime mistake -- and the
+// layer's memory is gone by then, which is the one class of bug this backend
+// cannot report after the fact.
+func TestAcquireAfterCloseIsRefused(t *testing.T) {
+	devs, err := mtl.Devices()
+	if err != nil || len(devs) == 0 {
+		t.Skipf("no Metal device (err=%v)", err)
+	}
+	md := devs[0]
+	defer func() {
+		for _, x := range devs {
+			x.Close()
+		}
+	}()
+
+	layer, err := mtl.NewOffscreenLayer()
+	if err != nil {
+		t.Skipf("no CAMetalLayer: %v", err)
+	}
+	d := &device{dev: md, queue: md.NewQueue()}
+	defer d.queue.Close()
+	target := &presentTarget{dev: d, layer: layer}
+	if err := target.Configure(8, 8); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := target.Acquire(time.Second); err == nil {
+		t.Fatal("acquiring from a closed target succeeded")
+	} else if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("the refusal should say the target is closed, got %v", err)
+	}
 }

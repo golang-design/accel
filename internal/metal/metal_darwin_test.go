@@ -780,3 +780,57 @@ func TestARowCopyCompiles(t *testing.T) {
 		t.Fatalf("a row copy should compile: %v", err)
 	}
 }
+
+// An unbound slot is reported when the plan is submitted, naming the slot.
+//
+// The check is in the backend rather than only above it because a plan may be
+// rebound between submissions: a slot bound for one submission and cleared for
+// the next is not something a build-time check can see, and resolving it to a
+// nil block would be a dispatch reading whatever address zero holds.
+func TestAnUnboundSlotIsReportedBySlotNumber(t *testing.T) {
+	d := open(t)
+	c := d.(driver.GraphCompiler)
+	op, err := driver.SlotOperand(1, 0, 256)
+	if err != nil {
+		t.Fatalf("operand: %v", err)
+	}
+	ex, err := c.Compile(&driver.Plan{
+		Slots: 1,
+		Nodes: []driver.PlanNode{{Op: driver.OpCopy, Dst: op, Src: op}},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	_, err = ex.Submit()
+	if err == nil {
+		t.Fatal("a submission with an unbound slot succeeded")
+	}
+	if !strings.Contains(err.Error(), "slot 1") {
+		t.Errorf("the error should name the slot, got %v", err)
+	}
+
+	// And a slot bound to fewer bytes than the operand reads. Rebind checks a
+	// binding against the slot's declared minimum; this is the second check,
+	// against what one *operand* actually reaches, and it is the one a
+	// rebinding to a smaller resource would otherwise walk past.
+	b, err := d.Alloc(driver.MemoryDevice, 4096, "small")
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	defer b.Free()
+	if err := ex.Rebind([]driver.SlotBinding{{
+		Slot: 1, Block: b, Offset: 0, Size: 64,
+	}}); err != nil {
+		// Rebind may refuse it first, which is also a correct answer: the
+		// operand needs 256 bytes and 64 were offered.
+		if !strings.Contains(err.Error(), "64") && !strings.Contains(err.Error(), "256") {
+			t.Fatalf("rebind: %v", err)
+		}
+		return
+	}
+	if _, err := ex.Submit(); err == nil {
+		t.Fatal("a submission whose operand reads past its binding succeeded")
+	} else if !strings.Contains(err.Error(), "outside") {
+		t.Errorf("the error should say the operand is outside its binding, got %v", err)
+	}
+}
