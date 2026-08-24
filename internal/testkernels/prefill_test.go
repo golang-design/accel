@@ -502,11 +502,11 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 
 		authored := make([]float32, batch*qHeads*headDim)
 		for g := range uint32(batch * qHeads) {
-			var scores, red, acc [128]float32
+			var scores, red [128]float32
 			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
 				kernel.ID3{X: batch * qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.AttentionDecodeBatched(th, d, q, pk, pv, pages, lengths,
-						authored, &scores, &red, &acc)
+						authored, &scores, &red)
 				})
 		}
 		generated := make([]float32, batch*qHeads*headDim)
@@ -547,11 +547,11 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 
 		authored := make([]float32, qHeads*headDim)
 		for g := range uint32(qHeads) {
-			var scores, red, acc [128]float32
+			var scores, red [128]float32
 			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
 				kernel.ID3{X: qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.AttentionDecodePaged(th, d, q, pk, pv, pages, lengths,
-						authored, &scores, &red, &acc)
+						authored, &scores, &red)
 				})
 		}
 		generated := make([]float32, qHeads*headDim)
@@ -593,10 +593,10 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
 		size := kernel.ID3{X: 128, Y: 1, Z: 1}
 		for g := range groups.X {
-			var scores, red, acc [128]float32
+			var scores, red [128]float32
 			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionPrefill(th, dims, q, k, v, lengths, authored,
-					&scores, &red, &acc)
+					&scores, &red)
 			})
 		}
 

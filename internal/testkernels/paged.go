@@ -44,7 +44,7 @@ type PagedDims struct {
 //accel:kernel workgroup=128
 func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	v []float32, pages []uint32, lengths []uint32, out []float32,
-	scores *[AttnBlock]float32, red *[AttnBlock]float32, acc *[AttnBlock]float32) {
+	scores *[AttnBlock]float32, red *[AttnBlock]float32) {
 	h := t.GroupID().X
 	// One sequence, so its length is the first entry. See AttentionDecode.
 	kvLen := lengths[0]
@@ -64,10 +64,13 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	// recurrence and for why one block reproduces the single-pass form exactly.
 	m := float32(-3.4e38)
 	l := float32(0)
-	if lane < d.HeadDim {
-		acc[lane] = 0
-	}
-	t.Barrier()
+
+	// The output accumulator is a local, not a shared array: each lane owns
+	// exactly one element of the row and no other lane reads it, so there is
+	// nothing to publish and no barrier to pay. The resumable lowering carries
+	// a local across a suspension point, which is what makes this available
+	// inside a loop that holds barriers.
+	o := float32(0)
 
 	for base := uint32(0); base < capacity; base += AttnBlock {
 		pos := base + lane
@@ -129,18 +132,17 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 		// arithmetic -- it reads V past its end, which the CPU backend reports
 		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
-			a := alpha * acc[lane]
+			o = alpha * o
 			for j := uint32(0); j < AttnBlock; j++ {
 				if base+j < kvLen {
 					phys := pages[(base+j)/d.Block]*d.Block + (base+j)%d.Block
-					a = a + scores[j]*v[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+					o = o + scores[j]*v[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 				}
 			}
-			acc[lane] = a
 		}
 	}
 
 	if lane < d.HeadDim {
-		out[h*d.HeadDim+lane] = acc[lane] / l
+		out[h*d.HeadDim+lane] = o / l
 	}
 }

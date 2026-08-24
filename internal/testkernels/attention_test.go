@@ -252,13 +252,12 @@ func TestAuthoredAttentionDecode(t *testing.T) {
 	authored := make([]float32, qHeads*headDim)
 	size := kernel.ID3{X: 128, Y: 1, Z: 1}
 	for h := range uint32(qHeads) {
-		var scores, red, acc [128]float32
+		var scores, red [128]float32
 		kernelabi.Poison(scores[:])
 		kernelabi.Poison(red[:])
-		kernelabi.Poison(acc[:])
 		kernel.RunAuthored(size, kernel.ID3{X: h}, kernel.ID3{X: qHeads}, 128,
 			func(th kernel.Thread) {
-				testkernels.AttentionDecode(th, d, q, k, v, lengths, authored, &scores, &red, &acc)
+				testkernels.AttentionDecode(th, d, q, k, v, lengths, authored, &scores, &red)
 			})
 	}
 
@@ -290,10 +289,11 @@ func TestAuthoredAttentionDecode(t *testing.T) {
 // arrays and the suspension count.
 func TestTheAttentionKernelDeclaresItsShape(t *testing.T) {
 	k := &testkernels.AttentionDecodeKernel
-	if len(k.SharedSizes) != 3 {
-		t.Fatalf("it declares %v shared arrays, want three: the scores, the "+
-			"reduction scratch, and the output accumulator the block loop carries",
-			k.SharedSizes)
+	if len(k.SharedSizes) != 2 {
+		t.Fatalf("it declares %v shared arrays, want two: the scores and the "+
+			"reduction scratch. The block loop added no third one -- the output "+
+			"accumulator is a local, because each lane owns one element of the "+
+			"row and no other lane reads it", k.SharedSizes)
 	}
 	for i, n := range k.SharedSizes {
 		if n != testkernels.AttnBlock {
@@ -303,15 +303,14 @@ func TestTheAttentionKernelDeclaresItsShape(t *testing.T) {
 	// Two trees and the barriers around them, counted in the source: a barrier
 	// inside a loop counts once however many rounds it runs.
 	//
-	// Seven, and two of them are the block loop's. One publishes the zeroed
-	// accumulator before the first pass reads it. The other stands at the top
-	// of the loop body, where it separates a pass's writes to the shared arrays
-	// from the previous pass's reads of them -- the hazard a single-pass kernel
-	// did not have and the one nothing else would report, since the CPU
-	// backend's rendezvous check finds an invocation that fails to arrive and
-	// this would be a race between arrivals.
-	if got := k.Suspensions; got != 7 {
-		t.Errorf("it has %d suspension points, want 7", got)
+	// Six, and one of them is the block loop's: a barrier at the top of the
+	// body, separating a pass's writes to the shared arrays from the previous
+	// pass's reads of them. That is the hazard a single-pass kernel did not
+	// have and the one nothing else would report, since the CPU backend's
+	// rendezvous check finds an invocation that fails to arrive and this would
+	// be a race between arrivals.
+	if got := k.Suspensions; got != 6 {
+		t.Errorf("it has %d suspension points, want 6", got)
 	}
 }
 

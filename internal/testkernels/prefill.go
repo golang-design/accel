@@ -64,8 +64,7 @@ type PrefillDims struct {
 //
 //accel:kernel workgroup=128
 func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v []float32,
-	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32,
-	acc *[AttnBlock]float32) {
+	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32) {
 	group := t.GroupID().X
 	// A prefill is one sequence, so its cache length is the first entry. A
 	// binding rather than a uniform so that there is exactly one way to say
@@ -99,10 +98,13 @@ func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v
 	// recurrence and for why one block reproduces the single-pass form exactly.
 	m := float32(-3.4e38)
 	l := float32(0)
-	if lane < d.HeadDim {
-		acc[lane] = 0
-	}
-	t.Barrier()
+
+	// The output accumulator is a local, not a shared array: each lane owns
+	// exactly one element of the row and no other lane reads it, so there is
+	// nothing to publish and no barrier to pay. The resumable lowering carries
+	// a local across a suspension point, which is what makes this available
+	// inside a loop that holds barriers.
+	o := float32(0)
 
 	for base := uint32(0); base < bound; base += AttnBlock {
 		pos := base + lane
@@ -170,17 +172,16 @@ func AttentionPrefill(t accel.Thread, d PrefillDims, q []float32, k []float32, v
 		// arithmetic -- it reads V past its end, which the CPU backend reports
 		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
-			a := alpha * acc[lane]
+			o = alpha * o
 			for j := uint32(0); j < AttnBlock; j++ {
 				if base+j <= limit && base+j < kvLen {
-					a = a + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+					o = o + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 				}
 			}
-			acc[lane] = a
 		}
 	}
 
 	if lane < d.HeadDim {
-		out[(s*d.QHeads+h)*d.HeadDim+lane] = acc[lane] / l
+		out[(s*d.QHeads+h)*d.HeadDim+lane] = o / l
 	}
 }

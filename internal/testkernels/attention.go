@@ -92,8 +92,7 @@ const AttnBlock = 128
 //
 //accel:kernel workgroup=128
 func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32,
-	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32,
-	acc *[AttnBlock]float32) {
+	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32) {
 	h := t.GroupID().X
 	// One sequence, so its length is the first entry. The length is a binding
 	// rather than a uniform because specs/043-per-row-values.md makes a
@@ -117,10 +116,13 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 	// being shared, and a shared copy would need its own barrier to publish.
 	m := float32(-3.4e38)
 	l := float32(0)
-	if lane < d.HeadDim {
-		acc[lane] = 0
-	}
-	t.Barrier()
+
+	// The output accumulator is a local, not a shared array: each lane owns
+	// exactly one element of the row and no other lane reads it, so there is
+	// nothing to publish and no barrier to pay. The resumable lowering carries
+	// a local across a suspension point, which is what makes this available
+	// inside a loop that holds barriers.
+	o := float32(0)
 
 	for base := uint32(0); base < capacity; base += AttnBlock {
 		pos := base + lane
@@ -189,26 +191,23 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 		// The weighted sum of V, parallel over the head's dimensions rather
 		// than over the cache: the probabilities are in shared memory now, so
 		// every lane can read all of them and each owns one output element.
-		// Each lane owns acc[lane] across every pass, so the accumulator needs
-		// no barrier of its own.
 		//
 		// The bound on j is a range check and not a mask. A position past the
 		// cache already has a probability of zero, so dropping it changes no
 		// arithmetic -- it reads V past its end, which the CPU backend reports
 		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
-			a := alpha * acc[lane]
+			o = alpha * o
 			for j := uint32(0); j < AttnBlock; j++ {
 				if base+j < kvLen {
-					a = a + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+					o = o + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 				}
 			}
-			acc[lane] = a
 		}
 	}
 
 	if lane < d.HeadDim {
-		out[h*d.HeadDim+lane] = acc[lane] / l
+		out[h*d.HeadDim+lane] = o / l
 	}
 }
 
@@ -237,8 +236,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 //accel:kernel workgroup=128
 func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float16,
 	v []accel.Float16, lengths []uint32,
-	out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32,
-	acc *[AttnBlock]float32) {
+	out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32) {
 	h := t.GroupID().X
 	// One sequence, so its length is the first entry. The length is a binding
 	// rather than a uniform because specs/043-per-row-values.md makes a
@@ -262,10 +260,13 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 	// being shared, and a shared copy would need its own barrier to publish.
 	m := float32(-3.4e38)
 	l := float32(0)
-	if lane < d.HeadDim {
-		acc[lane] = 0
-	}
-	t.Barrier()
+
+	// The output accumulator is a local, not a shared array: each lane owns
+	// exactly one element of the row and no other lane reads it, so there is
+	// nothing to publish and no barrier to pay. The resumable lowering carries
+	// a local across a suspension point, which is what makes this available
+	// inside a loop that holds barriers.
+	o := float32(0)
 
 	for base := uint32(0); base < capacity; base += AttnBlock {
 		pos := base + lane
@@ -334,25 +335,22 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 		// The weighted sum of V, parallel over the head's dimensions rather
 		// than over the cache: the probabilities are in shared memory now, so
 		// every lane can read all of them and each owns one output element.
-		// Each lane owns acc[lane] across every pass, so the accumulator needs
-		// no barrier of its own.
 		//
 		// The bound on j is a range check and not a mask. A position past the
 		// cache already has a probability of zero, so dropping it changes no
 		// arithmetic -- it reads V past its end, which the CPU backend reports
 		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
-			a := alpha * acc[lane]
+			o = alpha * o
 			for j := uint32(0); j < AttnBlock; j++ {
 				if base+j < kvLen {
-					a = a + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane].F32()
+					o = o + scores[j]*v[(base+j)*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane].F32()
 				}
 			}
-			acc[lane] = a
 		}
 	}
 
 	if lane < d.HeadDim {
-		out[h*d.HeadDim+lane] = acc[lane] / l
+		out[h*d.HeadDim+lane] = o / l
 	}
 }
