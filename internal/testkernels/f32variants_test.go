@@ -273,3 +273,68 @@ func TestTheNewVariantsMatchTheirAuthoredForms(t *testing.T) {
 		}
 	})
 }
+
+// The f16 cache past one block. It is the one attention kernel whose element
+// width differs from the others, and the loop bound is len(k) divided by the
+// head geometry -- so if len() ever reported bytes rather than elements for a
+// narrow binding, this kernel alone would walk twice the cache.
+//
+// Both backends compute that length from the binding's declared dtype: the CPU
+// lowering uses Go's len() on a []accel.Float16, and the Metal backend divides
+// the view's byte size by elemBytes(F16). This test is what would notice if
+// either changed.
+func TestAttentionDecodeF16ScoresACacheLongerThanAWorkgroup(t *testing.T) {
+	const qHeads, kvHeads, headDim = 4, 2, 32
+	const kvLen, capacity = 300, 384
+
+	d := testkernels.AttnDims{
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+		Scale: float32(1 / math.Sqrt(headDim)),
+	}
+	q := make([]float32, qHeads*headDim)
+	for i := range q {
+		q[i] = float32(math.Sin(float64(i) * 0.31))
+	}
+	// f32 originals kept beside the narrow ones, so the reference compares
+	// against what the cache actually holds rather than against what it was
+	// asked to hold. A narrowing that lost a value would otherwise be scored
+	// against the unrounded number and read as an error in this kernel.
+	k32 := make([]float32, capacity*kvHeads*headDim)
+	v32 := make([]float32, len(k32))
+	k16 := make([]accel.Float16, len(k32))
+	v16 := make([]accel.Float16, len(k32))
+	for i := range k32 {
+		k16[i] = accel.ToFloat16(float32(math.Cos(float64(i) * 0.021)))
+		v16[i] = accel.ToFloat16(float32(math.Sin(float64(i) * 0.017)))
+		k32[i] = k16[i].F32()
+		v32[i] = v16[i].F32()
+	}
+
+	got := make([]float32, qHeads*headDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeF16Kernel,
+		accel.ID3{X: qHeads},
+		kernelabi.Args{
+			Slices:   []any{q, k16, v16, []uint32{kvLen}, got},
+			Uniforms: []any{d},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	want := composedAttention(d, kvLen, q, k32, v32)
+
+	const u = 1.0 / (1 << 24)
+	n := float64(kvLen+headDim+1) + math.Ceil(float64(kvLen)/AttnBlockT)
+	gamma := n * u / (1 - n*u)
+	maxV := 0.0
+	for _, x := range v32 {
+		maxV = math.Max(maxV, math.Abs(float64(x)))
+	}
+	tol := maxV * gamma
+
+	for i := range got {
+		if diff := math.Abs(float64(got[i]) - want[i]); diff > tol {
+			t.Fatalf("element %d is %v, want %v: off by %g, tolerance %g",
+				i, got[i], want[i], diff, tol)
+		}
+	}
+}
