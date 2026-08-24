@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 4
+const ABIVersion = 5
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -189,6 +189,27 @@ var table = map[key]*Intrinsic{
 		Authored: "accel.Fragment.FrontFacing", Op: ir.OpFrontFacing,
 		Uniformity: PerInvocation, Result: ir.Bool,
 	},
+	// Integer texel fetch. A free function on the root package taking the
+	// texture and two signed coordinates, for the reason an atomic takes a
+	// buffer and an index: the shading languages name the resource and the
+	// coordinate separately and there is no intermediate value to pass.
+	//
+	// Exact, and that is the whole argument for admitting it. A fetch is an
+	// indexed load, so given one texture and one coordinate every backend
+	// returns the same four floats and there is nothing to reconcile. A
+	// filtered sample would be neither exact nor bounded -- half-texel
+	// addressing, LOD rounding and per-tap integer lerps are per-vendor, so its
+	// class would be "whatever this driver does" -- which is why
+	// specs/032-stage-abi.md section 5 admits this one and refuses that one.
+	//
+	// No capability. Reading a texel from a float 2D texture is baseline on
+	// every target this project emits for, so gating it would refuse kernels on
+	// devices that can run them.
+	{accelPkg, "", "Fetch"}: {
+		Authored: "accel.Fetch", Op: ir.OpTexelFetch, Params: 3,
+		Uniformity: PerInvocation, Result: ir.Array, Class: ClassExact,
+	},
+
 	{kernelPkg, "Thread", "GlobalID"}: {
 		Authored: "accel.Thread.GlobalID", Op: ir.OpGlobalID,
 		Uniformity: PerInvocation, Result: ir.ID3Kind,
