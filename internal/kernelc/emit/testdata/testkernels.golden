@@ -650,6 +650,9 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			f.group3 = (d.QHeads / d.KVHeads)
 			f.kvHead4 = (f.h0 / f.group3)
 			f.capacity5 = (uint32(int32(len(k))) / (d.KVHeads * d.HeadDim))
+			if f.kvLen1 > f.capacity5 {
+				f.kvLen1 = f.capacity5
+			}
 			f.m6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l7 = float32(0)
 			f.o8 = float32(0)
@@ -815,7 +818,7 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "1d40cfb95c02e476552d4694dc7d7f13",
+	Digest:    "0f4ad7c4a1f441a4b1e61be9be6a9929",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -850,6 +853,9 @@ kernel void AttentionDecode(
     uint group = (d.QHeads / d.KVHeads);
     uint kvHead = (h / group);
     uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
+    }
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
@@ -1315,6 +1321,9 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			f.pageBase6 = (f.seq2 * d.MaxPages)
 			f.qBase7 = (((f.seq2 * d.QHeads) + f.h3) * d.HeadDim)
 			f.capacity8 = (d.MaxPages * d.Block)
+			if f.kvLen5 > f.capacity8 {
+				f.kvLen5 = f.capacity8
+			}
 			f.m9 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l10 = float32(0)
 			f.o11 = float32(0)
@@ -1482,7 +1491,7 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "9cd6fcf45244e6cf87314dc82d07d886",
+	Digest:    "ab9bd12aab08d47cd77d5197afde4041",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1525,6 +1534,9 @@ kernel void AttentionDecodeBatched(
     uint pageBase = (seq * d.MaxPages);
     uint qBase = (((seq * d.QHeads) + h) * d.HeadDim);
     uint capacity = (d.MaxPages * d.Block);
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
+    }
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
@@ -3903,6 +3915,9 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			f.group3 = (d.QHeads / d.KVHeads)
 			f.kvHead4 = (f.h0 / f.group3)
 			f.capacity5 = (uint32(int32(len(pages))) * d.Block)
+			if f.kvLen1 > f.capacity5 {
+				f.kvLen1 = f.capacity5
+			}
 			f.m6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l7 = float32(0)
 			f.o8 = float32(0)
@@ -4070,7 +4085,7 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "4b41c5a6aaea0a6e7b8648aca27338e5",
+	Digest:    "a2118c0fe5edb09f913e29ca3303f79c",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4108,6 +4123,9 @@ kernel void AttentionDecodePaged(
     uint group = (d.QHeads / d.KVHeads);
     uint kvHead = (h / group);
     uint capacity = (uint(int(_lens[3])) * d.Block);
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
+    }
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
@@ -4248,6 +4266,9 @@ func attentionPrefillCoop(t accel.Thread, d PrefillDims, q []float32, k []float3
 			f.bound8 = (f.limit6 + uint32(1))
 			if f.bound8 > f.capacity7 {
 				f.bound8 = f.capacity7
+			}
+			if f.kvLen1 > f.capacity7 {
+				f.kvLen1 = f.capacity7
 			}
 			f.m9 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l10 = float32(0)
@@ -4416,7 +4437,7 @@ var AttentionPrefillKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "4701f02b35b01cb1b48a8df9ce85bbb5",
+	Digest:    "dcdb0c68e41443e944b5ccad92ab2d70",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4459,6 +4480,9 @@ kernel void AttentionPrefill(
     uint bound = (limit + uint(1));
     if ((bound > capacity)) {
         bound = capacity;
+    }
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
     }
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);

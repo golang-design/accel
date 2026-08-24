@@ -71,6 +71,22 @@ func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []floa
 	// below hold a barrier -- see [AttentionDecode] for why kvLen cannot.
 	capacity := d.MaxPages * d.Block
 
+	// The length is clamped to what the binding can reach. A caller's length is
+	// device data and nothing above has checked it against the cache -- and the
+	// loop bound below limits `base`, not `base+lane`, so an unclamped length
+	// past the reach is scored by the lanes of the last block rather than
+	// stopped by the loop. For the paged kernels that means reading the *next*
+	// sequence's page-table row, which is the failure
+	// specs/040-batch-scheduler.md names; for the contiguous ones it is a read
+	// past the end of the cache.
+	//
+	// Clamping truncates: the answer attends over a prefix. That is wrong, and
+	// it is the wrong that can be bounded here -- the kernel cannot tell a
+	// length that is too large from one that is right.
+	if kvLen > capacity {
+		kvLen = capacity
+	}
+
 	// The running softmax, carried across blocks. See [AttentionDecode] for the
 	// recurrence and for why one block reproduces the single-pass form exactly.
 	m := float32(-3.4e38)

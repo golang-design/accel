@@ -153,3 +153,82 @@ func TestBatchOfOne(t *testing.T) {
 		}
 	}
 }
+
+// A length past the page table's reach is truncated, not read out of the
+// neighbouring sequence's row.
+//
+// This is the claim specs/040-batch-scheduler.md and
+// specs/044-unbounded-context.md both make and neither could check before. The
+// batched kernel reads pages[seq*MaxPages + pos/Block], so before the block
+// loop a length above MaxPages*Block indexed into slot seq+1's row -- another
+// conversation's physical blocks -- and ran off the buffer for the last slot.
+// The loop now stops at MaxPages*Block, so the answer covers a prefix of the
+// sequence instead.
+//
+// A silently short answer is still wrong, which is why admission owes the
+// check. What this test fixes is which of the two wrongs happens, and it is the
+// difference between a truncated answer and another user's data.
+func TestABatchedLengthPastItsPageTableIsTruncated(t *testing.T) {
+	const batch, qHeads, kvHeads, headDim = 2, 2, 1, 8
+	const block, maxPages = 4, 2
+	const reach = maxPages * block // 8 positions per sequence
+
+	d := testkernels.BatchedDims{
+		Batch: batch, QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+		Block: block, MaxPages: maxPages,
+		Scale: float32(1 / math.Sqrt(headDim)),
+	}
+	// Sequence 0's blocks and sequence 1's are disjoint and hold values far
+	// apart, so reading across the row boundary is visible in the answer rather
+	// than merely different.
+	const poolBlocks = 8
+	q := make([]float32, batch*qHeads*headDim)
+	pk := make([]float32, poolBlocks*block*kvHeads*headDim)
+	pv := make([]float32, poolBlocks*block*kvHeads*headDim)
+	for i := range q {
+		q[i] = float32(math.Sin(float64(i) * 0.4))
+	}
+	for i := range pk {
+		pk[i] = float32(math.Cos(float64(i) * 0.13))
+		pv[i] = float32(i / (block * kvHeads * headDim)) // the block index
+	}
+	pages := []uint32{0, 1, 4, 5} // seq 0 -> blocks 0,1; seq 1 -> blocks 4,5
+
+	// Sequence 0 asks for more than its table can reach; sequence 1 does not.
+	over := []uint32{reach + 5, reach}
+	exact := []uint32{reach, reach}
+
+	run := func(lengths []uint32) []float32 {
+		out := make([]float32, batch*qHeads*headDim)
+		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeBatchedKernel,
+			accel.ID3{X: batch * qHeads},
+			kernelabi.Args{
+				Slices:   []any{q, pk, pv, pages, lengths, out},
+				Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		return out
+	}
+
+	got, want := run(over), run(exact)
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("element %d is %v with a length of %d and %v with a length of "+
+				"%d: a length past the page table's reach must attend over the "+
+				"reach, which is what stops it reaching the next sequence's row",
+				i, got[i], over[0], want[i], exact[0])
+		}
+	}
+
+	// And the truncated answer is a real attention over the eight reachable
+	// positions, not zeros or a NaN from an empty softmax.
+	for i, x := range got {
+		if math.IsNaN(float64(x)) {
+			t.Fatalf("element %d is NaN", i)
+		}
+	}
+	if got[0] == 0 && got[1] == 0 {
+		t.Fatal("the truncated answer is all zeros, so nothing was attended over")
+	}
+}

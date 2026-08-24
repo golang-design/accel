@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel/kernelabi"
+	"golang.design/x/accel/kmath"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/kernel"
@@ -388,3 +389,162 @@ func TestAttentionDecodeScoresACacheLongerThanAWorkgroup(t *testing.T) {
 // AttnBlockT is [testkernels.AttnBlock] as an untyped constant, so the
 // arithmetic above reads as arithmetic.
 const AttnBlockT = testkernels.AttnBlock
+
+// specs/044-unbounded-context.md's outcome table claims the block loop is
+// bit-identical to the single-pass form at one block, "by construction rather
+// than by measurement". This is that claim, asserted rather than reasoned.
+//
+// The reference reproduces the kernel's arithmetic in float32 in the kernel's
+// order, tree reductions included, and the comparison is == with no tolerance.
+// Reproducing the reduction *order* is the whole point: floating-point addition
+// is not associative, so a reference that summed left to right would need a
+// tolerance and would prove nothing about this.
+func TestOneBlockIsExactlyTheSinglePassForm(t *testing.T) {
+	const qHeads, kvHeads, headDim = 4, 2, 32
+	for _, kvLen := range []uint32{1, 63, 128} {
+		t.Run(fmt.Sprint(kvLen), func(t *testing.T) {
+			d := testkernels.AttnDims{
+				QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+				Scale: 1 / float32(math.Sqrt(headDim)),
+			}
+			rng := rand.New(rand.NewPCG(21, 5))
+			fill := func(n int) []float32 {
+				s := make([]float32, n)
+				for i := range s {
+					s[i] = float32(rng.NormFloat64())
+				}
+				return s
+			}
+			q := fill(qHeads * headDim)
+			k := fill(AttnBlockT * kvHeads * headDim)
+			v := fill(AttnBlockT * kvHeads * headDim)
+
+			got := make([]float32, qHeads*headDim)
+			if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
+				accel.ID3{X: qHeads},
+				kernelabi.Args{
+					Slices:   []any{q, k, v, []uint32{kvLen}, got},
+					Uniforms: []any{d},
+				}); err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+
+			for h := uint32(0); h < qHeads; h++ {
+				kvHead := h / (qHeads / kvHeads)
+
+				// Score, exactly as the kernel does: one lane per position,
+				// accumulating the dot product in float32 in index order.
+				var red [AttnBlockT]float32
+				for lane := uint32(0); lane < AttnBlockT; lane++ {
+					s := float32(-3.4e38)
+					if lane < kvLen {
+						dot := float32(0)
+						for i := uint32(0); i < headDim; i++ {
+							// float32() on the product and on the sum, which is
+							// what the generated kernel emits and what stops the
+							// compiler fusing them into an FMA. Without it this
+							// reference is a *more* accurate computation and
+							// therefore a different one.
+							dot = float32(dot + float32(q[h*headDim+i]*
+								k[lane*kvHeads*headDim+kvHead*headDim+i]))
+						}
+						s = dot * d.Scale
+					}
+					red[lane] = s
+				}
+				scores := red
+
+				// The tree maximum, stride by stride.
+				for stride := uint32(AttnBlockT / 2); stride > 0; stride /= 2 {
+					for lane := uint32(0); lane < stride; lane++ {
+						red[lane] = max(red[lane], red[lane+stride])
+					}
+				}
+				best := red[0]
+
+				// The shifted exponentials and the tree sum.
+				for lane := uint32(0); lane < AttnBlockT; lane++ {
+					e := float32(0)
+					if lane < kvLen {
+						e = kmath.Exp(scores[lane] - best)
+					}
+					scores[lane] = e
+					red[lane] = e
+				}
+				for stride := uint32(AttnBlockT / 2); stride > 0; stride /= 2 {
+					for lane := uint32(0); lane < stride; lane++ {
+						red[lane] = float32(red[lane] + red[lane+stride])
+					}
+				}
+				total := red[0]
+
+				for lane := uint32(0); lane < headDim; lane++ {
+					o := float32(0)
+					for j := uint32(0); j < AttnBlockT; j++ {
+						if j < kvLen {
+							o = float32(o + float32(scores[j]*
+								v[j*kvHeads*headDim+kvHead*headDim+lane]))
+						}
+					}
+					want := o / total
+					if g := got[h*headDim+lane]; g != want {
+						t.Fatalf("head %d element %d is %v, want exactly %v: at one "+
+							"block the running softmax reduces to the single-pass "+
+							"form, so this is equality and not a tolerance",
+							h, lane, g, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A length past the cache's own extent is clamped to it rather than read past
+// the end. The contiguous companion to
+// TestABatchedLengthPastItsPageTableIsTruncated.
+//
+// The loop bound limits base and not base+lane, so the lanes of the last block
+// reach AttnBlock-1 positions beyond it. Before the clamp this read off the end
+// of the cache binding, which the CPU backend reports as an out-of-range index
+// and a device would not report at all.
+func TestALengthPastTheCacheIsClamped(t *testing.T) {
+	const qHeads, kvHeads, headDim, capacity = 2, 1, 16, 192
+	d := testkernels.AttnDims{
+		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
+		Scale: 1 / float32(math.Sqrt(headDim)),
+	}
+	rng := rand.New(rand.NewPCG(31, 17))
+	fill := func(n int) []float32 {
+		s := make([]float32, n)
+		for i := range s {
+			s[i] = float32(rng.NormFloat64())
+		}
+		return s
+	}
+	q := fill(qHeads * headDim)
+	k := fill(capacity * kvHeads * headDim)
+	v := fill(capacity * kvHeads * headDim)
+
+	run := func(kvLen uint32) []float32 {
+		out := make([]float32, qHeads*headDim)
+		if err := kernel.DispatchCooperative(&testkernels.AttentionDecodeKernel,
+			accel.ID3{X: qHeads},
+			kernelabi.Args{
+				Slices: []any{q, k, v, []uint32{kvLen}, out}, Uniforms: []any{d},
+			}); err != nil {
+			t.Fatalf("dispatch at length %d: %v", kvLen, err)
+		}
+		return out
+	}
+
+	// capacity+40 lands inside the last block, so an unclamped length reads
+	// past the binding rather than merely covering it.
+	got, want := run(capacity+40), run(capacity)
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("element %d is %v with a length of %d and %v with a length of "+
+				"%d: a length past the cache attends over the cache",
+				i, got[i], capacity+40, want[i], capacity)
+		}
+	}
+}
