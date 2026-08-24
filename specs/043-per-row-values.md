@@ -1,6 +1,6 @@
 ---
 title: "Per-sequence values are device data, not scalars"
-status: drafted
+status: implemented
 layer: tensor
 depends_on:
   - 007-tensor-layer.md
@@ -93,11 +93,20 @@ question of the form *"which of the two ways do I use?"*
 | --- | --- |
 | `RoPE(b, x, rotaryDim, baseName, offsetName)` | `RoPE(b, x, rotaryDim, baseName, positions *Tensor)` |
 | `AttentionOptions.CurrentLengthName` | `AttentionOptions.Lengths *Tensor` |
-| `AttentionOptions.BaseName` | `AttentionOptions.Positions *Tensor` |
+| `AttentionOptions.BaseName` | **unchanged** — see below |
 | `SampleDims.Draw` scalar | a draws tensor, one per row |
 | paged cache unreachable | `AttentionOptions.Pages *Tensor` |
 
-`ScaleName` is untouched.
+`ScaleName` is untouched, and so is `BaseName`. A prefill is one sequence:
+[040](040-batch-scheduler.md) owns the batched form, so until it exists there is
+no row for a prefill's base to differ across. This table said otherwise when it
+was written, before the prefill path was read closely; the correction is here
+rather than left as a silent divergence.
+
+**Every attention kernel reads its cache length from a binding**, including
+prefill, so there is exactly one way to say *how much of the cache is real*
+rather than one way per kernel. A prefill binds a one-element tensor for the
+same reason a single-sequence decode does.
 
 **Paging is not a second cache type.** A `State` addressed through a page table
 is the same `State`; what differs is the binding. Introducing a `PagedState`
@@ -142,7 +151,50 @@ Two reports are dtype relaxations and share nothing with the above. They add
   what changes the mass), top-k before top-p, and *T=0* as a distinct greedy
   branch rather than a division.
 
-## 7. Done
+## 7. What was built — 2026-08-24
+
+All of §4, plus the two dtype relaxations of §5.
+
+**One thing the reports did not contain, found while building §5.**
+`accel.ToFloat16(-1.9996898)` returned `-1`. The rounded mantissa can carry out
+of ten bits and the code OR-ed that carry into the exponent instead of adding
+it; where the exponent's low bit was already set the OR did nothing, so every
+value in a band just below every other power of two came back at **half its
+magnitude**. Where the bit was clear the OR happened to act as a carry, which is
+why only half the affected band ever looked wrong.
+
+$$
+\text{ToFloat16}(x) \ \text{halved for}\ x \in [2^{e}(1-2^{-11}),\ 2^{e}) \ \text{where}\ e\ \text{is even}
+$$
+
+It reached every f16 path: weight conversion, the f16 GEMM corpus, and
+[027](027-quantization.md)'s scales, where a scale landing in the band would
+halve every weight in its block. The test is now an oracle enumerating all
+65536 halves, because a case table is what it had and the band is too narrow for
+anyone to write a case inside.
+
+**The generalizable part:** asking for a narrow cache surfaced a correctness bug
+in the conversion the narrow cache depends on. A dtype that nothing exercised
+end to end was a dtype nothing had checked.
+
+### 7.1 What #7 became
+
+The report asked for a buffer *over* memory the caller already owns, and filed
+it as a question because the lifetime rules are the hard part. They are: such a
+buffer is a promise about a lifetime accel cannot see, and a broken promise
+there is a use-after-free whose symptom is a plausible tensor.
+
+`Buffer.Access` points the same problem the other way. accel owns the memory and
+lends it for the duration of one call, so a loader converts *into* the
+destination and the intermediate does not shrink — it does not exist. No promise
+is required of the caller, and the borrow is bounded by something the compiler
+and the reader can both see.
+
+On unified memory the mapping *is* device memory, so the upload is free rather
+than fast, which is what the report observed about
+[006](006-backends.md) §2.2's hardware.
+
+## 8. Done
 
 - `RoPE` rotates each row at its own position, and a two-sequence batch with
   different cache lengths matches two single-sequence runs element for element;

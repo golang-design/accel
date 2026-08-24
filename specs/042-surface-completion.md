@@ -1,6 +1,6 @@
 ---
 title: "Completing the public API surface"
-status: drafted
+status: in progress
 layer: project
 depends_on:
   - 036-documentation.md
@@ -50,15 +50,21 @@ means it exists and should not.
 
 | Surface | Owner | Note |
 | --- | --- | --- |
-| `tensor.Contiguous` | [025](025-tensor-operators.md) §7 | needs a gather kernel; four sites already name it |
-| `ErrNoAdapter`, `ErrPolicy` | [006](006-backends.md) | selection failures a caller branches on |
-| A workgroup-count helper | [002](002-compute-model.md) | every tutorial computes `(n+63)/64` by hand |
-| `Requirements.SharedBytes`, populated | [016](016-graph-execution.md) | V11 is stated and cannot fire |
-| Timestamps | [003](003-command-graph.md) §9 | "no timing observability at all" on a throughput library |
-| Line and point rasterization | [035](035-cpu-rasterizer.md) §10 | three of five `Topology` values are refused |
+| ~~`tensor.Contiguous`~~ **done** | [025](025-tensor-operators.md) §7 | four sites named it; one told a caller to insert it |
+| ~~`ErrNoAdapter`, `ErrPolicy`~~ **done** | [006](006-backends.md) | selection failures a caller branches on |
+| ~~A workgroup-count helper~~ **done** | [002](002-compute-model.md) | every tutorial computed `(n+63)/64` by hand |
+| ~~`Requirements.SharedBytes`~~ **done** | [016](016-graph-execution.md) | V11 was stated and could not fire |
+| ~~Timestamps~~ **done** | [003](003-command-graph.md) §9 | whole-submission device time; per-node still needs the planner to stop merging boundaries |
 | Subgroup shuffles and scans | [020](020-atomics-subgroups.md) | intrinsics a kernel author cannot call |
+| Line and point rasterization | [035](035-cpu-rasterizer.md) §10 | needs a measurement first — see below |
 | Texture attachments | [033](033-render-api.md) | attachments are buffer views "at this milestone" |
 | Texel fetch in a stage | [032](032-stage-abi.md) §5 | also unblocks 033's feedback rejection |
+
+Line and point rasterization moved out of this table. Landing it means *stating*
+a rule [035](035-cpu-rasterizer.md) §10 deliberately leaves open, and a rule the
+CPU states that Metal does not follow makes the differential fail on lines
+forever. It needs a measurement of what the hardware already does, not a
+decision here.
 
 ### 2.2 Refuse, with the refusal naming the reason
 
@@ -80,7 +86,7 @@ building the missing half would answer it by default.
 
 | Surface | The question | This spec's answer |
 | --- | --- | --- |
-| `UniformBuffer[T]` | [001](001-device-resources.md) §10, [014](014-kernel-uniforms.md) §7: should uniform buffers exist at all, given that std140 padding is the only thing they buy? | **Keep and connect.** §3.1 |
+| `UniformBuffer[T]` | [001](001-device-resources.md) §10, [014](014-kernel-uniforms.md) §7: should uniform buffers exist at all, given that std140 padding is the only thing they buy? | **Keep and connect.** §3.1 — the dispatch path is not yet built |
 | `Device.Queues`, `QueueFor` | provisional in 036 §5.2 until a backend reports more than one queue | **Keep.** No backend reports two; the surface is what a second one would need, and withdrawing it would break every caller that branches on it when one arrives. |
 
 ### 3.1 Uniform buffers: keep, and connect
@@ -124,6 +130,18 @@ channel removed and redesigned, a store action reaching nothing, a buffer-index
 collision, a resize leaking a drawable) and three more on its second (a package
 doc claiming graphics was absent, `Recorder.Build` documenting itself with a
 signature, and two capability flags reporting the opposite of the truth).
+
+### 5.1 What a consumer's reports changed
+
+Seven arrived from a team building an inference framework while this spec was
+being worked. Four were one decision, which [043](043-per-row-values.md) names,
+and they took priority over this list: a report from someone building on the
+library is evidence about the surface that no audit of it produces.
+
+They also demonstrated the difference between the two kinds of gap this spec
+distinguishes. `tensor.Contiguous` was on this list from an audit. The RoPE
+scalar was not on any list, because nothing about the *surface* looked wrong —
+it looked wrong only to someone batching two sequences.
 
 ## 6. The documentation guard
 
