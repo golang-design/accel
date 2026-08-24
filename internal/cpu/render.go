@@ -5,7 +5,9 @@
 package cpu
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
@@ -43,7 +45,7 @@ func renderPass(n *resolvedNode) (err error) {
 	applyLoads(rp, fb)
 
 	for i, d := range rp.Draws {
-		if err := drawOne(rp, fb, d); err != nil {
+		if err := drawOne(rp, fb, d, n.vertexBytes[i]); err != nil {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
 	}
@@ -102,7 +104,7 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 }
 
 // drawOne rasterizes one draw.
-func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw) error {
+func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte) error {
 	vs, ok := d.Vertex.(kernel.VertexFn)
 	if !ok {
 		return fmt.Errorf("the vertex stage is %T, not a compiled stage", d.Vertex)
@@ -127,13 +129,14 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw)
 		ps.Mask = append(ps.Mask, raster.WriteMask(m))
 	}
 
-	// The vertex function, in the form primitive assembly takes. Both nil
-	// arguments are refusals upstream rather than omissions here: graph build
-	// rejects a draw whose stages declare uniforms or attributes, because
-	// specs/033-render-api.md deviation 1 leaves both channels unbuilt and a
-	// generated adapter would index past the end of an empty slice.
+	fetch := newFetcher(d, bufs)
+
+	// The vertex function, in the form primitive assembly takes. The nil
+	// uniforms are a refusal upstream rather than an omission here: graph build
+	// rejects a draw whose stages declare a by-value parameter, because
+	// specs/033-render-api.md deviation 1 leaves that channel unbuilt.
 	vertexFn := func(index, instance, base uint32) raster.Vertex {
-		pos, vary := vs(kernel.NewVertex(index, instance), nil, nil)
+		pos, vary := vs(kernel.NewVertex(index, instance), nil, fetch(index, instance))
 		return raster.Vertex{
 			Pos:      raster.Clip{X: pos[0], Y: pos[1], Z: pos[2], W: pos[3]},
 			Varyings: vary,
@@ -155,4 +158,68 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw)
 		FirstInstance: d.FirstInstance,
 	}, vertexFn, shade)
 	return err
+}
+
+// newFetcher builds the per-vertex attribute fetch.
+//
+// One closure for the whole draw rather than a lookup per vertex: the layout is
+// fixed for the draw, so the slice shapes and the byte strides are computed once
+// and the inner call is an index and a decode. A rasterizer calls this per
+// vertex of every primitive, and for a strip that is per primitive again.
+//
+// The returned slice is reused across calls. A generated adapter copies out of
+// it immediately -- it converts to [N]float32 by value -- so nothing outlives
+// the call, and allocating a fresh slice per vertex would be the largest
+// allocation in the draw.
+func newFetcher(d driver.RenderDraw, bufs [][]byte) func(index, instance uint32) [][]float32 {
+	// The stage indexes its attributes densely, and pipeline creation checked
+	// that the layout declares each exactly once, so the widest location plus
+	// one is the count.
+	n := 0
+	for _, l := range d.VertexLayouts {
+		for _, a := range l.Attributes {
+			if a.Location+1 > n {
+				n = a.Location + 1
+			}
+		}
+	}
+	if n == 0 {
+		return func(uint32, uint32) [][]float32 { return nil }
+	}
+
+	type source struct {
+		bytes      []byte
+		stride     int
+		offset     int
+		components int
+		perInst    bool
+	}
+	src := make([]source, n)
+	out := make([][]float32, n)
+	for i, l := range d.VertexLayouts {
+		raw := bufs[i]
+		for _, a := range l.Attributes {
+			src[a.Location] = source{
+				bytes: raw, stride: l.Stride, offset: a.Offset,
+				components: a.Components, perInst: l.PerInstance,
+			}
+			out[a.Location] = make([]float32, a.Components)
+		}
+	}
+
+	return func(index, instance uint32) [][]float32 {
+		for i := range src {
+			s := &src[i]
+			at := int(index)
+			if s.perInst {
+				at = int(instance)
+			}
+			base := at*s.stride + s.offset
+			for c := range s.components {
+				out[i][c] = math.Float32frombits(
+					binary.LittleEndian.Uint32(s.bytes[base+c*4:]))
+			}
+		}
+		return out
+	}
 }

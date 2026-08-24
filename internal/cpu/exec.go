@@ -166,6 +166,9 @@ type resolvedNode struct {
 	// to the device memory they name.
 	render      *driver.RenderPass
 	colorAttach [][]float32
+
+	// vertexBytes is the attribute source, per draw and then per bound slot.
+	vertexBytes [][][]byte
 	depthAttach []float32
 	args        kernel.Args
 	rows        *driver.RowCopy
@@ -579,6 +582,21 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
 		r.depthAttach = s.([]float32)
+	}
+
+	// The attribute bytes, resolved here for the same reason the attachments
+	// are: run walks resolved nodes and has no device left to ask.
+	for di, d := range rp.Draws {
+		var bufs [][]byte
+		for bi, o := range d.VertexBuffers {
+			raw, err := e.bytes(o)
+			if err != nil {
+				return fmt.Errorf("accel: node %d draw %d vertex buffer %d: %w",
+					n.ID, di, bi, err)
+			}
+			bufs = append(bufs, raw)
+		}
+		r.vertexBytes = append(r.vertexBytes, bufs)
 	}
 	return nil
 }

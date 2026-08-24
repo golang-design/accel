@@ -486,16 +486,63 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 					p.desc.Label, i, s.Name, s.Uniforms[0].Name)
 			}
 		}
-		if len(pipe.desc.Vertex.Attributes) > 0 {
-			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s reads the "+
-				"vertex attribute %q, and the vertex layout that would fetch it is "+
-				"unbuilt (specs/033-render-api.md deviation 1)",
-				p.desc.Label, i, pipe.desc.Vertex.Name,
-				pipe.desc.Vertex.Attributes[0].Name)
+		if err := g.vertexOperands(p, i, pipe, d, &rd); err != nil {
+			return nil, err
 		}
 		out.Draws = append(out.Draws, rd)
 	}
 	return out, nil
+}
+
+// vertexOperands lowers a draw's bound vertex buffers.
+//
+// The layout is the pipeline's and the buffers are the pass's, so this is where
+// the two meet and the only place that can check they agree. A slot the layout
+// reads and no draw bound is refused here rather than fetched as zeros: zeroed
+// attributes put every vertex at the origin, which reads as a broken transform
+// rather than as a missing binding.
+func (g *Graph) vertexOperands(p *RenderPass, draw int, pipe *RenderPipeline, d drawCall, rd *driver.RenderDraw) error {
+	for slot, layout := range pipe.desc.VertexBuffers {
+		if slot >= len(d.vertexBuf) || d.vertexBuf[slot].Buffer == nil {
+			return fmt.Errorf("accel: Build: render pass %q draw %d: the pipeline %q reads "+
+				"vertex buffer %d and no buffer is bound there; call SetVertexBuffer "+
+				"before the draw", p.desc.Label, draw, pipe.label, slot)
+		}
+		v := d.vertexBuf[slot]
+		blk, base := blockFor(v.Buffer)
+		size := v.Count * v.Buffer.DType().Size()
+		op, err := driver.BlockOperand(blk, base+v.Offset*v.Buffer.DType().Size(), size)
+		if err != nil {
+			return fmt.Errorf("accel: Build: render pass %q draw %d vertex buffer %d: %w",
+				p.desc.Label, draw, slot, err)
+		}
+
+		// The elements the draw reaches must be inside the view. Checked
+		// against the draw's own counts rather than against the buffer, because
+		// a buffer big enough for the geometry and a draw that walks past the
+		// end of it is the common shape and the one that reads as corruption.
+		last := d.first + d.vertices
+		if layout.StepMode == StepInstance {
+			last = d.firstInst + d.instances
+		}
+		if need := last * layout.Stride; need > size {
+			return fmt.Errorf("accel: Build: render pass %q draw %d: vertex buffer %d is "+
+				"%d bytes and the draw reads %d elements %s at a stride of %d, which "+
+				"needs %d", p.desc.Label, draw, slot, size, last, layout.StepMode,
+				layout.Stride, need)
+		}
+
+		rd.VertexBuffers = append(rd.VertexBuffers, op)
+		vl := driver.VertexLayout{Stride: layout.Stride, PerInstance: layout.StepMode == StepInstance}
+		for _, a := range layout.Attributes {
+			vl.Attributes = append(vl.Attributes, driver.VertexAttribute{
+				Location: a.Location, Offset: a.Offset,
+				Components: a.Format.Components(),
+			})
+		}
+		rd.VertexLayouts = append(rd.VertexLayouts, vl)
+	}
+	return nil
 }
 
 // has renders one half of the depth-agreement message.

@@ -156,6 +156,10 @@ type RenderPipelineDescriptor struct {
 	Vertex   *Stage
 	Fragment *Stage
 
+	// VertexBuffers is the vertex input layout. A stage that reads no attribute
+	// needs none; one that does needs every attribute declared exactly once.
+	VertexBuffers []VertexBufferLayout
+
 	Primitive    PrimitiveState
 	DepthStencil *DepthStencilState
 	Targets      []ColorTargetState
@@ -257,6 +261,14 @@ func (d *Device) NewRenderPipeline(desc RenderPipelineDescriptor) (*RenderPipeli
 		return nil, fmt.Errorf("accel: NewRenderPipeline %q: %s returns %s varyings and "+
 			"%s takes %s; the two stages exchange one type", label,
 			desc.Vertex.Name, desc.Vertex.Varyings, desc.Fragment.Name, desc.Fragment.Varyings)
+	}
+
+	// The layout last of the stage-record checks. A caller who swapped in the
+	// wrong vertex stage fails both this and the varyings check, and the
+	// varyings message names both stages where this one names only the vertex
+	// stage -- so it is the more useful of the two to report first.
+	if err := checkVertexLayout(label, desc.Vertex, desc.VertexBuffers); err != nil {
+		return nil, err
 	}
 
 	p := &RenderPipeline{dev: d, desc: desc, label: label}

@@ -590,8 +590,29 @@ type RenderDraw struct {
 	FirstVertex   int
 	FirstInstance int
 
-	// Vertex is the attribute source, one operand per bound slot.
+	// VertexBuffers is the attribute source, one operand per bound slot, and
+	// VertexLayouts says what is packed inside each. They are the same length.
 	VertexBuffers []Operand
+	VertexLayouts []VertexLayout
+}
+
+// VertexLayout is what one bound vertex buffer holds.
+//
+// It is the lowered form of the public VertexBufferLayout: formats become
+// component counts, because a backend fetches floats and the format's only
+// other job -- validating against the stage -- is done by the time a plan
+// exists.
+type VertexLayout struct {
+	Stride      int
+	PerInstance bool
+	Attributes  []VertexAttribute
+}
+
+// VertexAttribute is one attribute inside a bound vertex buffer.
+type VertexAttribute struct {
+	Location   int
+	Offset     int
+	Components int
 }
 
 // LoadOp is what happens to an attachment at the start of a render pass.
