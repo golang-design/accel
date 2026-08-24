@@ -261,3 +261,29 @@ func moduleFile(t *testing.T, repo, name string) string {
 	return body + "\nrequire golang.design/x/accel v0.0.0\n\n" +
 		"replace golang.design/x/accel => " + repo + "\n"
 }
+
+// The check CI actually runs, over the whole module rather than one package.
+//
+// The generator hides its own previous output from the type checker so a
+// generated file that no longer compiles cannot block the command that would
+// rewrite it. Hiding it unconditionally broke every *other* package that
+// imports the generated declarations, which a ./... pattern loads too -- so the
+// per-package check passed and the CI gate failed. This is that gate.
+func TestTheWholeModuleChecks(t *testing.T) {
+	results, err := kernelc.Run(kernelc.Options{Dir: root(t), Patterns: []string{"./..."}, Check: true})
+	if err != nil {
+		t.Fatalf("checking ./...: %v", err)
+	}
+	var withKernels int
+	for _, r := range results {
+		if r.Stale != "" {
+			t.Errorf("%s is stale:\n%s", r.Package, r.Stale)
+		}
+		if len(r.Kernels) > 0 {
+			withKernels++
+		}
+	}
+	if withKernels == 0 {
+		t.Error("no package in the module reported a kernel, so this checked nothing")
+	}
+}

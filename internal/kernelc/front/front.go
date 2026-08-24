@@ -117,14 +117,44 @@ const LoadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledG
 // present, which a deployed binary does not have. That is the whole reason
 // compilation is a generator rather than something that happens at startup.
 func Load(dir string, patterns ...string) ([]*packages.Package, error) {
-	overlay, err := blankGenerated(dir)
+	// First without the overlay. Previous output in the package is harmless to
+	// this pass -- it declares only what this run is about to rewrite, and an
+	// authored kernel cannot refer to it -- and blanking it unconditionally
+	// breaks every *other* package that imports the generated declarations,
+	// which a pattern like ./... loads too.
+	pkgs, bad, err := load(dir, nil, patterns)
 	if err != nil {
 		return nil, err
 	}
+	if len(bad) == 0 {
+		return pkgs, nil
+	}
+
+	// Something did not type-check. Now the overlay earns its keep: if what is
+	// wrong is the previous output itself, the package will not load, the
+	// generator will not run, and the generator is the one command that would
+	// have fixed it. Retrying with the output hidden breaks that cycle. If the
+	// retry still fails, the fault is in the authored source and the first set
+	// of errors is the one to report -- the second set describes a package with
+	// its generated half removed, which is not the tree anyone is looking at.
+	retry, stillBad, err := load(dir, mustOverlay(dir), patterns)
+	if err != nil {
+		return nil, err
+	}
+	if len(stillBad) == 0 {
+		return retry, nil
+	}
+	return nil, fmt.Errorf("accel: %s did not type-check:\n%s",
+		strings.Join(patterns, " "), strings.Join(bad, "\n"))
+}
+
+// load runs one packages.Load and separates the type-check errors from the ones
+// that stop a load happening at all.
+func load(dir string, overlay map[string][]byte, patterns []string) ([]*packages.Package, []string, error) {
 	cfg := &packages.Config{Mode: LoadMode, Dir: dir, Overlay: overlay}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
-		return nil, fmt.Errorf("accel: loading %v: %w", patterns, err)
+		return nil, nil, fmt.Errorf("accel: loading %v: %w", patterns, err)
 	}
 	var bad []string
 	for _, p := range pkgs {
@@ -132,10 +162,18 @@ func Load(dir string, patterns ...string) ([]*packages.Package, error) {
 			bad = append(bad, e.Error())
 		}
 	}
-	if len(bad) > 0 {
-		return nil, fmt.Errorf("accel: %s did not type-check:\n%s", strings.Join(patterns, " "), strings.Join(bad, "\n"))
+	return pkgs, bad, nil
+}
+
+// mustOverlay builds the blanking overlay, treating a failure to scan as no
+// overlay: the caller is already reporting a type-check failure, and losing the
+// retry is better than replacing that report with an unrelated I/O error.
+func mustOverlay(dir string) map[string][]byte {
+	o, err := blankGenerated(dir)
+	if err != nil {
+		return nil
 	}
-	return pkgs, nil
+	return o
 }
 
 // Check finds every kernel in a package and builds its IR.
