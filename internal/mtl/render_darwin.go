@@ -1,0 +1,538 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+//go:build darwin
+
+package mtl
+
+import (
+	"fmt"
+	"sync"
+	"unsafe"
+
+	"github.com/ebitengine/purego/objc"
+)
+
+// The Metal render path: textures, render pipeline states, and the render
+// command encoder.
+//
+// # Why a texture and not the caller's buffer
+//
+// MTLRenderPassDescriptor takes MTLTexture attachments and nothing else, while
+// specs/033-render-api.md makes an attachment a buffer view. So a pass renders
+// into a private texture and blits the result back. The texture is entirely
+// inside this backend: 033 says the shape a caller writes does not change when
+// the texture path lands, and this is that path arriving early and hidden.
+//
+// # The trap this file is built around
+//
+// -newRenderPipelineStateWithDescriptor:error: **aborts the process** on an
+// invalid descriptor rather than returning nil with an error: Metal's
+// validation layer calls assert. A missing vertex function is not a bad error
+// message, it is the caller's process gone. So every field the validator checks
+// is checked here first, and the error says which one.
+
+const (
+	// PixelFormatRGBA32Float is the only colour format this path renders, and
+	// it is the one specs/035-cpu-rasterizer.md's reference rasterizer writes:
+	// four float32 per pixel, so the blit back into a caller's F32 buffer is a
+	// copy rather than a conversion.
+	PixelFormatRGBA32Float = 125
+
+	// PixelFormatDepth32Float, for the same reason.
+	PixelFormatDepth32Float = 252
+
+	textureUsageRenderTarget = 4
+	storageModePrivate       = 2
+
+	loadActionDontCare = 0
+	loadActionLoad     = 1
+	loadActionClear    = 2
+
+	storeActionStore    = 1
+	storeActionDontCare = 0
+)
+
+// The Metal classes, looked up on first use rather than at package
+// initialization.
+//
+// A package-level objc.GetClass runs before Devices() has dlopened the Metal
+// framework, so every one of them is zero and the first Send is a message to
+// nil -- which Objective-C answers with zero rather than a crash, so the
+// symptom is "no render pipeline descriptor" from a call that never reached
+// Metal at all.
+var (
+	clsOnce                 sync.Once
+	clsTextureDescriptor    objc.Class
+	clsRenderPassDescriptor objc.Class
+	clsRenderPipelineDesc   objc.Class
+	clsVertexDescriptor     objc.Class
+	clsDepthStencilDesc     objc.Class
+)
+
+func classes() {
+	clsOnce.Do(func() {
+		clsTextureDescriptor = objc.GetClass("MTLTextureDescriptor")
+		clsRenderPassDescriptor = objc.GetClass("MTLRenderPassDescriptor")
+		clsRenderPipelineDesc = objc.GetClass("MTLRenderPipelineDescriptor")
+		clsVertexDescriptor = objc.GetClass("MTLVertexDescriptor")
+		clsDepthStencilDesc = objc.GetClass("MTLDepthStencilDescriptor")
+	})
+}
+
+var (
+	selTexture2D      = objc.RegisterName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:")
+	selSetTexUsage    = objc.RegisterName("setUsage:")
+	selSetTexStorage  = objc.RegisterName("setStorageMode:")
+	selNewTexture     = objc.RegisterName("newTextureWithDescriptor:")
+	selRenderPassDesc = objc.RegisterName("renderPassDescriptor")
+
+	selColorAttachments = objc.RegisterName("colorAttachments")
+	selDepthAttachment  = objc.RegisterName("depthAttachment")
+	selObjectAtIndexed  = objc.RegisterName("objectAtIndexedSubscript:")
+	selSetTexture       = objc.RegisterName("setTexture:")
+	selSetLoadAction    = objc.RegisterName("setLoadAction:")
+	selSetStoreAction   = objc.RegisterName("setStoreAction:")
+	selSetClearColor    = objc.RegisterName("setClearColor:")
+	selSetClearDepth    = objc.RegisterName("setClearDepth:")
+
+	selSetVertexFunction   = objc.RegisterName("setVertexFunction:")
+	selSetFragmentFunction = objc.RegisterName("setFragmentFunction:")
+	selSetPixelFormat      = objc.RegisterName("setPixelFormat:")
+	selSetDepthPixelFormat = objc.RegisterName("setDepthAttachmentPixelFormat:")
+	selSetVertexDescriptor = objc.RegisterName("setVertexDescriptor:")
+	selNewRenderPipeline   = objc.RegisterName("newRenderPipelineStateWithDescriptor:error:")
+
+	selSetBlendingEnabled  = objc.RegisterName("setBlendingEnabled:")
+	selSetSourceRGB        = objc.RegisterName("setSourceRGBBlendFactor:")
+	selSetDestRGB          = objc.RegisterName("setDestinationRGBBlendFactor:")
+	selSetRGBBlendOp       = objc.RegisterName("setRgbBlendOperation:")
+	selSetSourceAlpha      = objc.RegisterName("setSourceAlphaBlendFactor:")
+	selSetDestAlpha        = objc.RegisterName("setDestinationAlphaBlendFactor:")
+	selSetAlphaBlendOp     = objc.RegisterName("setAlphaBlendOperation:")
+	selSetWriteMask        = objc.RegisterName("setWriteMask:")
+	selVertexAttributes    = objc.RegisterName("attributes")
+	selVertexLayouts       = objc.RegisterName("layouts")
+	selSetFormat           = objc.RegisterName("setFormat:")
+	selSetOffset           = objc.RegisterName("setOffset:")
+	selSetBufferIndex      = objc.RegisterName("setBufferIndex:")
+	selSetStride           = objc.RegisterName("setStride:")
+	selSetStepFunction     = objc.RegisterName("setStepFunction:")
+	selSetDepthCompare     = objc.RegisterName("setDepthCompareFunction:")
+	selSetDepthWrite       = objc.RegisterName("setDepthWriteEnabled:")
+	selNewDepthStencil     = objc.RegisterName("newDepthStencilStateWithDescriptor:")
+	selRenderEncoderWith   = objc.RegisterName("renderCommandEncoderWithDescriptor:")
+	selSetRenderPipeline   = objc.RegisterName("setRenderPipelineState:")
+	selSetDepthStencil     = objc.RegisterName("setDepthStencilState:")
+	selSetVertexBuffer     = objc.RegisterName("setVertexBuffer:offset:atIndex:")
+	selSetFragmentBuffer   = objc.RegisterName("setFragmentBuffer:offset:atIndex:")
+	selSetCullMode         = objc.RegisterName("setCullMode:")
+	selSetWinding          = objc.RegisterName("setFrontFacingWinding:")
+	selDrawPrimitives      = objc.RegisterName("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:")
+	selDrawIndexed         = objc.RegisterName("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:")
+	selCopyTextureToBuffer = objc.RegisterName("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:")
+)
+
+// Texture is a render target.
+type Texture struct {
+	id            objc.ID
+	width, height int
+	bpp           int
+}
+
+// NewRenderTarget allocates a private texture to render into.
+//
+// Private storage because nothing on the host reads it: the result reaches a
+// caller through a blit into their own buffer, which is where the bytes have to
+// end up anyway.
+func (d *Device) NewRenderTarget(format, w, h int) (*Texture, error) {
+	classes()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("accel/mtl: a %dx%d render target", w, h)
+	}
+	t := &Texture{width: w, height: h, bpp: 16}
+	if format == PixelFormatDepth32Float {
+		t.bpp = 4
+	}
+	withPool(func() {
+		desc := objc.ID(clsTextureDescriptor).Send(selTexture2D,
+			uintptr(format), uintptr(w), uintptr(h), uintptr(0))
+		if desc == 0 {
+			return
+		}
+		desc.Send(selSetTexUsage, uintptr(textureUsageRenderTarget))
+		desc.Send(selSetTexStorage, uintptr(storageModePrivate))
+		t.id = d.id.Send(selNewTexture, desc)
+	})
+	if t.id == 0 {
+		return nil, fmt.Errorf("accel/mtl: the device refused a %dx%d render target in "+
+			"pixel format %d", w, h, format)
+	}
+	return t, nil
+}
+
+// Close releases the texture.
+func (t *Texture) Close() {
+	withPool(func() { release(t.id) })
+	t.id = 0
+}
+
+// RenderPipelineSpec is everything a render pipeline state is compiled from.
+//
+// A struct rather than a builder because Metal validates the whole descriptor
+// at once and aborts if any of it is wrong. Collecting the fields first means
+// this package can check them all before the abort is reachable.
+type RenderPipelineSpec struct {
+	Vertex, Fragment *Function
+
+	// ColorFormats is one per attachment, and Blends and WriteMasks are the
+	// same length or empty.
+	ColorFormats []int
+	Blends       []BlendSpec
+	WriteMasks   []int
+
+	// DepthFormat is 0 for a pipeline with no depth attachment.
+	DepthFormat int
+
+	// VertexLayouts describes the buffers the vertex stage fetches from.
+	VertexLayouts []VertexLayoutSpec
+}
+
+// BlendSpec is one attachment's blend state, in Metal's own enumeration.
+type BlendSpec struct {
+	Enabled               bool
+	SrcRGB, DstRGB, OpRGB int
+	SrcA, DstA, OpA       int
+}
+
+// VertexLayoutSpec is one bound vertex buffer.
+type VertexLayoutSpec struct {
+	Stride      int
+	PerInstance bool
+	Attributes  []VertexAttributeSpec
+}
+
+// VertexAttributeSpec is one attribute inside a bound buffer.
+type VertexAttributeSpec struct {
+	Location int
+	Offset   int
+
+	// Format is Metal's MTLVertexFormat: 28..31 are float, float2, float3,
+	// float4.
+	Format int
+}
+
+// RenderPipeline is a compiled render pipeline state.
+type RenderPipeline struct{ id objc.ID }
+
+// Close releases the pipeline state.
+func (p *RenderPipeline) Close() {
+	withPool(func() { release(p.id) })
+	p.id = 0
+}
+
+// NewRenderPipeline compiles a render pipeline state.
+//
+// Every check here exists because its absence is an abort rather than an error:
+// Metal's descriptor validation calls assert, so a nil vertex function takes
+// the caller's process down with a message on stderr and no Go error anywhere.
+func (d *Device) NewRenderPipeline(s RenderPipelineSpec) (*RenderPipeline, error) {
+	classes()
+	if s.Vertex == nil || s.Vertex.fn == 0 {
+		return nil, fmt.Errorf("accel/mtl: a render pipeline with no vertex function; " +
+			"Metal aborts the process on this rather than reporting it")
+	}
+	if s.Fragment == nil || s.Fragment.fn == 0 {
+		return nil, fmt.Errorf("accel/mtl: a render pipeline with no fragment function; " +
+			"Metal aborts the process on this rather than reporting it")
+	}
+	if len(s.ColorFormats) == 0 {
+		return nil, fmt.Errorf("accel/mtl: a render pipeline with no colour attachments")
+	}
+	for i, f := range s.ColorFormats {
+		if f == 0 {
+			return nil, fmt.Errorf("accel/mtl: colour attachment %d has no pixel format", i)
+		}
+	}
+	for i, l := range s.VertexLayouts {
+		if l.Stride <= 0 {
+			return nil, fmt.Errorf("accel/mtl: vertex buffer %d has a stride of %d",
+				i, l.Stride)
+		}
+		for _, a := range l.Attributes {
+			if a.Format == 0 {
+				return nil, fmt.Errorf("accel/mtl: vertex buffer %d attribute at location "+
+					"%d has no format", i, a.Location)
+			}
+		}
+	}
+
+	p := &RenderPipeline{}
+	var err error
+	withPool(func() {
+		desc := objc.ID(clsRenderPipelineDesc).Send(selAlloc).Send(selInit)
+		if desc == 0 {
+			err = fmt.Errorf("accel/mtl: no render pipeline descriptor")
+			return
+		}
+		defer release(desc)
+
+		desc.Send(selSetVertexFunction, s.Vertex.fn)
+		desc.Send(selSetFragmentFunction, s.Fragment.fn)
+		if s.DepthFormat != 0 {
+			desc.Send(selSetDepthPixelFormat, uintptr(s.DepthFormat))
+		}
+
+		atts := desc.Send(selColorAttachments)
+		for i, f := range s.ColorFormats {
+			a := atts.Send(selObjectAtIndexed, uintptr(i))
+			a.Send(selSetPixelFormat, uintptr(f))
+			if i < len(s.WriteMasks) {
+				a.Send(selSetWriteMask, uintptr(s.WriteMasks[i]))
+			}
+			if i < len(s.Blends) && s.Blends[i].Enabled {
+				b := s.Blends[i]
+				a.Send(selSetBlendingEnabled, uintptr(1))
+				a.Send(selSetSourceRGB, uintptr(b.SrcRGB))
+				a.Send(selSetDestRGB, uintptr(b.DstRGB))
+				a.Send(selSetRGBBlendOp, uintptr(b.OpRGB))
+				a.Send(selSetSourceAlpha, uintptr(b.SrcA))
+				a.Send(selSetDestAlpha, uintptr(b.DstA))
+				a.Send(selSetAlphaBlendOp, uintptr(b.OpA))
+			}
+		}
+
+		if len(s.VertexLayouts) > 0 {
+			vd := objc.ID(clsVertexDescriptor).Send(selAlloc).Send(selInit)
+			if vd == 0 {
+				err = fmt.Errorf("accel/mtl: no vertex descriptor")
+				return
+			}
+			defer release(vd)
+			attrs := vd.Send(selVertexAttributes)
+			layouts := vd.Send(selVertexLayouts)
+			for i, l := range s.VertexLayouts {
+				lay := layouts.Send(selObjectAtIndexed, uintptr(i))
+				lay.Send(selSetStride, uintptr(l.Stride))
+				step := uintptr(1) // MTLVertexStepFunctionPerVertex
+				if l.PerInstance {
+					step = 2 // MTLVertexStepFunctionPerInstance
+				}
+				lay.Send(selSetStepFunction, step)
+				for _, at := range l.Attributes {
+					x := attrs.Send(selObjectAtIndexed, uintptr(at.Location))
+					x.Send(selSetFormat, uintptr(at.Format))
+					x.Send(selSetOffset, uintptr(at.Offset))
+					x.Send(selSetBufferIndex, uintptr(i))
+				}
+			}
+			desc.Send(selSetVertexDescriptor, vd)
+		}
+
+		var nsErr objc.ID
+		p.id = d.id.Send(selNewRenderPipeline, desc, unsafe.Pointer(&nsErr))
+		if p.id == 0 {
+			err = describe("creating a render pipeline state", nsErr)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// DepthState is a compiled depth-stencil state.
+type DepthState struct{ id objc.ID }
+
+// Close releases it.
+func (s *DepthState) Close() {
+	withPool(func() { release(s.id) })
+	s.id = 0
+}
+
+// NewDepthState compiles a depth test and write rule.
+//
+// compare is MTLCompareFunction. A pipeline that does not test depth still
+// needs one of these when the pass has a depth attachment, with Always and
+// writes off — Metal's default is Always with writes disabled, so a nil state
+// is that, and this exists for everything else.
+func (d *Device) NewDepthState(compare int, write bool) (*DepthState, error) {
+	classes()
+	s := &DepthState{}
+	withPool(func() {
+		desc := objc.ID(clsDepthStencilDesc).Send(selAlloc).Send(selInit)
+		if desc == 0 {
+			return
+		}
+		defer release(desc)
+		desc.Send(selSetDepthCompare, uintptr(compare))
+		w := uintptr(0)
+		if write {
+			w = 1
+		}
+		desc.Send(selSetDepthWrite, w)
+		s.id = d.id.Send(selNewDepthStencil, desc)
+	})
+	if s.id == 0 {
+		return nil, fmt.Errorf("accel/mtl: the device refused a depth-stencil state")
+	}
+	return s, nil
+}
+
+// RenderAttachment is one colour or depth attachment of a pass.
+type RenderAttachment struct {
+	Texture    *Texture
+	Load       int
+	Store      int
+	ClearColor [4]float64
+	ClearDepth float64
+}
+
+// RenderEncoder encodes draws into a command buffer.
+type RenderEncoder struct{ id objc.ID }
+
+// Render begins a render pass.
+//
+// Neither the descriptor nor the encoder comes from a new* selector, so neither
+// is owned: the descriptor is left to the pool and the encoder is retained,
+// because it outlives this call. That is the ownership rule objc_darwin.go
+// states, and getting it backwards here is an abort rather than a leak.
+func (cb *CommandBuffer) Render(color []RenderAttachment, depth *RenderAttachment) (*RenderEncoder, error) {
+	classes()
+	if len(color) == 0 {
+		return nil, fmt.Errorf("accel/mtl: a render pass with no colour attachments")
+	}
+	e := &RenderEncoder{}
+	var err error
+	withPool(func() {
+		rp := objc.ID(clsRenderPassDescriptor).Send(selRenderPassDesc)
+		if rp == 0 {
+			err = fmt.Errorf("accel/mtl: no render pass descriptor")
+			return
+		}
+		atts := rp.Send(selColorAttachments)
+		for i, a := range color {
+			if a.Texture == nil || a.Texture.id == 0 {
+				err = fmt.Errorf("accel/mtl: colour attachment %d has no texture", i)
+				return
+			}
+			x := atts.Send(selObjectAtIndexed, uintptr(i))
+			x.Send(selSetTexture, a.Texture.id)
+			x.Send(selSetLoadAction, uintptr(a.Load))
+			x.Send(selSetStoreAction, uintptr(a.Store))
+			setClearColor(x, a.ClearColor)
+		}
+		if depth != nil {
+			if depth.Texture == nil || depth.Texture.id == 0 {
+				err = fmt.Errorf("accel/mtl: the depth attachment has no texture")
+				return
+			}
+			x := rp.Send(selDepthAttachment)
+			x.Send(selSetTexture, depth.Texture.id)
+			x.Send(selSetLoadAction, uintptr(depth.Load))
+			x.Send(selSetStoreAction, uintptr(depth.Store))
+			setClearDepth(x, depth.ClearDepth)
+		}
+		// Retained for the reason the compute encoder is: the encoder is
+		// autoreleased, and this pool drains before End is called. Without the
+		// retain it is deallocated while still held, and Metal asserts
+		// "released without endEncoding" -- an abort, not an error.
+		e.id = retain(cb.id.Send(selRenderEncoderWith, rp))
+		if e.id == 0 {
+			err = fmt.Errorf("accel/mtl: the command buffer refused a render encoder")
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// SetPipeline selects the pipeline state subsequent draws use.
+func (e *RenderEncoder) SetPipeline(p *RenderPipeline) {
+	e.id.Send(selSetRenderPipeline, p.id)
+}
+
+// SetDepthState selects the depth test and write rule.
+func (e *RenderEncoder) SetDepthState(s *DepthState) {
+	e.id.Send(selSetDepthStencil, s.id)
+}
+
+// SetVertexBuffer binds a buffer the vertex stage fetches from.
+func (e *RenderEncoder) SetVertexBuffer(b *Buffer, offset, index int) {
+	e.id.Send(selSetVertexBuffer, b.id, uintptr(offset), uintptr(index))
+}
+
+// SetFragmentBuffer binds a buffer the fragment stage reads.
+func (e *RenderEncoder) SetFragmentBuffer(b *Buffer, offset, index int) {
+	e.id.Send(selSetFragmentBuffer, b.id, uintptr(offset), uintptr(index))
+}
+
+// SetCull selects the cull mode: 0 none, 1 front, 2 back.
+func (e *RenderEncoder) SetCull(mode int) { e.id.Send(selSetCullMode, uintptr(mode)) }
+
+// SetWinding selects which winding faces front: 0 clockwise, 1 counterclockwise.
+func (e *RenderEncoder) SetWinding(w int) { e.id.Send(selSetWinding, uintptr(w)) }
+
+// Draw records a non-indexed draw. primitive is MTLPrimitiveType.
+func (e *RenderEncoder) Draw(primitive, first, count, instances, firstInstance int) {
+	e.id.Send(selDrawPrimitives, uintptr(primitive), uintptr(first), uintptr(count),
+		uintptr(instances), uintptr(firstInstance))
+}
+
+// DrawIndexed records an indexed draw. indexType is 0 for uint16 and 1 for
+// uint32.
+func (e *RenderEncoder) DrawIndexed(primitive, count, indexType int, idx *Buffer,
+	offset, instances, baseVertex, firstInstance int) {
+	e.id.Send(selDrawIndexed, uintptr(primitive), uintptr(count), uintptr(indexType),
+		idx.id, uintptr(offset), uintptr(instances), uintptr(baseVertex),
+		uintptr(firstInstance))
+}
+
+// End finishes the pass and releases the encoder. Nothing else may be encoded
+// into it afterwards.
+func (e *RenderEncoder) End() {
+	withPool(func() { e.id.Send(selEndEncoding) })
+	release(e.id)
+	e.id = 0
+}
+
+// ClearColor is MTLClearColor: four doubles passed by value.
+//
+// A struct and not four arguments, because that is what the selector takes.
+// This is the same hazard specs/021-metal-bringup.md section 2 singles out for
+// MTLSize: passing the components separately compiles, runs, and clears to a
+// colour nobody asked for.
+type ClearColor struct{ R, G, B, A float64 }
+
+func setClearColor(att objc.ID, c [4]float64) {
+	att.Send(selSetClearColor, ClearColor{R: c[0], G: c[1], B: c[2], A: c[3]})
+}
+
+func setClearDepth(att objc.ID, d float64) {
+	att.Send(selSetClearDepth, d)
+}
+
+// copyTextureToBuffer encodes the blit, with the origin and size structs the
+// selector takes by value.
+func copyTextureToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset int) {
+	type origin struct{ X, Y, Z uint64 }
+	type size struct{ W, H, D uint64 }
+	rowBytes := src.width * src.bpp
+	withPool(func() {
+		enc.Send(selCopyTextureToBuffer,
+			src.id, uintptr(0), uintptr(0),
+			origin{}, size{W: uint64(src.width), H: uint64(src.height), D: 1},
+			dst.id, uintptr(offset), uintptr(rowBytes),
+			uintptr(rowBytes*src.height))
+	})
+}
+
+// CopyTextureToBuffer blits a whole texture into a buffer, tightly packed.
+//
+// This is how a render result reaches the caller's buffer, which is where
+// specs/033-render-api.md says an attachment lives.
+func (b *BlitEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, offset int) {
+	copyTextureToBuffer(b.id, src, dst, offset)
+}
