@@ -98,7 +98,7 @@ CGO_ENABLED=0 go build ./...
 CGO_ENABLED=0 go test ./...
 ```
 
-Requires Go 1.27 or later. There is nothing to install and no GPU required,
+Requires Go 1.26 or later. There is nothing to install and no GPU required,
 which is deliberate and should stay true.
 
 Metal code is `//go:build darwin`, so building on a Mac stops proving that the

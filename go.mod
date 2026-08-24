@@ -1,6 +1,6 @@
 module golang.design/x/accel
 
-go 1.27
+go 1.26
 
 require (
 	github.com/ebitengine/purego v0.10.1

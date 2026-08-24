@@ -8,7 +8,7 @@
   <a href="https://pkg.go.dev/golang.design/x/accel"><img src="https://pkg.go.dev/badge/golang.design/x/accel.svg" alt="Go Reference"></a>
   <a href="https://github.com/golang-design/accel/actions/workflows/ci.yml"><img src="https://github.com/golang-design/accel/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-blue.svg" alt="License: BSD-3-Clause"></a>
-  <img src="https://img.shields.io/badge/go-1.27+-00ADD8.svg" alt="Go 1.27+">
+  <img src="https://img.shields.io/badge/go-1.26+-00ADD8.svg" alt="Go 1.26+">
   <img src="https://img.shields.io/badge/cgo-free-success.svg" alt="cgo-free">
   <img src="https://img.shields.io/badge/status-early-orange.svg" alt="Status: early">
 </p>
