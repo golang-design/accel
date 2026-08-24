@@ -19,10 +19,23 @@ public API never exposes the divergence.
 **Built and not yet built.** Every entry here is normative, and not every entry
 has code behind it. The CPU backend and Metal are built; the GL, GLSL, Vulkan
 and D3D12 entries state what a backend **will be required to do** and bind
-whoever writes it. The graphics entries — clip depth range, face winding,
-readback origin — are implemented today only by the CPU reference rasterizer,
-since there is no GPU render path yet. Where an entry is a requirement rather
-than a description, it says so.
+whoever writes it. Where an entry is a requirement rather than a description, it
+says so.
+
+The graphics entries are not one group, and this paragraph used to say they were
+— that there was no GPU render path, which stopped being true when Metal grew
+one:
+
+| Entry | Where it is enforced |
+| --- | --- |
+| clip-space depth range | both backends. The stage emitter folds Metal's `[0, w]` remap, and a render differential compares the two pixel for pixel |
+| face winding | both backends. The Metal encoder is given the winding explicitly rather than inheriting a default |
+| texture readback origin | **the CPU rasterizer only.** Metal does not lower a texture copy yet, so the one entry here that is *known* to differ between backends is the one no comparison covers |
+
+The last row is the honest one and it is the reason to read this table rather
+than trust the paragraph above it. A skipped test holds the comparison and
+starts running the day Metal lowers a texture copy, so the entry is enforced on
+the first day it can be rather than the first day someone remembers.
 
 ## Coordinate systems and clip space
 
