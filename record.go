@@ -273,6 +273,32 @@ func (r *Recorder) declare(op string, v BufferView, mode Access) (access, bool) 
 	return access{res: resourceRef{buf: v.Buffer}, off: off, size: size, mode: mode}, true
 }
 
+// declareTexture declares an access to the subresource a texture view names.
+//
+// It is the texture counterpart of [Recorder.declare] and runs the same checks:
+// a live resource, on this device, named by a view that names something. What
+// it does not do is narrow the range to the subresource, and that is deliberate
+// rather than pending: a texture's mip and layer counts are still refused above
+// one, so every view names the whole allocation. A range narrower than the
+// access is a hazard the barrier plan sees more precisely than the truth
+// supports, which is worse than one it sees less precisely.
+func (r *Recorder) declareTexture(op string, v TextureView, mode Access) (access, bool) {
+	t := v.Texture
+	if t == nil {
+		r.fail("%s: the view names no texture", op)
+		return access{}, false
+	}
+	if err := t.state.checkOpen(op); err != nil {
+		r.state.errs = append(r.state.errs, err)
+		return access{}, false
+	}
+	if t.pool.dev != r.state.dev {
+		r.fail("%s: %q belongs to a different device", op, t.desc.Label)
+		return access{}, false
+	}
+	return access{res: resourceRef{tex: t}, off: 0, size: t.bytes, mode: mode}, true
+}
+
 // slotAccess declares an access relative to a slot's eventual resource.
 func (r *Recorder) slotAccess(op string, s Slot, off, size int, mode Access) (access, bool) {
 	d, ok := r.slotDescriptor(s)

@@ -37,25 +37,25 @@ func solidPipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 func TestRenderPassRefusals(t *testing.T) {
 	for _, c := range []struct {
 		name   string
-		record func(t *testing.T, d *accel.Device, r *accel.Recorder, target *accel.Buffer)
+		record func(t *testing.T, d *accel.Device, r *accel.Recorder, target *accel.Texture)
 		says   string
 	}{{
 		name: "no colour attachments",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			r.RenderPass(accel.RenderPassDescriptor{Width: 4, Height: 4, Label: "bare"})
 		},
 		says: "no colour attachments",
 	}, {
 		name: "an area with no extent",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}}, Label: "flat",
+				Color: []accel.ColorAttachment{{View: view(t, b)}}, Label: "flat",
 			})
 		},
 		says: "render area is 0x0",
 	}, {
 		name: "an attachment naming no resource",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			r.RenderPass(accel.RenderPassDescriptor{
 				Color: []accel.ColorAttachment{{}}, Width: 4, Height: 4, Label: "empty",
 			})
@@ -63,18 +63,18 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "names no resource",
 	}, {
 		name: "a pass with no draws",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 4, Height: 4, Label: "idle",
 			})
 		},
 		says: "records no draws",
 	}, {
 		name: "SetPipeline with no pipeline",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 4, Height: 4, Label: "unset",
 			})
 			p.SetPipeline(nil)
@@ -82,9 +82,9 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "SetPipeline with no pipeline",
 	}, {
 		name: "a draw before a pipeline",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 4, Height: 4, Label: "early",
 			})
 			p.Draw(accel.Draw{VertexCount: 3})
@@ -92,9 +92,9 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "a draw with no pipeline",
 	}, {
 		name: "a draw of no vertices",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 4, Height: 4, Label: "nothing",
 			})
 			p.SetPipeline(solidPipeline(t, d))
@@ -103,35 +103,35 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "a draw of 0 vertices",
 	}, {
 		name: "an attachment too small for the area",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 64, Height: 64, Label: "cramped",
 			})
 			p.SetPipeline(solidPipeline(t, d))
 			p.Draw(accel.Draw{VertexCount: 3})
 		},
-		says: "at 4 components per pixel needs 16384",
+		says: `is texture "target", which is 4x4, and the render area is 64x64`,
 	}, {
 		name: "a depth attachment too small for the area",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
-			small := newBuffer(t, d, "shallow", 4, accel.BufferStorage|accel.BufferCopyDst)
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			small := depthTarget(t, d, "shallow", 2, 2)
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
-				Depth: &accel.DepthAttachment{View: whole(t, small)},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Depth: &accel.DepthAttachment{View: view(t, small)},
 				Width: 4, Height: 4, Label: "shallow",
 			})
 			p.SetPipeline(depthPipeline(t, d))
 			p.Draw(accel.Draw{VertexCount: 3})
 		},
-		says: "depth attachment holds 4 elements",
+		says: `depth attachment is texture "shallow", which is 2x2`,
 	}, {
 		name: "a depth clear outside the window range",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
-			depth := newBuffer(t, d, "depth", 16, accel.BufferStorage|accel.BufferCopyDst)
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			depth := depthTarget(t, d, "depth", 4, 4)
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
-				Depth: &accel.DepthAttachment{View: whole(t, depth), Clear: -1},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Depth: &accel.DepthAttachment{View: view(t, depth), Clear: -1},
 				Width: 4, Height: 4, Label: "deep",
 			})
 			p.SetPipeline(depthPipeline(t, d))
@@ -140,7 +140,7 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "stored window depth is in [0, 1]",
 	}, {
 		name: "a pipeline with more targets than the pass has attachments",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			mrt, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 				Vertex:   &testkernels.GeometryVSStage,
 				Fragment: &testkernels.ShadeFSStage,
@@ -161,7 +161,7 @@ func TestRenderPassRefusals(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = mrt.Close() })
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 4, Height: 4, Label: "single",
 			})
 			p.SetPipeline(mrt)
@@ -170,9 +170,9 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "has 2 colour targets and the pass has 1 attachments",
 	}, {
 		name: "a pipeline that tests depth in a pass with none",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, b)}},
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
 				Width: 4, Height: 4, Label: "flat",
 			})
 			p.SetPipeline(depthPipeline(t, d))
@@ -181,7 +181,7 @@ func TestRenderPassRefusals(t *testing.T) {
 		says: "has a depth state and the pass has no depth attachment",
 	}, {
 		name: "a stage whose by-value parameter has no value",
-		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Buffer) {
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 				Vertex:   &testkernels.GeometryVSStage,
 				Fragment: &testkernels.ShadeFSStage,
@@ -201,11 +201,10 @@ func TestRenderPassRefusals(t *testing.T) {
 				t.Fatalf("pipeline: %v", err)
 			}
 			t.Cleanup(func() { _ = pipe.Close() })
-			second := newBuffer(t, d, "second", 4*4*4,
-				accel.BufferStorage|accel.BufferCopyDst)
+			second := colourTarget(t, d, "second", 4, 4)
 			p := r.RenderPass(accel.RenderPassDescriptor{
 				Color: []accel.ColorAttachment{
-					{View: whole(t, b)}, {View: whole(t, second)},
+					{View: view(t, b)}, {View: view(t, second)},
 				},
 				Width: 4, Height: 4, Label: "uniformed",
 			})
@@ -216,8 +215,7 @@ func TestRenderPassRefusals(t *testing.T) {
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
-			target := newBuffer(t, d, "target", 4*4*4,
-				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			target := colourTarget(t, d, "target", 4, 4)
 			r := d.NewRecorder()
 			c.record(t, d, r, target)
 			g, err := r.Build()
@@ -260,13 +258,12 @@ func depthPipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 // below the one named are filled rather than left short.
 func TestARenderPassNamesItsNodeAndHoldsItsBuffers(t *testing.T) {
 	d := openDevice(t)
-	target := newBuffer(t, d, "target", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "target", 4, 4)
 	verts := newBuffer(t, d, "verts", 12, accel.BufferStorage|accel.BufferCopyDst)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target)}},
+		Color: []accel.ColorAttachment{{View: view(t, target)}},
 		Width: 4, Height: 4, Label: "noted",
 	})
 	p.SetPipeline(solidPipeline(t, d))
@@ -292,13 +289,12 @@ func TestARenderPassNamesItsNodeAndHoldsItsBuffers(t *testing.T) {
 func TestAnOmittedInstanceCountDrawsOnce(t *testing.T) {
 	const w, h = 4, 4
 	d := openDevice(t)
-	target := newBuffer(t, d, "target", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "target", w, h)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
-			View: whole(t, target), Load: accel.LoadClear, Clear: [4]float32{1, 0, 0, 1},
+			View: view(t, target), Load: accel.LoadClear, Clear: [4]float32{1, 0, 0, 1},
 		}},
 		Width: w, Height: h, Label: "once",
 	})
@@ -313,7 +309,7 @@ func TestAnOmittedInstanceCountDrawsOnce(t *testing.T) {
 	if err := d.Queue().Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if got := readback(t, d, target)[(1*w+0)*4]; got != 0.25 {
+	if got := readTarget(t, d, target)[(1*w+0)*4]; got != 0.25 {
 		t.Errorf("pixel (0,1) is %v, so the draw with no instance count drew nothing", got)
 	}
 }

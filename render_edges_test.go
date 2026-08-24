@@ -43,14 +43,17 @@ func TestTheLoadActionDecidesTheReadAfterWriteEdge(t *testing.T) {
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
-			target := newBuffer(t, d, "target", w*h*4,
+			target := colourTarget(t, d, "target", w, h)
+			src := newBuffer(t, d, "src", w*h*4,
 				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 
 			r := d.NewRecorder()
-			// Node 0 writes the attachment. Node 1 is the pass.
-			r.UploadToBuffer(whole(t, target), make([]float32, w*h*4))
+			// Node 0 writes the attachment. Node 1 is the pass. The write is a
+			// copy into the texture rather than an upload, because an
+			// attachment is a texture view and there is no host write to one.
+			r.CopyBufferToTexture(target, whole(t, src))
 			pass := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, target), Load: c.load}},
+				Color: []accel.ColorAttachment{{View: view(t, target), Load: c.load}},
 				Width: w, Height: h, Label: "pass",
 			})
 			pass.SetPipeline(solidPipeline(t, d))
@@ -92,15 +95,14 @@ func TestTheLoadActionDecidesTheReadAfterWriteEdge(t *testing.T) {
 func TestTwoPassesWritingOneAttachmentStayOrdered(t *testing.T) {
 	const w, h = 4, 4
 	d := openDevice(t)
-	target := newBuffer(t, d, "target", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "target", w, h)
 	pipe := solidPipeline(t, d)
 
 	r := d.NewRecorder()
 	var ids []accel.NodeID
 	for _, load := range []accel.LoadOp{accel.LoadClear, accel.LoadDontCare} {
 		p := r.RenderPass(accel.RenderPassDescriptor{
-			Color: []accel.ColorAttachment{{View: whole(t, target), Load: load}},
+			Color: []accel.ColorAttachment{{View: view(t, target), Load: load}},
 			Width: w, Height: h, Label: "pass",
 		})
 		p.SetPipeline(pipe)
@@ -132,8 +134,9 @@ func TestAPassDeclaresEveryAttachmentItTouches(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
 	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
-	kept := newBuffer(t, d, "kept", w*h*4, usage)
-	cleared := newBuffer(t, d, "cleared", w*h*4, usage)
+	kept := colourTarget(t, d, "kept", w, h)
+	cleared := colourTarget(t, d, "cleared", w, h)
+	blank := newBuffer(t, d, "blank", w*h*4, usage)
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 		Vertex:   &testkernels.GeometryVSStage,
@@ -166,12 +169,12 @@ func TestAPassDeclaresEveryAttachmentItTouches(t *testing.T) {
 	}
 
 	r := d.NewRecorder()
-	r.UploadToBuffer(whole(t, kept), make([]float32, w*h*4))
-	r.UploadToBuffer(whole(t, cleared), make([]float32, w*h*4))
+	r.CopyBufferToTexture(kept, whole(t, blank))
+	r.CopyBufferToTexture(cleared, whole(t, blank))
 	p := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{
-			{View: whole(t, kept), Load: accel.LoadKeep},
-			{View: whole(t, cleared), Load: accel.LoadClear},
+			{View: view(t, kept), Load: accel.LoadKeep},
+			{View: view(t, cleared), Load: accel.LoadClear},
 		},
 		Width: w, Height: h, Label: "mixed",
 	})
@@ -186,10 +189,10 @@ func TestAPassDeclaresEveryAttachmentItTouches(t *testing.T) {
 	}
 	defer g.Close()
 	edges := g.Edges()
-	for _, upload := range []accel.NodeID{0, 1} {
-		if len(edges[upload]) != 1 || edges[upload][0] != p.Node() {
-			t.Errorf("upload %d's successors are %v, want the pass; a pass is ordered "+
-				"against every attachment it declares", upload, edges[upload])
+	for _, write := range []accel.NodeID{0, 1} {
+		if len(edges[write]) != 1 || edges[write][0] != p.Node() {
+			t.Errorf("attachment write %d's successors are %v, want the pass; a pass is "+
+				"ordered against every attachment it declares", write, edges[write])
 		}
 	}
 	if err := q.Submit(g).Wait(); err != nil {
@@ -199,7 +202,7 @@ func TestAPassDeclaresEveryAttachmentItTouches(t *testing.T) {
 	// ShadeFS writes the interpolated colour to attachment 0 and the UV plus
 	// depth to attachment 1. Two attachments carrying different values is the
 	// assertion that MRT reached both rather than one twice.
-	a, b := readback(t, d, kept), readback(t, d, cleared)
+	a, b := readTarget(t, d, kept), readTarget(t, d, cleared)
 	same := true
 	for i := range a {
 		if a[i] != b[i] {

@@ -57,13 +57,12 @@ func TestEachStageGetsItsOwnUniforms(t *testing.T) {
 	if err := q.WriteBuffer(vb, 0, pos); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
-			View: whole(t, target), Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
+			View: view(t, target), Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
 		}},
 		Width: w, Height: h, Label: "uniforms",
 	})
@@ -81,7 +80,7 @@ func TestEachStageGetsItsOwnUniforms(t *testing.T) {
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 	at := func(x, y int) [4]float32 {
 		i := (y*w + x) * 4
 		return [4]float32{got[i], got[i+1], got[i+2], got[i+3]}
@@ -156,12 +155,11 @@ func TestRenderUniformRefusals(t *testing.T) {
 			if err := q.WriteBuffer(vb, 0, make([]float32, 9)); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			target := newBuffer(t, d, "colour", 4*4*4,
-				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			target := colourTarget(t, d, "colour", 4, 4)
 
 			r := d.NewRecorder()
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, target)}},
+				Color: []accel.ColorAttachment{{View: view(t, target)}},
 				Width: 4, Height: 4, Label: "refused",
 			})
 			p.SetPipeline(pipe)
@@ -187,12 +185,11 @@ func TestRenderUniformRefusals(t *testing.T) {
 // misspelled intent survives to the frame that looks wrong.
 func TestAUniformSetForAStageThatTakesNone(t *testing.T) {
 	d := openDevice(t)
-	target := newBuffer(t, d, "colour", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", 4, 4)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target)}},
+		Color: []accel.ColorAttachment{{View: view(t, target)}},
 		Width: 4, Height: 4, Label: "spurious",
 	})
 	p.SetPipeline(solidPipeline(t, d))
@@ -227,15 +224,14 @@ func TestUniformsAreCapturedPerDraw(t *testing.T) {
 	if err := q.WriteBuffer(vb, 0, pos); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	first := [4]float32{1, 0, 0, 1}
 	second := [4]float32{0, 1, 0, 1}
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "two draws",
 	})
 	pass.SetPipeline(pipe)
@@ -259,7 +255,7 @@ func TestUniformsAreCapturedPerDraw(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 	i := ((h - 1) * w) * 4
 	px := [4]float32{got[i], got[i+1], got[i+2], got[i+3]}
 	if px != first {
@@ -288,13 +284,12 @@ func TestAVertexSlotOutsideTheLayoutIsRefused(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
-			target := newBuffer(t, d, "colour", 4*4*4,
-				accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+			target := colourTarget(t, d, "colour", 4, 4)
 			vb := newBuffer(t, d, "vb", 9*4, accel.BufferVertex|accel.BufferCopyDst)
 
 			r := d.NewRecorder()
 			p := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{View: whole(t, target)}},
+				Color: []accel.ColorAttachment{{View: view(t, target)}},
 				Width: 4, Height: 4, Label: "slots",
 			})
 			// No recover(): a panic here fails the test by taking it down, which
@@ -330,8 +325,7 @@ func TestAVertexSlotOutsideTheLayoutIsRefused(t *testing.T) {
 // state standing at the time.
 func TestAnUnfetchedVertexBufferDoesNotOrderTheGraph(t *testing.T) {
 	d := openDevice(t)
-	target := newBuffer(t, d, "target", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "target", 4, 4)
 	// Written by an earlier node, so an unwanted read of it is an edge that
 	// shows up as a dependency rather than as nothing.
 	stray := newBuffer(t, d, "stray", 12, accel.BufferStorage|accel.BufferCopyDst)
@@ -341,7 +335,7 @@ func TestAnUnfetchedVertexBufferDoesNotOrderTheGraph(t *testing.T) {
 	r.CopyBuffer(whole(t, stray), whole(t, src))
 
 	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target)}},
+		Color: []accel.ColorAttachment{{View: view(t, target)}},
 		Width: 4, Height: 4, Label: "unfetched",
 	})
 	p.SetPipeline(solidPipeline(t, d))

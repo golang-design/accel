@@ -69,13 +69,12 @@ func TestATriangleFromAVertexBuffer(t *testing.T) {
 	if err := q.WriteBuffer(vb, 0, verts); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
-			View: whole(t, target), Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
+			View: view(t, target), Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
 		}},
 		Width: w, Height: h, Label: "attributes",
 	})
@@ -91,7 +90,7 @@ func TestATriangleFromAVertexBuffer(t *testing.T) {
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 
 	at := func(x, y int) [4]float32 {
 		i := (y*w + x) * 4
@@ -190,12 +189,11 @@ func TestPerInstanceAttributes(t *testing.T) {
 	if err := q.WriteBuffer(ib, 0, tints); err != nil {
 		t.Fatalf("write tints: %v", err)
 	}
-	target := newBuffer(t, d, "colour", w*h*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", w, h)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target), Load: accel.LoadClear}},
+		Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
 		Width: w, Height: h, Label: "instanced",
 	})
 	pass.SetPipeline(pipe)
@@ -213,7 +211,7 @@ func TestPerInstanceAttributes(t *testing.T) {
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	got := readback(t, d, target)
+	got := readTarget(t, d, target)
 
 	// Both instances draw the same triangle, so instance 1 overdraws instance
 	// 0 everywhere and the result is instance 1's colour. That is the
@@ -322,12 +320,11 @@ func TestVertexLayoutRefusals(t *testing.T) {
 // binding — and the caller would look at the stage.
 func TestADrawWithNoVertexBufferBound(t *testing.T) {
 	d := openDevice(t)
-	target := newBuffer(t, d, "colour", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", 4, 4)
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target)}},
+		Color: []accel.ColorAttachment{{View: view(t, target)}},
 		Width: 4, Height: 4, Label: "unbound",
 	})
 	pass.SetPipeline(attributePipeline(t, d))
@@ -350,8 +347,7 @@ func TestADrawWithNoVertexBufferBound(t *testing.T) {
 func TestADrawPastTheEndOfItsVertexBuffer(t *testing.T) {
 	d := openDevice(t)
 	q := d.Queue()
-	target := newBuffer(t, d, "colour", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "colour", 4, 4)
 	// Two vertices' worth of a 28-byte stride, for a draw of three.
 	vb := newBuffer(t, d, "verts", 14, accel.BufferStorage|accel.BufferCopyDst)
 	if err := q.WriteBuffer(vb, 0, make([]float32, 14)); err != nil {
@@ -360,7 +356,7 @@ func TestADrawPastTheEndOfItsVertexBuffer(t *testing.T) {
 
 	r := d.NewRecorder()
 	pass := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: whole(t, target)}},
+		Color: []accel.ColorAttachment{{View: view(t, target)}},
 		Width: 4, Height: 4, Label: "short",
 	})
 	pass.SetPipeline(attributePipeline(t, d))

@@ -139,7 +139,11 @@ func TestASurfaceFrameMatchesAnOffscreenTarget(t *testing.T) {
 		t.Fatalf("readback: %v", err)
 	}
 
-	// The same graph, bound to an ordinary buffer instead.
+	// The same graph, bound to an ordinary buffer instead. A present slot is a
+	// buffer slot -- specs/034-surface-present.md makes the presented image one
+	// -- so what stands in for the swapchain image here is a buffer and not a
+	// texture, which is also why a slot attachment did not change shape when an
+	// attachment became a texture view.
 	offscreen := newBuffer(t, d, "offscreen", w*h*4,
 		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
 	if err := g.Bind(accel.SlotBinding{Slot: swap, Buffer: whole(t, offscreen)}); err != nil {
@@ -375,8 +379,7 @@ func TestAnUndersizedSlotAttachmentIsRefused(t *testing.T) {
 // An attachment names one resource or one slot, and neither or both is refused.
 func TestAnAttachmentNamesExactlyOneResource(t *testing.T) {
 	d := openDevice(t)
-	target := newBuffer(t, d, "target", 4*4*4,
-		accel.BufferStorage|accel.BufferCopySrc|accel.BufferCopyDst)
+	target := colourTarget(t, d, "target", 4, 4)
 
 	for _, c := range []struct {
 		name string
@@ -393,7 +396,7 @@ func TestAnAttachmentNamesExactlyOneResource(t *testing.T) {
 				Name: "s", Kind: accel.BindingStorageBuffer, DType: accel.F32,
 				Access: accel.AccessWrite, MinCount: 64,
 			})
-			return accel.ColorAttachment{View: whole(t, target), Slot: s}
+			return accel.ColorAttachment{View: view(t, target), Slot: s}
 		},
 		says: "names both a resource and a slot",
 	}} {

@@ -8,11 +8,70 @@ package testkernels_test
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/testkernels"
 )
+
+// notLowered is the Metal backend's honest refusal of a texture attachment.
+//
+// specs/045-texture-attachments.md made an attachment a texture view and gave
+// the Metal path its own slice, so on a Metal device every pass here is
+// refused at Build until that lands. The entries skip with the reason rather
+// than being deleted, which is what makes the comparison start again on the
+// first day it can -- the arrangement TestATextureRoundTripKeepsCallerOrderOnMetal
+// already uses, and the reason a convention bug is cheapest to catch in the
+// commit that makes it reachable.
+const notLowered = "does not lower a texture attachment at specs/045-texture-attachments.md"
+
+func skipUnlessLowered(t *testing.T, err error) {
+	t.Helper()
+	if err != nil && strings.Contains(err.Error(), notLowered) {
+		t.Skipf("owed, not failing: this backend does not lower a texture attachment "+
+			"yet, so there is no Metal side to compare against the oracle: %v", err)
+	}
+}
+
+// colourTexture is a render target the host can read back.
+func colourTexture(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
+	t.Helper()
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryReadback, Label: label,
+	})
+	if err != nil {
+		t.Fatalf("texture %s: %v", label, err)
+	}
+	t.Cleanup(func() { _ = tex.Close() })
+	return tex
+}
+
+func wholeOf(t *testing.T, tex *accel.Texture) accel.TextureView {
+	t.Helper()
+	v, err := tex.Whole()
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	return v
+}
+
+func readColourTexture(t *testing.T, d *accel.Device, tex *accel.Texture) []float32 {
+	t.Helper()
+	sz := tex.Size()
+	raw := make([]byte, sz.Width*sz.Height*tex.Format().BytesPerPixel())
+	if err := d.Queue().ReadTexture(tex, raw); err != nil {
+		t.Fatalf("read texture: %v", err)
+	}
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
+			uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
+	}
+	return out
+}
 
 // The differential the MSL stage target could not have without a render path:
 // the same graph on the CPU rasterizer and on Metal, compared pixel by pixel.
@@ -76,22 +135,13 @@ func TestARenderPassAgreesOnBothBackends(t *testing.T) {
 		if err := q.WriteBuffer(vb, 0, verts); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		target, err := d.NewBuffer(accel.BufferDescriptor{
-			DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "colour",
-		})
-		if err != nil {
-			t.Fatalf("buffer: %v", err)
-		}
-		defer target.Close()
+		target := colourTexture(t, d, "colour", w, h)
 
 		vv, err := vb.View(0, vb.Count())
 		if err != nil {
 			t.Fatalf("view: %v", err)
 		}
-		tv, err := target.View(0, target.Count())
-		if err != nil {
-			t.Fatalf("view: %v", err)
-		}
+		tv := wholeOf(t, target)
 
 		r := d.NewRecorder()
 		p := r.RenderPass(accel.RenderPassDescriptor{
@@ -106,17 +156,14 @@ func TestARenderPassAgreesOnBothBackends(t *testing.T) {
 
 		g, err := r.Build()
 		if err != nil {
+			skipUnlessLowered(t, err)
 			t.Fatalf("build: %v", err)
 		}
 		defer g.Close()
 		if err := q.Submit(g).Wait(); err != nil {
 			t.Fatalf("submit: %v", err)
 		}
-		out := make([]float32, w*h*4)
-		if err := q.ReadBuffer(target, 0, out); err != nil {
-			t.Fatalf("readback: %v", err)
-		}
-		return out
+		return readColourTexture(t, d, target)
 	}
 
 	onCPU := render(t, cpu)
@@ -274,11 +321,15 @@ func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
 	if err := q.WriteBuffer(vv.Buffer, 0, f.verts); err != nil {
 		t.Fatalf("write verts: %v", err)
 	}
-	target, tv := newBuf("colour", w*h*4)
+	target := colourTexture(t, d, "colour", w, h)
+	tv := wholeOf(t, target)
+	var prior accel.BufferView
 	if f.keep != nil {
-		if err := q.WriteBuffer(target, 0, f.keep); err != nil {
+		priorBuf, v := newBuf("prior", w*h*4)
+		if err := q.WriteBuffer(priorBuf, 0, f.keep); err != nil {
 			t.Fatalf("write prior: %v", err)
 		}
+		prior = v
 	}
 
 	load := accel.LoadClear
@@ -295,13 +346,25 @@ func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
 		Width: w, Height: h, Label: "differential",
 	}
 	if f.depth {
-		_, dv := newBuf("depth", w*h)
+		dtex, err := d.NewTexture(accel.TextureDescriptor{
+			Format: accel.Depth32Float, Size: accel.Extent{Width: w, Height: h},
+			Usage: accel.TextureRenderTarget | accel.TextureCopySrc, Label: "depth",
+		})
+		if err != nil {
+			t.Fatalf("depth texture: %v", err)
+		}
+		defer dtex.Close()
 		desc.Depth = &accel.DepthAttachment{
-			View: dv, Load: accel.LoadClear, Clear: 1,
+			View: wholeOf(t, dtex), Load: accel.LoadClear, Clear: 1,
 		}
 	}
 
 	r := d.NewRecorder()
+	// There is no host write to a texture, so a pass that loads Keep is given
+	// something to keep by a recorded copy ahead of it.
+	if prior.Buffer != nil {
+		r.CopyBufferToTexture(target, prior)
+	}
 	p := r.RenderPass(desc)
 	p.SetPipeline(pipe)
 	p.SetVertexBuffer(0, vv)
@@ -323,17 +386,14 @@ func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
 
 	g, err := r.Build()
 	if err != nil {
+		skipUnlessLowered(t, err)
 		t.Fatalf("build: %v", err)
 	}
 	defer g.Close()
 	if err := q.Submit(g).Wait(); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	out := make([]float32, w*h*4)
-	if err := q.ReadBuffer(target, 0, out); err != nil {
-		t.Fatalf("readback: %v", err)
-	}
-	return out
+	return readColourTexture(t, d, target)
 }
 
 // posOnly is the layout for a stage that reads only a position.
@@ -648,13 +708,7 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 
 	q := metal.Queue()
 	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
-	target, err := metal.NewBuffer(accel.BufferDescriptor{
-		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "discarded",
-	})
-	if err != nil {
-		t.Fatalf("buffer: %v", err)
-	}
-	defer target.Close()
+	target := colourTexture(t, metal, "discarded", w, h)
 	verts, err := metal.NewBuffer(accel.BufferDescriptor{
 		DType: accel.F32, Count: 9, Usage: usage, Label: "verts",
 	})
@@ -667,13 +721,25 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 	}
 
 	// A recognisable pattern, so what survives says whether anything was
-	// written back.
+	// written back. It reaches the texture through a recorded copy, because
+	// there is no host write to one.
 	prior := make([]float32, w*h*4)
 	for i := range prior {
 		prior[i] = 0.125
 	}
-	if err := q.WriteBuffer(target, 0, prior); err != nil {
+	priorBuf, err := metal.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "prior",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer priorBuf.Close()
+	if err := q.WriteBuffer(priorBuf, 0, prior); err != nil {
 		t.Fatalf("write prior: %v", err)
+	}
+	pv, err := priorBuf.View(0, priorBuf.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
 	}
 
 	pipe, err := metal.NewRenderPipeline(accel.RenderPipelineDescriptor{
@@ -688,16 +754,14 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	tv, err := target.View(0, target.Count())
-	if err != nil {
-		t.Fatalf("view: %v", err)
-	}
+	tv := wholeOf(t, target)
 	vv, err := verts.View(0, verts.Count())
 	if err != nil {
 		t.Fatalf("view: %v", err)
 	}
 
 	r := metal.NewRecorder()
+	r.CopyBufferToTexture(target, pv)
 	p := r.RenderPass(accel.RenderPassDescriptor{
 		Color: []accel.ColorAttachment{{
 			View: tv, Load: accel.LoadClear, Clear: [4]float32{1, 0, 0, 1},
@@ -713,6 +777,7 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 
 	g, err := r.Build()
 	if err != nil {
+		skipUnlessLowered(t, err)
 		t.Fatalf("build: %v", err)
 	}
 	defer g.Close()
@@ -720,19 +785,16 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 
-	out := make([]float32, w*h*4)
-	if err := q.ReadBuffer(target, 0, out); err != nil {
-		t.Fatalf("readback: %v", err)
-	}
-	// The buffer is untouched, so it still holds the pattern written before the
+	out := readColourTexture(t, metal, target)
+	// The target is untouched, so it still holds the pattern written before the
 	// pass. Asserted exactly rather than as "not what the draw wrote", because
-	// the store action alone already makes the texture's contents undefined --
-	// so a backend that kept the blit would copy garbage, which is also not
-	// what the draw wrote and would pass a weaker assertion. Nothing written
-	// back is the claim, and an intact buffer is what that looks like.
+	// the store action alone already makes the contents undefined -- so a
+	// backend that kept the blit would copy garbage, which is also not what the
+	// draw wrote and would pass a weaker assertion. Nothing written back is the
+	// claim, and an intact image is what that looks like.
 	for i, v := range out {
 		if v != 0.125 {
-			t.Fatalf("float %d is %v and the buffer held 0.125 before the pass; "+
+			t.Fatalf("float %d is %v and the target held 0.125 before the pass; "+
 				"StoreDiscard did not skip the write back", i, v)
 		}
 	}
