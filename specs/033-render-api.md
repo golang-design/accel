@@ -1,6 +1,6 @@
 ---
 title: "Render pipelines, passes, attachments, and draws"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
@@ -413,7 +413,59 @@ of these names the node, the slot, and the recording call's source position.
   count capability a device-written count above the build-time maximum is clamped
   and reported.
 
-## 8. Open questions
+## 8. Deviations
+
+### Deviation 1: the draw-time uniform channel was removed
+
+**What the spec required.** Section 6 makes a uniform buffer at a recorded byte
+offset the mechanism a draw parameterises through, with the stride derived from
+`minUniformBufferOffsetAlignment`. The spec never described a by-value uniform
+on a draw.
+
+**What was built instead.** `RenderPass.Draw` was implemented with a
+`uniforms ...UniformValue` variadic, which lowered by appending values in the
+order the caller wrote them and ignoring `UniformValue.Index`. Two uniforms
+passed out of order bound to each other's parameters, and a subset shifted every
+parameter after the omitted one.
+
+**Why it was removed rather than fixed.** The placement bug is the symptom. Two
+stages are compiled independently, so each indexes its own uniform space from
+zero:
+
+$$
+\text{vertex } u[0] \;\ne\; \text{fragment } u[0]
+$$
+
+One slice cannot serve both, and the fix is either a per-stage pair of slices or
+a pipeline-wide index space the generator cannot assign — both of which widen a
+public surface that had just been frozen, for a channel the spec does not
+describe.
+
+**What holds now.** `kernel.Stage` records `Uniforms []StageUniform`, and graph
+build refuses a draw whose stage declares a by-value parameter, or whose vertex
+stage reads an attribute:
+
+```
+render pass "uniformed" draw 0: GeometryVS declares the by-value parameter "xf",
+and no render path supplies one yet (specs/033-render-api.md deviation 1)
+```
+
+Refused rather than passed an empty slice, because the generated adapter would
+then index past its end and the diagnostic would come from a backend.
+
+**When the gap closes.** With section 6's uniform-buffer mechanism and the vertex
+layout, which are the same milestone: both are channels from a bound buffer into
+a stage's parameters, and building one without the other leaves a stage that can
+be created and not drawn. The open design question is recorded in section 9.
+
+## 9. Open questions
+
+- **Whether by-value uniforms belong on a draw at all.** Section 6 says a uniform
+  buffer at a recorded offset, which is what an N-object frame needs. A by-value
+  channel is a convenience for the one-uniform case, and if it arrives it needs an
+  index space the two stages share — either assigned per pipeline at creation, or
+  split into two slices with the draw naming which stage each value is for. See
+  deviation 1.
 
 - **Whether a resize can avoid a graph rebuild.** Carried from 005 and owned by
   [034](034-surface-present.md), because the answer depends on whether attachment

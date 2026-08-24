@@ -1255,6 +1255,74 @@ machine. Two rules follow:
   predecessor.** Both already had the answer here. A blocker that contradicts
   a normative spec in the same repository is a bug in the blocker.
 
+#### The first graphics milestone: an offscreen triangle — 2026-08-24
+
+**A triangle renders through the public API and the interior pixels match.**
+[035](035-cpu-rasterizer.md) §8 step 1, and the first thing graphics does rather
+than describe. The path is whole: `NewRenderPipeline` → `Recorder.RenderPass` →
+`Draw` → `Build` → `Submit`, through `driver.OpRenderPass`, into the CPU
+backend, out through `internal/raster`.
+
+What the assertion checks, and why each half is separate:
+
+| Assertion | What its absence would hide |
+| --- | --- |
+| a covered pixel is the shaded colour | coverage dropped |
+| an uncovered pixel is the clear colour | coverage ignored, every pixel written |
+| the covered count is 28 of 64 | the fill rule inverted on the diagonal |
+| the depth buffer holds 0.75 inside and 1 outside | a depth buffer tested but never written, or written but never read |
+| `LoadKeep` leaves prior contents | the load action treated as a graph annotation only |
+
+The triangle covers half the target rather than all of it on purpose: a stage
+that covers everything cannot separate a working rasterizer from one that
+ignores its input. Its hypotenuse runs corner to corner, so it passes exactly
+through the centre of every pixel where $x = y$ — the fill rule decides those,
+not the coverage arithmetic. It is a right edge, and the top-left rule excludes
+it:
+
+$$
+|\{(x,y) : y > x\}| = 28 \qquad\text{not}\qquad |\{(x,y) : y \ge x\}| = 36
+$$
+
+**Three bugs worth recording, because what found each generalizes.**
+
+1. **`Plan.Validate` demanded a destination operand of every op but a dispatch.**
+   True while a dispatch was the only many-operand op, and it silently demanded
+   one of the next such op added — every plan containing a render pass was
+   refused before a backend saw it. The exemption form was the bug, not the
+   missing case: `PlanOp.HasDestination` now states which ops write through
+   `Dst`, and `internal/cpu` asks it rather than repeating the assumption. Found
+   by the end-to-end test on its first run; the same wrong sentence appeared
+   twice in the tree, which is what made centralizing it the fix.
+
+2. **A draw's by-value uniforms were placed by slice order, not by index.**
+   `RenderPass.Draw` took a `uniforms ...UniformValue` variadic and appended
+   values in the order the caller wrote them, ignoring `UniformValue.Index`.
+   Two uniforms passed out of order bound to each other's parameters. The channel
+   was unspecified API — [033](033-render-api.md) §6 describes a uniform buffer
+   at a recorded offset — so it was removed rather than fixed, recorded as
+   [033](033-render-api.md) deviation 1. Found by asking what a test for the
+   placement rule would look like and discovering the two stages each index
+   their own uniform space from zero, so no single slice can serve both.
+
+3. **A depth attachment's extent was never checked at build.** `checkAttachment`
+   looped the colour attachments only, so an undersized depth view reached the
+   backend and was caught there — on one backend, in that backend's words. Found
+   by review rather than by a test, which is the note: the colour check existing
+   made the depth one look present.
+
+The generalizable rule from the first and third: **a guard written as an
+exemption is a guard that will be wrong once, silently, at the moment something
+new is added.** Both were exemption-shaped — "every op but a dispatch", "the
+colour attachments" — and both failed on the first case outside the shape.
+
+**What a stage still cannot do, and where it is refused.** Neither vertex
+attributes nor by-value uniforms reach a stage: the vertex layout and §6's
+uniform buffer are the same unbuilt milestone. Graph build refuses a draw whose
+stage declares either, naming the parameter and the deviation. Refused rather
+than passed an empty slice, because the generated adapter would index past its
+end and the diagnostic would come from the backend instead.
+
 #### Two follow-ons that are post-v0 by [007](007-tensor-layer.md), not deferred here
 
 Two of the completed items name a follow-on, and both are already placed after
