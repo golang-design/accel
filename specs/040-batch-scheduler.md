@@ -365,6 +365,75 @@ at [010](010-kernel-corpus.md)'s registry. Two specs deferring to a third that
 neither amends is how a gap survives both. 010 has to gain the rows, and
 whichever of 039 or 040 is implemented first amends it.
 
+## 8.2 The query extent, which is the last per-dispatch value
+
+A consumer asked for this shape before building admission around it, which is
+cheaper to give than the feature (accel issue 16). It is recorded here rather
+than built.
+
+`Attention` takes a rank-4 query, `[batch, qSeq, qHeads, headDim]`. Every other
+per-sequence value became a tensor under [043](043-per-row-values.md)'s rule —
+lengths, page tables, RoPE positions, sampling draws — and `qSeq` did not. It is
+**a single leading extent shared by the whole batch**, so it is a value that
+differs per row wearing the shape of one that does not. That is the same mistake
+043 found five times, in the one place 043 did not look.
+
+It has two consequences and they are not the same size.
+
+### Batched prefill is a kernel away, and the shape already fits
+
+Several sequences prefilling together with the *same* token count is rank 4 with
+`qSeq > 1`, which the operator already parses and refuses for want of a kernel.
+Nothing about the shape is wrong for it.
+
+It is also less of a special case than it looks, because
+[029](029-plan-cache.md) buckets prefills: a bucket set rounds every prompt up
+to one of a few lengths, so a batch of bucketed prompts *has* a uniform `qSeq`
+by construction. Batched prefill is therefore a corpus item —
+`attention_prefill_batched`, the paged prefill with a sequence-major grid — and
+not a design question.
+
+### Mixed prefill and decode is the design question
+
+A dispatch carrying one sequence's 512-token chunk alongside four decode steps
+is **ragged**: `qSeq` is 512 for one row and 1 for the others, and no dense
+leading extent expresses that. This is where the throughput is. Chunked prefill
+without it bounds latency and recovers nothing — the decodes still wait for the
+chunk's whole forward pass, in smaller pieces — which is why vLLM's V1 scheduler
+has no phase distinction at all and sglang mixes explicitly.
+
+The shape that expresses it is the packed one every serving stack converges on:
+
+$$q : [\textstyle\sum_s n_s,\; \text{qHeads},\; \text{headDim}], \qquad
+\text{QueryLengths} : [B], \quad \sum_s \text{QueryLengths}[s] = \textstyle\sum_s n_s$$
+
+A flat token buffer plus one count per sequence. Decode is $n_s = 1$, a prefill
+chunk is $n_s = c$, and a mixed step is both in one dispatch — with no phase
+distinction anywhere in the operator, which is the property to aim for rather
+than a mode to add.
+
+**Where the rank goes.** The packed form is rank 3, which today means a
+single-sequence prefill. It does not collide: a single prefill is the packed
+form with `B = 1`, and `QueryLengths` is what says which reading applies —
+present means packed, absent means the whole extent is one sequence's. That is
+[043](043-per-row-values.md)'s rule paying for itself a second time; the value
+that decides is a tensor, and a batch of one is the same path.
+
+**What it costs.** The causal mask stops being a function of the row index and
+becomes a function of the row's position *within its sequence*, so the kernel
+needs the per-sequence offset the packed layout implies. That is one extra
+lookup per query position, in a kernel that already reads a page table per
+position. It is the same shape of change as paging, and 044 §5's observation
+applies again: a prefill already walks the cache in blocks, so the indirection
+goes where the walk is.
+
+**Order.** Batched prefill first, because it is a kernel over a shape that
+already parses and it makes bucketed batching work. The packed form after, and
+only when a scheduler exists to drive it — the consumer says their scheduler can
+be built against a batched decode plus prefills that run alone, and a shape
+built ahead of the thing that drives it is how `AttentionDecodeBatched` sat
+unreachable for four milestones.
+
 ## 9. Open questions
 
 - Whether `AttentionDecodeBatched` gains a `kvLen == 0` zero-write, retiring the
