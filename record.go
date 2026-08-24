@@ -53,6 +53,9 @@ type recNode struct {
 
 	// pipeline, count and uniforms are a dispatch node's payload.
 	pipeline *ComputePipeline
+
+	// pass is a NodeRenderPass's recorded draws and attachments.
+	pass     *RenderPass
 	count    kernel.ID3
 	uniforms []any
 
