@@ -175,6 +175,12 @@ would expect:
   otherwise means Mesa llvmpipe, lavapipe, WARP, and hunting for ANGLE inside an
   installed browser, and that last one has already broken once when a CI image
   changed.
+- It **uses every core you have**. A dispatch's workgroups are defined not to
+  depend on each other, so they run at once: about 7.5x on an eight-core laptop,
+  measured through the normal API on a million-element kernel. The answer does
+  not change with the core count — a kernel whose result *could* depend on the
+  order its workgroups ran in is detected at compile time and runs on one core,
+  so you never trade a repeatable answer for the speed.
 - It **catches bugs real hardware hides**. A kernel that reads shared memory
   before writing it gets a poison pattern rather than convenient zeroes. A
   barrier that some invocations reach and others do not is detected and reported,

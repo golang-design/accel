@@ -72,6 +72,12 @@ answer rather than an error, so the type makes it not compile.
 The generated file is checked in, and CI fails if it is stale. After editing a
 kernel, run `go generate ./...` — the same command, every time.
 
+**Also after upgrading accel.** A generated file records what the compiler knew
+about your kernel, and a release can add to that. When it does, the runtime
+refuses the stale file by name at `NewComputePipeline` and tells you to
+regenerate, rather than running a kernel record it half understands. Nothing you
+wrote has to change: run the same command.
+
 ## Try it
 
 - Add `v := someMap[i]` and run `go generate`. Read the error; it names the
