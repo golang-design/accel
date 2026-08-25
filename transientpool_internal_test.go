@@ -6,6 +6,8 @@ package accel
 
 import (
 	"errors"
+
+	"golang.design/x/accel/internal/driver"
 	"strings"
 	"testing"
 )
@@ -213,4 +215,92 @@ func TestSharedPoolCountsTheGraphsThatReserved(t *testing.T) {
 		t.Fatalf("the pool is unusable after a failed build: %v", err)
 	}
 
+}
+
+// A pool block refuses to move bytes after the pool is freed.
+//
+// [poolBlock] is the driver.Block a backend is handed for pooled transient
+// memory, and its allocation is swapped out from under it when the pool is
+// freed — that indirection is the point of the type, since a shared pool grows
+// by replacing the allocation while every graph keeps the same handle.
+//
+// So the freed case is not hypothetical: it is what a backend touching a
+// released pool would hit, and touching a freed allocation is a use-after-free
+// rather than a wrong answer. The guard existed and nothing had ever reached
+// it; these three methods sat at zero coverage, found by sweeping the surface
+// for functions no test calls.
+//
+// Bytes and Size return zero values rather than refusing, because their
+// signatures cannot carry an error and a nil slice is what a caller of Bytes
+// can already handle. Write and Read can refuse, so they do.
+func TestAFreedPoolBlockRefusesToMoveBytes(t *testing.T) {
+	p := &poolBlock{}
+
+	// Before anything is allocated, the block already has no inner allocation,
+	// which is the same state Free leaves it in.
+	if got := p.Bytes(); got != nil {
+		t.Errorf("Bytes on a block with no allocation returned %d bytes, want nil", len(got))
+	}
+	if got := p.Size(); got != 0 {
+		t.Errorf("Size on a block with no allocation is %d, want 0", got)
+	}
+
+	// The accepting half, and it is here because a refusal tested alone says
+	// only that the guard fires -- not that anything it guards works. Given a
+	// live allocation the same three methods move bytes.
+	d, err := OpenCPU(CPUOptions{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	blk, err := d.dev.Alloc(driver.MemoryShared, 16, "poolblock")
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	p.swap(blk)
+
+	want := []byte{9, 8, 7, 6}
+	if err := p.Write(4, want); err != nil {
+		t.Fatalf("Write through a live pool block: %v", err)
+	}
+	got := make([]byte, 4)
+	if err := p.Read(4, got); err != nil {
+		t.Fatalf("Read through a live pool block: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("read back %v, want %v", got, want)
+	}
+	if p.Size() != 16 {
+		t.Errorf("Size is %d, want 16", p.Size())
+	}
+	if len(p.Bytes()) != 16 {
+		t.Errorf("Bytes is %d long, want 16", len(p.Bytes()))
+	}
+
+	// Free is what a released pool does, and it puts the block back in the
+	// state the refusals below describe.
+	p.Free()
+	if got := p.Bytes(); got != nil {
+		t.Errorf("Bytes after Free returned %d bytes, want nil", len(got))
+	}
+
+	for _, c := range []struct {
+		name string
+		call func() error
+	}{
+		{"Write", func() error { return p.Write(0, []byte{1, 2, 3, 4}) }},
+		{"Read", func() error { return p.Read(0, make([]byte, 4)) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.call()
+			if err == nil {
+				t.Fatal("moving bytes through a freed pool block was accepted; the " +
+					"allocation behind it is gone, so this is a use-after-free rather " +
+					"than a wrong answer")
+			}
+			if !strings.Contains(err.Error(), "freed") {
+				t.Fatalf("refused with %q, which does not say the pool is gone", err)
+			}
+		})
+	}
 }
