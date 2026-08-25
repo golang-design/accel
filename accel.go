@@ -88,13 +88,13 @@
 // So this half is settling rather than settled, and it stays outside the freeze
 // until section 8's ledger is empty.
 //
-// A stage compiles an integer texel fetch on both backends
-// (specs/032-stage-abi.md section 5), and a render pass cannot yet bind a
-// texture to one -- so the half that lets a pass read what an earlier pass drew
-// is not reachable from here. There is no sampler and there is not going to be
-// one: a filtered sampler cannot be reproduced exactly by the CPU reference, so
-// it is a feature the oracle could not check, and a stage that wants filtering
-// builds it from fetches.
+// A stage fetches a texel from a texture a pass binds
+// (specs/032-stage-abi.md section 5), so one pass reads what an earlier pass
+// drew -- which is what deferred shading, shadow maps and post-processing are.
+// There is no sampler and there is not going to be one: a filtered sampler
+// cannot be reproduced exactly by the CPU reference, so it is a feature the
+// oracle could not check, and a stage that wants filtering builds it from
+// fetches.
 //
 // # The model
 //

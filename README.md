@@ -36,9 +36,8 @@ it on whichever backend the machine has — today the CPU or Metal — with
 >
 > The one change that was going to break callers has landed: an attachment names
 > a texture view rather than a buffer view, so it can carry a format, a mip
-> level and an array layer. What is left is **additive**: binding a texture to a
-> render pass so a stage can fetch from it, mip levels above one, and rejecting
-> a subresource used as an attachment and read by a stage at once.
+> level and an array layer. What is left is **additive**: mip levels above one,
+> and rejecting a subresource used as an attachment and read by a stage at once.
 > `specs/045-texture-attachments.md` §8 is the ledger. Treat the graphics API as
 > settling rather than settled: it is outside the freeze record below, and a
 > name here may still move where one in the compute half will not.
@@ -234,7 +233,7 @@ position.
 | Page a KV cache, and batch several sequences in one step | yes |
 | Draw triangles | yes, on both backends: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending, indexed and indirect draws |
 | Render into a chosen pixel format | yes — an attachment names a texture view, so it carries its own format, and sRGB converts on write and on read |
-| Read a texture from a shader stage | **not yet.** The kernel side is built — a stage compiles an integer texel fetch on both backends — and no render pass can bind a texture to it, so a caller cannot reach it. There will be no sampler: a filtered one cannot be reproduced exactly by the CPU reference, so a stage that wants filtering builds it from fetches |
+| Read a texture from a shader stage | yes, integer texel fetch — so one pass can read what another drew, which is what deferred shading and shadow maps are. There is no sampler and there will not be one: a filtered sampler cannot be reproduced exactly by the CPU reference, so a stage that wants filtering builds it from fetches |
 | Render a frame loop with acquire and present | yes, headless — the pixels come back in a buffer |
 | Present to a window | yes on Metal, into a `CAMetalLayer` you own; accel does not create windows |
 | Use Vulkan, D3D12, OpenGL or WebGPU | not yet |

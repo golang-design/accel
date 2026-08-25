@@ -298,7 +298,7 @@ row and the graph row are not, and each is owed to a separate slice.
 | 4 | `MipLevels`/`ArrayLayers` above one | **still refused** — see §8.3 |
 | 4 | Metal attachments at the declared format | **done** — see §6.1 |
 | 4 | texel fetch, the stage half | **done** — a stage compiles one on both backends |
-| 4 | texel fetch, the binding half | **not started**, and this is the one a caller notices: `RenderPass` cannot bind a texture, so the stage half is unreachable |
+| 4 | texel fetch, the binding half | **done** — `RenderPass.SetTexture`, a texture channel in the flat stage form, the plan carrying each bound subresource, and a refusal for a stage that fetches a slot no draw bound. A pass reads what an earlier pass drew, compared image for image |
 | 4 | Metal's per-pass staging copies and the present conversion draw | not started. They are a cost rather than a defect now that the pitch is right |
 | 4 | feedback rejection over subresources | not started, and it needs the binding half first — there is no way to construct feedback until a stage can be given a texture |
 
