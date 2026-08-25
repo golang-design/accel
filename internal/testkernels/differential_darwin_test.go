@@ -788,6 +788,65 @@ func diffCases() []diffCase {
 			groups: accel.WorkgroupCount{X: 2},
 			ulp:    32, why: "a softmax composed with two dot products, per section 8's propagation",
 		},
+		{
+			// The counting pass. Both backends must reach the same counts, and
+			// the reason this is comparable at all is that the accumulation is
+			// an integer atomic: an f32 one would be class E, which section 9
+			// of the harness spec excludes from bit comparison, and there would
+			// be nothing here to compare.
+			//
+			// The history repeats ids on purpose -- a frequency penalty exists
+			// to count repeats -- so several invocations increment one address
+			// and the two backends' orders differ.
+			kernel: &testkernels.PenaltyCountKernel,
+			counts: []int{64, 256},
+			uniforms: []any{testkernels.PenaltyDims{
+				Vocab: 256, History: 64, Count: 64,
+				Repetition: 1.5, Presence: 0.2, Frequency: 0.05,
+			}},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return 0 // the counts start empty
+				}
+				// Ids that repeat, and a few past the vocabulary so the drop
+				// rather than clamp rule is compared too.
+				if i%17 == 0 {
+					return 300
+				}
+				return float32(i % 23)
+			},
+			why: "integer counts, exact on both backends",
+		},
+		{
+			// The apply pass, including both branches of the divisive penalty:
+			// the seeded logits change sign, so a backend that lowered the
+			// branch differently would disagree on the negative half only.
+			kernel: &testkernels.PenaltyApplyKernel,
+			counts: []int{256, 256, 256},
+			uniforms: []any{testkernels.PenaltyDims{
+				Vocab: 256, History: 64, Count: 64,
+				Repetition: 1.5, Presence: 0.2, Frequency: 0.05,
+			}},
+			groups: accel.WorkgroupCount{X: 4},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					// Counts including zero, so the untouched path is compared
+					// alongside the penalised one.
+					return float32(i % 3)
+				}
+				return defaultSeed(b, i)
+			},
+			why: "one divide, one multiply and two subtracts, all exact per section 2",
+		},
+		{
+			kernel:   &testkernels.PenaltyClearKernel,
+			counts:   []int{256},
+			uniforms: []any{testkernels.PenaltyDims{Vocab: 256, History: 64, Count: 64}},
+			groups:   accel.WorkgroupCount{X: 4},
+			seed:     func(b, i int) float32 { return float32(i % 7) },
+			why:      "a store of zero",
+		},
 	}
 }
 
