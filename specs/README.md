@@ -60,7 +60,7 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 | --- | --- |
 | Done | M0 through M7, and five of M8's seven items: quantization, sampling, the plan cache, paged KV with batching, and shared transients |
 | In progress | The CPU reference rasterizer ([035](035-cpu-rasterizer.md)), the render API that drives it ([033](033-render-api.md)), the stage-ABI compiler work both need ([032](032-stage-abi.md)), and the headless half of surface/present ([034](034-surface-present.md)) |
-| Written, unbuilt | [037](037-vulkan-bringup.md) Vulkan, [038](038-spirv-target.md) SPIR-V, [039](039-sampling-policy.md) sampling policy, [040](040-batch-scheduler.md) the scheduler, [041](041-msaa.md) MSAA |
+| Written, unbuilt | [037](037-vulkan-bringup.md) Vulkan, [038](038-spirv-target.md) SPIR-V, [040](040-batch-scheduler.md) the scheduler, [041](041-msaa.md) MSAA |
 | Not blocked, unscheduled | Vulkan — see 009's correction; it is verifiable in CI on lavapipe today |
 
 [009](009-sequencing.md) has the milestone list, what done means for each, and
@@ -122,7 +122,7 @@ numbered in.
 | [044-unbounded-context.md](044-unbounded-context.md) | Implemented | M8: attention over a cache larger than a workgroup, and why the loop is bounded by a binding's extent rather than by the length |
 | [045-texture-attachments.md](045-texture-attachments.md) | In progress | M9: attachments become textures, a view names a subresource and may reinterpret its format, and a stage can fetch a texel. Resources, the render API, both backends, V13 and the stage half of texel fetch are built (§8); binding a texture to a pass, mip levels above one, and feedback rejection are owed |
 | [042-surface-completion.md](042-surface-completion.md) | In progress | Completing the public surface: what each exported declaration does, refuses, or is still owed |
-| [039-sampling-policy.md](039-sampling-policy.md) | Drafted | Post-v0: temperature, penalties, the composition order, and a seeded stream that makes a whole sequence reproducible rather than one token |
+| [039-sampling-policy.md](039-sampling-policy.md) | In progress | Post-v0: temperature, penalties, the composition order, and a seeded stream that makes a whole sequence reproducible rather than one token. The stream and the penalty kernels are built; the public type (§6) is blocked on where the counts buffer lives, and the kernels are unreachable until it lands |
 | [040-batch-scheduler.md](040-batch-scheduler.md) | Drafted | Post-v0: slots over 030's pool, one plan at max batch with parked idle slots, admission, eviction, and the drain a membership-size change costs |
 | [010-kernel-corpus.md](010-kernel-corpus.md) | In progress | Required unquantized kernels, variants, layouts, deterministic selection, and per-kernel proof obligations |
 

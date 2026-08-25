@@ -1,6 +1,6 @@
 ---
 title: "Sampling policy: temperature, penalties, and a sequence that reproduces"
-status: drafted
+status: in progress
 layer: tensor
 depends_on:
   - 007-tensor-layer.md
@@ -21,6 +21,14 @@ model runtime actually asks for, and makes a whole **sequence** reproducible.
 
 [007](007-tensor-layer.md) places "sampling operators and policy" post-v0. That
 is a schedule, not a design gap.
+
+**State — 2026-08-25.** §2's generator is built (`tensor.Stream`, `Derive`,
+`Draw`) and §4's three penalty kernels are built and compared on both backends.
+Outstanding: **§6**, the public type, which is blocked on a decision §4 does not
+resolve — the two-pass penalty needs a `[vocab]u32` counts buffer, and §6's
+`Sample` signature has nowhere to put it; and **§9**, whose assertions are
+mostly about the composed pipeline §6 defines. [010](010-kernel-corpus.md) §3
+records the three kernels as unreachable until then.
 
 ## 1. The thing 009 got half right
 
