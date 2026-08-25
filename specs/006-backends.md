@@ -794,9 +794,11 @@ target, not an accident of how the Go code is written.
 ### Parallel dispatch, and what keeps it deterministic
 
 Added 2026-08-25. A dispatch's workgroups do not depend on each other, so the
-grid walk is parallel by construction, and this backend takes it: an
+grid walk is parallel by construction, and this backend takes it. An
 elementwise f32 scale over a million elements went from 11.8 to 118.9 Melem/s
-on eight cores.
+on eight cores, and the same measurement taken through the public surface —
+buffers, a pipeline, a recorded dispatch — is 7.5x, which is the number a
+caller gets.
 
 The oracle rule above says the answer may not depend on how the answer was
 computed, so the pool has to be invisible in the output. Three rules carry
@@ -871,6 +873,15 @@ chooses the worker count — where there is no race to lose. That one fails ever
 run. This generalises: **a rule about a concurrent outcome should be checked on
 the decision that produces the outcome**, and the end-to-end test kept as
 evidence that the decision is wired to something.
+
+The end-to-end test earns that second job only if it can fail. The one here
+runs the same dispatch at one processor and at every processor and requires the
+bytes to match, and its first version could not: the output buffer survives
+between the two runs, so an element the second run never wrote still held the
+first run's correct value and read as agreement. **A test that compares two runs
+sharing a buffer must clear it between them**, or it compares a run against
+itself. Found by making every worker but the first skip its chunk and watching
+the test pass.
 
 ### Performance expectations
 

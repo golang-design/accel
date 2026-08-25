@@ -1807,7 +1807,8 @@ its §5 step 1 — `TextureView`, and the format-compatibility rule — is built
 **The CPU backend now dispatches in parallel** —
 [issue #20](https://github.com/golang-design/accel/issues/20), landed
 2026-08-25, and in no wave above because nothing gated it. An elementwise f32
-scale over a million elements went from 11.8 to 118.9 Melem/s on eight cores.
+scale over a million elements went from 11.8 to 118.9 Melem/s on eight cores,
+and 7.5x through the public surface, which is the number a caller gets.
 [006](006-backends.md) §5 carries the rule set that keeps the answer independent
 of the worker count, and two things found while building it are worth carrying
 forward:
@@ -1831,9 +1832,15 @@ forward:
   outcome**: check the decision, and keep the end-to-end test as evidence that
   the decision is wired to something.
 
-The second one was found by reinstating the bug and watching the test pass — the
-practice this milestone already applies to fixes, applied to a test that was
-about to be trusted.
+- **A test comparing two runs that share a buffer must clear it between them.**
+  The end-to-end check runs one dispatch at one processor and at every
+  processor and requires the bytes to match. Its first version could not fail:
+  the output buffer survives between runs, so an element the second run never
+  wrote still held the first run's correct value.
+
+All three were found by reinstating the bug and watching the test pass — the
+practice this milestone already applies to fixes, applied to three tests that
+were about to be trusted.
 
 #### A note on the review's own reliability
 
