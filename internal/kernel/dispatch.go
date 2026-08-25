@@ -18,12 +18,22 @@ import "fmt"
 // the workgroup is the unit the kernel's own extent divides the grid into, and
 // a thread count would make the caller do a division the kernel already knows
 // the answer to.
+func Dispatch(k *Kernel, count ID3, args Args) error {
+	return DispatchWith(k, count, args, Options{})
+}
+
+// DispatchWith runs a flat kernel with explicit options.
+//
+// It exists for the reason [DispatchCooperativeWith] does, and it is the seam a
+// determinism test needs: [Options.Workers] pins the pool size, so "parallel
+// agrees with serial" is an assertion about the two strategies rather than
+// about the GOMAXPROCS of whatever machine ran the test.
 //
 // Arguments are checked once, before the first invocation. The signature is the
 // binding layout, so a mismatch is something generation already proved, and
 // checking it inside the loop would report it once per invocation instead of
 // once with the binding's name.
-func Dispatch(k *Kernel, count ID3, args Args) error {
+func DispatchWith(k *Kernel, count ID3, args Args, opts Options) error {
 	if k == nil {
 		return fmt.Errorf("accel: dispatch: no kernel")
 	}
@@ -41,28 +51,34 @@ func Dispatch(k *Kernel, count ID3, args Args) error {
 		return err
 	}
 
-	for gz := range max(count.Z, 1) {
-		for gy := range max(count.Y, 1) {
-			for gx := range max(count.X, 1) {
-				group := ID3{X: gx, Y: gy, Z: gz}
-				for lz := range size.Z {
-					for ly := range size.Y {
-						for lx := range size.X {
-							local := ID3{X: lx, Y: ly, Z: lz}
-							t := NewThread(
-								ID3{
-									X: gx*size.X + lx,
-									Y: gy*size.Y + ly,
-									Z: gz*size.Z + lz,
-								},
-								local, group, size, count,
-							)
-							k.Flat(t, args)
-						}
-					}
-				}
+	grid := normalizeCount(count)
+	groups := int(grid.X) * int(grid.Y) * int(grid.Z)
+	workers := workerCount(k.OrderIndependent, groups*int(linear(size)), opts.Workers)
+	// Every worker shares one argument set, and that is what a binding is: one
+	// buffer the whole dispatch writes. A flat kernel carries no per-workgroup
+	// state at all -- no frame, no shared storage, no scheduler -- so a worker
+	// here is a loop and nothing else.
+	return runGrid(grid, workers, func(_ int, group ID3) error {
+		runFlat(k, args, group, size, grid)
+		return nil
+	})
+}
+
+// runFlat runs one workgroup's invocations, x fastest.
+func runFlat(k *Kernel, args Args, group, size, count ID3) {
+	for lz := range size.Z {
+		for ly := range size.Y {
+			for lx := range size.X {
+				t := NewThread(
+					ID3{
+						X: group.X*size.X + lx,
+						Y: group.Y*size.Y + ly,
+						Z: group.Z*size.Z + lz,
+					},
+					ID3{X: lx, Y: ly, Z: lz}, group, size, count,
+				)
+				k.Flat(t, args)
 			}
 		}
 	}
-	return nil
 }

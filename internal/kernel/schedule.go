@@ -65,6 +65,21 @@ type Options struct {
 	// It permutes only the order within an epoch. Epoch boundaries are what a
 	// barrier means, so shuffling across them would not model any real device.
 	ShuffleSeed uint64
+
+	// Workers is how many workgroups run at once. Zero picks a size from
+	// GOMAXPROCS and the dispatch's own extent; one runs the whole grid in the
+	// calling goroutine.
+	//
+	// It is an option rather than a package-level knob because a test that pins
+	// it is testing both strategies rather than the machine it runs on: a
+	// parallel-agrees-with-serial assertion that depended on GOMAXPROCS would
+	// pass on a laptop and prove nothing in CI.
+	//
+	// It sizes the pool, it does not license one. A kernel the compiler did not
+	// prove order-independent runs on one worker whatever this says, because a
+	// knob that turned the oracle off is a knob whose default nobody could
+	// trust. See [Kernel.OrderIndependent].
+	Workers int
 }
 
 // DispatchCooperativeWith runs a cooperative kernel with explicit options.
@@ -84,61 +99,99 @@ func DispatchCooperativeWith(k *Kernel, count ID3, args Args, opts Options) erro
 		return err
 	}
 
+	grid := normalizeCount(count)
+	groups := int(grid.X) * int(grid.Y) * int(grid.Z)
 	invocations := int(size.X) * int(size.Y) * int(size.Z)
-	frames := make([]Frame, invocations)
-	threads := make([]Thread, invocations)
+	workers := workerCount(k.OrderIndependent, groups*invocations, opts.Workers)
 
-	// One tracker for the whole workgroup, shared by every invocation, because
-	// what it checks is what the invocations did to each other. Nil in strict
-	// mode, where every call the generated code makes on it is a no-op the
-	// compiler removes.
-	var tracker *SharedTracker
-	if opts.Diagnostics && len(k.SharedSizes) > 0 {
-		tracker = NewSharedTracker(k.Name, ID3{}, k.SharedSizes)
+	// One scheduler per worker, not one per dispatch. Every field of it is
+	// state for the workgroup currently being advanced -- frames, ids, the
+	// tracker, the shared storage -- and specs/002-compute-model.md section 2.7
+	// gives no ordering between workgroups at all, so two workgroups sharing
+	// any of it would be two programs writing one scratchpad.
+	//
+	// Per worker rather than per workgroup because the allocation is what the
+	// serial loop already avoided: a dispatch is many workgroups, and one
+	// allocation per invocation per workgroup is a cost the flat path does not
+	// pay.
+	schedulers := make([]*scheduler, workers)
+	for i := range schedulers {
+		schedulers[i] = newScheduler(k, args, invocations, opts)
 	}
 
-	for gz := range max(count.Z, 1) {
-		for gy := range max(count.Y, 1) {
-			for gx := range max(count.X, 1) {
-				group := ID3{X: gx, Y: gy, Z: gz}
-				// Frames are reset rather than reallocated: a dispatch is many
-				// workgroups, and one allocation per invocation per workgroup
-				// is a cost the flat path does not pay.
-				//
-				// Their *contents* are dropped, though, and that is not an
-				// optimization to reclaim later: a frame carried into the next
-				// workgroup would resume an invocation mid-kernel with another
-				// workgroup's locals.
-				for i := range frames {
-					frames[i] = Frame{}
-				}
-				// Shared storage is fresh per workgroup for the same reason,
-				// and the generated code allocates it because only that knows
-				// each array's element type and extent. It arrives poisoned
-				// rather than zeroed: zero is a value a kernel legitimately
-				// expects, so a read-before-write would return something
-				// plausible and survive every test.
-				if k.NewShared != nil {
-					args.Shared = k.NewShared()
-				}
-				fill(threads, group, size, count, opts.SubgroupSize)
-				tracker.Reset(group)
-				for i := range frames {
-					frames[i].Shared = tracker
-				}
-				if err := runWorkgroup(k, args, threads, frames, tracker, opts.ShuffleSeed,
-					opts.Diagnostics); err != nil {
-					return err
-				}
-				// Reported per workgroup rather than accumulated, because the
-				// first offending workgroup is the one a reader wants and a
-				// dispatch of a thousand would otherwise report a thousand
-				// copies of one mistake.
-				if ds := tracker.Diagnostics(); len(ds) > 0 {
-					return ds
-				}
-			}
-		}
+	return runGrid(grid, workers, func(w int, group ID3) error {
+		return schedulers[w].workgroup(k, group, size, grid, opts)
+	})
+}
+
+// scheduler is one worker's state for the workgroup it is advancing.
+type scheduler struct {
+	frames  []Frame
+	threads []Thread
+
+	// tracker is one tracker for the whole workgroup, shared by every
+	// invocation, because what it checks is what the invocations did to each
+	// other. Nil in strict mode, where every call the generated code makes on
+	// it is a no-op the compiler removes.
+	tracker *SharedTracker
+
+	// args is this worker's own copy. The slices in it are the dispatch's
+	// bindings and are shared; Shared is the workgroup's own storage and is
+	// replaced per workgroup, which is why the struct is copied rather than
+	// pointed at.
+	args Args
+
+	// order is the advance order within an epoch, reused across workgroups so
+	// that a shuffled dispatch does not allocate one per workgroup.
+	order []int
+}
+
+func newScheduler(k *Kernel, args Args, invocations int, opts Options) *scheduler {
+	s := &scheduler{
+		frames:  make([]Frame, invocations),
+		threads: make([]Thread, invocations),
+		args:    args,
+		order:   make([]int, invocations),
+	}
+	if opts.Diagnostics && len(k.SharedSizes) > 0 {
+		s.tracker = NewSharedTracker(k.Name, ID3{}, k.SharedSizes)
+	}
+	return s
+}
+
+// workgroup runs one workgroup to completion.
+func (s *scheduler) workgroup(k *Kernel, group, size, count ID3, opts Options) error {
+	// Frames are reset rather than reallocated. Their *contents* are dropped,
+	// though, and that is not an optimization to reclaim later: a frame carried
+	// into the next workgroup would resume an invocation mid-kernel with
+	// another workgroup's locals.
+	for i := range s.frames {
+		s.frames[i] = Frame{}
+	}
+	// Shared storage is fresh per workgroup, and the generated code allocates
+	// it because only that knows each array's element type and extent. It
+	// arrives poisoned rather than zeroed: zero is a value a kernel
+	// legitimately expects, so a read-before-write would return something
+	// plausible and survive every test.
+	if k.NewShared != nil {
+		s.args.Shared = k.NewShared()
+	}
+	fill(s.threads, group, size, count, opts.SubgroupSize)
+	s.tracker.Reset(group)
+	for i := range s.frames {
+		s.frames[i].Shared = s.tracker
+	}
+	if err := runWorkgroup(k, s.args, s.threads, s.frames, s.tracker, s.order,
+		opts.ShuffleSeed, opts.Diagnostics); err != nil {
+		return err
+	}
+	// Reported per workgroup rather than accumulated, because the first
+	// offending workgroup is the one a reader wants and a dispatch of a
+	// thousand would otherwise report a thousand copies of one mistake. Which
+	// workgroup is "first" is the lowest numbered one whatever the worker count
+	// is: see [runGrid].
+	if ds := s.tracker.Diagnostics(); len(ds) > 0 {
+		return ds
 	}
 	return nil
 }
@@ -561,7 +614,7 @@ func fill(threads []Thread, group, size, count ID3, subgroup uint32) {
 
 // runWorkgroup advances every invocation epoch by epoch until all have
 // finished.
-func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker, shuffleSeed uint64, diag bool) error {
+func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker, order []int, shuffleSeed uint64, diag bool) error {
 	// The bound is a backstop against a generated program counter that does not
 	// advance, and it is deliberately loose.
 	//
@@ -579,8 +632,8 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 	const maxEpochs = 1 << 20
 	bound := maxEpochs
 	// The advance order within an epoch. Signature order unless a seed asks for
-	// a permutation; see Options.ShuffleSeed.
-	order := make([]int, len(threads))
+	// a permutation; see Options.ShuffleSeed. The slice belongs to the worker
+	// so that a shuffled dispatch does not allocate one per workgroup.
 	for i := range order {
 		order[i] = i
 	}
