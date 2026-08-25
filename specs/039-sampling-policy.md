@@ -22,13 +22,47 @@ model runtime actually asks for, and makes a whole **sequence** reproducible.
 [007](007-tensor-layer.md) places "sampling operators and policy" post-v0. That
 is a schedule, not a design gap.
 
-**State — 2026-08-25.** §2's generator is built (`tensor.Stream`, `Derive`,
-`Draw`) and §4's three penalty kernels are built and compared on both backends.
-Outstanding: **§6**, the public type, which is blocked on a decision §4 does not
-resolve — the two-pass penalty needs a `[vocab]u32` counts buffer, and §6's
-`Sample` signature has nowhere to put it; and **§9**, whose assertions are
-mostly about the composed pipeline §6 defines. [010](010-kernel-corpus.md) §3
-records the three kernels as unreachable until then.
+**State — 2026-08-25.** Built: §2's generator (`tensor.Stream`, `Derive`,
+`Draw`), §4's three penalty kernels, and §5–§6's composition (`SamplingOptions`,
+`Validate`, `Scalars`, `DeclareSamplingScalars`, `Sample`). Outstanding: most of
+§9's assertion list, and the CPU/Metal token differential. Four deviations
+below.
+
+### Deviations
+
+**1. The counts live in caller-owned state, and `Sample` names it.** §4's two
+passes need a `[vocab]u32` buffer one node zeroes and another accumulates into,
+and every node in a `tensor` graph produces exactly one output tensor. The
+buffer is therefore a `State` port, like the KV cache and like the history, and
+the version chain is what orders the clear before the count and the count before
+the read. The alternatives were an `inPlace` clear — which buys a `[vocab]u32`
+copy to avoid a zero-fill of the same size — and one cooperative kernel zeroing
+and counting across a barrier, which prices 152k invocations through the
+scheduler [006](006-backends.md) §5 keeps for correctness rather than speed.
+
+**2. The draw is a tensor, not a scalar.** §6 lists it in `Scalars`.
+[043](043-per-row-values.md) makes every per-row value a tensor, and the built
+`SampleCategorical` already takes one draw per row, so a scalar here would be
+the one value in the policy that a batch could not vary.
+
+**3. `Scalars` does not carry k and p.** §6 lists them; the built `TopKMask` and
+`TopPMask` record them as node attributes, which is what makes
+[029](029-plan-cache.md)'s digest distinguish a top-5 plan from a top-40 one.
+They are structural, so changing one is a different plan — which is what §7 says
+about everything structural, and k and p were on the wrong side of its own line.
+
+**4. §3's numerical refusal is unreachable, and is kept anyway.** The two
+temperature rules are stated separately and are not independent: every
+temperature whose reciprocal overflows is around 3e-39, far below the 1e-3
+guardrail, so the guardrail always answers first. The check is kept so that
+lowering `MinTemperature` cannot silently start admitting a temperature that
+produces an all-NaN distribution and a plausible token from it, and the
+shadowing is asserted by a test rather than left to be rediscovered the day the
+constant moves.
+
+`Shape` and `SamplingShape` are not built. Their job — saying which plan a
+policy needs — is served by `Greedy` and `Penalised` together with the recorded
+k and p, which the plan digest already covers.
 
 ## 1. The thing 009 got half right
 

@@ -224,14 +224,15 @@ is `ushort` and the conversion is `as_type<float>(uint(x) << 16)`, which every
 family has, and `ir.go` already forbids arithmetic on a storage kind. The
 narrowing keeps the refusal, because it has to round.
 
-### Added for accel issue 6 — 2026-08-25, and **unreachable**
+### Added for accel issue 6 — 2026-08-25
 
-Three kernels for [039](039-sampling-policy.md) §4's penalties, recorded here
-under the rule [009](009-sequencing.md) states for exactly this case: **a kernel
-is not a capability, and a corpus entry with no operator reaching it is recorded
-as unreachable rather than as done.** They are tested, and compared on both
-backends, and no `tensor` operator records them. A reader counting capabilities
-must not count these three.
+Three kernels for [039](039-sampling-policy.md) §4's penalties. They were
+recorded here as **unreachable** for part of a day, under the rule
+[009](009-sequencing.md) states for exactly this case — a kernel is not a
+capability, and a corpus entry with no operator reaching it is recorded as
+unreachable rather than as done. `tensor.Sample` now records all three, so they
+are reachable, and the note is kept rather than deleted because the interval is
+the evidence that the rule is applied rather than quoted.
 
 | Kernel | Obligation met |
 | --- | --- |
@@ -239,15 +240,16 @@ must not count these three.
 | `PenaltyApply` | one update per distinct token from a final count, with the divisive penalty multiplying a non-positive logit rather than dividing it, and an unseen token copied through bit-identical |
 | `PenaltyClear` | zeroes the counts, because the accumulation is an atomic add and a reused buffer would penalise each step by every earlier one |
 
-**What blocks the operator is not the kernels.** §4's two-pass shape needs a
+**What blocked the operator was not the kernels.** §4's two-pass shape needs a
 `[vocab]u32` counts buffer that one node zeroes and another accumulates into,
-and [039](039-sampling-policy.md) §6 fixes `Sample`'s signature with nowhere to
-put it: every node in a `tensor` graph produces exactly one output tensor, and
-nothing in the builder produces a constant. The three ways out — caller-declared
-state as the history already is, an `inPlace` clear node, or one cooperative
-kernel that zeroes and counts across a barrier — differ in what they cost and in
-which spec they amend, so the choice is recorded before it is made rather than
-after.
+and every node in a `tensor` graph produces exactly one output tensor. The
+resolution is [039](039-sampling-policy.md)'s deviation 1: the counts are a
+caller-owned `State` port, and the state version chain orders the clear before
+the count. `PenaltyClear` is therefore the corpus's first kernel reached by a
+node with **no inputs at all** — it writes a constant into caller-owned storage
+and reads nothing, and giving it a nominal input so that it looked like its
+neighbours would have been a dependency the planner must order and nothing must
+obey.
 
 ## 3.1 What is built — 2026-08-23
 
