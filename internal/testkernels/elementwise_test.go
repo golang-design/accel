@@ -464,3 +464,41 @@ func TestRoPERotatesEachRowAtItsOwnPosition(t *testing.T) {
 		}
 	}
 }
+
+// A signed uniform reaches the kernel as a signed value.
+//
+// The whole int32 uniform path was declared and never executed before this:
+// accel.UniformWriter.I32 sat at zero coverage, the emitter's int32 case was
+// never taken, and no kernel had ever been given a negative uniform. A kernel
+// author writing one would have been its first caller.
+//
+// The offset is negative on purpose, and the kernel *branches* on its sign
+// rather than only adding it. Adding is not enough and the first version of
+// this test believed it was: two's-complement addition is sign-agnostic, so a
+// backend declaring the field unsigned produces identical bits and passes.
+// Reinstating that is what showed it. Signedness is observable only where the
+// operation differs — comparison, division, modulo, right shift — so the kernel
+// compares against zero.
+func TestASignedUniformArrivesSigned(t *testing.T) {
+	in := []int32{10, 0, -5, 2147483647, -2147483648, 7}
+	out := make([]int32, len(in))
+	const offset = -3
+
+	runFlat(t, &testkernels.ElemBiasKernel, len(in), kernelabi.Args{
+		Uniforms: []any{testkernels.BiasParams{Offset: offset}},
+		Slices:   []any{in, out},
+	})
+
+	for i, v := range in {
+		// The offset is negative, so the reference takes the same branch the
+		// kernel must: subtract. Read as unsigned it would be positive, the
+		// other branch would run, and every element would differ.
+		if want := v - offset; out[i] != want {
+			t.Fatalf("element %d: the offset %d tested as %s, giving %d for input %d "+
+				"where %d was wanted. Read through the unsigned method it is a large "+
+				"positive number and the sign test goes the other way",
+				i, offset, map[bool]string{true: "negative", false: "non-negative"}[out[i] == v-offset],
+				out[i], v, want)
+		}
+	}
+}

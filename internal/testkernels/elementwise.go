@@ -294,3 +294,49 @@ func RoPE(t accel.Thread, p RoPEParams, positions []uint32, inout []float32) {
 		inout[hi] = x*s + y*c
 	}
 }
+
+// BiasParams carries a signed offset.
+//
+// It exists because `int32` is a legal uniform field type and nothing proved
+// it. specs/014-kernel-uniforms.md admits three scalars and the emitter maps
+// each to an [accel.UniformWriter] method, but every uniform in this corpus was
+// float32 or uint32 — so `UniformWriter.I32`, the emitter's `int32` case, and
+// the MSL spelling of a signed uniform were all declared and never executed. A
+// kernel author writing this struct today would be the first caller of that
+// path, which is not where a caller should find out.
+//
+// Signed rather than a second unsigned field for the same reason the value is
+// negative in the tests: `uint32(-1)` and `int32(-1)` are the same four bytes,
+// so a codec that wrote the wrong method would still round-trip. What
+// distinguishes them is arithmetic on the far side.
+type BiasParams struct{ Offset int32 }
+
+// ElemBias applies a signed offset, and branches on its sign.
+//
+// # Why it compares rather than only adds
+//
+// The first version of this added the offset and nothing else, on the reasoning
+// that "adding a negative offset to a positive input" would expose a uniform
+// read as unsigned. That reasoning is wrong, and reinstating the bug is what
+// said so: two's-complement addition is sign-agnostic. int32(-3) and
+// uint32(4294967293) are the same four bytes and adding either produces the
+// same thirty-two bits, so a Metal side declaring the field `uint` passed the
+// differential unchanged.
+//
+// Signedness is only observable where the operation itself differs: comparison,
+// division, modulo, and the right shift. This compares against zero, which is
+// the cheapest of them and the one a reader recognises as being about sign.
+//
+//accel:kernel workgroup=64
+func ElemBias(t accel.Thread, p BiasParams, in []int32, out []int32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		// Read as unsigned, a negative offset is a very large positive number,
+		// so this branch is never taken and every element takes the other one.
+		if p.Offset < 0 {
+			out[i] = in[i] - p.Offset
+		} else {
+			out[i] = in[i] + p.Offset
+		}
+	}
+}

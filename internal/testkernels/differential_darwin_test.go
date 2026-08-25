@@ -840,6 +840,18 @@ func diffCases() []diffCase {
 			why: "one divide, one multiply and two subtracts, all exact per section 2",
 		},
 		{
+			kernel:   &testkernels.ElemBiasKernel,
+			counts:   []int{256, 256},
+			uniforms: []any{testkernels.BiasParams{Offset: -3}},
+			groups:   accel.WorkgroupCount{X: 4},
+			// A signed uniform, which is the case no kernel here had. The two
+			// backends must agree on the arithmetic and not only on the bits:
+			// int32(-3) and uint32(4294967293) are the same four bytes, so a
+			// backend reading the uniform as unsigned round-trips it unchanged
+			// and adds the wrong number.
+			why: "an integer add, exact on both backends",
+		},
+		{
 			kernel:   &testkernels.PenaltyClearKernel,
 			counts:   []int{256},
 			uniforms: []any{testkernels.PenaltyDims{Vocab: 256, History: 64, Count: 64}},

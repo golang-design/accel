@@ -113,6 +113,24 @@ func (RoPEParamsCodec) Encode(dst []byte, value RoPEParams) error {
 	return w.Err()
 }
 
+// BiasParamsCodec is the generated std140 codec for BiasParams.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type BiasParamsCodec struct{}
+
+// BiasParamsBlockSize is the encoded size of a BiasParams block, in bytes.
+const BiasParamsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (BiasParamsCodec) EncodedSize() int { return BiasParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (BiasParamsCodec) Encode(dst []byte, value BiasParams) error {
+	w := accel.NewUniformWriter(dst)
+	w.I32(0, value.Offset)
+	return w.Err()
+}
+
 // GEMMDimsCodec is the generated std140 codec for GEMMDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -2876,6 +2894,73 @@ kernel void RoPE(
 	},
 	Flat: func(t accel.Thread, a kernelabi.Args) {
 		roPEFlat(t, kernelabi.UniformValue[RoPEParams](a, 0), kernelabi.Slice[uint32](a, 0), kernelabi.Slice[float32](a, 1))
+	},
+}
+
+// elemBiasFlat is the generated flat lowering of ElemBias.
+//
+// It is what the CPU backend runs. The authored ElemBias is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func elemBiasFlat(t accel.Thread, p BiasParams, in []int32, out []int32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(out))) {
+		if p.Offset < int32(0) {
+			out[i] = (in[i] - p.Offset)
+		} else {
+			out[i] = (in[i] + p.Offset)
+		}
+	}
+}
+
+// ElemBiasKernel is the compiled form of ElemBias.
+var ElemBiasKernel = kernelabi.Kernel{
+	Name:          "ElemBias",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "in", DType: kernelabi.I32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.I32, Access: kernelabi.Write},
+	},
+	Digest:           "d94c1487650493a29a62d9769514ec24",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct BiasParams {
+    int Offset;
+    char _tail[12];
+};
+
+kernel void ElemBias(
+    const device int *in [[buffer(0)]],
+    device int *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant BiasParams &p [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[1])))) {
+        if ((p.Offset < int(0))) {
+            out[i] = (in[i] - p.Offset);
+        } else {
+            out[i] = (in[i] + p.Offset);
+        }
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "p", Type: "BiasParams", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, BiasParamsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		elemBiasFlat(t, kernelabi.UniformValue[BiasParams](a, 0), kernelabi.Slice[int32](a, 0), kernelabi.Slice[int32](a, 1))
 	},
 }
 
@@ -9891,6 +9976,7 @@ var Kernels = []*kernelabi.Kernel{
 	&ScatterRowsKernel,
 	&ScatterRowsF16Kernel,
 	&RoPEKernel,
+	&ElemBiasKernel,
 	&MatMulTiledKernel,
 	&MatMulTiledF32Kernel,
 	&MatMulTiledF32F16Kernel,
