@@ -225,6 +225,37 @@ is `ushort` and the conversion is `as_type<float>(uint(x) << 16)`, which every
 family has, and `ir.go` already forbids arithmetic on a storage kind. The
 narrowing keeps the refusal, because it has to round.
 
+### Added to cover the signed atomics — 2026-08-26
+
+`AtomicOpsI32`, and it is the same finding as the signed uniform one file down,
+reached by the same sweep: reading the public surface for zero-coverage
+functions. Every **unsigned** atomic is used by a corpus kernel. Not one
+**signed** atomic was — `AddI32`, `SubI32`, `MinI32`, `MaxI32`, `ExchangeI32`
+and `CompareExchangeI32` were exported for kernel authors, lowered by an emitter
+path nobody ran, and spelled in MSL by a mapping nobody compiled.
+
+| Kernel | Obligation met |
+| --- | --- |
+| `AtomicOpsI32` | the six signed atomics reach both backends, and **min and max are checked over a negative state** — the only two of the six whose result a signed and an unsigned reading disagree about |
+
+**The two backends are guarded by different things, and that is worth writing
+down rather than assuming symmetry.** On the CPU backend the test holds it:
+making `MinI32` compare `uint32` fails with the pair named. On Metal the *type
+system* holds it — the binding lowers to `atomic_int`, and lowering it as
+`atomic_uint` does not compile, because the compare-exchange helper is typed
+against the signed pointer. **The differential could not have caught a
+signedness error on Metal**, because an unsigned signed-atomic is not
+expressible there. A guard that cannot fail is still a guard; it is just not the
+one it looks like.
+
+**Still uncovered: `AddF32`.** The float atomic is exported and reached by no
+kernel either — it appears in this corpus only inside a comment. It is left for
+now rather than swept up with these, because it is capability-gated
+([`CapAtomicFloatAddStorage`](006-backends.md)) and its result is numerics class
+E, which [011](011-conformance-harness.md) §9 excludes from bit comparison — so
+a corpus entry for it needs a differential that compares something other than
+bits, and that is a design question rather than a missing kernel.
+
 ### Added to cover the signed uniform — 2026-08-26
 
 `ElemBias`, one kernel, added for a gap rather than a feature.
