@@ -1804,6 +1804,37 @@ entirely. It stays in Wave 2 behind the attachment change.
 **Wave 2 proper is under way.** [045](045-texture-attachments.md) is drafted and
 its §5 step 1 — `TextureView`, and the format-compatibility rule — is built.
 
+**The CPU backend now dispatches in parallel** —
+[issue #20](https://github.com/golang-design/accel/issues/20), landed
+2026-08-25, and in no wave above because nothing gated it. An elementwise f32
+scale over a million elements went from 11.8 to 118.9 Melem/s on eight cores.
+[006](006-backends.md) §5 carries the rule set that keeps the answer independent
+of the worker count, and two things found while building it are worth carrying
+forward:
+
+- **The brief was wrong about atomics.** It said integer atomics are
+  order-independent because addition is associative. Every atomic accel offers
+  *returns the value the location held before it*, so a kernel that stores what
+  its increment returned has a schedule-dependent result even though the total
+  the counter reaches does not depend on the order. Order-independence is
+  therefore a property of a kernel — the absence of any atomic — rather than of
+  an operation.
+- **A rule about a concurrent outcome cannot be gated on observing that
+  outcome.** The end-to-end test dispatches an order-dependent kernel on eight
+  workers and checks the tickets 4096 workgroups drew. With the rule removed it
+  catches the violation in about 19 runs out of 20, because one worker draining
+  a queue of cheap workgroups before its peers wake is a legal schedule that
+  happens to produce grid order. That is a flake waiting to be deleted, not a
+  gate. The rule is asserted a second time on the function that chooses the
+  worker count, where there is no race to lose, and that assertion fails every
+  run. **This generalises to every rule this project states about a concurrent
+  outcome**: check the decision, and keep the end-to-end test as evidence that
+  the decision is wired to something.
+
+The second one was found by reinstating the bug and watching the test pass — the
+practice this milestone already applies to fixes, applied to a test that was
+about to be trusted.
+
 #### A note on the review's own reliability
 
 Three of its findings did not survive contact, and that is worth recording

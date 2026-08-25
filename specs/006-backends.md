@@ -791,6 +791,87 @@ and a conformance test runs the same kernels on arm64 and amd64 and requires
 bit-identical results. This is a stated obligation of the kernel compiler's CPU
 target, not an accident of how the Go code is written.
 
+### Parallel dispatch, and what keeps it deterministic
+
+Added 2026-08-25. A dispatch's workgroups do not depend on each other, so the
+grid walk is parallel by construction, and this backend takes it: an
+elementwise f32 scale over a million elements went from 11.8 to 118.9 Melem/s
+on eight cores.
+
+The oracle rule above says the answer may not depend on how the answer was
+computed, so the pool has to be invisible in the output. Three rules carry
+that, and each one is checked:
+
+1. **A kernel whose result can depend on workgroup order runs on one worker.**
+2. **Workgroups keep the numbering the serial loop visited them in**, x
+   fastest, so "workgroup n" names one workgroup whatever the worker count is.
+3. **When several workgroups fail, the reported failure is the lowest numbered
+   one**, which is the one the serial loop would have reported. A panic outranks
+   an error at the same index.
+
+#### Rule 1 is about atomics, and it is per kernel
+
+The property is the **absence of any atomic**, not the absence of a
+non-associative one. Every atomic accel offers returns the value the location
+held before it, so an atomic increment is a ticket dispenser:
+
+```
+                   counter: 0 ──┐
+  workgroup 0 ── AddU32 ──▶ 0   │  total = n, in every order
+  workgroup 1 ── AddU32 ──▶ 1   ├─ but tickets[g] = the order g ran in
+  workgroup 2 ── AddU32 ──▶ 2   │
+                   ...        ──┘
+```
+
+`counter` reaches `n` whatever the order, because addition is associative and
+commutative. `tickets[g]` does not, because the value the atomic *returned*
+records the schedule. A kernel that stores its ticket therefore has a
+schedule-dependent result even though its accumulator is associative. So
+associativity is the wrong question, and the answer attaches to the kernel
+rather than to the operation:
+
+$$\text{OrderIndependent}(K) \;=\; \bigwedge_{\text{op} \in K} \neg\,\text{atomic}(\text{op})$$
+
+The kernel compiler infers this and writes it into the generated kernel; it is
+not a field an author sets. `false` is what a kernel gets when the compiler
+cannot tell, which costs speed and never correctness.
+
+#### The threshold is measured, on the cheapest kernel there is
+
+A pool is not free, so a dispatch below `parallelThreshold` invocations runs on
+one worker. The number is measured rather than guessed, and measured on an
+elementwise f32 scale — one multiply per invocation — because a pool's cost is
+fixed while a workgroup's work is not. The invocation count at which a pool
+starts paying for itself is therefore **highest** when the work per invocation
+is lowest, so a threshold that holds for a single multiply holds for every
+heavier kernel.
+
+On an eight-core M2 the crossover is between 128 and 256 invocations. The
+threshold is 1024, four times that, and the margin is the point rather than the
+number: below it a dispatch pays nothing at all, and at it the same scale
+dispatch is already about 1.7x faster, so nothing lands where the answer is
+arguable.
+
+It counts **invocations, not workgroups**, because a workgroup is not a fixed
+amount of work: 4 workgroups of 1024 invocations is worth a pool and 64
+workgroups of 1 invocation is not.
+
+#### Why rule 1 is asserted on the decision and not only on the output
+
+A test that dispatches an order-dependent kernel on eight workers and reads the
+tickets back watches the rule from outside. It is worth having and **it is not
+a gate**: with the rule removed it reports the violation in about 19 runs out
+of 20, because whether two workers overlap at all is the scheduler's to decide,
+and one worker draining a queue of cheap workgroups before its peers wake is a
+legal schedule that happens to produce grid order. A guard that holds most of
+the time is waiting to be the flake somebody deletes.
+
+So the rule is also asserted where it is written down — on the function that
+chooses the worker count — where there is no race to lose. That one fails every
+run. This generalises: **a rule about a concurrent outcome should be checked on
+the decision that produces the outcome**, and the end-to-end test kept as
+evidence that the decision is wired to something.
+
 ### Performance expectations
 
 It is a correctness tool. Stating the shape anyway, because "how slow" decides
