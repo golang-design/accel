@@ -62,27 +62,91 @@ rows belong to different sequences and hold different numbers.
 
 ```go
 logits := tensor.MatMul(b, tensor.Reshape(b, att, tensor.Shape{1, dim}), wout)
-probs := tensor.Softmax(b, tensor.Scale(b, logits, "invtemp"),
-	tensor.SoftmaxOptions{Axis: -1})
-kept := tensor.TopPMask(b, tensor.TopKMask(b, probs, 8), 0.9)
-tensor.Output(b, "next", tensor.SampleCategorical(b, kept, draw))
+
+// The penalties need a ring of the tokens generated so far and a scratch
+// buffer of counts. Both are storage you own, like the caches above.
+history := tensor.NewState(b, tensor.StateDesc{
+	Name: "history", DType: accel.U32, Shape: tensor.Shape{historyCap},
+})
+counts := tensor.NewState(b, tensor.StateDesc{
+	Name: "counts", DType: accel.U32, Shape: tensor.Shape{vocab},
+})
+
+policy := tensor.SamplingOptions{
+	Temperature: 0.8,
+	TopK:        40,
+	TopP:        0.95,
+	Frequency:   0.1, // penalise tokens this sequence already used
+}
+tensor.DeclareSamplingScalars(b, policy, "sample")
+tensor.Output(b, "next",
+	tensor.Sample(b, logits, draw, history, counts, policy, "sample"))
 ```
 
-Temperature, softmax, top-k, top-p and the draw are five operators in one plan.
 **So a step reads back one token, not a vocabulary of logits.** At a real
 vocabulary that is 128k floats you do not move per token per sequence — the
 difference between a loop bound by the model and one bound by the bus.
 
+`Sample` records the whole policy as one subgraph:
+
+```
+logits ─▶ penalties ─▶ ×1/T ─▶ softmax ─▶ top-k ─▶ top-p ─▶ draw ─▶ token
+           (optional)                     (optional)(optional)
+       └─▶ argmax ─▶ token   when Temperature is 0
+```
+
+**"Off" means the node is absent.** `TopK: 0` and `TopP: 0` remove those
+operators from the graph. `TopK` equal to your vocabulary does *not* turn
+truncation off — the mask keeps a bounded number of entries, so you would
+silently get the top 128.
+
+**`Temperature: 0` is greedy, and it is a different graph rather than a small
+number.** Asking for `1e-6` instead gives you argmax almost always and the
+second-best token whenever the top two logits are close — reproducibly, so it
+reads as a model quirk rather than a bug. `Validate` refuses anything under
+`MinTemperature` and names `0` as the way to ask for greedy.
+
 Three things to hold:
 
-- **`SoftmaxOptions{Axis: -1}`.** Logits are `[rows, vocab]` and each row is
-  normalized on its own. The zero value means axis 0, which is refused rather
-  than computed: *"axis 0 is not the last"*.
-- **The masks feed the draw directly.** A kept entry carries its value and a
-  dropped one carries zero, so no renormalizing pass belongs between them. A
-  second `Softmax` there would undo the mask, because `exp(0)` is 1.
-- **The draw is yours.** One `float32` per row per step, from your host RNG. The
-  policy runs on the device; the randomness stays where you can seed it.
+- **Penalties act before temperature.** Subtracting a penalty *after* dividing
+  by `T` is subtracting `penalty × T` before it, so a penalty tuned at one
+  temperature would change strength at another. Two knobs you turn
+  independently must not multiply.
+- **Nothing renormalizes between the masks and the draw.** A kept entry carries
+  its value and a dropped one carries zero. A second `Softmax` there would undo
+  the mask, because `exp(0)` is 1 for every entry you just dropped.
+- **The penalties need two buffers you own**: a `[cap]u32` ring of the tokens
+  generated so far, and a `[vocab]u32` scratch for the counts. Pass `nil` for
+  both when no penalty is configured — passing storage nothing reads is refused
+  rather than ignored.
+
+## Draws that reproduce
+
+The draw is one `float32` per row per step. Where it comes from decides whether
+a sequence you generated yesterday generates again today.
+
+```go
+stream := tensor.Derive(seed, sequenceIndex)
+// ...
+write(drawBuf, []float32{stream.Draw(uint64(pos))})
+```
+
+A `Stream` is a seed and nothing else, and `Draw` is a pure function of it and
+the token index — **the index you already hold for the KV cache**. Three things
+follow, and each is a bug you do not have:
+
+- **Copying a `Stream` copies a number.** Put a `*rand.Rand` in a config struct
+  and Go copies the pointer on assignment, so two sequences share one generator
+  and neither reproduces. There is nothing here to share, and nothing to race.
+- **Resuming is free**, because there is no position to advance. Turning
+  temperature off for one step does not shift every later token.
+- **`Draw` never returns 1.0.** `float32(rng.Float64())` rounds up to exactly
+  1.0 about once in 2^24. The sampler clamps that rather than failing, so the
+  last token in your vocabulary quietly receives the extra mass and every test
+  still passes.
+
+Use `tensor.Derive(root, i)` to give each sequence of a batch its own stream
+from one root seed.
 
 ## The loop
 
@@ -96,16 +160,28 @@ write := func(buf *accel.Buffer, data any) {
 	}
 }
 
-rng := rand.New(rand.NewPCG(1, 2))
+stream := tensor.Stream{Seed: 1}
 token := uint32(7)
 out := []uint32{token}
+ring := make([]uint32, historyCap)
 for pos := range 12 {
 	write(tokBuf, []uint32{token})
 	write(qposBuf, []uint32{uint32(pos), uint32(pos)})
 	write(kposBuf, []uint32{uint32(pos)})
 	write(slotBuf, []uint32{uint32(pos)})
 	write(lenBuf, []uint32{uint32(pos + 1)})
-	write(drawBuf, []float32{rng.Float32()})
+	write(drawBuf, []float32{stream.Draw(uint64(pos))})
+
+	// The penalty window: this sequence's tokens so far, in a fixed-capacity
+	// ring. n is how much of it is filled.
+	ring[pos%historyCap] = token
+	write(historyBuf, ring)
+	n := uint32(min(pos+1, historyCap))
+	scalars, err := policy.Scalars("sample", n, uint32(historyCap))
+	if err != nil {
+		log.Fatal(err)
+	}
+	bindings.Scalars = scalars
 
 	if err := plan.Submit(queue, bindings).Wait(); err != nil {
 		log.Fatal(err)
@@ -117,11 +193,25 @@ for pos := range 12 {
 	token = got[0]
 	out = append(out, token)
 }
-fmt.Println(out) // [7 19 18 18 19 19 16 19 0 19 0 3 18]
+fmt.Println(out)
 ```
 
 Twelve tokens from one plan. Nothing is rebuilt and the cache is never
-re-uploaded. The weights here are untrained, so those numbers are not words.
+re-uploaded.
+
+**The ring is bound at its full capacity, every step.** Binding only the filled
+part would change the input shape on every token, which is a new plan on every
+token: the plan cache keys on operand shapes, so it would grow without bound.
+The symptom is decode getting slower as the sequence lengthens and device memory
+climbing — which reads as a memory leak rather than as a sampler mistake. `n` is
+what says how much of the ring is real, and `Scalars` refuses an `n` past the
+capacity rather than clamping it.
+
+**Rebinding scalars costs nothing.** `Submit` rewrites every uniform on every
+submission, so a temperature or a penalty coefficient that changes per step is
+free. What is *structural* — whether there are penalties at all, whether top-k
+is in the graph, and the k and p themselves — is not, and changing one of those
+is a different plan.
 
 ## Narrower storage costs two lines
 
@@ -144,7 +234,10 @@ refusal. The cast is a device pass, and `Selections()` then reports
 
 - Pass `kc` to `Attention` instead of what `ScatterRows` returned. It compiles,
   and the newest token is missing from every score.
-- Drop `TopKMask` and `TopPMask`. The same draws now reach the tail.
+- Set `TopK` and `TopP` to 0. The same draws now reach the tail.
+- Set `Temperature` to `1e-6` and read the refusal, then set it to `0`.
+- Configure `Frequency` and pass `nil` for the history. The refusal names which
+  buffer is missing and why the step would penalise nothing.
 - Write `SoftmaxOptions{}` and read the refusal.
 
 ---

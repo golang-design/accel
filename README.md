@@ -230,7 +230,8 @@ position.
 | Keep the KV cache at f16 | yes — written, read, and paged. It halves the largest allocation a serving process has after the weights |
 | Load a bf16 checkpoint | yes — `Cast` widens bf16 to f32 exactly, which is a shift. No GEMM reads bf16, so convert on load |
 | Sample a token (argmax, categorical, top-k, top-p) | yes, batched — one row per sequence, with the random draw supplied so a token is reproducible |
-| Run a whole sampling policy on device | yes — temperature, softmax, top-k, top-p and the draw compose into one submission, so a decode step reads back a token rather than a vocabulary of logits |
+| Run a whole sampling policy on device | yes — one `Sample` call records penalties, temperature, top-k, top-p and the draw, so a decode step reads back a token rather than a vocabulary of logits. At a 152k vocabulary that is 4 bytes instead of 608 KB per token |
+| Reproduce a generated sequence from a seed | yes — the draw is a pure function of a seed and the token index, so there is no generator to copy, share or advance, and resuming a sequence costs nothing |
 | Page a KV cache, and batch several sequences in one step | yes |
 | Draw triangles | yes, on both backends: vertex and index buffers, per-vertex and per-instance attributes, uniforms, depth, blending, indexed and indirect draws |
 | Render into a chosen pixel format | yes — an attachment names a texture view, so it carries its own format, and sRGB converts on write and on read |
