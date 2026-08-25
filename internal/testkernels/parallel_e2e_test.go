@@ -24,6 +24,9 @@ import (
 // The two runs are the same program on the same input, so any difference is
 // the worker count. A million elements is enough to be over the pool
 // threshold several hundred times over.
+// It cannot be a parallel test: it moves GOMAXPROCS, which is process-global,
+// so a sibling running at the same time would see the processor count this test
+// pinned rather than the one it was started with.
 func TestADispatchAnswersTheSameOnOneWorkerAndMany(t *testing.T) {
 	if runtime.NumCPU() < 2 {
 		t.Skip("one processor: there is no second worker count to disagree with")

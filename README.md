@@ -220,6 +220,7 @@ position.
 | Run the same kernel on a GPU | yes, on Metal |
 | Cross-compile with `CGO_ENABLED=0` | yes, every `GOOS` |
 | Test without a GPU | yes — the CPU backend is a full implementation, not a stub |
+| Use every core on a machine with no GPU | yes — a dispatch runs its workgroups at once, about 7.5x on eight cores, and the answer does not change with the core count |
 | Use shared memory, barriers and atomics | yes |
 | Use subgroup reductions, votes, broadcasts, shuffles and scans | yes, on both backends |
 | Multiply matrices (tiled GEMM) | yes, on both backends |
