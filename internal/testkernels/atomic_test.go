@@ -265,3 +265,38 @@ func TestTheSignedAtomicsArriveSigned(t *testing.T) {
 			state[2], state[3])
 	}
 }
+
+// The float atomic adds, and one invocation of it is deterministic.
+//
+// accel.AddF32 was the last operation in the atomic surface no kernel reached.
+// It was left out of the signed-atomic sweep on the grounds that its result is
+// numerics class E, and that conflated two things: **class E is about
+// contention, not about the operation.** What specs/008-numerics.md classifies
+// as non-deterministic is a reduction -- many invocations adding into one
+// location in an order nobody fixes. One invocation doing one read-modify-write
+// is an ordinary float addition and is exactly reproducible, which is why this
+// asserts exact values rather than a bound.
+func TestTheFloatAtomicReachesAKernel(t *testing.T) {
+	state := []float32{1.5, 1.5}
+	prev := make([]float32, 2)
+
+	if err := direct.Run(&testkernels.AtomicAddF32Kernel, accel.ID3{X: 1},
+		kernelabi.Args{Slices: []any{state, prev}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Every atomic returns the value the location held before it, which is the
+	// property the whole family shares and the one a ticket dispenser needs.
+	for i, w := range []float32{1.5, 1.5} {
+		if prev[i] != w {
+			t.Errorf("operation %d returned %v, want the previous %v", i, prev[i], w)
+		}
+	}
+	// Exact, not within a bound: the addends are small integers over a power of
+	// two, so a difference here is the atomic and not the arithmetic.
+	for i, w := range []float32{2.0, 1.25} {
+		if state[i] != w {
+			t.Errorf("state %d is %v, want %v", i, state[i], w)
+		}
+	}
+}

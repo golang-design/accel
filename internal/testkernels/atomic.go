@@ -105,3 +105,33 @@ func AtomicOpsI32(t accel.Thread, state []int32, prev []int32) {
 	prev[5] = accel.CompareExchangeI32(state, 5, -1, -99) // matches, so it stores
 	prev[6] = accel.CompareExchangeI32(state, 6, -1, -99) // does not match
 }
+
+// AtomicAddF32 adds to a float location atomically, once.
+//
+// The float atomic was the last operation in accel's atomic surface that no
+// kernel reached: `accel.AddF32` appeared in this corpus only inside a comment.
+// It was left out of the signed-atomic sweep on the grounds that its result is
+// numerics class E, which specs/011-conformance-harness.md §9 excludes from bit
+// comparison — and that reasoning conflated two different things.
+//
+// **Class E is about contention, not about the operation.** What
+// specs/008-numerics.md classifies as non-deterministic is a *reduction*: many
+// invocations adding into one location in an order nobody fixes. One invocation
+// doing one read-modify-write is an ordinary float addition and is exactly
+// reproducible. So this kernel dispatches as a sequence rather than a grid, the
+// same shape [AtomicOps] uses, and its result is comparable like any other.
+//
+// # It is capability-gated, and that is half of what it is for
+//
+// [accel.CapAtomicFloatAddStorage] is a capability rather than a guarantee, and
+// Metal reports it false. So this kernel runs on the CPU backend and is
+// **refused at pipeline creation** on Metal, naming the capability — which is a
+// promise `accel.AddF32`'s own documentation makes and nothing checked.
+//
+//accel:kernel workgroup=1
+func AtomicAddF32(t accel.Thread, state []float32, prev []float32) {
+	// Values a float adds exactly, so a failure is about the atomic rather than
+	// about rounding: each is a small integer over a power of two.
+	prev[0] = accel.AddF32(state, 0, 0.5)
+	prev[1] = accel.AddF32(state, 1, -0.25)
+}

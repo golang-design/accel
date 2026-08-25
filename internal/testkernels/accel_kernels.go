@@ -732,6 +732,32 @@ kernel void AtomicOpsI32(
 	},
 }
 
+// atomicAddF32Flat is the generated flat lowering of AtomicAddF32.
+//
+// It is what the CPU backend runs. The authored AtomicAddF32 is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func atomicAddF32Flat(t accel.Thread, state []float32, prev []float32) {
+	prev[int32(0)] = accel.AddF32(state, uint32(0), math.Float32frombits(0x3F000000 /* 0.5 */))
+	prev[int32(1)] = accel.AddF32(state, uint32(1), math.Float32frombits(0xBE800000 /* -0.25 */))
+}
+
+// AtomicAddF32Kernel is the compiled form of AtomicAddF32.
+var AtomicAddF32Kernel = kernelabi.Kernel{
+	Name:          "AtomicAddF32",
+	WorkgroupSize: accel.ID3{X: 1, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
+		{Name: "prev", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "498fcca0b580e019a948f71f9425bdca",
+	Generator: kernelabi.Version,
+	Caps:      128,
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		atomicAddF32Flat(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1))
+	},
+}
+
 // attentionDecodeFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -10021,6 +10047,7 @@ var Kernels = []*kernelabi.Kernel{
 	&AtomicOpsKernel,
 	&CountWorkgroupsKernel,
 	&AtomicOpsI32Kernel,
+	&AtomicAddF32Kernel,
 	&AttentionDecodeKernel,
 	&AttentionDecodeF16Kernel,
 	&AttentionDecodeBatchedKernel,

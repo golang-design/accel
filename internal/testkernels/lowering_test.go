@@ -16,7 +16,13 @@ import (
 // Empty, and that is the point: a kernel added here is a kernel that cannot run
 // on a GPU, and writing its name down is how someone decides whether that is
 // acceptable rather than discovering it later.
-var unlowered = map[string]string{}
+var unlowered = map[string]string{
+	"AtomicAddF32": "the float atomic is a capability rather than a guarantee " +
+		"(accel.CapAtomicFloatAddStorage) and Metal reports it false, so the " +
+		"emitter declines to spell an operation the target cannot run. The " +
+		"refusal a caller meets is at pipeline creation and names the " +
+		"capability, which is checked in metal_darwin_test.go",
+}
 
 // Every corpus kernel lowers to MSL, or is listed with a reason.
 //

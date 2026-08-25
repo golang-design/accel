@@ -11,6 +11,7 @@ import (
 	"golang.design/x/accel/kernelabi"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -1489,5 +1490,42 @@ func TestMetalTimingsAreSilentWhenNotAskedFor(t *testing.T) {
 	}
 	if _, err := f.Stats(); err != nil {
 		t.Errorf("reading stats after the graph closed gave %v", err)
+	}
+}
+
+// A kernel needing a capability Metal lacks is refused at pipeline creation,
+// naming the capability.
+//
+// accel.AddF32's own documentation promises this: "A device without it refuses
+// the kernel at pipeline creation rather than producing a wrong sum." The
+// machinery existed -- Requirements.Unmet carries CapAtomicFloatAddStorage and
+// the Metal device implements driver.KernelSupport -- and nothing exercised the
+// path, because no corpus kernel used the float atomic until AtomicAddF32.
+//
+// The refusal must arrive at pipeline creation rather than at plan compile,
+// which is the whole point of specs/021-metal-bringup.md's correction: compile
+// is after a caller has uploaded their weights, so the right diagnosis arrived
+// after the expensive part (accel issue 19).
+func TestMetalRefusesTheFloatAtomicByName(t *testing.T) {
+	d := openMetalDevice(t)
+	defer d.Close()
+
+	if d.Capabilities().Has(accel.CapAtomicFloatAddStorage) {
+		t.Skip("this device reports CapAtomicFloatAddStorage, so there is no refusal " +
+			"to observe. The test runs on the day Metal stops declaring it false")
+	}
+
+	_, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AtomicAddF32Kernel, Label: "floatatomic",
+	})
+	if err == nil {
+		t.Fatal("a kernel using the float atomic built a pipeline on a device that " +
+			"reports the capability false; the sum it produces would be wrong rather " +
+			"than refused")
+	}
+	if !strings.Contains(err.Error(), "CapAtomicFloatAddStorage") {
+		t.Fatalf("refused with %q, which does not name the capability. A caller who "+
+			"cannot tell which capability is missing cannot tell whether another "+
+			"device would run it", err)
 	}
 }
