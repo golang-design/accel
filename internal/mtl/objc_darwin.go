@@ -75,9 +75,9 @@ var (
 // that difference is milliseconds a submission -- see
 // BenchmarkSubmitAttribution in internal/metal.
 //
-// # Why the arity is fixed at three
+// # Why the arity is fixed at five
 //
-// Every selector on this path takes at most three arguments after the receiver
+// Every selector on this path takes at most five arguments after the receiver
 // and the selector, and passing a register a callee does not read is free: the
 // AAPCS64 and SysV argument registers are caller-populated and the callee
 // simply ignores what it was not declared to take. A variadic Go signature here
@@ -90,9 +90,12 @@ var (
 // that through a uintptr. Those calls keep the reflected form, which reads the
 // Go signature and does place them correctly. [ComputeEncoder.Dispatch] is the
 // one on this path: MTLSize is a three-word struct.
-func send(id objc.ID, sel objc.SEL, a0, a1, a2 uintptr) uintptr {
-	r, _, _ := purego.SyscallN(fnMsgSend, uintptr(id), uintptr(sel), a0, a1, a2)
-	return r
+func send(id objc.ID, sel objc.SEL, a ...uintptr) objc.ID {
+	var f [7]uintptr
+	f[0], f[1] = uintptr(id), uintptr(sel)
+	copy(f[2:], a)
+	r, _, _ := purego.SyscallN(fnMsgSend, f[:]...)
+	return objc.ID(r)
 }
 
 // load resolves every symbol this package needs, once.
@@ -286,13 +289,13 @@ func describe(what string, err objc.ID) error {
 // grepping for them finds every place ownership changes.
 func retain(id objc.ID) objc.ID {
 	if id != 0 {
-		id.Send(selRetain)
+		send(id, selRetain)
 	}
 	return id
 }
 
 func release(id objc.ID) {
 	if id != 0 {
-		id.Send(selRelease)
+		send(id, selRelease)
 	}
 }

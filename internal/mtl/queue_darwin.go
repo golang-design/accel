@@ -58,7 +58,7 @@ var (
 // NewQueue makes a command queue, +1 from a new* selector.
 func (d *Device) NewQueue() *Queue {
 	q := &Queue{}
-	withPool(func() { q.id = d.id.Send(selNewCommandQueue) })
+	withPool(func() { q.id = send(d.id, selNewCommandQueue) })
 	return q
 }
 
@@ -75,7 +75,7 @@ func (q *Queue) Close() {
 // and then waits on it. Releasing it is [CommandBuffer.Close].
 func (q *Queue) Begin() *CommandBuffer {
 	cb := &CommandBuffer{}
-	withPool(func() { cb.id = retain(q.id.Send(selCommandBuffer)) })
+	withPool(func() { cb.id = retain(send(q.id, selCommandBuffer)) })
 	return cb
 }
 
@@ -83,20 +83,20 @@ func (q *Queue) Begin() *CommandBuffer {
 // the same reason command buffers are.
 func (cb *CommandBuffer) Compute() *ComputeEncoder {
 	e := &ComputeEncoder{}
-	withPool(func() { e.id = retain(cb.id.Send(selComputeCommandEncoder)) })
+	withPool(func() { e.id = retain(send(cb.id, selComputeCommandEncoder)) })
 	return e
 }
 
 // Blit begins a copy pass.
 func (cb *CommandBuffer) Blit() *BlitEncoder {
 	e := &BlitEncoder{}
-	withPool(func() { e.id = retain(cb.id.Send(selBlitCommandEncoder)) })
+	withPool(func() { e.id = retain(send(cb.id, selBlitCommandEncoder)) })
 	return e
 }
 
 // SetPipeline selects the kernel this pass runs.
 func (e *ComputeEncoder) SetPipeline(p *Pipeline) {
-	withPool(func() { send(e.id, selSetComputePipeline, uintptr(p.id), 0, 0) })
+	withPool(func() { send(e.id, selSetComputePipeline, uintptr(p.id)) })
 }
 
 // SetBuffer binds a range of a buffer at an argument index.
@@ -148,7 +148,7 @@ func (e *ComputeEncoder) DispatchIndirect(count *Buffer, offset int, threadsPerG
 
 // End closes the pass and releases the encoder.
 func (e *ComputeEncoder) End() {
-	withPool(func() { e.id.Send(selEndEncoding) })
+	withPool(func() { send(e.id, selEndEncoding) })
 	release(e.id)
 	e.id = 0
 }
@@ -156,32 +156,32 @@ func (e *ComputeEncoder) End() {
 // Copy encodes a device-to-device copy.
 func (e *BlitEncoder) Copy(dst *Buffer, dstOff int, src *Buffer, srcOff, size int) {
 	withPool(func() {
-		e.id.Send(selCopyFromBuffer, src.id, uintptr(srcOff), dst.id, uintptr(dstOff), uintptr(size))
+		send(e.id, selCopyFromBuffer, uintptr(src.id), uintptr(srcOff), uintptr(dst.id), uintptr(dstOff), uintptr(size))
 	})
 }
 
 // End closes the pass and releases the encoder.
 func (e *BlitEncoder) End() {
-	withPool(func() { e.id.Send(selEndEncoding) })
+	withPool(func() { send(e.id, selEndEncoding) })
 	release(e.id)
 	e.id = 0
 }
 
 // Commit submits the buffer and returns without waiting.
 func (cb *CommandBuffer) Commit() {
-	withPool(func() { cb.id.Send(selCommit) })
+	withPool(func() { send(cb.id, selCommit) })
 }
 
 // Wait blocks until the submission completes.
 func (cb *CommandBuffer) Wait() {
-	withPool(func() { cb.id.Send(selWaitUntilCompleted) })
+	withPool(func() { send(cb.id, selWaitUntilCompleted) })
 }
 
 // Done reports without blocking whether the submission has finished, either by
 // completing or by failing.
 func (cb *CommandBuffer) Done() bool {
 	var s int
-	withPool(func() { s = int(cb.id.Send(selStatus)) })
+	withPool(func() { s = int(send(cb.id, selStatus)) })
 	return s == StatusCompleted || s == StatusError
 }
 
