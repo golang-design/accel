@@ -408,6 +408,12 @@ func backing(b driver.Block) ([]byte, error) {
 // it cannot observe a missing barrier. specs/006-backends.md section 5 says so
 // explicitly, and it is why the whole-plan oracle compares two *plans* rather
 // than trusting execution here to find a barrier bug.
+//
+// Nodes, not workgroups. One node's workgroups do run at once, because the
+// compute model defines them not to depend on each other and a missing barrier
+// between two of them is already undefined everywhere. Two nodes are the case
+// a barrier exists to order, so overlapping them here would hide exactly the
+// bug this backend is kept serial to expose.
 func run(nodes []resolvedNode) error {
 	for i := range nodes {
 		n := &nodes[i]
