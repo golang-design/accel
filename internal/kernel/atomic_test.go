@@ -118,19 +118,34 @@ func TestTheFloatAtomicAdds(t *testing.T) {
 		t.Errorf("stored %v, want 1.75", b[0])
 	}
 
-	// A sum of the same values in two orders differs in the last bit, which is
-	// why a test asserting an exact total for a float reduction is wrong even
-	// where the same test is right for integers.
+	// A sum of the same values in two orders differs, which is why a test
+	// asserting an exact total for a float reduction is wrong even where the
+	// same test is right for integers.
+	//
+	// The addend is chosen from the format rather than tried until something
+	// worked, and that is what makes this deterministic. One ulp at 1.0 in f32
+	// is 2^-23, about 1.19e-7, so a value below half of that -- 5.96e-8 --
+	// disappears when added to 1.0 and survives when added to its own twin:
+	//
+	//	forward:   (1 + 4e-8) + 4e-8  =  1        + 4e-8  =  1
+	//	backward:  (4e-8 + 4e-8) + 1  =  8e-8     + 1     =  1.0000001
+	//
+	// The earlier spelling used 1e-8, where *both* orders round to 1.0 and the
+	// demonstration demonstrates nothing. It skipped when they matched, so it
+	// reported SKIP on every machine and the point it exists to make was never
+	// made. An addend picked from the ulp cannot do that.
+	const addend = 4e-8 // under half an ulp at 1.0 alone, over it in pairs
 	forward := []float32{0}
-	for _, v := range []float32{1, 1e-8, 1e-8} {
+	for _, v := range []float32{1, addend, addend} {
 		kernel.AddF32(forward, 0, v)
 	}
 	backward := []float32{0}
-	for _, v := range []float32{1e-8, 1e-8, 1} {
+	for _, v := range []float32{addend, addend, 1} {
 		kernel.AddF32(backward, 0, v)
 	}
 	if forward[0] == backward[0] {
-		t.Skip("this machine's f32 addition happens to be associative for these values; " +
-			"the point stands and the demonstration needs different ones")
+		t.Fatalf("both orders summed to %v; f32 addition is not associative and this "+
+			"is the case that shows it, so an equal result means the addend stopped "+
+			"straddling half an ulp at 1.0", forward[0])
 	}
 }
