@@ -122,6 +122,20 @@ found seven of in its own surface: `UniformBuffer[T]` is exported, allocates,
 encodes, and hands back a `BufferView` that no draw can be parameterised by.
 The type is not wrong; the half that would use it was removed and not replaced.
 
+**Made visible where a caller reads, 2026-08-25.** Re-checked rather than
+recalled — nothing anywhere calls `View`, and both uniform channels that exist
+are by value. Two things changed and neither needed the decision this item is
+waiting on. The type's own doc says what it cannot do and why the encoding half
+is still worth exporting, because a caller who allocates one and finds nothing
+that takes it is the defect reaching them rather than being recorded about them.
+And `TestADrawCanBeParameterisedByAUniformBuffer` skips with the reason and
+**self-activates** the day a draw can name a uniform offset.
+
+That second part is the same correction the same day's audit forced twice
+elsewhere: a gap recorded only in prose has no accepting half, so nothing
+notices when it closes. This spec is where the decision lives; the test is what
+makes the decision's arrival do something.
+
 ## 4. The `Kernel` shape change
 
 `Requirements.SharedBytes` is never populated, so validation rule V11 — a
