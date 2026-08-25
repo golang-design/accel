@@ -180,6 +180,21 @@ vocabulary a caller reads.
 now, because [004](004-kernel-authoring.md) describes exactly one immutable
 `Kernel` record and two would be one too many.
 
+### What the ABI version has changed for
+
+`KernelABIVersion` is in the kernel digest, so raising it makes every generated
+file in every consumer's tree stale at once. That is deliberate — a generated
+adapter compiled against one shape of the record and loaded by another is a
+wrong-answer bug with no compile error available — and it is cheap, because
+`NewComputePipeline` refuses a mismatched record by name and says to re-run
+`go generate`. It is still a version log worth keeping, since "why did my build
+start refusing kernels" has one answer per bump:
+
+| ABI | Date | What moved, and what a consumer does |
+| --- | --- | --- |
+| 2 | — | the shape this milestone shipped |
+| 3 | 2026-08-25 | `Kernel` records whether its result can depend on the order its workgroups run in, which is what the CPU backend gates its worker pool on ([006](006-backends.md) §5). Re-run `go generate`; nothing a kernel author wrote has to change |
+
 ## 5. Where this milestone's corpus lives
 
 `internal/testkernels`, which is **not** the v0 corpus.
