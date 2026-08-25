@@ -618,12 +618,21 @@ purego's `reflect.MakeFunc` dispatch, which rebuilds an argument frame per call
 from a signature it re-reads every time. One dispatch node is five such calls,
 each wrapped in an autorelease pool that is two more.
 
-| | before | after |
+| M2, otherwise idle | before | after |
 | --- | ---: | ---: |
 | one message send | 667 ns | 180 ns |
 | an autorelease pool, push and pop | 941 ns | 389 ns |
 | 790 nodes, one encoder | 11.6 ms | 5.55 ms |
 | 790 nodes, a barrier between each | 15.4 ms | 9.76 ms |
+
+The machine's own state is part of that table and is stated rather than
+assumed: the same pair measured while the machine was under a load average of
+200 reads 40 ms against 8 ms, because the reflected path allocates per call and
+an allocating path degrades further under contention than one that does not.
+The idle figures are the conservative ones and are the ones quoted. The row for
+the encoder constructors, `retain`/`release` and the buffer copy landed after
+the idle measurement and is not in it, so the "after" column is an upper bound
+on what the path costs now.
 
 Calling `objc_msgSend` directly took the per-node cost from 14.7 µs to 7.0 µs,
 and this is a **rule about where to look**: on a cgo-free backend, a
