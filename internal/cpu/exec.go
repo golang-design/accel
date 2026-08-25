@@ -187,6 +187,11 @@ type resolvedNode struct {
 	colorAttach [][]byte
 	colorCodec  []texelCodec
 
+	// vertexTextures and fragmentTextures are each stage's bound textures,
+	// per draw and then per slot, decoded to the four floats a fetch returns.
+	vertexTextures   [][]boundTexture
+	fragmentTextures [][]boundTexture
+
 	// vertexBytes is the attribute source, per draw and then per bound slot.
 	// indexBytes is one per draw, nil for a non-indexed one.
 	vertexBytes [][][]byte
@@ -635,6 +640,22 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 		}
 		r.vertexBytes = append(r.vertexBytes, bufs)
 
+		// A stage's texture *bytes*, resolved here and decoded when the draw
+		// runs. Decoding here would be decoding too early: resolution happens
+		// before any node executes, so a pass fetching what an earlier pass
+		// drew would capture the texture as it was before the draw -- black,
+		// and silently so.
+		vt, err := e.textureBytes(d.VertexTextures)
+		if err != nil {
+			return fmt.Errorf("accel: node %d draw %d vertex texture: %w", n.ID, di, err)
+		}
+		ft, err := e.textureBytes(d.FragmentTextures)
+		if err != nil {
+			return fmt.Errorf("accel: node %d draw %d fragment texture: %w", n.ID, di, err)
+		}
+		r.vertexTextures = append(r.vertexTextures, vt)
+		r.fragmentTextures = append(r.fragmentTextures, ft)
+
 		var idx []byte
 		if d.Indexed {
 			raw, err := e.bytes(d.Index)
@@ -657,4 +678,64 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 		r.indirectArgs = append(r.indirectArgs, args)
 	}
 	return nil
+}
+
+// stageTextures decodes one stage's bound textures into the form a fetch reads.
+//
+// Once per draw rather than once per fetch: a fragment stage fetching per pixel
+// would otherwise decode the same texel a thousand times, and the decode is the
+// same work every time. The cost is one image-sized slice per bound texture,
+// which is what the GPU has resident anyway.
+func (e *executable) textureBytes(ts []driver.RenderTexture) ([]boundTexture, error) {
+	if len(ts) == 0 {
+		return nil, nil
+	}
+	out := make([]boundTexture, len(ts))
+	for i, t := range ts {
+		raw, err := e.bytes(t.Operand)
+		if err != nil {
+			return nil, fmt.Errorf("slot %d: %w", i, err)
+		}
+		if _, err := codecFor(t.Format); err != nil {
+			return nil, fmt.Errorf("slot %d: %w", i, err)
+		}
+		out[i] = boundTexture{desc: t, raw: raw}
+	}
+	return out, nil
+}
+
+// boundTexture is a bound texture's bytes and the shape they decode with.
+//
+// The bytes are a live view of device memory rather than a copy, which is what
+// lets the decode happen when the draw runs: a pass that fetches what an
+// earlier pass wrote sees the write.
+type boundTexture struct {
+	desc driver.RenderTexture
+	raw  []byte
+}
+
+// decode turns the bytes into the four floats a fetch returns.
+//
+// Once per draw rather than once per fetch: a fragment stage fetching per pixel
+// would otherwise decode the same texel a thousand times for the same answer.
+// The codec is the *view's* format, so a texture written through a linear view
+// and fetched through an sRGB one decodes the way the fetch asked -- which is
+// what a texture unit does in fixed function on every target.
+func decodeTextures(ts []boundTexture) ([]kernel.Texture2D, error) {
+	if len(ts) == 0 {
+		return nil, nil
+	}
+	out := make([]kernel.Texture2D, len(ts))
+	for i, t := range ts {
+		c, err := codecFor(t.desc.Format)
+		if err != nil {
+			return nil, fmt.Errorf("slot %d: %w", i, err)
+		}
+		texels := make([]float32, t.desc.Width*t.desc.Height*4)
+		if err := c.decodeImage(texels, t.raw, t.desc.Width, t.desc.Height, t.desc.Pitch); err != nil {
+			return nil, fmt.Errorf("slot %d: %w", i, err)
+		}
+		out[i] = kernel.NewTexture2D(t.desc.Width, t.desc.Height, texels)
+	}
+	return out, nil
 }

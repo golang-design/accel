@@ -50,12 +50,11 @@ type Stage struct {
 	// signature order.
 	//
 	// A non-empty list is what tells a render pipeline that this stage needs a
-	// texture bound, and it is also why [Stage.RunVertex] and
-	// [Stage.RunFragment] are nil for such a stage: the flat form a rasterizer
-	// calls carries a uniform slice and interpolated varyings and has nowhere
-	// to put a texture, so a stage that fetches one cannot be run through it.
-	// Leaving the adapter nil states that; emitting one that fetched from an
-	// unbound texture would return black for every pixel and fail nothing.
+	// texture bound, and Index is the slot the pass binds against. A stage that
+	// declares one and is drawn with nothing bound there is refused when the
+	// graph is built, which is the alternative to an adapter fetching from an
+	// empty texture: every fetch would be out of range, the pass would be black,
+	// and nothing would fail.
 	//
 	// See specs/032-stage-abi.md section 5.
 	Textures []StageTexture
@@ -171,10 +170,18 @@ type StageOutput struct {
 // order Attributes declares. The result is the clip position and the varyings
 // flattened into floats — which is what specs/035-cpu-rasterizer.md interpolates
 // and why it never has to know about a Go struct.
-type VertexFn func(v Vertex, uniforms []any, attrs [][]float32) (Clip, []float32)
+//
+// textures is one per [Stage.Textures] entry, indexed by StageTexture.Index and
+// already resolved to the subresource the pass bound: its texels decoded from
+// the bound view's format, and its extent the texture's own. A backend supplies
+// every one a stage declares, so the adapter indexes rather than tests.
+type VertexFn func(v Vertex, uniforms []any, attrs [][]float32, textures []Texture2D) (Clip, []float32)
 
 // FragmentFn is the flat form of a fragment stage.
 //
-// varyings arrives interpolated, in the same flat order VertexFn produced. The
-// result is one value per colour attachment, in declaration order.
-type FragmentFn func(f Fragment, uniforms []any, varyings []float32) [][4]float32
+// varyings arrives interpolated, in the same flat order VertexFn produced.
+// textures is [VertexFn]'s, indexed by this stage's own dense texture index --
+// the two stages count their textures from zero the way they count their
+// uniforms. The result is one value per colour attachment, in declaration
+// order.
+type FragmentFn func(f Fragment, uniforms []any, varyings []float32, textures []Texture2D) [][4]float32

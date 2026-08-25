@@ -517,6 +517,12 @@ type drawCall struct {
 	// for a texture no body fetches.
 	textures []TextureView
 
+	// texAccess indexes the node's access list for each stage's textures,
+	// dense by the stage's own texture index. Two slices because each stage
+	// numbers its textures from zero, the way the uniform slices are two.
+	vertexTexAccess   []int
+	fragmentTexAccess []int
+
 	// vertexAccess and indexAccess index the node's access list, so build
 	// lowers these views the way it lowers an attachment. -1 is unbound.
 	vertexAccess []int
@@ -1016,7 +1022,15 @@ func (p *RenderPass) declareTextureReads(d *drawCall) {
 			if v.Texture == nil {
 				continue
 			}
-			p.declareTextureRead(v, fmt.Sprintf("%s %d", s.what, tx.Index), s.mask)
+			at := p.declareTextureRead(v, fmt.Sprintf("%s %d", s.what, tx.Index), s.mask)
+			dst := &d.vertexTexAccess
+			if s.mask == stageFragmentShader {
+				dst = &d.fragmentTexAccess
+			}
+			for len(*dst) <= tx.Index {
+				*dst = append(*dst, -1)
+			}
+			(*dst)[tx.Index] = at
 		}
 	}
 }

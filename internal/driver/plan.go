@@ -725,6 +725,46 @@ type RenderDraw struct {
 	// one slice per stage because each stage indexes its own from zero.
 	VertexUniforms   []any
 	FragmentUniforms []any
+
+	// VertexTextures and FragmentTextures are the shader-visible textures each
+	// stage declares, in that stage's own dense texture order.
+	//
+	// Two lists rather than the pass's one slot array, even though a slot is
+	// one binding both stages share. What a backend does with them is
+	// per-stage: Metal has a texture argument table per stage and the CPU
+	// rasterizer hands each adapter its own slice, so a shared array would make
+	// every consumer re-derive "the textures *this* stage declares" from a
+	// stage record it would otherwise not need to read.
+	VertexTextures   []RenderTexture
+	FragmentTextures []RenderTexture
+}
+
+// RenderTexture is one texture bound to a stage.
+//
+// The extent is the *texture's*, not the render area's. A pass that fetches a
+// 16x16 lookup table while drawing into a 1920x1080 attachment is ordinary, and
+// an extent taken from the pass would put every fetch past row 16 in range and
+// reading whatever followed.
+type RenderTexture struct {
+	// Operand names the subresource's bytes, the way an attachment's does.
+	Operand Operand
+
+	// Format is the *view's* rather than the texture's, so a texture written
+	// through a linear view and fetched through an sRGB one decodes as the
+	// fetch asked for. It is what selects the codec that turns those bytes into
+	// the four floats a stage sees, which is the conversion every target does
+	// in fixed function on the way out of a texture unit.
+	Format Format
+
+	// Width and Height are the bound subresource's extent in texels.
+	Width, Height int
+
+	// Pitch is the distance in bytes between the starts of two consecutive
+	// rows, carried for the reason an attachment's is: a texture's rows are
+	// padded to the device's copy alignment, so it is not width times bytes per
+	// pixel and dividing it out of the operand size stops working the day a
+	// view names a mip.
+	Pitch int
 }
 
 // VertexLayout is what one bound vertex buffer holds.

@@ -527,6 +527,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			return nil, err
 		}
 		rd.VertexUniforms, rd.FragmentUniforms = vu, fu
+		if err := g.textureOperands(n, p, i, pipe, d, &rd); err != nil {
+			return nil, err
+		}
 		if err := g.vertexOperands(n, p, i, pipe, d, &rd); err != nil {
 			return nil, err
 		}
@@ -838,4 +841,54 @@ func aspectMismatch(wantDepth bool) string {
 		return "a depth attachment takes a depth format"
 	}
 	return "a colour attachment does not take a depth format"
+}
+
+// textureOperands lowers a draw's bound stage textures.
+//
+// A stage declares which textures it fetches and a pass binds them, so this is
+// where the two meet -- the same shape vertexOperands has, and the same
+// refusal: a slot the stage reads and no draw bound is refused here rather than
+// fetched as zeros, because a stage sampling a black texture looks like a
+// lighting bug rather than a missing binding.
+func (g *Graph) textureOperands(n *recNode, p *RenderPass, draw int, pipe *RenderPipeline, d drawCall, rd *driver.RenderDraw) error {
+	for _, s := range []struct {
+		stage  *Stage
+		access []int
+		out    *[]driver.RenderTexture
+		what   string
+	}{
+		{pipe.desc.Vertex, d.vertexTexAccess, &rd.VertexTextures, "vertex"},
+		{pipe.desc.Fragment, d.fragmentTexAccess, &rd.FragmentTextures, "fragment"},
+	} {
+		if s.stage == nil {
+			continue
+		}
+		for _, tx := range s.stage.Textures {
+			if !tx.Reads {
+				continue
+			}
+			if tx.Index >= len(s.access) || s.access[tx.Index] < 0 {
+				return fmt.Errorf("accel: Build: render pass %q draw %d: the %s stage %q "+
+					"fetches texture %d and no texture is bound there; call SetTexture "+
+					"before the draw", p.desc.Label, draw, s.what, s.stage.Name, tx.Index)
+			}
+			v := d.textures[tx.Index]
+			op, err := g.operand(n, n.accesses[s.access[tx.Index]])
+			if err != nil {
+				return fmt.Errorf("accel: Build: render pass %q draw %d %s texture %d: %w",
+					p.desc.Label, draw, s.what, tx.Index, err)
+			}
+			sz := v.Texture.desc.Size
+			for len(*s.out) <= tx.Index {
+				*s.out = append(*s.out, driver.RenderTexture{})
+			}
+			(*s.out)[tx.Index] = driver.RenderTexture{
+				Operand: op,
+				Format:  v.Format.plan(),
+				Width:   sz.Width, Height: sz.Height,
+				Pitch: g.dev.AlignedRowPitch(v.Format, sz.Width),
+			}
+		}
+	}
+	return nil
 }
