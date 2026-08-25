@@ -391,3 +391,58 @@ func TestPaddingDoesNotChangeTheRealRows(t *testing.T) {
 // Refuses rather than evicts: choosing a victim is a policy question about
 // which sequence matters, and a wrong answer silently truncates somebody's
 // context.
+
+// Sizes reports the bucket set smallest-first, and hands out a copy.
+//
+// The copy is the property worth guarding. [NewBuckets] is the only way to
+// build a set, and it sorts precisely so that [Buckets.For]
+// can pick the smallest bucket that fits by walking in order. Returning the
+// backing slice would let any caller reorder or truncate that invariant from
+// outside, and the symptom is not a panic: For would return a bucket that is
+// not the smallest fit, so a prompt gets a larger plan than it needs and
+// nothing reports anything.
+//
+// Nothing called Sizes at all before this — found by sweeping the surface for
+// functions no test reaches.
+func TestBucketSizesAreSortedAndCopied(t *testing.T) {
+	b, err := tensor.NewBuckets(512, 64, 128)
+	if err != nil {
+		t.Fatalf("NewBuckets: %v", err)
+	}
+
+	got := b.Sizes()
+	want := []int{64, 128, 512}
+	if len(got) != len(want) {
+		t.Fatalf("Sizes returned %v, want %v: the set is sorted", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Sizes returned %v, want %v", got, want)
+		}
+	}
+
+	// Mutating what Sizes handed back must not reach the set. Reversing it is
+	// the mutation that matters, because For depends on the order.
+	for i, j := 0, len(got)-1; i < j; i, j = i+1, j-1 {
+		got[i], got[j] = got[j], got[i]
+	}
+	if again := b.Sizes(); again[0] != 64 {
+		t.Fatalf("after reversing the slice Sizes returned, the set reads %v: Sizes "+
+			"handed out its backing array, so a caller can reorder the invariant For "+
+			"walks and get a bucket that is not the smallest fit", again)
+	}
+
+	// The order is what For consumes, so assert it through For as well rather
+	// than only through the accessor that reports it.
+	if n, err := b.For(65); err != nil || n != 128 {
+		t.Fatalf("For(65) = %d, %v; want 128 and no error", n, err)
+	}
+
+	// A duplicate is refused rather than collapsed, which is what the
+	// constructor's documentation said it did until writing this test read the
+	// code. Collapsing would compile one plan where a caller asked for two.
+	if _, err := tensor.NewBuckets(128, 64, 128); err == nil {
+		t.Fatal("a repeated bucket size was accepted; a caller's list saying " +
+			"something they did not mean should be refused rather than tidied")
+	}
+}

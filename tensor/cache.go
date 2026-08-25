@@ -158,8 +158,14 @@ func (c *PlanCache) Close() error {
 // 128. Silently, with a plausible answer.
 type Buckets struct{ sizes []int }
 
-// NewBuckets sorts and de-duplicates a bucket set. It is the only way to build
-// one; see [Buckets].
+// NewBuckets sorts a bucket set and refuses a duplicate. It is the only way to
+// build one; see [Buckets].
+//
+// Refuses rather than collapses, and the distinction is worth the sentence: a
+// repeated size is a caller's list saying something they did not mean, and
+// silently collapsing it would compile one plan where they asked for two and
+// report nothing. Every other malformed set here is refused for the same
+// reason, so de-duplicating would be the one place a mistake was tidied away.
 func NewBuckets(sizes ...int) (Buckets, error) {
 	if len(sizes) == 0 {
 		return Buckets{}, errors.New("accel/tensor: a bucket set needs at least one size")
