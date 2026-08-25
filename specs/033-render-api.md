@@ -434,6 +434,18 @@ only the CPU backend lowers a texture attachment today. Those entries skip
 naming 045 rather than being deleted, so the seven-case comparison resumes on
 the day the Metal slice lands. 045 §8.4 records what the pause costs.
 
+**The pause ended, 2026-08-25.** The Metal slice landed — attachments at the
+declared format, the pitch correction, and the texel-fetch binding half — and
+the comparison is running: `TestTheRenderSurfaceAgreesOnBothBackends` covers all
+seven cases, beside the load-action, store-action, depth and per-format
+comparisons. **This note exists because nothing made the resumption happen.** A
+pause recorded in prose has no accepting half: the tests were rewritten as the
+slice landed and this paragraph kept saying they were paused, so for a day the
+spec understated what was verified while a reader had no way to tell. A
+suspension with a stated end condition should be a skipping test that
+self-activates on the condition — [009](009-sequencing.md) records that pattern
+for the texture-origin entry — rather than a sentence somebody has to remember.
+
 **Outstanding**, and why this spec stays *in progress*:
 
 | Row | Why it is not done |
