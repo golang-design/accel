@@ -873,6 +873,14 @@ func (g *Graph) textureOperands(n *recNode, p *RenderPass, draw int, pipe *Rende
 					"before the draw", p.desc.Label, draw, s.what, s.stage.Name, tx.Index)
 			}
 			v := d.textures[tx.Index]
+			if what, ok := attachmentFeedback(p, v); ok {
+				return fmt.Errorf("%w: Build: render pass %q draw %d: the %s stage %q "+
+					"fetches texture %d, which is %s of this pass — a stage reading the "+
+					"subresource the pass is writing is feedback, and its result is "+
+					"undefined on every target (specs/033-render-api.md section 3.3). "+
+					"Read it in a later pass, or fetch a different mip or layer",
+					ErrUsage, p.desc.Label, draw, s.what, s.stage.Name, tx.Index, what)
+			}
 			op, err := g.operand(n, n.accesses[s.access[tx.Index]])
 			if err != nil {
 				return fmt.Errorf("accel: Build: render pass %q draw %d %s texture %d: %w",
@@ -891,4 +899,61 @@ func (g *Graph) textureOperands(n *recNode, p *RenderPass, draw int, pipe *Rende
 		}
 	}
 	return nil
+}
+
+// attachmentFeedback reports whether a fetched view names a subresource this
+// pass is also writing, and which attachment it is.
+//
+// specs/033-render-api.md §3.3. The comparison is on **view ranges** rather
+// than on texture handles, and that is the whole rule: a different mip or a
+// different array layer is a different subresource and is legal where a backend
+// can bind those views independently. Comparing handles rejects that legal case,
+// and is right about the illegal one only by accident.
+//
+// # Two things this deliberately does not refuse
+//
+// Fixed-function read-modify-write is not feedback. LoadKeep, blending, and the
+// depth test all read the attachment, and they are ordered by the raster
+// operations rather than by the shader — refusing them would reject every
+// blended or depth-tested pass ever written. Nothing here looks at a load
+// action or a blend state, which is why.
+//
+// A depth attachment with writes disabled is still an attachment. It is legal
+// to test against, and fetching that same subresource in a stage is still
+// feedback, so the depth attachment is compared like any other.
+//
+// # What is not yet reachable, and why that is recorded rather than assumed
+//
+// MipLevels and ArrayLayers above one are still refused
+// (specs/045-texture-attachments.md §8.3), so today every view of a texture
+// names mip 0 and layer 0 and the disjoint case cannot be constructed. This
+// compares ranges anyway, because that is the rule and writing the degenerate
+// form would make the day mips land the day this silently starts refusing legal
+// draws. But the accepting half is untested until then, and this project has
+// withdrawn two rules for exactly that shape — so
+// TestADisjointSubresourceIsNotFeedback skips today and self-activates when a
+// second mip becomes admissible.
+func attachmentFeedback(p *RenderPass, v TextureView) (string, bool) {
+	if v.Texture == nil {
+		return "", false
+	}
+	for i, c := range p.desc.Color {
+		if sameSubresource(c.View, v) {
+			return fmt.Sprintf("colour attachment %d", i), true
+		}
+	}
+	if p.desc.Depth != nil && sameSubresource(p.desc.Depth.View, v) {
+		return "the depth attachment", true
+	}
+	return "", false
+}
+
+// sameSubresource reports whether two views name overlapping storage.
+//
+// Format is not compared, and that is deliberate: two views of one mip that
+// differ only in numeric encoding — the RGBA8Unorm and RGBA8UnormSRGB pair
+// [Texture.View] exists for — are the same bytes, so reading one while writing
+// the other is the feedback this refuses rather than a way around it.
+func sameSubresource(a, b TextureView) bool {
+	return a.Texture != nil && a.Texture == b.Texture && a.Mip == b.Mip && a.Layer == b.Layer
 }
