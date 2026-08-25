@@ -225,7 +225,10 @@ position.
 | Use subgroup reductions, votes, broadcasts, shuffles and scans | yes, on both backends |
 | Multiply matrices (tiled GEMM) | yes, on both backends |
 | Build a tensor graph and run inference | yes — decode and prefill, with a KV cache |
-| Use int8 quantized weights | yes |
+| Use int8 quantized weights | yes, against f32 or f16 activations |
+| Mix widths in one product | yes — f32 activations against f16 or int8 weights, with no cast between. A transformer's two operands are never the same width, and casting them was four dispatches per layer |
+| Keep the KV cache at f16 | yes — written, read, and paged. It halves the largest allocation a serving process has after the weights |
+| Load a bf16 checkpoint | yes — `Cast` widens bf16 to f32 exactly, which is a shift. No GEMM reads bf16, so convert on load |
 | Sample a token (argmax, categorical, top-k, top-p) | yes, batched — one row per sequence, with the random draw supplied so a token is reproducible |
 | Run a whole sampling policy on device | yes — temperature, softmax, top-k, top-p and the draw compose into one submission, so a decode step reads back a token rather than a vocabulary of logits |
 | Page a KV cache, and batch several sequences in one step | yes |
