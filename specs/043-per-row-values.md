@@ -323,6 +323,16 @@ chunked-scan kernel and nothing before it. What is genuinely missing and is
 worth building on its own is **snapshot and restore for any `State`**, which
 serves prefix caching for both kinds and is not blocked on a recurrent kernel.
 
+**Checked, not only argued — 2026-08-25.** Both halves of this withdrawal are
+claims about what compiles and runs, and both were first argued from reading
+`ScatterRows`'s shape arithmetic. `TestARecurrentStateIsAStateIndexedBySequence`
+is the accepting half: a state shaped `[slots, heads, keyDim, valDim]` declares
+as an ordinary `State`, a write at one sequence's slot leaves the other slots
+byte-identical, and a paged KV cache and a recurrent state are live in one graph
+and one submission. Binding the wrong slot fails it. **A correction is a claim
+like any other, and one sent to a consumer needs the same evidence a feature
+does.**
+
 **The generalisable part.** A test that predicts an operation set is stronger
 than a description, which is why the aphorism was persuasive — and that is
 exactly why it needs checking against the case it was not derived from. This one
