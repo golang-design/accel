@@ -23,10 +23,27 @@ model runtime actually asks for, and makes a whole **sequence** reproducible.
 is a schedule, not a design gap.
 
 **State — 2026-08-25.** Built: §2's generator (`tensor.Stream`, `Derive`,
-`Draw`), §4's three penalty kernels, and §5–§6's composition (`SamplingOptions`,
-`Validate`, `Scalars`, `DeclareSamplingScalars`, `Sample`). Outstanding: most of
-§9's assertion list, and the CPU/Metal token differential. Four deviations
-below.
+`Draw`), §4's three penalty kernels, §5–§6's composition (`SamplingOptions`,
+`Validate`, `Scalars`, `DeclareSamplingScalars`, `Sample`), and §9's assertions
+including the CPU/Metal **token** differential and the interleaved
+reproducibility run. Four deviations below.
+
+Two of §9's assertions are the ones the corpus differential cannot make, and
+they are worth separating from the rest. The differential compares each
+kernel's two lowerings; every kernel here passes it. What it cannot see is
+**where a boundary falls in the composition** — a plateau at the top-k edge, or
+a nucleus the walk stops inside — which decides a different token from
+arithmetic that matched everywhere. So the cross-backend assertion is on the
+token a caller reads, over many draws, and it additionally requires those draws
+to produce more than one distinct token: agreement between two backends that
+both return a constant is not evidence.
+
+The interleave in the reproducibility test is likewise not a detail. One token
+sampled twice passes for a design that reseeds every step; a whole sequence
+sampled twice passes for one whose generator happens to advance identically both
+times. Running a different sequence in between is what fails for a mutable
+generator hidden anywhere, and it does — verified by hiding a counter behind
+`Stream`'s value type.
 
 ### Deviations
 
