@@ -125,6 +125,7 @@ state; `scatter_rows` first executes through a public graph in M3.
 | `linear_attention_chunked` | **not registered** | — | A gated-delta / SSM recurrence, which is three of every four layers in the hybrid models the open-weights frontier has moved to (accel issue 17). **In scope**, and two things are prior to a kernel: the recurrence is sequential in $t$, so a prefill is a chunked *scan* rather than a batch of independent rows; and the state is matrix-valued **per sequence**, not per position, which [007](007-tensor-layer.md)'s `State` cannot express — see [043](043-per-row-values.md) §9. Not scheduled: the consumer's dense path is unblocked and this decides whether a 27B hybrid target is reachable, not whether they can build. |
 | `grouped_gemm` | **not registered** | — | $E$ independent $[n_e, K]\times[K, N]$ products with the $n_e$ decided at runtime, which is what a mixture-of-experts layer needs and what makes it worth having: ~30B parameters at ~3B of compute per token (accel issue 18). **In scope.** The naive form — run every expert and mask — is expressible today and does $E/k$ times the work, which inverts the reason MoE exists. The routing itself composes: a small `MatMul` for the gate and [028](028-sampling.md)'s top-$k$ over $E$. Not scheduled, and if built the ragged extent is [043](043-per-row-values.md) §9's, built once rather than a third time. |
 | `quant_matmul_superblock` | **not registered** | — | GGUF's K-quants, which is where the ecosystem's pre-quantized checkpoints are (accel issue 15). A `Q4_K` super-block is 256 weights as eight sub-blocks of 32, each carrying a 6-bit scale and a 6-bit minimum, over two fp16 super-scales: $w_i = d\cdot s_j\cdot q_i - d_\text{min}\cdot m_j$ with $j=\lfloor i/32\rfloor$. `quant` registers one representation — int8 with one fp16 scale per 32, no minimum and one level of scale — so nothing reads a super-block. Not scheduled: the consumer reads safetensors and quantizes at load, and says so. The two workarounds are both bad and are why this is recorded rather than left implicit — dequantizing K-quants at load discards the memory saving that is the whole reason to read GGUF, and requantizing into int8 stacks two lossy steps. |
+| `quant_matmul_int4` | **not registered** | — | A 4-bit weight representation and a GEMM that reads it, which decides whether a 27B-class model fits one device at all (accel issue 22). **In scope.** At 27B parameters: bf16 is 50.3 GiB, accel's int8 is 26.7 GiB, and int4 is 13.4 GiB — so this is not a saving, it is the difference between fitting a 24 GiB card and not. |
 | `quant_matmul` | per-element at every M and matrix-vector at M=1, each over f16 and over f32 activations | int8 weights with per-block scales; the activation's width selects within each shape | The M=1 variant closes accel issue 11's second half, and is the same selection `matvec` is for the unquantized path. Its reduction is a tree over lanes where the general kernel folds sequentially, so its rounding differs and its bound does not: 027 states the error over the number of terms rather than their order. The f32-activation pair closes accel issue 14: int8 is the width a model reaches for *because* it is large, so requiring f16 activations put a Cast in front of every projection of the configuration least able to afford the pass. Both shapes have one rather than only the general kernel, because M=1 is every decode step and closing the refusal there alone would have repeated issue 11. Defensible on the same ground as the mixed GEMM: each is its f16 form with the activation load already wide, so on activations f16 holds exactly the two agree bit for bit, and 027's bound is stated against an evaluation neither changed. The quant and scale planes keep their widths in every variant. |
 
 The `16x8x16` GEMM tile means a 16-wide output-N tile, eight output rows, and a
@@ -250,6 +251,51 @@ node with **no inputs at all** — it writes a constant into caller-owned storag
 and reads nothing, and giving it a nominal input so that it looked like its
 neighbours would have been a dependency the planner must order and nothing must
 obey.
+
+### What decides a 4-bit representation — 2026-08-25
+
+Recorded before the shape is fixed, because the two obvious goals pull apart and
+the choice is hard to revisit once checkpoints exist.
+
+**`Int8Block` is 32 for a reason that does not carry over.** It was chosen so no
+K-step straddles a scale boundary: the tiled GEMM steps K in sixteen and the row
+kernels are 128 wide. That is a *tiling* argument, and at 8 bits the metadata it
+implies is invisible. At 4 bits it is not:
+
+| representation | bytes per weight | 27B resident | scale overhead, as a share of the payload |
+| --- | ---: | ---: | ---: |
+| bf16 | 2.0 | 50.3 GiB | — |
+| int8, fp16 scale per 32 | 1.0625 | 26.7 GiB | 6.2% |
+| int4, fp16 scale per 32 | 0.5625 | 14.1 GiB | **12.5%** |
+| int4, fp16 scale + fp16 zero per 128 | 0.53125 | 13.4 GiB | 6.2% |
+
+**Halving the payload doubles the metadata's share of it.** Keeping the block at
+32 would spend an eighth of a 4-bit format on scales. A group of 128 carries
+*twice* as much metadata per group — a scale and a zero point — and still costs
+less, because it is amortised over four times as many weights. And 128 is a
+multiple of sixteen and is exactly the row kernels' width, so the tiling
+argument that fixed 32 permits 128 rather than forbidding it.
+
+**The tension worth stating is symmetric against asymmetric.** accel's int8 is
+symmetric — `Int8Max` is 127 rather than 128 precisely so the representable
+range has no value without a counterpart, which is the special case
+[027](027-quantization.md)'s error bound is stated without. AWQ and GPTQ both use
+group 128 **with a zero point**, which is asymmetric and needs a different bound.
+So the consumer's question is the right one and the answer is not obviously yes:
+*reading the ecosystem's checkpoints* and *having a good 4-bit format* may not be
+one representation. A symmetric int4 has the cleaner bound; an asymmetric one
+reads what people publish.
+
+This is a different gap from `quant_matmul_superblock` above and neither
+subsumes the other. That row is about reading GGUF's K-quants, which are 4-bit
+among other things and carry two levels of scale; this one is about accel having
+a 4-bit representation at all. A decision to read K-quants would not give a
+caller a format to quantize *into*, and a native int4 would not read a published
+`Q4_K` file.
+
+**Not scheduled.** The consumer's dense path runs at ~18 tokens/s on Metal and
+they say so. What this row buys is that the gap is visible to whoever picks it
+up, which is exactly what they asked for.
 
 ## 3.1 What is built — 2026-08-23
 

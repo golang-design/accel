@@ -182,3 +182,24 @@ and asymmetric), a quantized KV cache, activation quantization, and
 `CapI8DotProduct` — the capability exists in [002](002-compute-model.md)'s table
 and nothing here requires it, because the products are widened to f32 before
 accumulating.
+
+
+## A 4-bit representation is in scope, and its block size is not 32
+
+Recorded 2026-08-25 for accel issue 22, with the arithmetic in
+[010](010-kernel-corpus.md) §3.
+
+This spec states its error bound for a **symmetric** representation, and
+`Int8Max` is 127 rather than 128 so that the range has no value without a
+counterpart — which is the special case the bound is written without. A 4-bit
+representation that reads AWQ or GPTQ checkpoints is **asymmetric**: group 128
+with a zero point. That needs its own bound, and stating one is prior to
+registering the format rather than a follow-up, because a bound derived after
+the fact is a bound fitted to what the code already does.
+
+The block size does not carry from int8. Thirty-two was a tiling choice — no
+K-step straddles a scale boundary — and at 8 bits the metadata it implies is
+6.2% of the payload. At 4 bits the same block is **12.5%**, because halving the
+payload doubles the metadata's share of it. Group 128 carries a scale *and* a
+zero point and still costs 6.2%, and 128 is a multiple of the GEMM's K-step and
+equal to the row kernels' width, so the argument that fixed 32 permits it.
