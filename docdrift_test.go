@@ -42,7 +42,11 @@ import (
 func TestTheDocumentationNamesNothingThatIsGone(t *testing.T) {
 	known := exportedNames(t)
 
-	qualified := regexp.MustCompile(`\baccel\.([A-Z][A-Za-z0-9_]*)`)
+	// Both packages a tutorial writes against. `tensor` was missing here until
+	// 2026-08-25, which mattered more than the omission looks: the tutorials are
+	// mostly about the tensor layer, so the guard was covering the package the
+	// documentation talks about least.
+	qualified := regexp.MustCompile(`\b(?:accel|tensor)\.([A-Z][A-Za-z0-9_]*)`)
 	// The receiver is captured so a call qualified by a package this repo does
 	// not own can be skipped. Without it `atomic.AddInt32` and
 	// `unsafe.Pointer` read as missing accel methods, and a guard with false
@@ -74,7 +78,7 @@ func TestTheDocumentationNamesNothingThatIsGone(t *testing.T) {
 		text := string(src)
 		for _, m := range qualified.FindAllStringSubmatch(text, -1) {
 			if !known[m[1]] {
-				missing = append(missing, f+": accel."+m[1])
+				missing = append(missing, f+": "+m[1])
 			}
 		}
 		for _, m := range called.FindAllStringSubmatch(text, -1) {
@@ -90,7 +94,7 @@ func TestTheDocumentationNamesNothingThatIsGone(t *testing.T) {
 	sort.Strings(missing)
 	missing = dedupe(missing)
 	for _, m := range missing {
-		t.Errorf("the documentation names %s, which this package no longer exports; "+
+		t.Errorf("the documentation names %s, which no package here exports; "+
 			"a document that advises a call is a promise the call is there", m)
 	}
 }
