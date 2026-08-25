@@ -248,13 +248,36 @@ signedness error on Metal**, because an unsigned signed-atomic is not
 expressible there. A guard that cannot fail is still a guard; it is just not the
 one it looks like.
 
-**Still uncovered: `AddF32`.** The float atomic is exported and reached by no
-kernel either — it appears in this corpus only inside a comment. It is left for
-now rather than swept up with these, because it is capability-gated
-([`CapAtomicFloatAddStorage`](006-backends.md)) and its result is numerics class
-E, which [011](011-conformance-harness.md) §9 excludes from bit comparison — so
-a corpus entry for it needs a differential that compares something other than
-bits, and that is a design question rather than a missing kernel.
+**`AddF32` too, and the reason it was deferred was wrong — 2026-08-26.** The
+float atomic was left out of the sweep above on the grounds that its result is
+numerics class E, which [011](011-conformance-harness.md) §9 excludes from bit
+comparison. That conflated two different things.
+
+**Class E is about contention, not about the operation.** What
+[008](008-numerics.md) classifies as non-deterministic is a *reduction* — many
+invocations adding into one location in an order nobody fixes. One invocation
+doing one read-modify-write is an ordinary float addition and is exactly
+reproducible. `AtomicAddF32` therefore dispatches as a sequence, the shape
+`AtomicOps` already uses, and asserts exact values rather than a bound.
+
+| Kernel | Obligation met |
+| --- | --- |
+| `AtomicAddF32` | the float atomic reaches a kernel, returns the previous value like the rest of the family, and is **refused on a device that lacks the capability, at pipeline creation, naming it** |
+
+It carries **no MSL artifact**, and that is correct rather than a gap:
+`CapAtomicFloatAddStorage` is false on Metal and the emitter declines to spell
+an operation the target cannot run. §3's lowering guard demanded the reason,
+which is what that guard exists for.
+
+The second obligation is the one that was missing entirely. `accel.AddF32`'s own
+documentation promises that a device without the capability *"refuses the kernel
+at pipeline creation rather than producing a wrong sum"* — the machinery existed
+and nothing exercised it, because no kernel used the operation. Two independent
+reasons stop it on Metal: the absent capability, and the missing MSL artifact
+Metal's `SupportsKernel` looks for. **The capability check fires first, which is
+the one that names something a caller can act on** — a caller told "no MSL
+artifact" learns that this build cannot run it, and a caller told
+"CapAtomicFloatAddStorage is absent" learns that another device might.
 
 ### Added to cover the signed uniform — 2026-08-26
 
