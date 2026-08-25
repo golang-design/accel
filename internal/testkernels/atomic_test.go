@@ -208,3 +208,60 @@ func TestAuthoredAtomicKernels(t *testing.T) {
 		}
 	})
 }
+
+// The signed atomics arrive signed, and min and max are what say so.
+//
+// Every unsigned atomic was reached by a corpus kernel and no signed one was,
+// so the emitter's lowering and the MSL spelling for all six were declared and
+// never executed. This is the accepting half.
+//
+// Four of the six cannot distinguish a signed lowering from an unsigned one:
+// add, sub, exchange and compare-exchange are the same machine operation on the
+// same bits either way. They are here for reachability. **Min and max are the
+// assertion**, because a comparison is where two's complement stops hiding the
+// difference: state[2] holds -5 and the operand is 3, so a signed minimum keeps
+// -5 and an unsigned one keeps 3.
+func TestTheSignedAtomicsArriveSigned(t *testing.T) {
+	state := []int32{10, 10, -5, -5, 10, -1, 7}
+	prev := make([]int32, len(state))
+
+	// One workgroup of one invocation, as [AtomicOps]'s test does: these
+	// operations are a fixed sequence rather than a grid, and running the
+	// sequence sixty-four times over would be testing the dispatch.
+	if err := direct.Run(&testkernels.AtomicOpsI32Kernel, accel.ID3{X: 1},
+		kernelabi.Args{Slices: []any{state, prev}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Every atomic returns the value the location held before it.
+	wantPrev := []int32{10, 10, -5, -5, 10, -1, 7}
+	for i, w := range wantPrev {
+		if prev[i] != w {
+			t.Errorf("operation %d returned %d, want the previous %d", i, prev[i], w)
+		}
+	}
+
+	wantState := []int32{
+		3,   // 10 + (-7)
+		13,  // 10 - (-3)
+		-5,  // min(-5, 3) signed. Unsigned this is 3, which is the whole point
+		3,   // max(-5, 3) signed. Unsigned this is -5, likewise
+		-42, // exchanged
+		-99, // compare-exchange matched -1 and stored
+		7,   // compare-exchange did not match, so it left 7
+	}
+	for i, w := range wantState {
+		if state[i] != w {
+			t.Errorf("state %d is %d, want %d", i, state[i], w)
+		}
+	}
+
+	// Stated separately so a failure here reads as what it is rather than as
+	// one of seven equal assertions.
+	if state[2] != -5 || state[3] != 3 {
+		t.Fatalf("min gave %d and max gave %d over (-5, 3); signed they are -5 and 3, "+
+			"and unsigned they are 3 and -5. This is the pair that tells a signed "+
+			"lowering from an unsigned one, because add and exchange cannot",
+			state[2], state[3])
+	}
+}

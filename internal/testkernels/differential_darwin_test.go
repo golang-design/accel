@@ -840,6 +840,24 @@ func diffCases() []diffCase {
 			why: "one divide, one multiply and two subtracts, all exact per section 2",
 		},
 		{
+			// The signed atomics, whose min and max are the only two of the six
+			// that a signed and an unsigned lowering compute differently. The
+			// seeded state is negative for those two indices, which is what
+			// makes this a comparison of signedness rather than of reachability.
+			kernel: &testkernels.AtomicOpsI32Kernel,
+			counts: []int{7, 7},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return 0
+				}
+				// state[2] and state[3] negative, so min and max over the
+				// kernel's positive operand disagree between the two readings.
+				return []float32{10, 10, -5, -5, 10, -1, 7}[i]
+			},
+			why: "integer atomics, exact on both backends",
+		},
+		{
 			kernel:   &testkernels.ElemBiasKernel,
 			counts:   []int{256, 256},
 			uniforms: []any{testkernels.BiasParams{Offset: -3}},
