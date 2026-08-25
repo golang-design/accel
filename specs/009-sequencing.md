@@ -1859,6 +1859,31 @@ that never existed — and unlike an inert test, it does not even have to be
 wrong to be worthless. Worth running periodically: `go test ./... -v` and read
 every SKIP, asking whether the condition is genuinely occasional.
 
+**A third method, and a fifth finding — 2026-08-26.** Reading coverage for
+*refusals nobody triggers* found something else instead: `UniformWriter.I32` at
+**0.0%**. [014](014-kernel-uniforms.md) admits three scalar uniform types and
+the emitter maps each to a writer method, but every uniform in this corpus was
+float32 or uint32 — so that method, the emitter's `int32` case, and the MSL
+spelling of a signed uniform had all been declared and never executed. A kernel
+author writing an `int32` field would have been the first caller of the path.
+Closed with `ElemBias`, a corpus kernel carrying one.
+
+**The instructive part is that the first version of that kernel did not test
+what it claimed.** It added the offset, on the reasoning that adding a negative
+number to a positive one would expose a uniform read as unsigned. It does not:
+two's-complement addition is sign-agnostic, so `int32(-3)` and
+`uint32(4294967293)` produce identical bits and a Metal side declaring the field
+`uint` passed the differential unchanged. Signedness is observable only where
+the *operation* differs — comparison, division, modulo, right shift — so the
+kernel now branches on the sign, and the same mutation fails.
+
+That is reasoning-presented-as-verification again, and reinstating the bug is
+what caught it, on a test written the same hour by someone who had just written
+down that reinstating is how you catch it. **The rule: a test for a
+representation must use an operation that the representation changes.** Storing
+a value back, or adding it, proves the bits survived and nothing about how they
+were read.
+
 Two of the skips that sweep found are deliberate and self-activating — the
 disjoint-subresource permission and the draw-time uniform channel — which is the
 distinction to keep: a skip that names a condition somebody will lift is a

@@ -225,6 +225,24 @@ is `ushort` and the conversion is `as_type<float>(uint(x) << 16)`, which every
 family has, and `ir.go` already forbids arithmetic on a storage kind. The
 narrowing keeps the refusal, because it has to round.
 
+### Added to cover the signed uniform — 2026-08-26
+
+`ElemBias`, one kernel, added for a gap rather than a feature.
+[014](014-kernel-uniforms.md) admits `float32`, `int32` and `uint32` as uniform
+field types, and every uniform in this corpus used two of them. So the third was
+specified, emitted by a code path nobody ran, and written by an
+`accel.UniformWriter` method sitting at zero coverage.
+
+| Kernel | Obligation met |
+| --- | --- |
+| `ElemBias` | a signed uniform arrives signed, checked by an operation that signedness changes — the kernel branches on the offset's sign rather than adding it, because two's-complement addition is sign-agnostic and an unsigned read of the same four bytes adds identically |
+
+**The obligation is worded that way because the first version failed it while
+passing.** Adding a negative offset produces the same thirty-two bits as adding
+the unsigned reading of those bytes, so a Metal side declaring the field `uint`
+compiled and agreed. Comparison, division, modulo and the right shift are the
+operations that differ; the kernel uses the first.
+
 ### Added for accel issue 6 — 2026-08-25
 
 Three kernels for [039](039-sampling-policy.md) §4's penalties. They were
