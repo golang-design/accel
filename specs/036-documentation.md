@@ -361,3 +361,30 @@ the join between two declarations that are each individually reasonable.
   even to people not using accel, which is a real and unusual asset. Whether it
   should be promoted rather than filed under backend-author documentation is
   open.
+
+
+## The drift guard covered one package — corrected 2026-08-25
+
+§3.1 requires tutorial code to live in `Example` functions so that `go test`
+compiles it. That was specified and never built, and `docdrift_test.go` is the
+narrower guard that replaced it: every API name the documentation uses must
+still exist.
+
+It checked `accel.Foo` and not `tensor.Foo`, which is the wrong half. The
+tutorials are mostly about the tensor layer, so the guard was covering the
+package the documentation talks about **least**. Widened, and verified by naming
+an operator that does not exist and watching it report.
+
+**The finding that generalises is about stale advice rather than missing
+sections.** Tutorial 9 told a reader to take the sampling draw from
+`rng.Float32()`. Every name in that sentence existed, so no drift guard of this
+shape could ever have flagged it — and it is the exact call
+[039](039-sampling-policy.md) §2 argues against, because
+`float32(rng.Float64())` rounds up to 1.0 about once in 2^24 and the sampler
+clamps that rather than reporting it. A reader following the tutorial got
+working code with a bug they could not see.
+
+So: **a name-existence guard cannot see advice that is wrong, only advice that
+is gone.** The rule that follows is a review obligation rather than a test —
+when an operator subsumes a composition the documentation teaches, the
+documentation is part of the change, not follow-up work.
