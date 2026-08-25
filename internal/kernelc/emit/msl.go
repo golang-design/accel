@@ -491,10 +491,26 @@ func (m *msl) uniformField(u *ir.Uniform, f ir.UniformField) (decl string, size 
 			f.Len * f.Stride, true
 	}
 	// An array member's std140 stride is sixteen whatever its element type, so
-	// it cannot be one C array of the element type and a caller indexes it with
-	// one index. Reconciling those needs the index expression rewritten, which
-	// is a change to the body rather than to this declaration, and no corpus
-	// kernel needs it yet.
+	// it cannot be one C array of the element type that a caller indexes with
+	// one index. It is spelled the way the matrix case above is -- an outer
+	// array of the element count, each row the stride in elements -- and the
+	// body appends the inner index, which m.value does when it recognises an
+	// index into a uniform member.
+	//
+	// This was refused, on the grounds that no corpus kernel needed it. Pack
+	// did, and Pack is what tensor.Contiguous lowers to, so the refusal made a
+	// public operator CPU-only without anything above the emitter saying so --
+	// a consumer found it when a graph that compiled on the CPU failed on Metal
+	// after the weights were already uploaded (accel issue 19).
+	if f.Kind == "array" {
+		if f.Stride%4 != 0 || f.Stride == 0 || f.Len == 0 {
+			m.fail("uniform block %s field %s is an array of %d with stride %d",
+				u.TypeName, f.Name, f.Len, f.Stride)
+			return "", 0, false
+		}
+		return fmt.Sprintf("%s %s[%d][%d];", elem, f.Name, f.Len, f.Stride/4),
+			f.Len * f.Stride, true
+	}
 	m.refuse("a "+f.Kind+" member of uniform block "+u.TypeName, m.fn.Pos())
 	return "", 0, false
 }
@@ -848,6 +864,12 @@ func (m *msl) value(v ir.Value) {
 		m.printf("[")
 		m.value(v.Index)
 		m.printf("]")
+		// A std140 array member is declared as an outer array of padded rows,
+		// so one Go index is two here and the second is always zero: the
+		// element sits at the start of its sixteen-byte slot. See uniformField.
+		if m.paddedArrayMember(v.X) {
+			m.printf("[0]")
+		}
 
 	case *ir.Unary:
 		// Go spells bitwise complement ^x and C spells it ~x. Emitting the Go
@@ -1287,4 +1309,24 @@ var mslIntrinsic = map[ir.Opcode]string{
 	ir.OpAbs:   "fabs",
 	ir.OpMin:   "min",
 	ir.OpMax:   "max",
+}
+
+// paddedArrayMember reports whether v is a uniform block's array member, which
+// is declared with a padding dimension the Go source does not have.
+//
+// Only an array: a matrix member is already two-dimensional in the Go source,
+// so its two indices are the caller's own and nothing is appended.
+func (m *msl) paddedArrayMember(v ir.Value) bool {
+	f, ok := v.(*ir.FieldSel)
+	if !ok || !m.arraySpelled(v) {
+		return false
+	}
+	for _, u := range m.fn.Uniforms {
+		for _, fl := range u.Fields {
+			if fl.Name == f.Name {
+				return fl.Kind == "array"
+			}
+		}
+	}
+	return false
 }

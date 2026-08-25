@@ -321,3 +321,61 @@ func openMetalRuntimeDevice(t *testing.T) *accel.Device {
 	t.Skipf("no Metal adapter on this machine; diagnostics: %v", e.Diagnostics)
 	return nil
 }
+
+// Contiguous runs on Metal, which it could not until the emitter learned to
+// spell a std140 array member.
+//
+// accel issue 19. Pack was the only kernel in the corpus with no MSL artifact,
+// because its uniform block holds two eight-element arrays and std140 gives an
+// array member a sixteen-byte stride whatever its element type. Nothing above
+// the emitter knew, so tensor.Contiguous was documented without qualification,
+// compiled on a Metal device, and failed at plan compile -- after the weights
+// were on the card.
+//
+// The shape here is the consumer's: slice the last row of a hidden state and
+// pack it, which is the LM-head case and the one with no alternative. Running
+// the head over every position instead costs T times the vocabulary, which for
+// a 4B model at two thousand positions is more memory than the model.
+func TestContiguousRunsOnMetal(t *testing.T) {
+	const rows, cols = 4, 8
+	d := openMetalRuntimeDevice(t)
+	rt, err := tensor.NewRuntime(d)
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	b := rt.NewBuilder("contiguous")
+	x := tensor.Input(b, tensor.ValueDesc{
+		Name: "x", DType: accel.F32, Shape: tensor.Shape{rows, cols},
+	})
+	last := tensor.Slice(b, x, 0, rows-1, rows)
+	tensor.Output(b, "y", tensor.Contiguous(b, last))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "contiguous"})
+	if err != nil {
+		t.Fatalf("compile on Metal: %v", err)
+	}
+	defer plan.Close()
+
+	src := make([]float32, rows*cols)
+	for i := range src {
+		src[i] = float32(math.Sin(float64(i) * 0.5))
+	}
+	out := f32Buffer(t, d, "y", make([]float32, cols))
+	f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f32Buffer(t, d, "x", src), "y": out,
+	}})
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, cols)
+	if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	// Exactly: a pack moves values and computes nothing.
+	for i := range got {
+		if want := src[(rows-1)*cols+i]; got[i] != want {
+			t.Fatalf("element %d is %v, want %v: a pack copies, so this is equality",
+				i, got[i], want)
+		}
+	}
+}

@@ -585,6 +585,26 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// Pack, which tensor.Contiguous lowers to. Its uniform block holds
+			// two eight-element arrays, and std140 gives an array member a
+			// sixteen-byte stride whatever its element type -- so the two
+			// lowerings must agree about a padding dimension that exists only
+			// in the MSL declaration. Nothing else in the corpus has one.
+			//
+			// A transpose of a 3x4 matrix: the source is read with the strides
+			// swapped, so a lowering that ignored a stride would produce the
+			// *same* twelve values in the wrong order rather than obviously
+			// wrong ones.
+			kernel: &testkernels.PackKernel,
+			counts: []int{12, 12},
+			uniforms: []any{testkernels.PackParams{
+				Rank: 2, Count: 12, Offset: 0,
+				Extent: [8]uint32{4, 3},
+				Stride: [8]uint32{1, 4},
+			}},
+			groups: accel.WorkgroupCount{X: 1},
+		},
+		{
 			kernel:   &testkernels.QuantRowsKernel,
 			counts:   []int{8 * 32, 8 * 32 / 32, 4, 4 * 32},
 			uniforms: []any{testkernels.RowParams{Rows: 4, Width: 32, Capacity: 8}},

@@ -4630,6 +4630,49 @@ var PackKernel = kernelabi.Kernel{
 	},
 	Digest:    "0d88f8e513db178200c0835036c16d38",
 	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PackParams {
+    uint Rank;
+    uint Count;
+    uint Offset;
+    char _pad3[4];
+    uint Extent[8][4];
+    uint Stride[8][4];
+};
+
+kernel void Pack(
+    const device float *src [[buffer(0)]],
+    device float *dst [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant PackParams &p [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < p.Count)) {
+        uint rem = i;
+        uint at = p.Offset;
+        for (int axis = int(7); (axis >= int(0)); axis = (axis - int(1))) {
+            uint a = uint(axis);
+            if ((a < p.Rank)) {
+                uint e = p.Extent[a][0];
+                if ((e > uint(0))) {
+                    uint c = (rem % e);
+                    rem = (rem / e);
+                    at = (at + (c * p.Stride[a][0]));
+                }
+            }
+        }
+        dst[i] = src[at];
+    }
+}
+`,
 	Uniforms: []kernelabi.Uniform{
 		{Name: "p", Type: "PackParams", Size: 272, Encode: func(dst []byte, v any) error {
 			return kernelabi.EncodeUniform(dst, v, PackParamsCodec{}.Encode)
