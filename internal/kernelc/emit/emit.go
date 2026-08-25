@@ -530,6 +530,9 @@ func (e *emitter) kernel(k *ir.Func) {
 	if k.Caps != 0 {
 		e.printf("\tCaps: %d,\n", k.Caps)
 	}
+	if orderIndependent(k) {
+		e.printf("\tOrderIndependent: true,\n")
+	}
 	e.mslArtifact(k)
 	e.uniformRecords(k)
 	e.printf("\tFlat: func(t accel.Thread, a kernelabi.Args) {\n")
@@ -1394,4 +1397,41 @@ func (e *emitter) dtype(t *ir.Type) string {
 	}
 	e.fail("no dtype for binding element %v", t.Elem)
 	return "kernelabi.F32"
+}
+
+// orderIndependent reports that a kernel's observable result cannot depend on
+// the order its workgroups run in.
+//
+// # Why it is the absence of atomics and not a judgement about which ones
+//
+// specs/002-compute-model.md section 2.7 gives no ordering between workgroups,
+// so a workgroup that read what another wrote is undefined on every target
+// already. What *is* defined between them is an atomic, and every atomic accel
+// offers returns the value the location held before the operation. That return
+// is the order dependence, and it is there even for the operations whose
+// accumulator is associative:
+//
+//	out[t.GlobalID().X] = accel.AddU32(counter, 0, 1)
+//
+// leaves the counter holding the same total whatever order the workgroups ran
+// in, and out holding a different permutation for each one. So a rule that
+// admitted the commutative integer operations and refused only AddF32 and the
+// exchanges would be wrong on the kernel above, which is the idiom this is most
+// likely to meet.
+//
+// # Why the helpers are included
+//
+// Func.Helpers is transitive, so a kernel whose atomic is three helpers deep is
+// caught by one loop. It is the caller's union rather than a propagated flag
+// because a helper's own body is built independently of who calls it.
+func orderIndependent(k *ir.Func) bool {
+	if k.Atomics {
+		return false
+	}
+	for _, h := range k.Helpers {
+		if h.Atomics {
+			return false
+		}
+	}
+	return true
 }

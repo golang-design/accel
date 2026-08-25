@@ -31,7 +31,7 @@ import (
 // generated adapter compiled against one shape of this package and loaded by
 // another is a wrong-answer bug, and there is no version of it that is a
 // compile error.
-const ABIVersion = 2
+const ABIVersion = 3
 
 // ID3 is a three-dimensional invocation identifier.
 //
@@ -289,6 +289,37 @@ type Kernel struct {
 	// accel.Capability. Inferred by the compiler from what the body reaches,
 	// never declared by its author.
 	Caps uint32
+
+	// OrderIndependent reports that this kernel's observable result cannot
+	// depend on the order its workgroups run in, which is what lets the CPU
+	// backend run them at once.
+	//
+	// # Why it is not simply true
+	//
+	// specs/002-compute-model.md section 2.7 gives no ordering between
+	// workgroups, so a workgroup that read what another wrote is already
+	// undefined on every target. What is *defined* between workgroups is an
+	// atomic, and every atomic accel offers returns the value the location held
+	// before the operation. That return is the order dependence, and it is
+	// there even for the operations whose accumulator is associative: after
+	//
+	//	out[t.GlobalID().X] = accel.AddU32(counter, 0, 1)
+	//
+	// the counter holds the same total whatever order the workgroups ran in,
+	// and out holds a different permutation for each one. So the property is
+	// per kernel and not per operation, and the compiler infers it as the
+	// absence of any atomic rather than as a judgement about which atomics are
+	// commutative.
+	//
+	// # Why false is the safe value
+	//
+	// A kernel generated before this field existed carries false, runs on one
+	// worker, and produces exactly the bytes it produced before. The cost of a
+	// stale generated file is therefore the speed, never the answer, which is
+	// why this is inferred metadata rather than something an author writes:
+	// an author who forgot it would only be slow, and an author who wrote it
+	// wrongly would be silently wrong.
+	OrderIndependent bool
 
 	// SharedSizes is each declared shared array's element count, in signature
 	// order. The tracker needs it to size its shadow bits, and only generation

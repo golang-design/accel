@@ -35,6 +35,20 @@ package kernel
 // two lanes colliding, and the diagnostics in specs/019-cooperative-diagnostics.md
 // catch a *missing* atomic by seeing two invocations touch one location
 // unordered. The atomicity itself is free here; the checking is not.
+//
+// Between *workgroups* there is concurrency, because the CPU backend runs the
+// grid on a worker pool. These functions are still plain reads and writes, and
+// that is safe for one reason only: a kernel that reaches any of them is not
+// order-independent, so its whole grid runs on one worker. See
+// [Kernel.OrderIndependent], which is what the compiler infers and what
+// [DispatchWith] gates on.
+//
+// Making them synchronised instead would be the wrong repair, and not only for
+// the cost. Every one of them returns the value the location held before the
+// operation, so a kernel that stores that return has a result that depends on
+// which workgroup went first -- a real atomic would make the *counter* right
+// and leave the *answer* unreproducible, which is the one thing this backend
+// exists not to do.
 
 // AddU32 adds v to b[i] and returns the previous value. It wraps modulo 2^32.
 func AddU32(b []uint32, i uint32, v uint32) uint32 {

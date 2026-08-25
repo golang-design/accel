@@ -760,6 +760,9 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	if k.Caps != 0 {
 		e.printf("\tCaps: %d,\n", k.Caps)
 	}
+	if orderIndependent(k) {
+		e.printf("\tOrderIndependent: true,\n")
+	}
 	e.printf("\tSuspensions: %d,\n", countSuspensions(segs))
 	if len(k.Shared) > 0 {
 		e.printf("\tSharedSizes: []int{")

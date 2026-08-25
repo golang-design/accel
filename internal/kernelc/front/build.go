@@ -851,6 +851,15 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 	// because this is where the compiler learns what the kernel actually uses.
 	if c.current != nil {
 		c.current.Caps |= uint32(in.Cap)
+		// An atomic is what a kernel's workgroups say to each other, and every
+		// one of accel's returns the value the location held before it. That
+		// return is what makes the kernel's result depend on the order the
+		// workgroups ran in, which is what the CPU backend's worker pool is
+		// gated on. Recorded here for the same reason a capability is: this is
+		// where the compiler learns what the body actually uses.
+		if in.Op.IsAtomic() {
+			c.current.Atomics = true
+		}
 	}
 	// A barrier or a subgroup rendezvous makes the whole kernel cooperative,
 	// which selects the resumable lowering. Both need something the flat path

@@ -812,6 +812,17 @@ type Func struct {
 	// backend promising an early depth test the stage cannot have.
 	Discards bool
 
+	// Atomics reports that this function's own body reaches an atomic
+	// read-modify-write. It does not include what its helpers reach; a caller
+	// that needs the whole picture unions this over Helpers, which is already
+	// transitive.
+	//
+	// An atomic is the only thing specs/002-compute-model.md defines *between*
+	// workgroups, so it is the only thing that can make a kernel's result
+	// depend on the order they run in. That is what the CPU backend gates its
+	// worker pool on: see kernel.Kernel.OrderIndependent.
+	Atomics bool
+
 	// Intrinsics is every intrinsic the body reaches, in first-use order, by its
 	// authored spelling. The digest records these rather than resolved package
 	// paths, so relocating a type does not invalidate a committed digest.
