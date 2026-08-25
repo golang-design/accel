@@ -1842,6 +1842,31 @@ All three were found by reinstating the bug and watching the test pass — the
 practice this milestone already applies to fixes, applied to three tests that
 were about to be trusted.
 
+**Metal's submit cost was the FFI binding, not the encoder** —
+[issue #21](https://github.com/golang-design/accel/issues/21), measured and
+half-closed 2026-08-25. A consumer reported the submit interval as 15.6% of a
+decode step on a ~790-node graph. [006](006-backends.md) §4.3 predicted the
+shape — it says re-encoding "stops being fine somewhere in the thousands of
+nodes" — and the prediction was right about *where* and wrong about *what*: the
+cost was per node, and most of it was purego's reflected call path rather than
+Metal. Calling `objc_msgSend` directly halved the host time, 11.6ms to 5.55ms at
+790 nodes.
+
+Three things this leaves behind:
+
+- **On a cgo-free backend, a per-operation cost is the FFI binding before it is
+  the driver.** Nothing about this was visible from the consumer's side, and
+  nothing about it was visible from the spec either, which had already written
+  down the explanation it expected to find.
+- **A measurement that names a cause has to decompose it.** The first
+  attribution here blamed the autorelease pool, on the evidence that an empty
+  `withPool` costs most of a microsecond. `withPool` makes two foreign calls of
+  its own, so that evidence measures the foreign call twice and says nothing
+  about the pool. The corrected benchmark keeps the two apart, and it is kept
+  rather than deleted so the next change to the path has a baseline.
+- **The remaining cost is real and still per node**, so §4.3's indirect command
+  buffer is not withdrawn. It is now behind a smaller number.
+
 #### A note on the review's own reliability
 
 Three of its findings did not survive contact, and that is worth recording

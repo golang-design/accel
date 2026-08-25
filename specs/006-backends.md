@@ -610,6 +610,32 @@ per command, and for a graph of a hundred nodes the re-encode is a rounding erro
 next to the plan-once saving. It stops being fine somewhere in the thousands of
 nodes, which a large model reaches.
 
+**Measured 2026-08-25, and the first cost was not Metal's.** A consumer running
+a 596M model reported the submit interval as 15.6% of a decode step on a graph
+of about 790 nodes. Attributing it found the cost is per node, and that most of
+it was the *foreign call*, not the encoder: every Objective-C call went through
+purego's `reflect.MakeFunc` dispatch, which rebuilds an argument frame per call
+from a signature it re-reads every time. One dispatch node is five such calls,
+each wrapped in an autorelease pool that is two more.
+
+| | before | after |
+| --- | ---: | ---: |
+| one message send | 667 ns | 180 ns |
+| an autorelease pool, push and pop | 941 ns | 389 ns |
+| 790 nodes, one encoder | 11.6 ms | 5.55 ms |
+| 790 nodes, a barrier between each | 15.4 ms | 9.76 ms |
+
+Calling `objc_msgSend` directly took the per-node cost from 14.7 µs to 7.0 µs,
+and this is a **rule about where to look**: on a cgo-free backend, a
+per-operation cost is the FFI binding before it is the driver. Two calls keep
+the reflected form and the reason is the ABI rather than taste — a struct passed
+by value and a Go pointer both need a signature the reflected path reads and a
+`uintptr` cannot carry. `BenchmarkFFICost` in `internal/mtl` and
+`BenchmarkSubmitAttribution` in `internal/metal` are the measurement, kept so
+the next change to this path has a baseline.
+
+What remains after that is genuinely the encoder, and it is still per node.
+
 `MTLIndirectCommandBuffer` is the escape: compute commands encoded once into an
 ICB, then executed from a fresh command buffer per submission with a single
 `executeCommandsInBuffer`. The costs are real: it requires argument buffers for
