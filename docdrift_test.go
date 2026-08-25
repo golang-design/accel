@@ -114,7 +114,12 @@ func ours(name string) bool {
 	// The standard library, on types a tutorial legitimately uses.
 	case "Fatal", "Fatalf", "Printf", "Println", "Print", "Error", "Errorf",
 		"Sprintf", "Sqrt", "Abs", "Sin", "Cos", "Exp", "Log", "Now", "Since",
-		"String", "Len", "Cap", "Run", "Skip", "Helper", "Cleanup", "Logf":
+		"String", "Len", "Cap", "Run", "Skip", "Helper", "Cleanup", "Logf",
+		// math/rand's, reached through a *rand.Rand a tutorial holds in a
+		// local. The qualifier list above cannot catch these: it matches
+		// `rand.Float32()` and a tutorial writes `rng.Float32()`, where `rng`
+		// is a variable this test does not resolve types for.
+		"Float32", "Float64", "IntN", "Perm", "NormFloat64", "Uint32":
 		return false
 	}
 	return true

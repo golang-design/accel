@@ -17,6 +17,9 @@ that is a bug worth filing.
 | 6 | [Values that are not buffers](06-uniforms.md) | uniforms, and changing one without re-recording | a runtime coefficient |
 | 7 | [Tensors](07-tensors.md) | shapes and operators instead of bindings | a feed-forward block |
 | 8 | [Backends](08-backends.md) | picking a device, and testing without one | shipping to machines you do not own |
+| 9 | [A decode step](09-a-decode-step.md) | state that survives between submissions | generating tokens, sampling on the device |
+| 10 | [Quantized weights](10-quantized-weights.md) | storage width is not compute width | a model that does not fit at full width |
+| 11 | [Batching sequences](11-batching-sequences.md) | a value that differs per row is a tensor | several sequences in one step |
 
 ## Which layer do you want?
 
@@ -26,13 +29,12 @@ accel has two, and you can ignore the one you are not using.
   Use it when you have your own maths to run: simulation, image and signal
   processing, anything where you write the kernel. Tutorials 1–6.
 - **The tensor layer** (`accel/tensor`) deals in shapes and operators. Use it
-  for inference; you never touch a bind group. Tutorial 7.
+  for inference; you never touch a bind group. Tutorials 7 and 9–11.
 
 ## What these do not cover yet
 
 Graphics, and the Vulkan, D3D12, OpenGL and WebGPU backends. Neither is
 callable. See the [status table](../../README.md#what-works-today).
 
-Sampling policy, batching, and the paged KV cache are built but move fast enough
-that a tutorial would age badly; the package documentation is the current word
-on them.
+Temperature and repetition penalties as a *policy object* — the primitives are
+all here and tutorial 9 composes them by hand, but nothing wraps them yet.
