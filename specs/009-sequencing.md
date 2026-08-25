@@ -1842,6 +1842,29 @@ All three were found by reinstating the bug and watching the test pass — the
 practice this milestone already applies to fixes, applied to three tests that
 were about to be trusted.
 
+**A fourth, and a second method — 2026-08-25.** `TestTheFloatAtomicAdds` summed
+the same values in two orders and *skipped* when they matched, to show that an
+exact total is the wrong assertion for a float reduction. Its addend was `1e-8`,
+which is far below half an ulp at 1.0, so both orders round to 1.0 on every
+machine: it reported SKIP everywhere and the point was never made. The addend is
+now picked from the format — `4e-8`, under half an ulp alone and over it in
+pairs — so the demonstration is IEEE-754 rather than a property of the machine,
+and an equal result is a failure.
+
+Reinstating a bug could not have found this one, because there was no bug to
+reinstate: the code was right and the test declined to check it. **The method
+that found it is sweeping what skips.** A skip is invisible in a green run, so a
+test that skips for a reason that is always true is indistinguishable from one
+that never existed — and unlike an inert test, it does not even have to be
+wrong to be worthless. Worth running periodically: `go test ./... -v` and read
+every SKIP, asking whether the condition is genuinely occasional.
+
+Two of the skips that sweep found are deliberate and self-activating — the
+disjoint-subresource permission and the draw-time uniform channel — which is the
+distinction to keep: a skip that names a condition somebody will lift is a
+marker, and a skip that names a condition that never changes is a deletion
+nobody performed.
+
 **Metal's submit cost was the FFI binding, not the encoder** —
 [issue #21](https://github.com/golang-design/accel/issues/21), measured and
 half-closed 2026-08-25. A consumer reported the submit interval as 15.6% of a
