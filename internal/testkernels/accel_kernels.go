@@ -211,6 +211,29 @@ func (PagedDimsCodec) Encode(dst []byte, value PagedDims) error {
 	return w.Err()
 }
 
+// PenaltyDimsCodec is the generated std140 codec for PenaltyDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type PenaltyDimsCodec struct{}
+
+// PenaltyDimsBlockSize is the encoded size of a PenaltyDims block, in bytes.
+const PenaltyDimsBlockSize = 32
+
+// EncodedSize reports the std140 block size.
+func (PenaltyDimsCodec) EncodedSize() int { return PenaltyDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (PenaltyDimsCodec) Encode(dst []byte, value PenaltyDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Vocab)
+	w.U32(4, value.History)
+	w.U32(8, value.Count)
+	w.F32(12, value.Repetition)
+	w.F32(16, value.Presence)
+	w.F32(20, value.Frequency)
+	return w.Err()
+}
+
 // PrefillDimsCodec is the generated std140 codec for PrefillDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -5399,6 +5422,233 @@ kernel void AttentionDecodePagedF16(
 	},
 }
 
+// penaltyCountFlat is the generated flat lowering of PenaltyCount.
+//
+// It is what the CPU backend runs. The authored PenaltyCount is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func penaltyCountFlat(t accel.Thread, d PenaltyDims, history []uint32, counts []uint32) {
+	var i uint32 = t.GlobalID().X
+	if i >= d.Count {
+		return
+	}
+	var id uint32 = history[i]
+	if id < d.Vocab {
+		accel.AddU32(counts, id, uint32(1))
+	}
+}
+
+// PenaltyCountKernel is the compiled form of PenaltyCount.
+var PenaltyCountKernel = kernelabi.Kernel{
+	Name:          "PenaltyCount",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "history", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
+	},
+	Digest:    "e384460865345383f7ef9bd3c436d7f0",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PenaltyDims {
+    uint Vocab;
+    uint History;
+    uint Count;
+    float Repetition;
+    float Presence;
+    float Frequency;
+    char _tail[8];
+};
+
+kernel void PenaltyCount(
+    const device uint *history [[buffer(0)]],
+    device atomic_uint *counts [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    constant PenaltyDims &d [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= d.Count)) {
+        return;
+    }
+    uint id = history[i];
+    if ((id < d.Vocab)) {
+        atomic_fetch_add_explicit(&counts[id], uint(1), memory_order_relaxed);
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "PenaltyDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, PenaltyDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		penaltyCountFlat(t, kernelabi.UniformValue[PenaltyDims](a, 0), kernelabi.Slice[uint32](a, 0), kernelabi.Slice[uint32](a, 1))
+	},
+}
+
+// penaltyApplyFlat is the generated flat lowering of PenaltyApply.
+//
+// It is what the CPU backend runs. The authored PenaltyApply is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func penaltyApplyFlat(t accel.Thread, d PenaltyDims, logits []float32, counts []uint32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= d.Vocab {
+		return
+	}
+	var l float32 = logits[i]
+	var c uint32 = counts[i]
+	if c == uint32(0) {
+		out[i] = l
+		return
+	}
+	if (d.Repetition != float32(0)) && (d.Repetition != float32(1)) {
+		if l > float32(0) {
+			l = float32(l / d.Repetition)
+		} else {
+			l = float32(l * d.Repetition)
+		}
+	}
+	out[i] = float32(float32(l-d.Presence) - float32(d.Frequency*float32(c)))
+}
+
+// PenaltyApplyKernel is the compiled form of PenaltyApply.
+var PenaltyApplyKernel = kernelabi.Kernel{
+	Name:          "PenaltyApply",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "logits", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "08fcdfe35bf7f1a331e0fac2296e2d8f",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PenaltyDims {
+    uint Vocab;
+    uint History;
+    uint Count;
+    float Repetition;
+    float Presence;
+    float Frequency;
+    char _tail[8];
+};
+
+kernel void PenaltyApply(
+    const device float *logits [[buffer(0)]],
+    const device uint *counts [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant PenaltyDims &d [[buffer(4)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= d.Vocab)) {
+        return;
+    }
+    float l = logits[i];
+    uint c = counts[i];
+    if ((c == uint(0))) {
+        out[i] = l;
+        return;
+    }
+    if (((d.Repetition != float(0)) && (d.Repetition != float(1)))) {
+        if ((l > float(0))) {
+            l = (l / d.Repetition);
+        } else {
+            l = (l * d.Repetition);
+        }
+    }
+    out[i] = ((l - d.Presence) - (d.Frequency * float(c)));
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "PenaltyDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, PenaltyDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		penaltyApplyFlat(t, kernelabi.UniformValue[PenaltyDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[uint32](a, 1), kernelabi.Slice[float32](a, 2))
+	},
+}
+
+// penaltyClearFlat is the generated flat lowering of PenaltyClear.
+//
+// It is what the CPU backend runs. The authored PenaltyClear is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func penaltyClearFlat(t accel.Thread, d PenaltyDims, counts []uint32) {
+	var i uint32 = t.GlobalID().X
+	if i < d.Vocab {
+		counts[i] = uint32(0)
+	}
+}
+
+// PenaltyClearKernel is the compiled form of PenaltyClear.
+var PenaltyClearKernel = kernelabi.Kernel{
+	Name:          "PenaltyClear",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Write},
+	},
+	Digest:           "d71ace4662b12acc851c7c164da60d8a",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PenaltyDims {
+    uint Vocab;
+    uint History;
+    uint Count;
+    float Repetition;
+    float Presence;
+    float Frequency;
+    char _tail[8];
+};
+
+kernel void PenaltyClear(
+    device uint *counts [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    constant PenaltyDims &d [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < d.Vocab)) {
+        counts[i] = uint(0);
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "PenaltyDims", Size: 32, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, PenaltyDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		penaltyClearFlat(t, kernelabi.UniformValue[PenaltyDims](a, 0), kernelabi.Slice[uint32](a, 0))
+	},
+}
+
 // attentionPrefillFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -9653,6 +9903,9 @@ var Kernels = []*kernelabi.Kernel{
 	&PackKernel,
 	&AttentionDecodePagedKernel,
 	&AttentionDecodePagedF16Kernel,
+	&PenaltyCountKernel,
+	&PenaltyApplyKernel,
+	&PenaltyClearKernel,
 	&AttentionPrefillKernel,
 	&AttentionPrefillF16Kernel,
 	&AttentionPrefillPagedKernel,
