@@ -32,39 +32,52 @@ import (
 // Wait is the device half plus the fence round trip. Reported separately
 // because only the first is accel's to spend.
 //
-// Run with -bench SubmitAttribution -benchtime 100x.
+// The barrier variants are the reason the no-barrier number is a floor rather
+// than a ceiling. A barrier ends the encoder, so a graph that barriers between
+// its nodes pays for a new compute encoder at each one. On an M2 at 790 nodes
+// that is 14.7us a node without barriers and 19.5us with them, and a real
+// decode graph is closer to the second.
+//
+// Run with -bench SubmitAttribution -benchtime 150x.
 func BenchmarkSubmitAttribution(b *testing.B) {
 	for _, nodes := range []int{1, 64, 256, 790} {
-		b.Run(fmt.Sprintf("nodes=%d", nodes), func(b *testing.B) {
-			e := benchExecutable(b, nodes)
-
-			var submit, wait time.Duration
-			b.ResetTimer()
-			for range b.N {
-				t0 := time.Now()
-				f, err := e.Submit()
-				if err != nil {
-					b.Fatalf("submit: %v", err)
-				}
-				t1 := time.Now()
-				if err := f.Wait(); err != nil {
-					b.Fatalf("wait: %v", err)
-				}
-				t2 := time.Now()
-				submit += t1.Sub(t0)
-				wait += t2.Sub(t1)
+		for _, barrier := range []bool{false, true} {
+			name := fmt.Sprintf("nodes=%d", nodes)
+			if barrier {
+				name += "/barriers"
 			}
-			b.StopTimer()
-
-			n := time.Duration(b.N)
-			b.ReportMetric(float64(submit/n)/1e3, "us/submit")
-			b.ReportMetric(float64(wait/n)/1e3, "us/wait")
-			// The figure that decides the fix. A cost that is flat in the node
-			// count is paid once a submission and an indirect command buffer
-			// would not touch it.
-			b.ReportMetric(float64((submit/n).Nanoseconds())/float64(nodes), "ns/node")
-		})
+			b.Run(name, func(b *testing.B) {
+				benchSubmit(b, benchExecutable(b, nodes, barrier), nodes)
+			})
+		}
 	}
+}
+
+func benchSubmit(b *testing.B, e driver.Executable, nodes int) {
+	var submit, wait time.Duration
+	b.ResetTimer()
+	for range b.N {
+		t0 := time.Now()
+		f, err := e.Submit()
+		if err != nil {
+			b.Fatalf("submit: %v", err)
+		}
+		t1 := time.Now()
+		if err := f.Wait(); err != nil {
+			b.Fatalf("wait: %v", err)
+		}
+		t2 := time.Now()
+		submit += t1.Sub(t0)
+		wait += t2.Sub(t1)
+	}
+	b.StopTimer()
+
+	n := time.Duration(b.N)
+	b.ReportMetric(float64(submit/n)/1e3, "us/submit")
+	b.ReportMetric(float64(wait/n)/1e3, "us/wait")
+	// The figure that decides the fix. A cost that is flat in the node count is
+	// paid once a submission and an indirect command buffer would not touch it.
+	b.ReportMetric(float64((submit/n).Nanoseconds())/float64(nodes), "ns/node")
 }
 
 // benchExecutable compiles a plan of n independent dispatches over one buffer.
@@ -74,7 +87,7 @@ func BenchmarkSubmitAttribution(b *testing.B) {
 // scales with a model's node count, from the per-encoder cost a barrier adds.
 // A real decode graph has both, and separating them is the point of the
 // measurement.
-func benchExecutable(b *testing.B, n int) driver.Executable {
+func benchExecutable(b *testing.B, n int, barrier bool) driver.Executable {
 	b.Helper()
 	ads, err := metal.Adapters()
 	if err != nil || len(ads) == 0 {
@@ -107,7 +120,7 @@ func benchExecutable(b *testing.B, n int) driver.Executable {
 	plan := &driver.Plan{Label: "attrib"}
 	for i := range n {
 		plan.Nodes = append(plan.Nodes, driver.PlanNode{
-			Op: driver.OpDispatch, ID: i,
+			Op: driver.OpDispatch, ID: i, BarrierBefore: barrier && i > 0,
 			Dispatch: &driver.Dispatch{
 				Kernel:   &testkernels.AddKernel,
 				Count:    kernel.ID3{X: count / 64, Y: 1, Z: 1},
