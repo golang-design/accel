@@ -99,6 +99,23 @@ func (w *UniformWriter) U32(offset int, v uint32) {
 // graph structure: [UniformBuffer.Write] encodes through the queue, and the
 // graph's binding does not move. A caller who wrote std140 bytes into an
 // ordinary buffer would be doing the codec's job with the padding hidden.
+//
+// # Nothing consumes one yet, and that is stated rather than discovered
+//
+// [UniformBuffer.View] returns a binding no draw and no dispatch is
+// parameterised by today. A compute kernel takes its uniform block as a
+// by-value parameter, and a render stage takes one as pass state through
+// [RenderPass.SetVertexUniform] — neither reads a buffer. The mechanism that
+// would use this is a draw at a recorded byte offset, which
+// specs/033-render-api.md deviation 1 removed and did not replace, and
+// specs/042-surface-completion.md §3.1 records as outstanding.
+//
+// So a caller can allocate one, write through it, and read the bytes back —
+// [UniformBuffer.Buffer] and an ordinary read do that — and cannot yet hand it
+// to anything that draws. It is exported because the encoding half is correct
+// and is what a caller would otherwise reimplement with the padding hidden, and
+// this paragraph exists because a type that advertises a capability it does not
+// have is worse than one that says so.
 type UniformBuffer[T any] struct {
 	_ noCopy
 

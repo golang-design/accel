@@ -199,3 +199,45 @@ func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 	}
 	g.Close()
 }
+
+// A draw parameterised by a UniformBuffer, which is not yet possible.
+//
+// specs/042-surface-completion.md §3.1 records this as the one instance of "an
+// exported declaration that reaches nothing" that this project shipped itself:
+// UniformBuffer allocates, encodes correctly, and hands back a BufferView no
+// draw takes. The mechanism is specs/033-render-api.md §6's draw at a recorded
+// byte offset, which that spec's deviation 1 removed and did not replace.
+//
+// It is a test rather than a sentence for the reason the same day's audit
+// found twice over: a gap recorded in prose has no accepting half, so nothing
+// makes it resume and nothing notices when it closes. This skips with the
+// reason and **self-activates** the day a draw can name a uniform offset, at
+// which point it is the first caller of that channel rather than a rewrite
+// somebody has to remember to do.
+//
+// The skip is deliberately not conditional on a feature flag. It reads the
+// surface: if RenderPass ever grows a call taking a BufferView for a stage
+// uniform, this stops describing the library and should be written out.
+func TestADrawCanBeParameterisedByAUniformBuffer(t *testing.T) {
+	d := openDevice(t)
+
+	ub, err := accel.NewUniformBuffer[testkernels.Params](d, testkernels.ParamsCodec{})
+	if err != nil {
+		t.Fatalf("NewUniformBuffer: %v", err)
+	}
+	defer ub.Close()
+
+	// The encoding half works, which is why the type is exported.
+	if err := ub.Write(d.Queue(), testkernels.Params{}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := ub.View(); err != nil {
+		t.Fatalf("View: %v", err)
+	}
+
+	t.Skip("a draw cannot be parameterised by a uniform buffer: a stage takes its " +
+		"block as pass state through SetVertexUniform and SetFragmentUniform, both " +
+		"by value, and no call binds a BufferView to a stage uniform. " +
+		"specs/033-render-api.md deviation 1 removed the draw-time channel; this " +
+		"test is what runs the day it comes back")
+}
