@@ -252,3 +252,59 @@ func TestSampleRefusesStateItWouldNotRead(t *testing.T) {
 		t.Fatalf("refused with %q, which does not name the missing state", err)
 	}
 }
+
+// A sequence of tokens reproduces bit for bit from one seed, with a second
+// sequence interleaved between the two runs.
+//
+// specs/039-sampling-policy.md section 9's first assertion, and the interleave
+// is the whole of it. One token sampled twice proves nothing: it passes for a
+// design that reseeds every step. A whole sequence sampled twice proves little
+// more: it passes for a design holding a generator that happens to be advanced
+// the same way both times. Running a *different* sequence in between is what
+// fails for any design with a mutable generator anywhere, because the second
+// sequence's draws would advance it.
+//
+// Every step is compared exactly. There is no bounded tier here: a token id is
+// an integer, and "nearly the same token" is not a thing.
+func TestASequenceReproducesFromOneSeedAcrossAnInterleave(t *testing.T) {
+	logits := []float32{2.0, 1.6, 1.1, 0.4, -0.5, -20}
+	o := tensor.SamplingOptions{Temperature: 0.9, TopK: 4}
+
+	sequence := func(seed uint64, n int) []uint32 {
+		s := tensor.Stream{Seed: seed}
+		out := make([]uint32, n)
+		for i := range out {
+			out[i] = policyRun(t, o, logits, nil, 0, s.Draw(uint64(i)))
+		}
+		return out
+	}
+
+	const n = 12
+	first := sequence(1234, n)
+
+	// A different seed, and a different length, so nothing about the second run
+	// lines up with the first.
+	other := sequence(999, n+5)
+
+	again := sequence(1234, n)
+	for i := range first {
+		if first[i] != again[i] {
+			t.Fatalf("token %d of the sequence was %d and then %d after another "+
+				"sequence ran in between: something holds a generator that the "+
+				"interleaved run advanced", i, first[i], again[i])
+		}
+	}
+
+	// The two seeds must not agree everywhere, or the assertion above is about
+	// a constant rather than about a stream.
+	same := 0
+	for i := range first {
+		if first[i] == other[i] {
+			same++
+		}
+	}
+	if same == len(first) {
+		t.Fatalf("two different seeds produced the same %d tokens: the draw is not "+
+			"reaching the walk", len(first))
+	}
+}
