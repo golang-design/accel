@@ -228,34 +228,43 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 		},
 	}
 
-	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+	// At pipeline creation, which is the first moment the kernel and the device
+	// are in the same place. This used to be accepted here and refused at graph
+	// build -- correct, and after a caller had uploaded their weights.
+	_, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &unlowered, Label: "unlowered",
+	})
+	if err == nil {
+		t.Fatal("a pipeline was built for a kernel with no MSL artifact; the refusal " +
+			"then has to come later, after the caller has paid for their uploads")
+	}
+	if !errors.Is(err, accel.ErrUnsupported) {
+		t.Errorf("the refusal should be ErrUnsupported, which is what a caller branches "+
+			"on to fall back to another device: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Unlowered") {
+		t.Errorf("the refusal should name the kernel that cannot be lowered: %v", err)
+	}
+	if !strings.Contains(err.Error(), "MSL") {
+		t.Errorf("the refusal should name the target, per specs/004-kernel-authoring.md: %v", err)
+	}
+
+	// And the CPU backend builds the same pipeline, which is what makes the
+	// refusal about this device rather than about the kernel.
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+	cp, err := cpu.NewComputePipeline(accel.ComputePipelineDescriptor{
 		Kernel: &unlowered, Label: "unlowered",
 	})
 	if err != nil {
-		t.Fatalf("pipeline creation does not compile MSL, so it should succeed: %v", err)
+		t.Fatalf("the CPU backend should run a kernel with no MSL: %v", err)
 	}
-	defer p.Close()
-
-	out := newBuffer(t, d, "out", n, storage)
-	r := d.NewRecorder()
-	r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: whole(t, out)}}, nil, accel.WorkgroupCount{X: 1})
-
-	g, buildErr := r.Build()
-	if buildErr == nil {
-		defer g.Close()
-		buildErr = d.Queue().Submit(g).Wait()
-	}
-	if buildErr == nil {
-		t.Fatal("a kernel with no MSL artifact ran on Metal, which means something fell " +
-			"back to the Go lowering: the GPU was never exercised")
-	}
-	if !strings.Contains(buildErr.Error(), "Unlowered") {
-		t.Errorf("the refusal should name the kernel that cannot be lowered: %v", buildErr)
-	}
-	if !strings.Contains(buildErr.Error(), "MSL") {
-		t.Errorf("the refusal should name the target, per specs/004-kernel-authoring.md: %v", buildErr)
-	}
-	t.Logf("refused: %v", buildErr)
+	defer cp.Close()
+	_ = n
+	_ = storage
 }
 
 // A buffer round trip at every v0 dtype, on Metal.

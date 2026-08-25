@@ -96,6 +96,26 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 	return e, nil
 }
 
+// SupportsKernel reports whether this device can run k, which is
+// driver.KernelSupport.
+//
+// It answers the one question pipelineFor answers first, and answering it here
+// means a caller hears it when they build a pipeline rather than when they
+// compile a graph. The difference is not cosmetic: a graph is compiled after
+// its weights are uploaded, so the late answer costs a caller the upload before
+// telling them the kernel cannot run (accel issue 19).
+//
+// It does not compile the MSL. Compiling is what pipelineFor does and is the
+// expensive part; this is the cheap precondition, so asking it early costs
+// nothing and asking it twice is free.
+func (d *device) SupportsKernel(k *kernel.Kernel) error {
+	if k.MSL == "" {
+		return fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal; "+
+			"it is outside the subset specs/021-metal-bringup.md section 5 lowers", k.Name)
+	}
+	return nil
+}
+
 // pipelineFor compiles a kernel's MSL, once per device.
 //
 // Keyed by digest, which is what identifies the generated source: two records

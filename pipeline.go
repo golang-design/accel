@@ -74,6 +74,23 @@ func (d *Device) newComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 		return nil, fmt.Errorf("accel: NewComputePipeline %q: %q does not meet what kernel %q "+
 			"requires: %s", label, d.info.Name, k.Name, describeUnmet(unmet))
 	}
+	// And whether the backend can run it at all, which is a question only the
+	// backend can answer: it turns on which artifact that backend needs and
+	// whether this kernel carries one.
+	//
+	// Asked here because a pipeline is the first moment a kernel and a device
+	// are in the same place. It used to be answered at graph compile, which is
+	// after a caller has uploaded their weights -- so the diagnosis was right
+	// and arrived after the expensive part (specs/021-metal-bringup.md, and
+	// accel issue 19 for what that cost).
+	//
+	// A backend that runs anything it is given does not implement the
+	// interface, and that is a real answer rather than a stub.
+	if s, ok := d.dev.(driver.KernelSupport); ok {
+		if err := s.SupportsKernel(k); err != nil {
+			return nil, fmt.Errorf("%w: NewComputePipeline %q: %w", ErrUnsupported, label, err)
+		}
+	}
 
 	p := &ComputePipeline{dev: d, kernel: k, label: label}
 	p.state.init(label)

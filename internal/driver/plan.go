@@ -397,6 +397,34 @@ type GraphCompiler interface {
 	Compile(p *Plan) (Executable, error)
 }
 
+// KernelSupport reports whether a device can run a kernel at all, before a
+// pipeline is built for it.
+//
+// # Why this exists as an interface rather than a check in the layer above
+//
+// Whether a kernel can run is a question only its backend can answer: it turns
+// on which artifact the backend needs and whether that kernel carries one. The
+// layer above knows neither, and a check there would have to name a backend --
+// which is the shape specs/042-surface-completion.md section 5.3 records as a
+// design defect, an abstraction narrowed by the one implementation it has.
+//
+// # Why it is answered here rather than at graph compile
+//
+// It already is answered at graph compile, and that is too late to be useful. A
+// consumer built a graph, uploaded 1.4 GB of weights, and then learned that one
+// operator's kernel had no Metal lowering (accel issue 19). Nothing was wrong
+// with the diagnosis; it arrived after the expensive part. Decision 6 says
+// absence is reported rather than discovered, and a pipeline is the first
+// moment a kernel and a device are in the same place.
+//
+// A backend that can run anything it is given does not implement this, which is
+// a real answer rather than a stub.
+type KernelSupport interface {
+	// SupportsKernel returns nil when the device can run k, and an error naming
+	// what is missing when it cannot.
+	SupportsKernel(k *kernel.Kernel) error
+}
+
 // HasDestination reports whether the op writes through PlanNode.Dst.
 //
 // Stated as a list of the ops that have one rather than as an exemption for the
