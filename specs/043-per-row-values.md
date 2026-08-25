@@ -240,7 +240,7 @@ conflates two things.**
 | --- | --- | --- |
 | shape | one value per **position** | one value per **sequence** |
 | grows with context | yes | no — which is the entire appeal |
-| indexable at a position | yes, and `ScatterRows` does | **no**; resuming means restoring it, not indexing it |
+| indexable at a position | yes, and `ScatterRows` does | **no**; resuming means restoring it, not indexing it — *withdrawn, see the correction below: a batch indexes it by sequence slot every step* |
 | pageable | yes, `Pages` addresses positions | there are no positions to address |
 | what sharing a prefix needs | a **page table**: two sequences name the same blocks | a **snapshot**: save at a branch point, restore when a request diverges |
 
@@ -273,6 +273,62 @@ models but two kinds of state in one forward pass, sixteen full-attention layers
 with a paged cache beside forty-eight recurrent layers with snapshots. That is
 the constraint to design the type distinction against, and it rules out the
 cheap answer of a second `State`-like type used in a separate plan.
+
+### Correction — 2026-08-25: there is no type distinction to make
+
+Appended rather than edited in, because the reasoning above was quoted from a
+consumer report and agreed to in public, and a tidied record is one nobody can
+audit. **The conclusion was wrong, and the aphorism is what made it wrong.**
+
+"Everything a cache does is addressing, and everything a recurrent state does is
+copying" was praised above for predicting the operations rather than describing
+the differences. It predicts them **wrongly**, and it does so because both
+halves were reasoned about one sequence at a time:
+
+- **A recurrent state is indexed, every step, in any batch.** Each sequence has
+  its own $S_t$, so a batch of $B$ sequences holds $B$ states and writing
+  sequence $i$'s new state means writing slot $i$. That is
+  `ScatterRows(b, s, rows, ids)` with `ids` naming the sequence slot, and it is
+  the operator that already exists. The table row saying "indexable: no" is true
+  of a single sequence and false of every batched one — which is the case
+  serving is made of, and the case [#16](https://github.com/golang-design/accel/issues/16)
+  is entirely about.
+- **Snapshot and restore are not the recurrent state's operators.** A KV cache
+  prefix-cached by copying rather than by page table wants exactly the same two,
+  which the same consumer report says ollama does for its whole cache. They are
+  a general `State` operation that nothing in this library has yet, and
+  attaching them to one kind would leave the other kind unable to ask for them.
+
+What actually differs is **which axis the index means**, not whether there is
+one:
+
+| | first axis | grows with context |
+| --- | --- | --- |
+| a KV cache | position within a sequence | yes |
+| a recurrent state | sequence slot | no |
+
+`State` is already "a buffer whose first axis is indexed, written by
+`ScatterRows` at ids": `width := s.shape.Elements() / s.shape[0]`, so a row is
+everything after the indexed axis. A recurrent state shaped
+`[slots, heads, keyHeadDim, valueHeadDim]` is that, with no change and no new
+type. The constraint that a hybrid model needs both kinds live in one graph is
+then satisfied by construction — they are two `State`s of different shapes —
+and it only looked like a hard requirement because a second type would have
+made it one.
+
+So the ordering recorded above — *the state distinction before the first
+recurrent kernel* — is **withdrawn**, because there is no distinction to make.
+What [#17](https://github.com/golang-design/accel/issues/17) needs is the
+chunked-scan kernel and nothing before it. What is genuinely missing and is
+worth building on its own is **snapshot and restore for any `State`**, which
+serves prefix caching for both kinds and is not blocked on a recurrent kernel.
+
+**The generalisable part.** A test that predicts an operation set is stronger
+than a description, which is why the aphorism was persuasive — and that is
+exactly why it needs checking against the case it was not derived from. This one
+was derived from a single sequence and asserted about a library whose whole
+per-row programme is batching. The rule: **a distinction argued from one
+instance is not a type until it survives the batch.**
 
 **One kernel this does not need.** The short depthwise causal convolution these
 layers carry composes from what exists: left-pad the input by `K-1` rows so
