@@ -7511,7 +7511,7 @@ var GeometryVSStage = accel.Stage{
 			return kernelabi.EncodeUniform(dst, v, StageTransformCodec{}.Encode)
 		}},
 	},
-	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
 		pos, vary := geometryVSFlat(v, u[0].(StageTransform), [3]float32(a[0]), [2]float32(a[1]))
 		return pos, flattenVaryings(vary)
 	},
@@ -7577,7 +7577,7 @@ var FullScreenVSStage = accel.Stage{
 	Name:     "FullScreenVS",
 	Kind:     accel.StageVertex,
 	Varyings: "NoVaryings",
-	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
 		pos, vary := fullScreenVSFlat(v)
 		return pos, flattenNoVaryings(vary)
 	},
@@ -7629,7 +7629,7 @@ var ShadeFSStage = accel.Stage{
 		{Name: "Albedo", Index: 0},
 		{Name: "Normal", Index: 1},
 	},
-	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
 		out := shadeFSFlat(f, unflattenVaryings(vv))
 		return [][4]float32{out.Albedo, out.Normal}
 	},
@@ -7684,7 +7684,7 @@ var HalfTriangleVSStage = accel.Stage{
 	Name:     "HalfTriangleVS",
 	Kind:     accel.StageVertex,
 	Varyings: "NoVaryings",
-	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
 		pos, vary := halfTriangleVSFlat(v)
 		return pos, flattenNoVaryings(vary)
 	},
@@ -7733,7 +7733,7 @@ var SolidFSStage = accel.Stage{
 	Outputs: []accel.StageOutput{
 		{Name: "Colour", Index: 0},
 	},
-	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
 		out := solidFSFlat(f, unflattenNoVaryings(vv))
 		return [][4]float32{out.Colour}
 	},
@@ -7779,7 +7779,7 @@ var AttributeVSStage = accel.Stage{
 		{Name: "pos", Index: 0, Components: 3},
 		{Name: "tint", Index: 1, Components: 4},
 	},
-	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
 		pos, vary := attributeVSFlat(v, [3]float32(a[0]), [4]float32(a[1]))
 		return pos, flattenColourVaryings(vary)
 	},
@@ -7830,7 +7830,7 @@ var TintFSStage = accel.Stage{
 	Outputs: []accel.StageOutput{
 		{Name: "Colour", Index: 0},
 	},
-	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
 		out := tintFSFlat(f, unflattenColourVaryings(vv))
 		return [][4]float32{out.Colour}
 	},
@@ -7881,7 +7881,7 @@ var ScaledVSStage = accel.Stage{
 			return kernelabi.EncodeUniform(dst, v, StageTransformCodec{}.Encode)
 		}},
 	},
-	RunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
 		pos, vary := scaledVSFlat(v, u[0].(StageTransform), [3]float32(a[0]))
 		return pos, flattenNoVaryings(vary)
 	},
@@ -7940,7 +7940,7 @@ var TintedFSStage = accel.Stage{
 	Outputs: []accel.StageOutput{
 		{Name: "Colour", Index: 0},
 	},
-	RunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
 		out := tintedFSFlat(f, unflattenNoVaryings(vv), u[0].(StageTint))
 		return [][4]float32{out.Colour}
 	},
@@ -7997,6 +7997,10 @@ var SampledFSStage = accel.Stage{
 	Textures: []accel.StageTexture{
 		{Name: "src", Index: 0, Reads: true},
 	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
+		out := sampledFSFlat(f, unflattenTexelVaryings(vv), tx[0])
+		return [][4]float32{out.Colour}
+	},
 	MSL: `#include <metal_stdlib>
 using namespace metal;
 #pragma METAL fp contract(off)
@@ -8052,6 +8056,10 @@ var DisplacedVSStage = accel.Stage{
 	Textures: []accel.StageTexture{
 		{Name: "height", Index: 0, Reads: true},
 	},
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
+		pos, vary := displacedVSFlat(v, tx[0])
+		return pos, flattenTexelVaryings(vary)
+	},
 	MSL: `#include <metal_stdlib>
 using namespace metal;
 #pragma METAL fp contract(off)
@@ -8081,6 +8089,63 @@ vertex DisplacedVS_out DisplacedVS(
 }
 `,
 	Digest:    "97346a6ad1f09549e997efb651a370ab",
+	Generator: kernelabi.Version,
+}
+
+// blitFSFlat is the generated lowering of the fragment stage BlitFS.
+//
+// specs/032-stage-abi.md. The authored BlitFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func blitFSFlat(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
+	var c [4]float32 = f.Coord()
+	return Solid{accel.Fetch(src, int32(c[int32(0)]), int32(c[int32(1)]))}
+}
+
+// BlitFSStage is the compiled form of BlitFS.
+var BlitFSStage = accel.Stage{
+	Name:     "BlitFS",
+	Kind:     accel.StageFragment,
+	Varyings: "NoVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	Textures: []accel.StageTexture{
+		{Name: "src", Index: 0, Reads: true},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
+		out := blitFSFlat(f, unflattenNoVaryings(vv), tx[0])
+		return [][4]float32{out.Colour}
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static float4 _accel_fetch2d(texture2d<float> t, int x, int y) {
+    if (x < 0 || y < 0) { return float4(0.0); }
+    if (uint(x) >= t.get_width() || uint(y) >= t.get_height()) { return float4(0.0); }
+    return t.read(uint2(uint(x), uint(y)));
+}
+
+struct BlitFS_in {
+    float4 _pos [[position]];
+};
+
+struct BlitFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment BlitFS_out BlitFS(
+    BlitFS_in _in [[stage_in]],
+    texture2d<float> src [[texture(0)]],
+    bool _front [[front_facing]]) {
+    BlitFS_in in = _in;
+    BlitFS_out _out;
+    float4 c = _in._pos;
+    _out.Colour = _accel_fetch2d(src, int(c[int(0)]), int(c[int(1)]));
+    return _out;
+}
+`,
+	Digest:    "b74ed83860b276a44e9758e45c853fde",
 	Generator: kernelabi.Version,
 }
 
@@ -9478,6 +9543,22 @@ func unflattenColourVaryings(f []float32) ColourVaryings {
 	return v
 }
 
+// flattenTexelVaryings packs TexelVaryings into the flat form a rasterizer interpolates.
+func flattenTexelVaryings(v TexelVaryings) []float32 {
+	out := make([]float32, 0, 2)
+	out = append(out, v.Texel[0])
+	out = append(out, v.Texel[1])
+	return out
+}
+
+// unflattenTexelVaryings is flattenTexelVaryings's inverse.
+func unflattenTexelVaryings(f []float32) TexelVaryings {
+	var v TexelVaryings
+	v.Texel[0] = f[0]
+	v.Texel[1] = f[1]
+	return v
+}
+
 // Kernels is every kernel this package generated, in source order.
 //
 // Generated rather than written, so that a pass over the whole corpus cannot
@@ -9558,4 +9639,5 @@ var Stages = []*accel.Stage{
 	&TintedFSStage,
 	&SampledFSStage,
 	&DisplacedVSStage,
+	&BlitFSStage,
 }

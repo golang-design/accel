@@ -191,3 +191,21 @@ func DisplacedVS(v accel.Vertex, height accel.Texture2D) (accel.Clip, TexelVaryi
 	return accel.Clip{h[0], h[1], h[2], 1},
 		TexelVaryings{Texel: accel.Vec2{float32(i), 0}}
 }
+
+// BlitFS returns the texel under the fragment, which is the stage
+// specs/032-stage-abi.md section 5 opens with.
+//
+// It reads its coordinate from the built-in rather than from a varying, and
+// that is what makes it the stage a two-backend comparison can be exact
+// through. An interpolated coordinate is a sum of three products of a
+// barycentric weight and a varying, and two rasterizers are free to compute the
+// weights differently -- so int32() of one would land on a different texel from
+// int32() of the other at a pixel or two, and the fetch under test would be
+// blamed for the interpolation. Coord() is the pixel centre, x + 0.5, on every
+// backend by the ABI, so int32 of it is x exactly.
+//
+//accel:fragment
+func BlitFS(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
+	c := f.Coord()
+	return Solid{Colour: accel.Fetch(src, int32(c[0]), int32(c[1]))}
+}

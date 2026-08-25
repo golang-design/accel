@@ -97,7 +97,7 @@ func TestStageAdaptersAgreeWithTheTypedStages(t *testing.T) {
 
 		wantPos, wantVary := GeometryVS(v, xf, pos, uv)
 		gotPos, flat := GeometryVSStage.RunVertex(v, []any{xf},
-			[][]float32{pos[:], uv[:]})
+			[][]float32{pos[:], uv[:]}, nil)
 
 		if gotPos != wantPos {
 			t.Errorf("position: adapter %v, typed %v", gotPos, wantPos)
@@ -115,7 +115,7 @@ func TestStageAdaptersAgreeWithTheTypedStages(t *testing.T) {
 		in := Varyings{Colour: accel.Vec4{0.2, 0.4, 0.6, 1}, UV: accel.Vec2{0.3, 0.7}}
 
 		want := ShadeFS(f, in)
-		got := ShadeFSStage.RunFragment(f, nil, flattenVaryings(in))
+		got := ShadeFSStage.RunFragment(f, nil, flattenVaryings(in), nil)
 
 		if len(got) != 2 {
 			t.Fatalf("the adapter returned %d attachments, want 2", len(got))
@@ -130,7 +130,7 @@ func TestStageAdaptersAgreeWithTheTypedStages(t *testing.T) {
 	t.Run("no varyings", func(t *testing.T) {
 		v := accel.NewVertexForTest(1, 0)
 		wantPos, _ := FullScreenVS(v)
-		gotPos, flat := FullScreenVSStage.RunVertex(v, nil, nil)
+		gotPos, flat := FullScreenVSStage.RunVertex(v, nil, nil, nil)
 		if gotPos != wantPos {
 			t.Errorf("position: adapter %v, typed %v", gotPos, wantPos)
 		}

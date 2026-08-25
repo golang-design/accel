@@ -45,7 +45,8 @@ func renderPass(n *resolvedNode) (err error) {
 	applyLoads(rp, fb)
 
 	for i, d := range rp.Draws {
-		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.indexBytes[i], n.indirectArgs[i]); err != nil {
+		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.vertexTextures[i], n.fragmentTextures[i],
+			n.indexBytes[i], n.indirectArgs[i]); err != nil {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
 	}
@@ -144,7 +145,19 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 }
 
 // drawOne rasterizes one draw.
-func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, indices, args []byte) error {
+func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, vbound, fbound []boundTexture, indices, args []byte) error {
+	// Decoded here, when the draw runs, rather than when the node was
+	// resolved: resolution happens before any node executes, so a pass
+	// fetching what an earlier pass drew would otherwise read the texture as
+	// it was before the draw.
+	vtex, err := decodeTextures(vbound)
+	if err != nil {
+		return fmt.Errorf("accel: vertex texture: %w", err)
+	}
+	ftex, err := decodeTextures(fbound)
+	if err != nil {
+		return fmt.Errorf("accel: fragment texture: %w", err)
+	}
 	vs, fs := d.Vertex.RunVertex, d.Fragment.RunFragment
 	if vs == nil || fs == nil {
 		return fmt.Errorf("stage %q or %q carries no generated adapter, so this backend "+
@@ -182,7 +195,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 		// pre-offset or post-offset value; the ABI exposes only the one a
 		// caller can act on, and that is the pre-offset index.
 		pos, vary := vs(kernel.NewVertex(index, instance), d.VertexUniforms,
-			fetch(index+base, instance))
+			fetch(index+base, instance), vtex)
 		return raster.Vertex{
 			Pos:      raster.Clip{X: pos[0], Y: pos[1], Z: pos[2], W: pos[3]},
 			Varyings: vary,
@@ -192,7 +205,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 	shade := func(f raster.Fragment) raster.Shaded {
 		out := fs(kernel.NewFragment(
 			kernel.Vec4{float32(f.X) + 0.5, float32(f.Y) + 0.5, f.Depth, f.InvW},
-			f.Front), d.FragmentUniforms, f.Varyings)
+			f.Front), d.FragmentUniforms, f.Varyings, ftex)
 		return raster.Shaded{Color: out}
 	}
 
@@ -213,7 +226,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 			return err
 		}
 	}
-	_, err := raster.DrawPrimitives(ps, fb, dc, vertexFn, shade)
+	_, err = raster.DrawPrimitives(ps, fb, dc, vertexFn, shade)
 	return err
 }
 

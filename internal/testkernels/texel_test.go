@@ -105,25 +105,27 @@ func TestAFetchingStageReadsTheTextureAndZeroOutsideIt(t *testing.T) {
 	}
 }
 
-// A stage that declares a texture carries the texture in its record and carries
-// no flat adapter.
+// Every stage carries a flat adapter, and one that declares a texture carries
+// the texture in its record too.
 //
-// The two halves are one statement. The flat form specs/035-cpu-rasterizer.md
-// calls takes a uniform slice and interpolated floats and has nowhere to put a
-// texture, so a stage that fetches cannot be run through it. Emitting one
-// anyway would pass an empty texture, every fetch would be out of range, and
-// the pass would produce black without failing anything.
-func TestAStageWithATextureHasNoFlatAdapter(t *testing.T) {
+// This asserted the opposite until the flat form gained a texture channel. The
+// reasoning then was sound and is worth keeping visible: the form took a
+// uniform slice and interpolated floats and had nowhere to put a texture, so
+// emitting an adapter for a fetching stage would have passed an empty one,
+// every fetch would have been out of range, and the pass would have produced
+// black without failing anything. The answer was to withhold the adapter, which
+// made the stage unrunnable on the backend that is the oracle.
+//
+// The channel exists now, so the adapter is emitted and the guarantee moves: a
+// stage that declares a texture must still *declare* it, because that record is
+// what the pass binds against and what refuses a draw that bound nothing.
+func TestAStageWithATextureDeclaresIt(t *testing.T) {
 	for _, s := range Stages {
-		if len(s.Textures) == 0 {
-			if s.RunVertex == nil && s.RunFragment == nil {
-				t.Errorf("%s declares no texture and has no flat adapter", s.Name)
-			}
-			continue
+		if s.RunVertex == nil && s.RunFragment == nil {
+			t.Errorf("%s has no flat adapter, so the CPU backend cannot run it", s.Name)
 		}
-		if s.RunVertex != nil || s.RunFragment != nil {
-			t.Errorf("%s declares %d textures and still carries a flat adapter, which "+
-				"would run it against an unbound texture", s.Name, len(s.Textures))
+		if len(s.Textures) == 0 {
+			continue
 		}
 		for i, tx := range s.Textures {
 			if tx.Index != i {

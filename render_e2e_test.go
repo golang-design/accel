@@ -244,7 +244,7 @@ func TestAPanickingStageBecomesAnError(t *testing.T) {
 
 	boom := accel.Stage{
 		Name: "Boom", Kind: accel.StageVertex, Varyings: "NoVaryings",
-		RunVertex: func(accel.Vertex, []any, [][]float32) (accel.Clip, []float32) {
+		RunVertex: func(accel.Vertex, []any, [][]float32, []accel.Texture2D) (accel.Clip, []float32) {
 			panic("a stage read past the end of something")
 		},
 	}

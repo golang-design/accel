@@ -328,20 +328,6 @@ func (e *emitter) stage(k *ir.Func) {
 // layout — which is also what lets the two disagree loudly rather than quietly,
 // since a mismatch fails to compile in generated code.
 func (e *emitter) stageAdapter(k *ir.Func, lower string) {
-	// A stage that fetches a texture gets no flat adapter, and the varyings
-	// packers with it.
-	//
-	// The flat form carries a uniform slice and interpolated floats and has
-	// nowhere to put a texture, so this stage cannot be run through it. The
-	// alternative is an adapter that passes accel.Texture2D{}, whose every
-	// fetch is out of range and therefore returns zero — a black picture that
-	// fails nothing, which is worse than an absent adapter a pipeline can
-	// refuse by name. specs/032-stage-abi.md section 5 records that the flat
-	// form gains a texture channel when a render pass can bind one.
-	if len(k.Textures) > 0 {
-		return
-	}
-
 	uniforms := 0
 	for _, p := range k.Params {
 		if p.Type() != nil && p.Type().Kind == ir.Struct && p.Index > 0 &&
@@ -351,15 +337,18 @@ func (e *emitter) stageAdapter(k *ir.Func, lower string) {
 	}
 
 	if k.Stage == ir.StageVertex {
-		e.printf("\tRunVertex: func(v accel.Vertex, u []any, a [][]float32) (accel.Clip, []float32) {\n")
+		e.printf("\tRunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {\n")
 		e.printf("\t\tpos, vary := %s(v", lower)
-		ui, ai := 0, 0
+		ui, ai, ti := 0, 0, 0
 		for _, p := range k.Params[1:] {
 			t := p.Type()
 			switch {
 			case t != nil && t.Kind == ir.Array:
 				e.printf(", %s(a[%d])", e.goType(t), ai)
 				ai++
+			case t != nil && t.Kind == ir.Texture2D:
+				e.printf(", tx[%d]", ti)
+				ti++
 			case t != nil && t.Kind == ir.Struct:
 				e.printf(", u[%d].(%s)", ui, e.goType(t))
 				ui++
@@ -374,17 +363,21 @@ func (e *emitter) stageAdapter(k *ir.Func, lower string) {
 		return
 	}
 
-	e.printf("\tRunFragment: func(f accel.Fragment, u []any, vv []float32) [][4]float32 {\n")
+	e.printf("\tRunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {\n")
 	e.printf("\t\tout := %s(f, %s(vv)", lower, unflattenName(k))
-	ui := 0
+	ui, ti := 0, 0
 	for _, p := range k.Params[2:] {
 		t := p.Type()
-		if t != nil && t.Kind == ir.Struct {
+		switch {
+		case t != nil && t.Kind == ir.Texture2D:
+			e.printf(", tx[%d]", ti)
+			ti++
+		case t != nil && t.Kind == ir.Struct:
 			e.printf(", u[%d].(%s)", ui, e.goType(t))
 			ui++
-			continue
+		default:
+			e.printf(", %s{}", e.goType(t))
 		}
-		e.printf(", %s{}", e.goType(t))
 	}
 	e.printf(")\n")
 	e.printf("\t\treturn [][4]float32{")

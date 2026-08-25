@@ -26,14 +26,14 @@ var (
 	stageTestVS = Stage{
 		Name: "stageTestVS", Kind: kernel.StageVertex, Varyings: "stageTestVaryings",
 		Attributes: []kernel.StageAttribute{{Name: "pos", Index: 0, Components: 3}},
-		RunVertex: func(kernel.Vertex, []any, [][]float32) (kernel.Clip, []float32) {
+		RunVertex: func(kernel.Vertex, []any, [][]float32, []kernel.Texture2D) (kernel.Clip, []float32) {
 			return kernel.Clip{}, nil
 		},
 	}
 	stageTestFS = Stage{
 		Name: "stageTestFS", Kind: kernel.StageFragment, Varyings: "stageTestVaryings",
 		Outputs: []kernel.StageOutput{{Name: "colour", Index: 0}},
-		RunFragment: func(kernel.Fragment, []any, []float32) [][4]float32 {
+		RunFragment: func(kernel.Fragment, []any, []float32, []kernel.Texture2D) [][4]float32 {
 			return nil
 		},
 	}
