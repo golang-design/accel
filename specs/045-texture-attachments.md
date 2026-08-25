@@ -300,7 +300,7 @@ row and the graph row are not, and each is owed to a separate slice.
 | 4 | texel fetch, the stage half | **done** — a stage compiles one on both backends |
 | 4 | texel fetch, the binding half | **done** — `RenderPass.SetTexture`, a texture channel in the flat stage form, the plan carrying each bound subresource, and a refusal for a stage that fetches a slot no draw bound. A pass reads what an earlier pass drew, compared image for image |
 | 4 | Metal's per-pass staging copies and the present conversion draw | not started. They are a cost rather than a defect now that the pitch is right |
-| 4 | feedback rejection over subresources | not started; **unblocked as of 2026-08-25** — the binding half is done, so a draw that reads the subresource it writes is now constructible and therefore refusable |
+| 4 | feedback rejection over subresources | **done** — a stage that fetches the subresource its pass is writing is refused at build, naming both views. Compared on view ranges, checked where a stage declares it *reads* the slot rather than where one is bound. Its accepting half is partly unreachable: see below |
 
 Four rules the pass now owns, all at build and all named: the texture declares
 `TextureRenderTarget`; its extent covers the render area; a colour attachment is
@@ -431,3 +431,41 @@ Unchanged from §7, minus what §8.1 marks done:
   in a test;
 - `MipLevels` and `ArrayLayers`, once the allocation, the copy and the hazard
   range name a subresource.
+
+
+## 9. Feedback rejection, and the half of it that cannot be tested yet
+
+Built 2026-08-25, closing §5's step 3.
+
+The rule is [033](033-render-api.md) §3.3: a stage that fetches the subresource
+its pass is writing is refused at build. It sits where a stage *declares it
+reads* the slot rather than where a texture is bound, because that is what
+"shader-visible" means — a texture bound and never fetched is not feedback, and
+refusing it would be a rule about the caller's tidiness rather than about
+undefined results.
+
+Three parts of the accepting half are exercised and one is not:
+
+| | exercised |
+| --- | --- |
+| fixed-function read-modify-write — `LoadKeep`, blending, the depth test | yes; refusing it would reject every blended pass there is |
+| a texture this pass does not write, however many others do | yes — the ordinary two-pass shape |
+| two views of one mip differing only in numeric encoding | not separately; they are the same bytes and are compared as one, which is why `Format` is excluded from the comparison |
+| **a disjoint mip or array layer** | **no — §8.3 still refuses `MipLevels` above one, so it cannot be constructed** |
+
+The comparison is on view ranges anyway, because the degenerate form would make
+the day mips land the day this silently starts refusing legal draws. But an
+untested permission is precisely the shape the two withdrawn rules had — V23,
+and [033](033-render-api.md) §6's undeclared-vertex-slot rule — and this project
+records that **a rule's accepting half decides when it can be built**.
+
+So the gap is marked by a test rather than by a sentence:
+`TestADisjointSubresourceIsNotFeedback` asks for a two-mip texture, skips with
+the refusal it got, and **self-activates** the day that refusal is lifted. This
+is the same pattern the texture-origin corpus entry uses, and it is the answer
+to the drift found the same day in [033](033-render-api.md) §7 — a suspension
+recorded in prose has no accepting half and nothing makes it resume.
+
+Measured rather than assumed: removing the check fails the refusal test;
+degrading the range comparison to a texture-handle comparison fails **nothing**,
+which is the gap stated exactly.
