@@ -1884,6 +1884,30 @@ representation must use an operation that the representation changes.** Storing
 a value back, or adding it, proves the bits survived and nothing about how they
 were read.
 
+**What the zero-coverage sweep found, in the order severity fell — 2026-08-26.**
+Reading every function no test calls turned out to be the most productive of the
+three methods, and it graded itself: the findings got smaller as the list
+shortened, which is how a sweep says it is done.
+
+| Found | Severity |
+| --- | --- |
+| the six **signed atomics**, none reached by any kernel | an emitter path and an MSL mapping, unrun |
+| `UniformWriter.I32`, and with it the `int32` **uniform** type | a scalar type in the ABI, specified and never executed |
+| `accel.AddF32`, and the **capability refusal** it is gated by | a documented promise nothing exercised |
+| `poolBlock.Write`/`Read`, with a **use-after-free** guard | a refusal nobody had reached |
+| `Buckets.Sizes`, and its constructor's **wrong doc comment** | an accessor, and a sentence that lied |
+
+Two of those found something other than what they were looking for. `AddF32`'s
+entry found that the *refusal* was the untested part, not the operation. And
+writing a test for `Buckets.Sizes` found `NewBuckets` documented as
+"de-duplicates" when it refuses a duplicate — a defect no coverage number could
+show, because the code was covered and the sentence about it was wrong.
+
+**The generalisation is that coverage points at code and the finding is often
+next to it.** A function at 0% is a question, not an answer: asking why nothing
+calls it is what produces the finding, and three of the five above were larger
+than the uncovered function itself.
+
 Two of the skips that sweep found are deliberate and self-activating — the
 disjoint-subresource permission and the draw-time uniform channel — which is the
 distinction to keep: a skip that names a condition somebody will lift is a
