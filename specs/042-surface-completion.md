@@ -73,7 +73,7 @@ decision here.
 | Surface | Refused because |
 | --- | --- |
 | `Ballot` on Metal | `simd_ballot` returns `simd_vote`; [022](022-msl-target.md) §5 |
-| Uniform-block array members | std140's 16-byte stride needs the index expression rewritten |
+| ~~Uniform-block array members~~ | **withdrawn 2026-08-24.** std140's 16-byte stride does need the index expression rewritten, and the matrix member beside it was already spelled that way — an outer array of the element count, each row the stride in elements. The array case now shares it. The refusal said no corpus kernel needed one; `Pack` did, which made `tensor.Contiguous` CPU-only. A refusal justified by "nothing needs this yet" is only as true as the last time somebody checked |
 | Non-Metal window handles | [034](034-surface-present.md) §6 lists them; no backend has one |
 | MSAA | [041](041-msaa.md), unbuilt |
 | `MipLevels`, `ArrayLayers` > 1 | the API cannot name a subresource yet |
