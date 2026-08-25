@@ -461,8 +461,26 @@ type RenderPass struct {
 	indexBuf BufferView
 	indexFmt IndexFormat
 	buffers  []BufferView
-	draws    []drawCall
-	failed   bool
+
+	// textures are the shader-visible bindings set so far, indexed by slot.
+	//
+	// One slice for both stages, where the uniforms are two. A uniform is a
+	// *value* and each stage indexes its own parameters from zero, so one
+	// shared slice would give a fragment stage the vertex stage's parameter 0.
+	// A texture is a resource, and a slot names the resource rather than a
+	// parameter of either stage: slot n is what a vertex stage's texture n and
+	// a fragment stage's texture n both read, which is one binding on every
+	// target -- Metal binds the same MTLTexture into both argument tables, and
+	// a Vulkan descriptor set is visible to the stages that declare it.
+	//
+	// The consequence is worth stating: two stages that each declare a texture
+	// at index 0 read the same view. That is the G-buffer case rather than a
+	// restriction on it, and the alternative -- SetVertexTexture and
+	// SetFragmentTexture -- makes a caller bind one resource twice for it.
+	textures []TextureView
+
+	draws  []drawCall
+	failed bool
 }
 
 // drawCall is one recorded draw.
@@ -488,6 +506,16 @@ type drawCall struct {
 	indirect       bool
 	indirectArgs   BufferView
 	indirectAccess int
+
+	// textures is the texture state standing when this draw was recorded,
+	// indexed by slot.
+	//
+	// No access index beside it, where a vertex buffer has one. A buffer view
+	// may name a transient or a slot, so build has to reach the access to learn
+	// where the bytes ended up; a texture is neither, and its operand is its
+	// own allocation whether or not the read was declared -- which it is not
+	// for a texture no body fetches.
+	textures []TextureView
 
 	// vertexAccess and indexAccess index the node's access list, so build
 	// lowers these views the way it lowers an attachment. -1 is unbound.
@@ -637,6 +665,45 @@ func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
 }
 
 func (p *RenderPass) vertexBuffers() []BufferView { return p.buffers }
+
+// SetTexture binds a texture a stage fetches from, at one slot.
+//
+// The view names the subresource, which is the whole of what a stage reads: the
+// mip and the layer are the view's rather than the fetch's, so
+// specs/032-stage-abi.md section 5's Fetch takes a coordinate and nothing else
+// and specs/033-render-api.md section 3.3 has one shape to compare an
+// attachment against.
+//
+// The slot is a stage's dense texture index, counting the textures its
+// signature declares and not its parameters -- the rule [StageAttribute]
+// follows. Both stages read the same slot space, for the reason
+// [RenderPass.textures] gives.
+//
+// Its two refusals are [RenderPass.SetVertexBuffer]'s, and for that method's
+// reason: a negative slot indexed a slice and took the caller's process down
+// from inside a recording call, and a panic is the one diagnostic a caller
+// cannot handle, cannot attribute to a slot, and cannot see beside the rest of
+// a build's errors.
+func (p *RenderPass) SetTexture(slot int, v TextureView) {
+	if slot < 0 {
+		p.r.fail("RenderPass %q: SetTexture at slot %d; a slot is a stage's texture "+
+			"index and cannot be negative", p.desc.Label, slot)
+		p.failed = true
+		return
+	}
+	if slot >= mslabi.StageTextureLimit {
+		p.r.fail("RenderPass %q: SetTexture at slot %d; %d is the ceiling, which is what "+
+			"every target this project emits for guarantees a stage "+
+			"(specs/032-stage-abi.md section 5)",
+			p.desc.Label, slot, mslabi.StageTextureLimit)
+		p.failed = true
+		return
+	}
+	for len(p.textures) <= slot {
+		p.textures = append(p.textures, TextureView{})
+	}
+	p.textures[slot] = v
+}
 
 // SetVertexUniform and SetFragmentUniform supply one by-value parameter of the
 // stage named, for every draw recorded after the call.
@@ -870,6 +937,7 @@ func (p *RenderPass) record(d drawCall) {
 	d.vertexBuf = append([]BufferView(nil), p.buffers...)
 	d.vertexU = append([]any(nil), p.vertexUniforms...)
 	d.fragmentU = append([]any(nil), p.fragmentUniforms...)
+	d.textures = append([]TextureView(nil), p.textures...)
 
 	// The buffers a draw reads become the pass's declared reads, which is
 	// specs/033-render-api.md section 3's table. Declared here rather than at
@@ -901,8 +969,56 @@ func (p *RenderPass) record(d drawCall) {
 	if d.indexed {
 		d.indexAccess = p.declareRead(d.indexBuf, "index buffer", stageVertexInput)
 	}
+	p.declareTextureReads(&d)
 
 	p.draws = append(p.draws, d)
+}
+
+// declareTextureReads adds one read per texture this draw's stages fetch.
+//
+// Only the slots a stage *declares*, for the reason only the vertex slots a
+// layout reads are declared: a texture bound at a slot no stage names is not
+// fetched, so ordering this node against whatever wrote it would move barriers
+// and stretch a transient's live range for a read that does not happen. Binding
+// for the widest pipeline in a pass and drawing with a narrower one is
+// legitimate.
+//
+// And only a texture the body reads. StageTexture.Reads is inferred from the
+// body rather than declared, and a texture nothing fetches is not a
+// subresource this pass depends on -- the binding is still required, because
+// the shader's argument exists either way, but the graph edge is not.
+//
+// The stage mask is the stage that declares it, so the barrier
+// specs/045-texture-attachments.md section 3 draws -- colour output to a shader
+// stage -- names the shader stage that actually reads. A slot both stages
+// declare is one access carrying both bits, which is what declareRead's
+// de-duplication already does for a view fetched in two roles.
+func (p *RenderPass) declareTextureReads(d *drawCall) {
+	if d.pipeline == nil {
+		return
+	}
+	for _, s := range []struct {
+		stage *Stage
+		mask  stage
+		what  string
+	}{
+		{d.pipeline.desc.Vertex, stageVertexShader, "vertex stage texture"},
+		{d.pipeline.desc.Fragment, stageFragmentShader, "fragment stage texture"},
+	} {
+		if s.stage == nil {
+			continue
+		}
+		for _, tx := range s.stage.Textures {
+			if !tx.Reads || tx.Index < 0 || tx.Index >= len(d.textures) {
+				continue
+			}
+			v := d.textures[tx.Index]
+			if v.Texture == nil {
+				continue
+			}
+			p.declareTextureRead(v, fmt.Sprintf("%s %d", s.what, tx.Index), s.mask)
+		}
+	}
 }
 
 // declareRead adds one read to the pass's node, once per distinct view, in the
@@ -927,6 +1043,27 @@ func (p *RenderPass) declareRead(v BufferView, what string, st stage) int {
 		p.failed = true
 		return -1
 	}
+	return p.addRead(a, st)
+}
+
+// declareTextureRead is [RenderPass.declareRead] for a subresource.
+//
+// The same body over a different declaration, because what makes a read
+// distinct and where it lands in the node's access list are properties of the
+// access rather than of the resource kind. Two paths would let a texture read
+// and a buffer read de-duplicate by different rules, and build consumes the
+// returned index positionally either way.
+func (p *RenderPass) declareTextureRead(v TextureView, what string, st stage) int {
+	a, ok := p.r.declareTexture("RenderPass "+p.desc.Label+" "+what, v, AccessRead)
+	if !ok {
+		p.failed = true
+		return -1
+	}
+	return p.addRead(a, st)
+}
+
+// addRead places one declared read in the node, once per distinct range.
+func (p *RenderPass) addRead(a access, st stage) int {
 	a.stage = st
 	n := p.r.state.nodes[p.id]
 	for i, have := range n.accesses {

@@ -376,14 +376,40 @@ func TestStageNamesEveryBitItHolds(t *testing.T) {
 		{stageLateDepth, "late depth"},
 		{stageColourOutput, "colour output"},
 		{stageCompute, "compute"},
+		{stageVertexShader, "vertex shader"},
+		{stageFragmentShader, "fragment shader"},
 		{stageEarlyDepth | stageLateDepth, "early depth and late depth"},
 		{stageTransfer | stageCompute, "transfer and compute"},
 		{stageAll, "transfer and indirect fetch and vertex input and early depth " +
-			"and late depth and colour output and compute"},
+			"and late depth and colour output and compute and vertex shader " +
+			"and fragment shader"},
 	} {
 		if got := c.s.String(); got != c.want {
-			t.Errorf("stage(%d) prints %q, want %q", uint8(c.s), got, c.want)
+			t.Errorf("stage(%d) prints %q, want %q", uint16(c.s), got, c.want)
 		}
+	}
+}
+
+// stageAll is every bit the mask defines.
+//
+// A bit added to the enumeration and left out of stageAll makes every
+// conservative barrier -- specs/017-graph-aliasing.md's, the serial plan's, and
+// the queue-wide ordering point -- narrower than the "everything" each of them
+// means, and narrower in the direction that removes ordering rather than adding
+// it. Nothing else fails when that happens: the barrier is still emitted, still
+// counted, and still reported, with one stage missing from its mask.
+//
+// stageNames is the list this reads, so a bit reaches stageAll and the printer
+// together or neither.
+func TestStageAllIsEveryStage(t *testing.T) {
+	var union stage
+	for _, n := range stageNames {
+		union |= n.bit
+	}
+	if union != stageAll {
+		t.Errorf("the named stages are %d and stageAll is %d; the difference is %d, "+
+			"which is a stage a conservative barrier would not order",
+			union, stageAll, union^stageAll)
 	}
 }
 

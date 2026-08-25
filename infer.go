@@ -45,11 +45,15 @@ func (h hazard) String() string {
 //
 // The set mirrors specs/003-command-graph.md's StageMask, less the stages no
 // declared access can be in yet. StageHost is absent because a host write is a
-// staged blit on the queue, so its queue-side stage is transfer. StageVertex
-// and StageFragment are absent because nothing a pass declares is read by a
-// shader stage: uniforms are by-value and there is no texel fetch. Both arrive
-// with the accesses that produce them rather than as names nothing sets.
-type stage uint8
+// staged blit on the queue, so its queue-side stage is transfer.
+//
+// stageVertexShader and stageFragmentShader arrived with the accesses that
+// produce them, which is the rule the rest of this list follows: a bound
+// [TextureView] is read by a shader stage, so the barrier between a pass that
+// writes an attachment and a pass that fetches it names colour output on one
+// side and a shader stage on the other -- which is the edge
+// specs/045-texture-attachments.md section 3 draws.
+type stage uint16
 
 const (
 	stageTransfer stage = 1 << iota
@@ -59,12 +63,20 @@ const (
 	stageLateDepth
 	stageColourOutput
 	stageCompute
+	stageVertexShader
+	stageFragmentShader
 )
 
 // stageAll is every stage, which is what an ordering point that names no
 // particular access has to say on both sides.
+//
+// Every bit belongs here, and TestStageAllIsEveryStage is what says so: a bit
+// added and forgotten makes every conservative barrier -- the aliasing one, the
+// serial plan's, the queue-wide one -- quietly narrower than "everything",
+// which no other test can see.
 const stageAll = stageTransfer | stageIndirectFetch | stageVertexInput |
-	stageEarlyDepth | stageLateDepth | stageColourOutput | stageCompute
+	stageEarlyDepth | stageLateDepth | stageColourOutput | stageCompute |
+	stageVertexShader | stageFragmentShader
 
 var stageNames = []struct {
 	bit  stage
@@ -77,6 +89,8 @@ var stageNames = []struct {
 	{stageLateDepth, "late depth"},
 	{stageColourOutput, "colour output"},
 	{stageCompute, "compute"},
+	{stageVertexShader, "vertex shader"},
+	{stageFragmentShader, "fragment shader"},
 }
 
 // String joins the bits set rather than switching on the whole value.

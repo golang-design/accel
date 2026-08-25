@@ -82,3 +82,19 @@ func StageFragmentUniformIndex(i int) int { return i }
 // numbering is -- the emitter writes it into the shader and the backend binds
 // against it, and a disagreement is a stage reading the wrong texture.
 func StageTextureIndex(i int) int { return i }
+
+// StageTextureLimit is how many textures one stage may bind.
+//
+// It is not the reservation StageVertexBufferLimit is. Nothing shares the
+// texture argument space, so no index above this collides with anything; it is
+// a ceiling, and it exists because exceeding a target's own is not an error a
+// caller sees. Metal's texture argument table is fixed per family and
+// overrunning it is a validation assert -- the abort class
+// internal/mtl/render_darwin.go is built around -- so the slot is refused where
+// a caller wrote it rather than where the device stops the process.
+//
+// Sixteen because that is what every target this project emits for guarantees:
+// Vulkan's maxPerStageDescriptorSampledImages has a required minimum of 16 and
+// Metal's smallest table is 31. A pipeline that fits here fits everywhere,
+// which is the property a portable ABI needs from a limit.
+const StageTextureLimit = 16
