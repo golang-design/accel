@@ -96,12 +96,12 @@ func (cb *CommandBuffer) Blit() *BlitEncoder {
 
 // SetPipeline selects the kernel this pass runs.
 func (e *ComputeEncoder) SetPipeline(p *Pipeline) {
-	withPool(func() { e.id.Send(selSetComputePipeline, p.id) })
+	withPool(func() { send(e.id, selSetComputePipeline, uintptr(p.id), 0, 0) })
 }
 
 // SetBuffer binds a range of a buffer at an argument index.
 func (e *ComputeEncoder) SetBuffer(b *Buffer, offset, index int) {
-	withPool(func() { e.id.Send(selSetBuffer, b.id, uintptr(offset), uintptr(index)) })
+	withPool(func() { send(e.id, selSetBuffer, uintptr(b.id), uintptr(offset), uintptr(index)) })
 }
 
 // SetBytes binds a small value inline, without a buffer.
@@ -114,6 +114,11 @@ func (e *ComputeEncoder) SetBytes(data []byte, index int) {
 	if len(data) == 0 {
 		return
 	}
+	// Not [send]: the pointer is Go memory. A uintptr is not a reference the
+	// collector honours, and nothing here proves the slice is on the heap
+	// rather than on a stack that may grow and move under the call. The
+	// reflected form takes an unsafe.Pointer, which escape analysis does
+	// account for, and this is the one call on the path where that matters.
 	withPool(func() {
 		e.id.Send(selSetBytes, unsafe.Pointer(&data[0]), uintptr(len(data)), uintptr(index))
 	})

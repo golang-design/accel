@@ -19,13 +19,18 @@ import "testing"
 // faster needs the two apart, because the fixes are different and only one of
 // them touches an object-lifetime rule.
 //
-//	send-in-pool     one foreign call, pool already held
-//	withPool-empty   two foreign calls, no work inside
-//	send-with-pool   the whole thing: pool, call, drain
+//	send-reflected   one message send through purego's reflect path
+//	send-direct      the same send through [send], pool already held
+//	withPool-empty   a pool push and pop, no work inside
+//	send-with-pool   the whole thing: pool, reflected call, drain
 //
-// Read it as: if send-in-pool is close to half of withPool-empty, the foreign
-// call is the unit of cost and the pool is one more of them. If send-in-pool is
-// far smaller, the pool is genuinely the expensive part.
+// The first two are also the before and after of the change that made this
+// package call objc_msgSend without reflection, which is why both spellings
+// are kept reachable rather than one deleted.
+//
+// Read it as: the foreign call is the unit of cost, and a pool is two more of
+// them. Measured on an M2 after the change, 180ns direct against 667ns
+// reflected, and an empty pool 389ns for its two.
 func BenchmarkFFICost(b *testing.B) {
 	ds, err := Devices()
 	if err != nil || len(ds) == 0 {
@@ -33,11 +38,20 @@ func BenchmarkFFICost(b *testing.B) {
 	}
 	d := ds[0]
 
-	b.Run("send-in-pool", func(b *testing.B) {
+	b.Run("send-reflected", func(b *testing.B) {
 		withPool(func() {
 			b.ResetTimer()
 			for range b.N {
 				_ = d.id.Send(selRegistryID)
+			}
+			b.StopTimer()
+		})
+	})
+	b.Run("send-direct", func(b *testing.B) {
+		withPool(func() {
+			b.ResetTimer()
+			for range b.N {
+				_ = send(d.id, selRegistryID, 0, 0, 0)
 			}
 			b.StopTimer()
 		})

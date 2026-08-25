@@ -53,7 +53,47 @@ var (
 
 	autoreleasePoolPush func() uintptr
 	autoreleasePoolPop  func(uintptr)
+
+	// The same three entry points again, as raw addresses called without
+	// reflection. See [send] for why both spellings exist.
+	fnPoolPush uintptr
+	fnPoolPop  uintptr
+	fnMsgSend  uintptr
 )
+
+// send calls objc_msgSend directly, with the arguments already in the shape the
+// ABI wants.
+//
+// # Why this exists next to objc.ID.Send
+//
+// purego's Send resolves the call through reflect.MakeFunc, which builds an
+// argument frame per call from a signature it re-reads every time. That is the
+// right tool for a call whose shape is decided at run time, and every call in
+// this package's hot path has a shape decided at compile time. Measured on an
+// M2, the reflected form is 620ns a send; this one is the C call and nothing
+// else. At five sends per dispatch node and a graph of several hundred nodes,
+// that difference is milliseconds a submission -- see
+// BenchmarkSubmitAttribution in internal/metal.
+//
+// # Why the arity is fixed at three
+//
+// Every selector on this path takes at most three arguments after the receiver
+// and the selector, and passing a register a callee does not read is free: the
+// AAPCS64 and SysV argument registers are caller-populated and the callee
+// simply ignores what it was not declared to take. A variadic Go signature here
+// would allocate the slice this avoids.
+//
+// # What it may not be used for
+//
+// Arguments that are not integers or pointers. A float or a struct passed by
+// value goes in a different register class, and objc_msgSend cannot be told
+// that through a uintptr. Those calls keep the reflected form, which reads the
+// Go signature and does place them correctly. [ComputeEncoder.Dispatch] is the
+// one on this path: MTLSize is a three-word struct.
+func send(id objc.ID, sel objc.SEL, a0, a1, a2 uintptr) uintptr {
+	r, _, _ := purego.SyscallN(fnMsgSend, uintptr(id), uintptr(sel), a0, a1, a2)
+	return r
+}
 
 // load resolves every symbol this package needs, once.
 //
@@ -84,6 +124,7 @@ type symbols struct {
 	copyAllDevices uintptr // zero when absent, which is not an error
 	poolPush       uintptr
 	poolPop        uintptr
+	msgSend        uintptr
 }
 
 // resolve looks up every symbol this package needs, through injected lookups.
@@ -120,6 +161,9 @@ func resolve(dlopen func(string, int) (uintptr, error), dlsym func(uintptr, stri
 	if out.poolPop, err = dlsym(libobjc, "objc_autoreleasePoolPop"); err != nil {
 		return out, fmt.Errorf("accel/mtl: objc_autoreleasePoolPop: %w", err)
 	}
+	if out.msgSend, err = dlsym(libobjc, "objc_msgSend"); err != nil {
+		return out, fmt.Errorf("accel/mtl: objc_msgSend: %w", err)
+	}
 	return out, nil
 }
 
@@ -139,6 +183,7 @@ func bind(s symbols) {
 	}
 	purego.RegisterFunc(&autoreleasePoolPush, s.poolPush)
 	purego.RegisterFunc(&autoreleasePoolPop, s.poolPop)
+	fnPoolPush, fnPoolPop, fnMsgSend = s.poolPush, s.poolPop, s.msgSend
 	classNSString = objc.GetClass("NSString")
 	if classNSString == 0 {
 		loadErr = errors.New("accel/mtl: Foundation is loaded but NSString is not registered")
@@ -170,11 +215,16 @@ var (
 // leak; and a pool must be popped on the thread that pushed it, so the
 // goroutine may not migrate in between. See docs/conventions.md, "Objective-C
 // object lifetime across completion handlers".
+// The pool is pushed and popped without reflection for the reason [send] gives:
+// a pool is taken around every Metal call this package makes, so its cost is
+// multiplied by the size of a graph. The discipline is unchanged -- same thread,
+// same nesting, same drain -- and only the way the two C functions are reached
+// is different.
 func withPool(f func()) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	p := autoreleasePoolPush()
-	defer autoreleasePoolPop(p)
+	p, _, _ := purego.SyscallN(fnPoolPush)
+	defer purego.SyscallN(fnPoolPop, p)
 	f()
 }
 
