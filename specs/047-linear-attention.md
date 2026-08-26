@@ -1,6 +1,6 @@
 ---
 title: "Linear attention: a matrix state, and a scan over a segmented extent"
-status: drafted
+status: in progress
 layer: tensor
 depends_on:
   - 007-tensor-layer.md
@@ -156,6 +156,31 @@ Each assertion names the mutation it catches.
   slot**, asserted by leaving another slot filled with a sentinel.
 - **CPU and Metal agree** within [008](008-numerics.md) §6's bound for a sum of
   products, which is what all three passes are.
+
+## 5.1 Built — 2026-08-26
+
+§1's recurrence, §2's scan, and §3's use of an ordinary `State`. Every assertion
+in §5 is built except the CPU/Metal one, which is the corpus differential and
+runs as a case there.
+
+**What the extent bought.** This spec is short and its kernel is 80 lines
+because [046](046-segmented-extents.md) had already expressed "how many tokens
+does this sequence contribute". A decode step and a prefill are the same code
+path — the loop runs `offsets[seq]` to `offsets[seq+1]` — and nothing in the
+kernel or the operator tests which it is. That was the argument for building the
+primitive first and it held.
+
+**Two mutations that proved nothing, and what they cost.** Twice in one day a
+mutation failed to reach the code it was meant to break and the passing test was
+read as evidence. Once a `perl` substitution did not match; once a mutation used
+a form outside the kernel subset, `go generate` failed, and its error was hidden
+by a redirect. **A mutation that does not reach the code is indistinguishable
+from a test that does not check it**, so a reinstatement now asserts that it
+applied before the test is run — and where the property is about plumbing rather
+than arithmetic, the test proves its own discriminating power instead. The
+persistence test does that: it zeroes the state between two identical steps and
+requires them to match, which is what says an equal result is what a reset
+produces.
 
 ## 6. Open
 
