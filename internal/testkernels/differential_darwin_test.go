@@ -845,6 +845,59 @@ func diffCases() []diffCase {
 			// that a signed and an unsigned lowering compute differently. The
 			// seeded state is negative for those two indices, which is what
 			// makes this a comparison of signedness rather than of reachability.
+			// The exclusive prefix sum. Integer, so the two backends agree
+			// exactly, and the seeded counts include a zero so the repeated
+			// offset a zero-count row produces is compared too.
+			kernel:   &testkernels.SegmentOffsetsKernel,
+			counts:   []int{4, 5},
+			uniforms: []any{testkernels.SegmentDims{Rows: 4}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return 0
+				}
+				return []float32{3, 0, 4, 1}[i]
+			},
+			why: "an integer prefix sum, exact on both backends",
+		},
+		{
+			// A ragged step: one sequence contributing several tokens beside
+			// sequences contributing one, which is the mixed shape the extent
+			// exists for. The offsets are seeded rather than derived, so this
+			// compares the attention kernel alone.
+			kernel: &testkernels.AttentionRaggedKernel,
+			counts: []int{6 * 2 * 8, 12 * 4 * 1 * 8, 12 * 4 * 1 * 8, 3 * 4, 3, 4, 6 * 2 * 8},
+			uniforms: []any{testkernels.RaggedDims{
+				Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+				Block: 4, MaxPages: 4, Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 6 * 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 2:
+					// V is seeded strictly positive, and that is about the
+					// measurement rather than about the kernel. defaultSeed is
+					// symmetric about zero, so a softmax-weighted sum of it
+					// cancels: the first run of this case produced an output of
+					// 8.5e-4 from values near +/-1, where 266 ULP is 2e-5
+					// relative and is ordinary f32 softmax noise magnified by
+					// the cancellation. Raising the ceiling would have hidden
+					// that, and the ceiling is derived from section 8's
+					// propagation rather than from what a run produced. A
+					// positive V makes the ULP count measure the two lowerings.
+					return float32(i%7+1) / 4
+				case 3: // the page table: block ids, one row per sequence
+					return float32(i)
+				case 4: // lengths, one per sequence
+					return []float32{4, 2, 5}[i]
+				case 5: // offsets: counts 3, 1, 2
+					return []float32{0, 3, 4, 6}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
+		},
+		{
 			kernel: &testkernels.AtomicOpsI32Kernel,
 			counts: []int{7, 7},
 			groups: accel.WorkgroupCount{X: 1},
