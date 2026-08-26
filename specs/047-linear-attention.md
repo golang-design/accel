@@ -184,10 +184,23 @@ produces.
 
 ## 6. Open
 
-- **The chunked form's numerics.** Reassociating the recurrence changes the
-  summation order, so the chunked kernel would not be bit-equal to this one and
-  the bound between them has to be derived rather than measured. That is the
-  work §4 defers, and this kernel is what it would be derived against.
+- **The chunked form needs a second representation, not just a reassociation —
+  derived 2026-08-26.** Splitting each output into a prior-state part and a
+  within-chunk part gets one of the two into a shape a device likes:
+
+  $$o_t = \underbrace{d_t\,(S_0 q_t)}_{\text{a GEMM over the chunk}} \;+\; \underbrace{\sum_{j\le t} \Big(\textstyle\prod_{i=j+1}^{t}\alpha_i\Big)\beta_j (v_j - u_j)(k_j \cdot q_t)}_{\text{still sequential in } u_j}$$
+
+  where $d_t = \prod_{j \le t}\alpha_j$. The first term is $[C, K] \times [K, V]$
+  and parallelises over the whole chunk. **The second still needs
+  $u_j = S_{j-1}k_j$, which is the recurrence again**, so a chunked kernel is not
+  this one with a bigger step: it needs the WY / UT-transform representation that
+  makes the $u_j$ computable together, and that is where the summation order
+  genuinely changes and the bound between the two forms has to be derived.
+
+  So the work is a derivation before it is a kernel, and this kernel is what the
+  derivation would be checked against. Scoped here rather than attempted,
+  because a chunked scan that is fast and subtly wrong is worse than a slow one
+  that is right — and the consumer has not yet measured the slow one.
 - **Whether $\alpha$ and $\beta$ should be one tensor.** They are two per-token
   scalars and every model that has one has the other. Two bindings is two things
   to bind wrongly; one interleaved tensor is a layout a caller has to know.
