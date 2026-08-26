@@ -596,3 +596,37 @@ func TestNewTextureCanAskForReadbackMemory(t *testing.T) {
 		t.Errorf("readback differs from what was written")
 	}
 }
+
+// A texture with mips above the base level is refused, and says why.
+//
+// specs/045-texture-attachments.md §8.3 records this as the current state
+// rather than a permanent rule: [TextureView] names a subresource, so *binding*
+// one is no longer the obstacle, but sizing, copying and hazarding still
+// address a whole allocation. A texture whose mips could be created but not
+// sized, copied or hazarded would be worse than one that cannot be created.
+//
+// It is asserted here because two things depend on the refusal firing.
+// `TestADisjointSubresourceIsNotFeedback` skips on it and self-activates when it
+// lifts, so a refusal that quietly stopped firing would turn that marker into a
+// test asserting a permission against a texture nobody could build. And §8.3's
+// entry is a promise about what a caller meets.
+func TestMipsAboveTheBaseLevelAreRefused(t *testing.T) {
+	d := openDevice(t)
+
+	_, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: 8, Height: 8},
+		MipLevels: 2, Usage: accel.TextureSampled | accel.TextureCopyDst,
+		Label: "mipped",
+	})
+	if err == nil {
+		t.Fatal("a texture with two mip levels was created; the allocation is sized " +
+			"for one, so a copy or a hazard covering the whole texture is wrong by " +
+			"the size of every level after the base")
+	}
+	for _, want := range []string{"mip level", "base"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refused with %q, which does not mention %q — a caller has to be "+
+				"able to tell this from an unsupported format", err, want)
+		}
+	}
+}

@@ -815,3 +815,31 @@ func TestDeviceIsSafeForConcurrentUse(t *testing.T) {
 		t.Fatalf("Device.Close: %v", err)
 	}
 }
+
+// A memory kind outside the enum is refused by name.
+//
+// Every backend today supports all four kinds, so this refusal fires only for a
+// value that is not one of them — which a caller can produce, because
+// [accel.MemoryKind] is an integer type and nothing stops `MemoryKind(99)`.
+// The message was written for spec 001 §2 and no test had ever seen it printed.
+//
+// Refused rather than defaulted, because a pool that quietly allocated device
+// memory for a kind the caller invented would work, and would be the wrong
+// memory: an upload pool that is not host-visible fails much later, at the write.
+func TestAPoolRefusesAMemoryKindOutsideTheEnum(t *testing.T) {
+	d := openDevice(t)
+
+	_, err := d.NewPool(accel.PoolDescriptor{
+		Kind: accel.MemoryKind(99), Bytes: 4096, Label: "bogus",
+	})
+	if err == nil {
+		t.Fatal("a pool of an unknown memory kind was created; the caller gets memory " +
+			"with properties they did not ask for and finds out at the first write")
+	}
+	if !errors.Is(err, accel.ErrUnsupported) {
+		t.Errorf("refused with %v, which is not ErrUnsupported", err)
+	}
+	if !strings.Contains(err.Error(), "memory kind") {
+		t.Errorf("refused with %q, which does not say what was wrong", err)
+	}
+}
