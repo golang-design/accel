@@ -347,3 +347,109 @@ func TestTheAuthoredSegmentOffsetsMatchesItsLowering(t *testing.T) {
 		}
 	}
 }
+
+// The f16 ragged kernel equals the f32 one on values f16 holds exactly.
+//
+// accel issue 23. The two kernels differ in three lines -- the cache bindings
+// and the two loads that widen -- so what is worth asserting is that they agree
+// where they should, and the way to make that meaningful is to feed both a
+// cache f16 represents without rounding. Then a difference is the *lowering*
+// rather than the storage, which is the only thing this variant can get wrong.
+func TestTheF16RaggedStepEqualsTheF32One(t *testing.T) {
+	d := testkernels.RaggedDims{
+		Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+		Block: 4, MaxPages: 3, Scale: float32(1 / math.Sqrt(8)),
+	}
+	counts := []uint32{3, 1, 2}
+	q, k, v, pages, lengths, offsets := raggedFixture(d, counts)
+
+	// Small integers over a power of two: exact in f16, so the halves carry
+	// what was intended rather than what rounding produced.
+	for i := range k {
+		k[i] = float32(i%13-6) / 4
+		v[i] = float32(i%11-5) / 2
+	}
+
+	wide := runRagged(t, d, q, k, v, pages, lengths, offsets)
+
+	narrowK := make([]accel.Float16, len(k))
+	narrowV := make([]accel.Float16, len(v))
+	for i := range k {
+		narrowK[i] = accel.ToFloat16(k[i])
+		narrowV[i] = accel.ToFloat16(v[i])
+		if narrowK[i].F32() != k[i] || narrowV[i].F32() != v[i] {
+			t.Fatalf("element %d does not survive f16, so this test would be about "+
+				"rounding rather than about the lowering", i)
+		}
+	}
+
+	total := offsets[d.Batch]
+	narrow := make([]float32, total*d.QHeads*d.HeadDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionRaggedF16Kernel,
+		accel.ID3{X: total * d.QHeads},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{q, narrowK, narrowV, pages, lengths, offsets, narrow},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	for i := range wide {
+		if narrow[i] != wide[i] {
+			t.Fatalf("element %d: the f16 cache gave %v and the f32 cache %v over a "+
+				"cache f16 holds exactly, so the two lowerings disagree",
+				i, narrow[i], wide[i])
+		}
+	}
+}
+
+// The authored f16 ragged kernel and its generated lowering agree.
+//
+// specs/010-kernel-corpus.md §6's obligation, and the reason it is not implied
+// by the test above: that one runs the *generated* form on both sides of the
+// f16/f32 comparison, so the authored function it was derived from is called by
+// nothing. On darwin the Metal differential would reach it; on Linux nothing
+// does, which is how this package's coverage gate failed twice this milestone.
+func TestTheAuthoredF16RaggedKernelMatchesItsLowering(t *testing.T) {
+	d := testkernels.RaggedDims{
+		Batch: 2, QHeads: 2, KVHeads: 1, HeadDim: 8,
+		Block: 4, MaxPages: 3, Scale: float32(1 / math.Sqrt(8)),
+	}
+	counts := []uint32{2, 1}
+	q, k, v, pages, lengths, offsets := raggedFixture(d, counts)
+
+	narrowK := make([]accel.Float16, len(k))
+	narrowV := make([]accel.Float16, len(v))
+	for i := range k {
+		narrowK[i] = accel.ToFloat16(k[i])
+		narrowV[i] = accel.ToFloat16(v[i])
+	}
+
+	total := offsets[d.Batch]
+	groups := kernel.ID3{X: total * d.QHeads, Y: 1, Z: 1}
+	authored := make([]float32, total*d.QHeads*d.HeadDim)
+	for g := range groups.X {
+		var scores, red [128]float32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			groups, 128, func(th kernel.Thread) {
+				testkernels.AttentionRaggedF16(th, d, q, narrowK, narrowV, pages,
+					lengths, offsets, authored, &scores, &red)
+			})
+	}
+
+	generated := make([]float32, total*d.QHeads*d.HeadDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionRaggedF16Kernel,
+		accel.ID3{X: total * d.QHeads},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{q, narrowK, narrowV, pages, lengths, offsets, generated},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	for i := range authored {
+		if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+		}
+	}
+}

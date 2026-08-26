@@ -238,8 +238,25 @@ Three things this took that were not in the plan:
   that test compared nothing at all: it built a member case, assigned it to the
   blank identifier, and asserted the output was not NaN.
 
-**Not built:** §6 stays open, and [#18](https://github.com/golang-design/accel/issues/18)
-is where §1 gets its second caller.
+**Not built:** §6 stays open.
+[#18](https://github.com/golang-design/accel/issues/18) took §1's second caller
+and [#17](https://github.com/golang-design/accel/issues/17) its third, both
+without changing it.
+
+**A narrow cache, added 2026-08-27.** The first version read an f32 cache only,
+and a consumer filed [#23](https://github.com/golang-design/accel/issues/23) the
+same day against a collision rather than a missing dtype: an f16 cache halves
+the largest allocation a serving process has after the weights, and a ragged
+step is the only way to express a batched prefill — so refusing the pair made a
+server give up one to have the other. Their arithmetic puts the crossover batch
+size at half what it should be. `AttentionRaggedF16` differs in three lines and
+is selected by the cache's dtype.
+
+**The lesson is about where a refusal's cost lands.** "The ragged kernel reads
+f32" was an honest refusal and looked like a variant nobody had asked for. It
+was the f16 cache's own justification being undone by the operator that needs it
+most, and that was invisible from inside — it took a consumer holding both
+specs at once to see it.
 
 ## 6. Open
 

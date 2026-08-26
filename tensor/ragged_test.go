@@ -490,3 +490,67 @@ func TestARaggedPlanIsNotAPrefillPlan(t *testing.T) {
 		t.Fatalf("two identical ragged graphs have different identities %q and %q", a, c)
 	}
 }
+
+// A ragged step runs over an f16 cache, and picks the kernel that reads one.
+//
+// accel issue 23: an f16 cache halves the largest allocation a serving process
+// has after the weights, and a ragged step is the only way to express a batched
+// prefill — so refusing the pair made a server give up one to have the other.
+//
+// Asserted through Selections rather than only by the graph compiling, because
+// a graph that silently used the f32 kernel over a narrow cache would read the
+// halves as full floats and produce a plausible wrong picture.
+func TestARaggedStepRunsOverAnF16Cache(t *testing.T) {
+	c := raggedCase{
+		batch: 2, qHeads: 2, kvHeads: 1, headDim: 8,
+		block: 4, maxPages: 3,
+		counts: []uint32{2, 1}, lengths: []uint32{3, 2},
+	}
+	rt := newRuntime(t)
+	b := rt.NewBuilder("f16ragged")
+
+	tokens := c.tokens()
+	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+	q := tensor.Input(b, tensor.ValueDesc{
+		Name: "q", DType: accel.F32, Shape: tensor.Shape{tokens, c.qHeads, c.headDim},
+	})
+	extents := tensor.Input(b, tensor.ValueDesc{
+		Name: "extents", DType: accel.U32, Shape: tensor.Shape{c.batch},
+	})
+	lengths := tensor.Input(b, tensor.ValueDesc{
+		Name: "len", DType: accel.U32, Shape: tensor.Shape{c.batch},
+	})
+	pages := tensor.Input(b, tensor.ValueDesc{
+		Name: "pages", DType: accel.U32, Shape: tensor.Shape{c.batch, c.maxPages},
+	})
+	capacity := c.capacity()
+	kc := tensor.NewState(b, tensor.StateDesc{
+		Name: "kcache", DType: accel.F16,
+		Shape: tensor.Shape{capacity, c.kvHeads, c.headDim},
+	})
+	vc := tensor.NewState(b, tensor.StateDesc{
+		Name: "vcache", DType: accel.F16,
+		Shape: tensor.Shape{capacity, c.kvHeads, c.headDim},
+	})
+	tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+		Lengths: lengths, Pages: pages, Block: c.block,
+		QueryExtents: extents, ScaleName: "scale",
+	}))
+
+	plan, err := b.Compile(rt, tensor.CompileOptions{Label: "f16ragged"})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer plan.Close()
+
+	var picked string
+	for _, s := range plan.Selections() {
+		if s.Op == "Attention" {
+			picked = s.Kernel
+		}
+	}
+	if picked != "AttentionRaggedF16" {
+		t.Fatalf("a ragged step over an f16 cache selected %q; the f32 kernel would "+
+			"read the halves as full floats and draw a plausible wrong picture", picked)
+	}
+}

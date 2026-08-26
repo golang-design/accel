@@ -278,9 +278,18 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 				"sequences; a page table is [batch, maxPages], one row of block ids "+
 				"per sequence", opts.Pages.shape, batch)
 		}
-		if cacheDType != accel.F32 {
-			return b.fail(1, "Attention", "the cache is %v and the ragged kernel reads "+
-				"f32; specs/010-kernel-corpus.md owns the narrow variant", cacheDType)
+		// Both cache widths, and the narrow one is not a convenience. An f16
+		// cache halves the largest allocation a serving process has after the
+		// weights, and a ragged step is the only way to express a batched
+		// prefill -- so refusing the pair made a server give up one to have the
+		// other, which is what accel issue 23 reported the day the ragged step
+		// landed.
+		ragged := &testkernels.AttentionRaggedKernel
+		if cacheDType == accel.F16 {
+			ragged = &testkernels.AttentionRaggedF16Kernel
+		} else if cacheDType != accel.F32 {
+			return b.fail(1, "Attention", "the cache is %v and the ragged kernels read "+
+				"f32 or f16", cacheDType)
 		}
 		if opts.BaseName != "" {
 			return b.fail(1, "Attention", "BaseName is %q and QueryExtents is set; a "+
@@ -300,7 +309,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 				q, readState(b, k), readState(b, v), opts.Pages,
 				opts.Lengths, offsets,
 			},
-			kernel: &testkernels.AttentionRaggedKernel,
+			kernel: ragged,
 			reads:  []string{opts.ScaleName},
 			uniform: func(vals map[string]ScalarValue) any {
 				return testkernels.RaggedDims{
@@ -313,9 +322,9 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			grid: func(*Tensor) accel.WorkgroupCount {
 				return accel.WorkgroupCount{X: tokens * qHeads}
 			},
-			reason: fmt.Sprintf("the ragged paged kernel: %d tokens over %d sequences, "+
-				"one workgroup per (token, head) with each token causal against its own "+
-				"position", tokens, batch),
+			reason: fmt.Sprintf("the ragged paged kernel over a %v cache: %d tokens "+
+				"over %d sequences, one workgroup per (token, head) with each token "+
+				"causal against its own position", cacheDType, tokens, batch),
 			rejected: []string{"the rectangular batched kernel: it gives every sequence " +
 				"the same token count, which is what a ragged step exists not to do"},
 			attrs: []uint64{uint64(opts.Block)},

@@ -917,6 +917,33 @@ func diffCases() []diffCase {
 			ulp: 8,
 		},
 		{
+			// The same ragged step over an f16 cache. Both backends read the
+			// same halves, so this compares the two lowerings of the widening
+			// rather than the conversion, and the ceiling is the f32 kernel's
+			// because the widening is exact.
+			kernel: &testkernels.AttentionRaggedF16Kernel,
+			counts: []int{6 * 2 * 8, 12 * 4 * 1 * 8, 12 * 4 * 1 * 8, 3 * 4, 3, 4, 6 * 2 * 8},
+			uniforms: []any{testkernels.RaggedDims{
+				Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+				Block: 4, MaxPages: 4, Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 6 * 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 2:
+					return float32(i%7+1) / 4
+				case 3:
+					return float32(i)
+				case 4:
+					return []float32{4, 2, 5}[i]
+				case 5:
+					return []float32{0, 3, 4, 6}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
+		},
+		{
 			// The exclusive prefix sum. Integer, so the two backends agree
 			// exactly, and the seeded counts include a zero so the repeated
 			// offset a zero-count row produces is compared too.
