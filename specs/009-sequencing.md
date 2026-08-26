@@ -1903,6 +1903,28 @@ writing a test for `Buckets.Sizes` found `NewBuckets` documented as
 "de-duplicates" when it refuses a duplicate — a defect no coverage number could
 show, because the code was covered and the sentence about it was wrong.
 
+**A sixth method, and a mostly negative result — 2026-08-26.** The `NewBuckets`
+finding above was an accident: a doc comment claiming behaviour the code did not
+have, which no coverage number can show because the code was covered and only
+the sentence was wrong. Three of those landed in one week — the tutorial's
+`rng.Float32()` advice, `UniformBuffer`'s "it exists so that a value may
+change", and `NewBuckets` — so the class was worth a deliberate sweep.
+
+The systematic form: extract the distinctive wording from every refusal on the
+public path and grep the tests for it. Twelve phrases appeared in no test, and
+**ten of them are defensive internal guards a caller cannot reach** — a nil pass
+node, a default branch in a lowering switch, a binding that resolved to nothing.
+Two were caller-facing and are now checked: a memory kind outside the enum, and
+mips above the base level.
+
+**The negative result is the useful part.** The refusals that a caller can meet
+are, with those two exceptions, already tested; what is untested is code that
+exists so a future mistake has somewhere to land. That is a reasonable state for
+this surface to be in, and it says this lens does not need running again soon.
+It also bounds the earlier finding: doc comments that lie are real and were found
+three times, but they are not concentrated in the refusal messages, which are the
+part of the documentation the tests already hold to account.
+
 **The generalisation is that coverage points at code and the finding is often
 next to it.** A function at 0% is a question, not an answer: asking why nothing
 calls it is what produces the finding, and three of the five above were larger
