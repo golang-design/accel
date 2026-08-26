@@ -871,6 +871,31 @@ func diffCases() []diffCase {
 			ulp: 32, why: "three sums of products per token, per section 8's propagation",
 		},
 		{
+			// A 4-bit matvec: nibble extraction, a zero point, and a tree
+			// reduction. The two backends must agree on the *unpacking* as well
+			// as the arithmetic, and a shift lowered differently would show as
+			// a wholly different product rather than as a rounding difference.
+			kernel:   &testkernels.QuantMatVecInt4Kernel,
+			counts:   []int{128, 128 / 8 * 2, 2, 2, 2},
+			uniforms: []any{testkernels.GEMMDims{K: 128, N: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1: // the packed codes, as u32 words
+					return float32(i%251 + 1)
+				case 2: // scales: positive and modest
+					return 0.25
+				case 3: // zero points
+					return 4
+				case 4:
+					return 0
+				}
+				return defaultSeed(b, i)
+			},
+			why: "a sum of products, per section 7's reduction bound",
+			ulp: 8,
+		},
+		{
 			// The exclusive prefix sum. Integer, so the two backends agree
 			// exactly, and the seeded counts include a zero so the repeated
 			// offset a zero-count row produces is compared too.

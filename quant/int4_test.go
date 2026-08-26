@@ -147,25 +147,25 @@ func TestInt4LosesToInt8OnAGroupCentredOnZero(t *testing.T) {
 	}
 }
 
-// The packing round-trips at an odd length.
+// The packing round-trips at a length that is not a multiple of the word.
 //
-// The last byte holds one weight and a nibble nobody wrote, which is why
-// Int4Dequantize takes the count rather than deriving it from the byte length.
+// The last word holds one weight and seven nibbles nobody wrote, which is why
+// Int4Dequantize takes the count rather than deriving it from the word length.
 func TestInt4PackingRoundTripsAtAnOddLength(t *testing.T) {
 	w := make([]float32, quant.Int4Group+1)
 	for i := range w {
 		w[i] = float32(i%16) / 4
 	}
 	packed, scales, zeros := quant.Int4Quantize(w)
-	if want := (len(w) + 1) / 2; len(packed) != want {
-		t.Fatalf("%d weights packed into %d bytes, want %d", len(w), len(packed), want)
+	if want := (len(w) + 7) / 8; len(packed) != want {
+		t.Fatalf("%d weights packed into %d words, want %d", len(w), len(packed), want)
 	}
 	got := quant.Int4Dequantize(packed, scales, zeros, len(w))
 	if len(got) != len(w) {
 		t.Fatalf("reconstructed %d weights from %d", len(got), len(w))
 	}
-	// The last weight is the one the odd byte holds, and it is the one an
-	// off-by-one in the packing loses.
+	// The last weight is the one the partly-filled word holds, and it is the
+	// one an off-by-one in the packing loses.
 	last := len(w) - 1
 	if math.Abs(float64(w[last]-got[last])) > 0.2 {
 		t.Fatalf("the last weight of an odd-length run is %v and reconstructed as %v",
@@ -197,11 +197,12 @@ func TestInt4PacksLowNibbleFirst(t *testing.T) {
 		t.Errorf("weight 1 is the group maximum and its code is %d, want %d",
 			got, quant.Int4Max)
 	}
-	// And byte 0 is 0xF0: weight 0 in the low nibble, weight 1 in the high one.
-	if packed[0] != 0xF0 {
-		t.Fatalf("byte 0 is %#02x, want 0xF0 -- weight 0 belongs in the low nibble "+
-			"and weight 1 in the high one, and a kernel reading them the other way "+
-			"round gets a plausible matrix", packed[0])
+	// And word 0's low two nibbles are 0xF0: weight 0 in bits 0-3, weight 1 in
+	// bits 4-7.
+	if packed[0]&0xFF != 0xF0 {
+		t.Fatalf("word 0's low byte is %#02x, want 0xF0 -- weight 0 belongs in the "+
+			"lowest nibble and weight 1 in the next, and a kernel reading them the "+
+			"other way round gets a plausible matrix", packed[0]&0xFF)
 	}
 }
 

@@ -50,18 +50,27 @@ const Int4Max = 15
 // zero is represented better by four asymmetric bits than by eight symmetric
 // ones, and a group centred on zero is about seventeen times worse.
 //
-// # The packing
+// # The packing is into words, not bytes
 //
-// Two weights per byte, low nibble first: byte b holds weight 2b in its low
-// nibble and 2b+1 in its high one. A group of 128 is 64 bytes, so a group
-// boundary is always a byte boundary and no weight straddles one.
+// Eight weights per uint32, low nibble first: word j holds weights 8j..8j+7
+// with weight 8j+n in bits 4n..4n+3. A group of 128 is 16 words, so a group
+// boundary is always a word boundary and no weight straddles one.
 //
-// The returned slice is ceil(len(w)/2) bytes; at an odd length the last byte's
-// high nibble is zero and reads back as a weight nobody asked for, which is why
-// [Int4Dequantize] takes the length rather than deriving it.
-func Int4Quantize(w []float32) (packed []uint8, scales, zeros []accel.Float16) {
+// Words rather than bytes because a kernel cannot do arithmetic on a u8 at all:
+// specs/002-compute-model.md makes narrow dtypes *storage*, converted to f32 on
+// load, so a shift and a mask on one is outside the subset. Byte packing would
+// have needed the caller to reinterpret the slice as words on upload, which
+// works only because every supported platform is little-endian -- a dependency
+// worth not having when the alternative removes it. It is also what AWQ and
+// GPTQ pack into, so the ecosystem's files need no repacking either.
+//
+// The returned slice is ceil(len(w)/8) words; at a length that is not a
+// multiple of eight the last word's high nibbles are zero and read back as
+// weights nobody asked for, which is why [Int4Dequantize] takes the count
+// rather than deriving it.
+func Int4Quantize(w []float32) (packed []uint32, scales, zeros []accel.Float16) {
 	groups := (len(w) + Int4Group - 1) / Int4Group
-	packed = make([]uint8, (len(w)+1)/2)
+	packed = make([]uint32, (len(w)+7)/8)
 	scales = make([]accel.Float16, groups)
 	zeros = make([]accel.Float16, groups)
 
@@ -122,19 +131,16 @@ func Int4Quantize(w []float32) (packed []uint8, scales, zeros []accel.Float16) {
 			if q < 0 {
 				q = 0
 			}
-			setNibble(packed, i, uint8(q))
+			setNibble(packed, i, uint32(q))
 		}
 	}
 	return packed, scales, zeros
 }
 
 // setNibble writes one 4-bit code at index i.
-func setNibble(packed []uint8, i int, q uint8) {
-	if i%2 == 0 {
-		packed[i/2] = packed[i/2]&0xF0 | q
-	} else {
-		packed[i/2] = packed[i/2]&0x0F | q<<4
-	}
+func setNibble(packed []uint32, i int, q uint32) {
+	shift := 4 * (i % 8)
+	packed[i/8] = packed[i/8]&^(0xF<<shift) | q<<shift
 }
 
 // Int4Nibble reads the 4-bit code at index i.
@@ -142,15 +148,16 @@ func setNibble(packed []uint8, i int, q uint8) {
 // Exported because it is the one piece of this representation a kernel and a
 // caller must spell identically, and so the place where two implementations
 // disagree without either being obviously wrong.
-func Int4Nibble(packed []uint8, i int) uint8 {
-	return packed[i/2] >> (4 * (i % 2)) & 0x0F
+func Int4Nibble(packed []uint32, i int) uint32 {
+	return packed[i/8] >> (4 * (i % 8)) & 0xF
 }
 
 // Int4Dequantize reconstructs the weights a packed group represents.
 //
-// n is the weight count rather than derived from len(packed), because an odd
-// count leaves the last byte's high nibble holding a code nobody wrote.
-func Int4Dequantize(packed []uint8, scales, zeros []accel.Float16, n int) []float32 {
+// n is the weight count rather than derived from len(packed), because a count
+// that is not a multiple of eight leaves the last word's high nibbles holding
+// codes nobody wrote.
+func Int4Dequantize(packed []uint32, scales, zeros []accel.Float16, n int) []float32 {
 	out := make([]float32, n)
 	for i := range out {
 		g := i / Int4Group
