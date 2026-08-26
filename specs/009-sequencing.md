@@ -2010,6 +2010,62 @@ a GPU and not. §4 of [047](047-linear-attention.md) deferred the chunked form a
 **#18 is last despite being cheapest**, and that is deliberate: it serves a model
 class no consumer here is running, where the three above serve the one they are.
 
+#### Outcome — 2026-08-27
+
+All four built, in the planned order, plus one the work itself produced.
+
+| | | outcome |
+| --- | --- | --- |
+| 1 | **#22** int4 | [048](048-int4.md). 13.4 GiB at 27B against int8's 26.7, so the model fits a 24 GiB card. Asymmetric, group 128, with its own derived bound |
+| 2 | **#17** the chunked scan | **not built, and the plan was wrong about why.** See below |
+| 3 | **#21** Metal's encode cost | 2.14 ms → ~1.7 ms on top of the earlier 11.6 → 5.55. Not the pool *hoisting* the options described |
+| 4 | **#18** grouped GEMM | [049](049-grouped-gemm.md). No new concept: `segmentOffsets`'s third caller |
+| — | **#23** the f16 ragged cache | filed by a consumer against work from the same day, and closed the same day |
+
+**The plan was wrong about #17, and the derivation is what said so.** It listed
+the chunked scan as needing "its own summation order", implying a
+reassociation. Splitting each output into a prior-state part and a within-chunk
+part puts the first into a GEMM over the chunk and leaves the second needing
+$u_j = S_{j-1}k_j$ — the recurrence again. A chunked kernel therefore needs the
+WY / UT-transform representation, which is a **derivation before it is a
+kernel**. Recorded in [047](047-linear-attention.md) §6 rather than attempted: a
+chunked scan that is fast and subtly wrong is worse than a slow one that is
+right, and nobody has measured the slow one.
+
+**Two of the four were smaller than the options offered for them.** #21's
+remaining cost needed neither pool hoisting nor an indirect command buffer: a
+selector returning **void** autoreleases nothing, and that describes every call
+a dispatch makes per node. #22's blocking question — "download size or card
+fit?" — had an answer derivable without the consumer, because for that model
+both point at the same format. **An option list is a claim that the alternatives
+are the alternatives**, and twice here the real answer was outside it.
+
+**The extent paid for itself three times.** [046](046-segmented-extents.md) was
+built for #16 and became the shape of #17's scan, #18's router, and #23's narrow
+variant without changing. [043](043-per-row-values.md) §9 predicted exactly that
+and it is the clearest case this project has of a primitive built once being
+cheaper than three features built separately.
+
+#### What this milestone kept getting wrong
+
+Three of a kind, all the same shape and all caught:
+
+- **The Linux coverage gate, twice.** The Metal differential inflates
+  `internal/testkernels` on darwin, so a kernel whose *authored* form nothing
+  calls passes locally and fails in CI. Both times the missing test was the
+  authored-versus-generated one that [010](010-kernel-corpus.md) §6 already
+  requires. The second time it was measured before pushing.
+- **Refusals shipped untested.** The three operators added for #17, #18 and #22
+  sat at 69–80%, and the uncovered statements were almost entirely their own
+  diagnostics — the same "a refusal nobody has seen printed" class this project
+  swept for a week earlier, added back by the same hand that swept.
+- **Mutations that did not reach the code.** Twice a reinstatement failed to
+  apply — once a substitution did not match, once the mutated kernel was outside
+  the subset so `go generate` failed with its error hidden by a redirect — and
+  the passing test was read as evidence. **A mutation that does not reach the
+  code is indistinguishable from a test that does not check it**, so a
+  reinstatement now asserts it applied before the test runs.
+
 #### A note on the review's own reliability
 
 Three of its findings did not survive contact, and that is worth recording
