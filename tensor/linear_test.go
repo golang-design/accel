@@ -313,3 +313,74 @@ func TestALinearGateIsPerTokenNotPerSequence(t *testing.T) {
 		t.Fatalf("refused with %q, which does not say a gate is per token", err)
 	}
 }
+
+// The dtypes and shapes a gated delta layer refuses.
+//
+// Every field is required, so "accepted and ignored" cannot happen here -- what
+// these cover is the caller who supplied all three and got one wrong.
+func TestALinearStepRefusesWrongTypesAndShapes(t *testing.T) {
+	const batch, heads, keyDim, valueDim, tokens = 2, 1, 4, 4, 3
+
+	type parts struct {
+		q, k, v, alpha, beta, ext tensor.ValueDesc
+		state                     tensor.Shape
+		omit                      string
+	}
+	good := parts{
+		q:     tensor.ValueDesc{Name: "q", DType: accel.F32, Shape: tensor.Shape{tokens, heads, keyDim}},
+		k:     tensor.ValueDesc{Name: "k", DType: accel.F32, Shape: tensor.Shape{tokens, heads, keyDim}},
+		v:     tensor.ValueDesc{Name: "v", DType: accel.F32, Shape: tensor.Shape{tokens, heads, valueDim}},
+		alpha: tensor.ValueDesc{Name: "alpha", DType: accel.F32, Shape: tensor.Shape{tokens}},
+		beta:  tensor.ValueDesc{Name: "beta", DType: accel.F32, Shape: tensor.Shape{tokens}},
+		ext:   tensor.ValueDesc{Name: "ext", DType: accel.U32, Shape: tensor.Shape{batch}},
+		state: tensor.Shape{batch, heads, valueDim, keyDim},
+	}
+	for _, c := range []struct {
+		name string
+		mut  func(*parts)
+		want string
+	}{
+		{"no extents", func(p *parts) { p.omit = "ext" }, "all"},
+		{"f16 queries", func(p *parts) { p.q.DType = accel.F16 }, "reads f32"},
+		{"extents that are not u32", func(p *parts) { p.ext.DType = accel.F32 }, "reads u32"},
+		{"k of a different width", func(p *parts) {
+			p.k.Shape = tensor.Shape{tokens, heads, keyDim + 2}
+		}, "share a width"},
+		{"v with a different token count", func(p *parts) {
+			p.v.Shape = tensor.Shape{tokens + 1, heads, valueDim}
+		}, "same tokens"},
+		{"q that is not [tokens, heads, dim]", func(p *parts) {
+			p.q.Shape = tensor.Shape{tokens, keyDim}
+			p.k.Shape = tensor.Shape{tokens, keyDim}
+			p.v.Shape = tensor.Shape{tokens, valueDim}
+		}, "end to end"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := good
+			c.mut(&p)
+			rt := newRuntime(t)
+			b := rt.NewBuilder("refusal")
+			mk := func(d tensor.ValueDesc) *tensor.Tensor {
+				if p.omit == d.Name {
+					return nil
+				}
+				return tensor.Input(b, d)
+			}
+			st := tensor.NewState(b, tensor.StateDesc{
+				Name: "state", DType: accel.F32, Shape: p.state,
+			})
+			o, _ := tensor.LinearAttention(b, mk(p.q), mk(p.k), mk(p.v), st,
+				tensor.LinearOptions{
+					Alpha: mk(p.alpha), Beta: mk(p.beta), QueryExtents: mk(p.ext),
+				})
+			tensor.Output(b, "out", o)
+			_, err := b.Compile(rt, tensor.CompileOptions{Label: "refusal"})
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("refused with %q, which does not mention %q", err, c.want)
+			}
+		})
+	}
+}

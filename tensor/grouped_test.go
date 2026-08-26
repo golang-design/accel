@@ -119,3 +119,46 @@ func TestAGroupedMatVecRefusesMismatchedShapes(t *testing.T) {
 		})
 	}
 }
+
+// The dtypes and the degenerate shapes a grouped product refuses.
+func TestAGroupedMatVecRefusesWrongTypes(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		xd, wd, cd tensor.DType
+		xs, ws, cs tensor.Shape
+		nilCounts  bool
+		want       string
+	}{
+		{name: "no counts", xd: accel.F32, wd: accel.F32, cd: accel.U32,
+			xs: tensor.Shape{4, 64}, ws: tensor.Shape{2, 64, 4}, cs: tensor.Shape{2},
+			nilCounts: true, want: "one token count per expert"},
+		{name: "f16 activations", xd: accel.F16, wd: accel.F32, cd: accel.U32,
+			xs: tensor.Shape{4, 64}, ws: tensor.Shape{2, 64, 4}, cs: tensor.Shape{2},
+			want: "x is"},
+		{name: "counts that are not u32", xd: accel.F32, wd: accel.F32, cd: accel.F32,
+			xs: tensor.Shape{4, 64}, ws: tensor.Shape{2, 64, 4}, cs: tensor.Shape{2},
+			want: "counts is"},
+		{name: "w that is not a stack of matrices", xd: accel.F32, wd: accel.F32, cd: accel.U32,
+			xs: tensor.Shape{4, 64}, ws: tensor.Shape{64, 4}, cs: tensor.Shape{2},
+			want: "one matrix per expert"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := newRuntime(t)
+			b := rt.NewBuilder("refusal")
+			x := tensor.Input(b, tensor.ValueDesc{Name: "x", DType: c.xd, Shape: c.xs})
+			w := tensor.Weight(b, tensor.ValueDesc{Name: "w", DType: c.wd, Shape: c.ws})
+			var cnt *tensor.Tensor
+			if !c.nilCounts {
+				cnt = tensor.Input(b, tensor.ValueDesc{Name: "c", DType: c.cd, Shape: c.cs})
+			}
+			tensor.Output(b, "out", tensor.GroupedMatVec(b, x, w, cnt))
+			_, err := b.Compile(rt, tensor.CompileOptions{Label: "refusal"})
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("refused with %q, which does not mention %q", err, c.want)
+			}
+		})
+	}
+}

@@ -169,3 +169,102 @@ func TestAnInt4MatrixRefusesAMismatchedTriple(t *testing.T) {
 		})
 	}
 }
+
+// Every plane's dtype and count is refused by name.
+//
+// These are the branches a caller reaches by building the triple themselves
+// rather than taking what quant.Int4Quantize returned, and each names which
+// plane is wrong -- a refusal that said only "the weight matrix is invalid"
+// would leave three places to look.
+func TestAnInt4MatrixRefusesEachWrongPlane(t *testing.T) {
+	const K, N = 128, 2
+	weights := K * N
+	words := (weights + 7) / 8
+	groups := (weights + quant.Int4Group - 1) / quant.Int4Group
+
+	type planes struct{ codes, scales, zeros tensor.ValueDesc }
+	good := planes{
+		codes:  tensor.ValueDesc{Name: "codes", DType: accel.U32, Shape: tensor.Shape{words}},
+		scales: tensor.ValueDesc{Name: "scales", DType: accel.F16, Shape: tensor.Shape{groups}},
+		zeros:  tensor.ValueDesc{Name: "zeros", DType: accel.F16, Shape: tensor.Shape{groups}},
+	}
+	for _, c := range []struct {
+		name string
+		mut  func(*planes)
+		want string
+	}{
+		{"codes of the wrong dtype", func(p *planes) { p.codes.DType = accel.F32 }, "must be u32"},
+		{"scales of the wrong dtype", func(p *planes) { p.scales.DType = accel.F32 }, "scales are"},
+		{"zeros of the wrong dtype", func(p *planes) { p.zeros.DType = accel.F32 }, "zeros are"},
+		{"too few scales", func(p *planes) { p.scales.Shape = tensor.Shape{groups + 1} }, "scales"},
+		{"too few zeros", func(p *planes) { p.zeros.Shape = tensor.Shape{groups + 1} }, "zeros"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := good
+			c.mut(&p)
+			rt := newRuntime(t)
+			b := rt.NewBuilder("refusal")
+			a := tensor.Input(b, tensor.ValueDesc{
+				Name: "a", DType: accel.F32, Shape: tensor.Shape{K},
+			})
+			tensor.Output(b, "out", tensor.Int4MatVec(b, a, tensor.Int4{
+				Codes:   tensor.Weight(b, p.codes),
+				Scales:  tensor.Weight(b, p.scales),
+				Zeros:   tensor.Weight(b, p.zeros),
+				Weights: weights,
+			}))
+			_, err := b.Compile(rt, tensor.CompileOptions{Label: "refusal"})
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("refused with %q, which does not mention %q", err, c.want)
+			}
+		})
+	}
+}
+
+// The activations a 4-bit matvec takes are refused when they are not a vector
+// of the matrix's contraction width.
+func TestAnInt4MatVecRefusesWrongActivations(t *testing.T) {
+	const K, N = 128, 2
+	weights := K * N
+	words := (weights + 7) / 8
+	groups := (weights + quant.Int4Group - 1) / quant.Int4Group
+
+	for _, c := range []struct {
+		name  string
+		shape tensor.Shape
+		dtype tensor.DType
+		want  string
+	}{
+		{"f16 activations", tensor.Shape{K}, accel.F16, "reads f32"},
+		{"a matrix of activations", tensor.Shape{2, K}, accel.F32, "takes a vector"},
+		{"a width the matrix is not a multiple of", tensor.Shape{K + 1}, accel.F32, "multiple"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := newRuntime(t)
+			b := rt.NewBuilder("refusal")
+			a := tensor.Input(b, tensor.ValueDesc{Name: "a", DType: c.dtype, Shape: c.shape})
+			tensor.Output(b, "out", tensor.Int4MatVec(b, a, tensor.Int4{
+				Codes: tensor.Weight(b, tensor.ValueDesc{
+					Name: "codes", DType: accel.U32, Shape: tensor.Shape{words},
+				}),
+				Scales: tensor.Weight(b, tensor.ValueDesc{
+					Name: "scales", DType: accel.F16, Shape: tensor.Shape{groups},
+				}),
+				Zeros: tensor.Weight(b, tensor.ValueDesc{
+					Name: "zeros", DType: accel.F16, Shape: tensor.Shape{groups},
+				}),
+				Weights: weights,
+			}))
+			_, err := b.Compile(rt, tensor.CompileOptions{Label: "refusal"})
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("refused with %q, which does not mention %q", err, c.want)
+			}
+		})
+	}
+}
