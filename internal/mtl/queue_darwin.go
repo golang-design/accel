@@ -96,12 +96,12 @@ func (cb *CommandBuffer) Blit() *BlitEncoder {
 
 // SetPipeline selects the kernel this pass runs.
 func (e *ComputeEncoder) SetPipeline(p *Pipeline) {
-	withPool(func() { send(e.id, selSetComputePipeline, uintptr(p.id)) })
+	send(e.id, selSetComputePipeline, uintptr(p.id))
 }
 
 // SetBuffer binds a range of a buffer at an argument index.
 func (e *ComputeEncoder) SetBuffer(b *Buffer, offset, index int) {
-	withPool(func() { send(e.id, selSetBuffer, uintptr(b.id), uintptr(offset), uintptr(index)) })
+	send(e.id, selSetBuffer, uintptr(b.id), uintptr(offset), uintptr(index))
 }
 
 // SetBytes binds a small value inline, without a buffer.
@@ -119,9 +119,7 @@ func (e *ComputeEncoder) SetBytes(data []byte, index int) {
 	// rather than on a stack that may grow and move under the call. The
 	// reflected form takes an unsafe.Pointer, which escape analysis does
 	// account for, and this is the one call on the path where that matters.
-	withPool(func() {
-		e.id.Send(selSetBytes, unsafe.Pointer(&data[0]), uintptr(len(data)), uintptr(index))
-	})
+	e.id.Send(selSetBytes, unsafe.Pointer(&data[0]), uintptr(len(data)), uintptr(index))
 }
 
 // Dispatch launches a grid of threadgroups.
@@ -131,7 +129,7 @@ func (e *ComputeEncoder) SetBytes(data []byte, index int) {
 // compiles, runs, and launches a grid nobody asked for, so the test that covers
 // it checks the ids the kernel saw rather than that the call returned.
 func (e *ComputeEncoder) Dispatch(groups, threadsPerGroup Size) {
-	withPool(func() { e.id.Send(selDispatchThreadgroups, groups, threadsPerGroup) })
+	e.id.Send(selDispatchThreadgroups, groups, threadsPerGroup)
 }
 
 // DispatchIndirect launches a grid whose count the device wrote.
@@ -148,7 +146,7 @@ func (e *ComputeEncoder) DispatchIndirect(count *Buffer, offset int, threadsPerG
 
 // End closes the pass and releases the encoder.
 func (e *ComputeEncoder) End() {
-	withPool(func() { send(e.id, selEndEncoding) })
+	send(e.id, selEndEncoding)
 	release(e.id)
 	e.id = 0
 }
@@ -162,26 +160,26 @@ func (e *BlitEncoder) Copy(dst *Buffer, dstOff int, src *Buffer, srcOff, size in
 
 // End closes the pass and releases the encoder.
 func (e *BlitEncoder) End() {
-	withPool(func() { send(e.id, selEndEncoding) })
+	send(e.id, selEndEncoding)
 	release(e.id)
 	e.id = 0
 }
 
 // Commit submits the buffer and returns without waiting.
 func (cb *CommandBuffer) Commit() {
-	withPool(func() { send(cb.id, selCommit) })
+	send(cb.id, selCommit)
 }
 
 // Wait blocks until the submission completes.
 func (cb *CommandBuffer) Wait() {
-	withPool(func() { send(cb.id, selWaitUntilCompleted) })
+	send(cb.id, selWaitUntilCompleted)
 }
 
 // Done reports without blocking whether the submission has finished, either by
 // completing or by failing.
 func (cb *CommandBuffer) Done() bool {
 	var s int
-	withPool(func() { s = int(send(cb.id, selStatus)) })
+	s = int(send(cb.id, selStatus))
 	return s == StatusCompleted || s == StatusError
 }
 

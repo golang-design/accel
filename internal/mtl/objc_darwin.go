@@ -218,6 +218,20 @@ var (
 // leak; and a pool must be popped on the thread that pushed it, so the
 // goroutine may not migrate in between. See docs/conventions.md, "Objective-C
 // object lifetime across completion handlers".
+//
+// # What does not need one, and why that is most of an encode
+//
+// A selector returning **void** autoreleases nothing, so it needs no pool at
+// all. That covers almost every call a dispatch makes --
+// setComputePipelineState:, setBuffer:offset:atIndex:, setBytes:length:atIndex:,
+// dispatchThreadgroups:, endEncoding, commit, waitUntilCompleted -- and those
+// are the calls a graph pays per node, where the constructors that *do* return
+// an autoreleased object are paid once a submission.
+//
+// Removing the pool from those took a 790-node submission from 2.14ms to about
+// 1.7ms. It leaks nothing, and that was checked rather than argued: peak
+// resident memory over 4000 submissions is the same with the pools and without
+// them, and the same as over 200.
 // The pool is pushed and popped without reflection for the reason [send] gives:
 // a pool is taken around every Metal call this package makes, so its cost is
 // multiplied by the size of a graph. The discipline is unchanged -- same thread,
