@@ -275,3 +275,75 @@ func TestARaggedTokenDoesNotSeeThePositionAfterIt(t *testing.T) {
 		}
 	}
 }
+
+// The authored ragged kernel and its generated lowering agree.
+//
+// specs/010-kernel-corpus.md §6's per-kernel obligation. Every other test here
+// runs the generated form, which is what a device executes, so nothing else
+// calls the authored function -- and a function nothing calls is a function
+// that can drift from the lowering it is the source of.
+//
+// It also matters where the differential does not run. On darwin the CPU/Metal
+// comparison exercises this kernel; on Linux nothing does, which is how the
+// package's coverage fell below its gate on one platform and not the other.
+func TestTheAuthoredRaggedKernelMatchesItsLowering(t *testing.T) {
+	d := testkernels.RaggedDims{
+		Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+		Block: 4, MaxPages: 3, Scale: float32(1 / math.Sqrt(8)),
+	}
+	counts := []uint32{3, 1, 2}
+	q, k, v, pages, lengths, offsets := raggedFixture(d, counts)
+
+	total := offsets[d.Batch]
+	groups := kernel.ID3{X: total * d.QHeads, Y: 1, Z: 1}
+
+	authored := make([]float32, total*d.QHeads*d.HeadDim)
+	for g := range groups.X {
+		var scores, red [128]float32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			groups, 128, func(th kernel.Thread) {
+				testkernels.AttentionRagged(th, d, q, k, v, pages, lengths,
+					offsets, authored, &scores, &red)
+			})
+	}
+
+	generated := runRagged(t, d, q, k, v, pages, lengths, offsets)
+
+	// Within a bound rather than exact, and the reason is specs/006-backends.md
+	// §5's rounding obligation rather than laxity. The generated form spells the
+	// dot product as float32(dot + float32(a*b)) -- an explicit rounding of the
+	// product, which is what stops a backend fusing the multiply and the add.
+	// The authored form is ordinary Go, where the compiler may fuse on a target
+	// that has FMA. So the two differ by an ulp on arm64 and agree exactly on a
+	// target without it, and an exact comparison here would pass on one machine
+	// and fail on the other. Every authored-versus-generated comparison over
+	// f32 in this package carries the same bound for the same reason.
+	for i := range authored {
+		if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+		}
+	}
+}
+
+// The authored prefix sum and its generated lowering agree, for the same reason.
+func TestTheAuthoredSegmentOffsetsMatchesItsLowering(t *testing.T) {
+	counts := []uint32{3, 0, 4, 1}
+	dims := testkernels.SegmentDims{Rows: uint32(len(counts))}
+
+	authored := make([]uint32, len(counts)+1)
+	kernel.RunAuthored(kernel.ID3{X: 1, Y: 1, Z: 1}, kernel.ID3{X: 0},
+		kernel.ID3{X: 1, Y: 1, Z: 1}, 1, func(th kernel.Thread) {
+			testkernels.SegmentOffsets(th, dims, counts, authored)
+		})
+
+	generated := make([]uint32, len(counts)+1)
+	if err := direct.Run(&testkernels.SegmentOffsetsKernel, accel.ID3{X: 1},
+		kernelabi.Args{Uniforms: []any{dims}, Slices: []any{counts, generated}}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for i := range authored {
+		if authored[i] != generated[i] {
+			t.Fatalf("offset %d: authored %d, generated %d", i, authored[i], generated[i])
+		}
+	}
+}
