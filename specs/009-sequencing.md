@@ -1961,6 +1961,55 @@ Three things this leaves behind:
 - **The remaining cost is real and still per node**, so §4.3's indirect command
   buffer is not withdrawn. It is now behind a smaller number.
 
+### M10. The four open reports, in the order the arithmetic gives — planned 2026-08-26
+
+M9 closed [#16](https://github.com/golang-design/accel/issues/16) and the
+expressible half of [#17](https://github.com/golang-design/accel/issues/17).
+Four reports remain and they are not equally urgent, which two numbers decide
+rather than a preference.
+
+**What blocks the model the consumer actually named.** Qwen3.8-27B at the
+representations that exist:
+
+| | resident |
+| --- | ---: |
+| bf16 | 50.3 GiB |
+| int8, what `quant` has | 26.7 GiB |
+| int4, scale + zero per 128 | **13.4 GiB** |
+
+Only the last fits a 24 GiB card, and the checkpoint published for that model is
+a 13 GiB 4-bit file — so one format removes both the fit problem and a 50 GiB
+download. [#22](https://github.com/golang-design/accel/issues/22) is therefore
+the only remaining **hard** blocker, and the question asked of the consumer
+("download size or card fit?") has an answer derivable without them: for this
+model both point at the asymmetric group-128 format.
+
+**What makes the layer M9 built unusable for prefill.** The sequential scan
+gives a device `batch × heads` workgroups and nothing more:
+
+```
+batch  1:   48 workgroups, and the tokens inside each are serial
+batch  8:  384
+batch 32: 1536
+```
+
+At batch 1 a prefill of *any length* runs 48 workgroups. Length buys no
+parallelism, which is not a constant factor — it is the difference between using
+a GPU and not. §4 of [047](047-linear-attention.md) deferred the chunked form as
+"fast rather than expressible"; this is the number that says how much.
+
+#### The order, and what each needs
+
+| | | needs |
+| --- | --- | --- |
+| 1 | **#22**, a 4-bit representation | a derived bound for an **asymmetric** representation, which [027](027-quantization.md) §3 does not have: its bound is stated for a symmetric one and without the special case a zero point introduces |
+| 2 | **#17**, the chunked scan | its own summation order, so its numeric bound is derived against M9's sequential kernel rather than measured |
+| 3 | **#21**, Metal's remaining encode cost | a decision, not a discovery: pool hoisting touches the completion-handler lifetime rule, and the indirect command buffer is a second lowering path |
+| 4 | **#18**, grouped GEMM | nothing new — [046](046-segmented-extents.md)'s extent is its shape and is built. What is left is a GEMM whose row extent is device data |
+
+**#18 is last despite being cheapest**, and that is deliberate: it serves a model
+class no consumer here is running, where the three above serve the one they are.
+
 #### A note on the review's own reliability
 
 Three of its findings did not survive contact, and that is worth recording
