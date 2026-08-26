@@ -30,7 +30,6 @@ func (c linearCase) tokens() int {
 type linearPlan struct {
 	plan          *tensor.Plan
 	dev           *accel.Device
-	bufs          map[string]accel.BufferView
 	stateBuf, out accel.BufferView
 	c             linearCase
 }
@@ -79,10 +78,7 @@ func buildLinear(t *testing.T, c linearCase) *linearPlan {
 	stateBuf := f32Buffer(t, d, "state",
 		make([]float32, c.batch*c.heads*c.valueDim*c.keyDim))
 	out := f32Buffer(t, d, "out", make([]float32, tokens*c.heads*c.valueDim))
-	return &linearPlan{
-		plan: plan, dev: d, stateBuf: stateBuf, out: out, c: c,
-		bufs: map[string]accel.BufferView{"state": stateBuf, "out": out},
-	}
+	return &linearPlan{plan: plan, dev: d, stateBuf: stateBuf, out: out, c: c}
 }
 
 // step submits one dispatch with the given per-token inputs.
