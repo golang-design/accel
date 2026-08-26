@@ -896,6 +896,27 @@ func diffCases() []diffCase {
 			ulp: 8,
 		},
 		{
+			// A grouped product: a segment lookup choosing which weight matrix
+			// a token multiplies against, then the row kernels' reduction. The
+			// lookup is integer and must agree exactly; the reduction carries
+			// section 7's bound.
+			kernel:   &testkernels.GroupedMatVecKernel,
+			counts:   []int{6 * 32, 3 * 32 * 4, 4, 6 * 4},
+			uniforms: []any{testkernels.GroupedDims{Experts: 3, K: 32, N: 4}},
+			groups:   accel.WorkgroupCount{X: 6 * 4},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 2: // offsets: experts get 2, 0, 4 tokens
+					return []float32{0, 2, 2, 6}[i]
+				case 3:
+					return 0
+				}
+				return defaultSeed(b, i)
+			},
+			why: "a sum of products, per section 7's reduction bound",
+			ulp: 8,
+		},
+		{
 			// The exclusive prefix sum. Integer, so the two backends agree
 			// exactly, and the seeded counts include a zero so the repeated
 			// offset a zero-count row produces is compared too.

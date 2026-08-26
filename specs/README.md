@@ -120,6 +120,7 @@ numbered in.
 | [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
 | [043-per-row-values.md](043-per-row-values.md) | Implemented | M8: the one line behind five consumer reports — a value every row of a dispatch shares is a scalar, and a value that differs per row is a tensor |
 | [044-unbounded-context.md](044-unbounded-context.md) | Implemented | M8: attention over a cache larger than a workgroup, and why the loop is bounded by a binding's extent rather than by the length |
+| [049-grouped-gemm.md](049-grouped-gemm.md) | In progress | One weight matrix per segment, chosen at runtime — a mixture-of-experts layer over 046's extent (accel issue 18) |
 | [048-int4.md](048-int4.md) | In progress | An asymmetric grouped 4-bit weight representation and its derived bound, which decides whether a 27B-class model fits one device (accel issue 22) |
 | [047-linear-attention.md](047-linear-attention.md) | In progress | A matrix state per sequence and a scan over 046's segmented extent, so hybrid models whose three-in-four layers are not softmax attention become expressible |
 | [046-segmented-extents.md](046-segmented-extents.md) | In progress | A count per row, the offsets it implies, and the ragged query extent that closes accel issue 16. Written as a primitive because issue 18's grouped GEMM is its second caller |

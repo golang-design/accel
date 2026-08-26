@@ -151,6 +151,26 @@ func (GEMMDimsCodec) Encode(dst []byte, value GEMMDims) error {
 	return w.Err()
 }
 
+// GroupedDimsCodec is the generated std140 codec for GroupedDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type GroupedDimsCodec struct{}
+
+// GroupedDimsBlockSize is the encoded size of a GroupedDims block, in bytes.
+const GroupedDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (GroupedDimsCodec) EncodedSize() int { return GroupedDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (GroupedDimsCodec) Encode(dst []byte, value GroupedDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Experts)
+	w.U32(4, value.K)
+	w.U32(8, value.N)
+	return w.Err()
+}
+
 // LinearDimsCodec is the generated std140 codec for LinearDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -3758,6 +3778,189 @@ kernel void MatMulTiledF32F16(
 			slot.State = f
 		}
 		return matMulTiledF32F16Coop(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[accel.Float16](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[256]accel.Float16](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// groupedMatVecFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type groupedMatVecFrame struct {
+	pc      int
+	group0  uint32
+	lid1    uint32
+	tok2    uint32
+	col3    uint32
+	e4      uint32
+	r5      uint32
+	wBase6  uint32
+	acc7    float32
+	k8      uint32
+	stride9 uint32
+}
+
+// groupedMatVecCoop runs one invocation of GroupedMatVec to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func groupedMatVecCoop(t accel.Thread, d GroupedDims, x []float32, w []float32, offsets []uint32, out []float32, sh *[128]float32, f *groupedMatVecFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.group0 = t.GroupID().X
+			f.lid1 = t.LocalID().X
+			f.tok2 = (f.group0 / d.N)
+			f.col3 = (f.group0 % d.N)
+			f.e4 = uint32(0)
+			{
+				f.r5 = uint32(0)
+				for ; f.r5 < d.Experts; f.r5 = (f.r5 + uint32(1)) {
+					if offsets[(f.r5+uint32(1))] <= f.tok2 {
+						f.e4 = (f.e4 + uint32(1))
+					}
+				}
+			}
+			f.wBase6 = ((f.e4 * d.K) * d.N)
+			f.acc7 = float32(0)
+			{
+				f.k8 = f.lid1
+				for ; f.k8 < d.K; f.k8 = (f.k8 + uint32(128)) {
+					f.acc7 = float32(f.acc7 + float32(x[((f.tok2*d.K)+f.k8)]*w[((f.wBase6+(f.k8*d.N))+f.col3)]))
+				}
+			}
+			tr.Write(0, int(f.lid1))
+			sh[f.lid1] = f.acc7
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "grouped.go:71:2"}
+			return true
+		case 2:
+			f.stride9 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lid1 < f.stride9 {
+				tr.Write(0, int(f.lid1))
+				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride9)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "grouped.go:77:3"}
+			return true
+		case 5:
+			f.stride9 = (f.stride9 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride9 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			if f.lid1 == uint32(0) {
+				out[((f.tok2 * d.N) + f.col3)] = sh[tr.ReadAt(0, int(int32(0)))]
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// GroupedMatVecKernel is the compiled form of GroupedMatVec.
+var GroupedMatVecKernel = kernelabi.Kernel{
+	Name:          "GroupedMatVec",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "w", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "076794c887d9ad6b10f9988508215dac",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GroupedDims {
+    uint Experts;
+    uint K;
+    uint N;
+    char _tail[4];
+};
+
+kernel void GroupedMatVec(
+    const device float *x [[buffer(0)]],
+    const device float *w [[buffer(1)]],
+    const device uint *offsets [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant GroupedDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[128];
+    uint group = _wid.x;
+    uint lid = _lid.x;
+    uint tok = (group / d.N);
+    uint col = (group % d.N);
+    uint e = uint(0);
+    for (uint r = uint(0); (r < d.Experts); r = (r + uint(1))) {
+        if ((offsets[(r + uint(1))] <= tok)) {
+            e = (e + uint(1));
+        }
+    }
+    uint wBase = ((e * d.K) * d.N);
+    float acc = float(0);
+    for (uint k = lid; (k < d.K); k = (k + uint(128))) {
+        acc = (acc + (x[((tok * d.K) + k)] * w[((wBase + (k * d.N)) + col)]));
+    }
+    sh[lid] = acc;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        if ((lid < stride)) {
+            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if ((lid == uint(0))) {
+        out[((tok * d.N) + col)] = sh[int(0)];
+    }
+}
+`,
+	OrderIndependent: true,
+	Suspensions:      2,
+	SharedSizes:      []int{128},
+	SharedBytes:      512,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		return []any{&s0}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "GroupedDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, GroupedDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*groupedMatVecFrame)
+		if f == nil {
+			f = &groupedMatVecFrame{}
+			slot.State = f
+		}
+		return groupedMatVecCoop(t, kernelabi.UniformValue[GroupedDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[uint32](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Shared[[128]float32](a, 0), f, slot, slot.Shared)
 	},
 }
 
@@ -10909,6 +11112,7 @@ var Kernels = []*kernelabi.Kernel{
 	&MatMulTiledKernel,
 	&MatMulTiledF32Kernel,
 	&MatMulTiledF32F16Kernel,
+	&GroupedMatVecKernel,
 	&QuantMatVecInt4Kernel,
 	&LinearAttentionKernel,
 	&MatVecKernel,
