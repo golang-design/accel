@@ -625,6 +625,14 @@ each wrapped in an autorelease pool that is two more.
 | 790 nodes, one encoder | 11.6 ms | 5.55 ms |
 | 790 nodes, a barrier between each | 15.4 ms | 9.76 ms |
 
+**A second pass, 2026-08-26**, took 790 nodes from 2.14 ms to about 1.7 ms on a
+quiet machine. Not the pool *hoisting* the options described: a selector
+returning **void** autoreleases nothing, and every call a dispatch makes per node
+returns void, so those were paying a push and a pop for objects that do not
+exist. The constructors keep their pools and are paid once a submission. Checked
+rather than argued — peak resident memory over 4000 submissions is the same with
+the pools and without, and the same as over 200.
+
 The machine's own state is part of that table and is stated rather than
 assumed: the same pair measured while the machine was under a load average of
 200 reads 40 ms against 8 ms, because the reflected path allocates per call and

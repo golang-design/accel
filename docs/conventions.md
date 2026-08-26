@@ -317,9 +317,22 @@ enclosing autorelease pool has drained. Releasing an autoreleased object from
 inside the handler is a use-after-free, and it crashes inside `objc_msgSend` with
 a stack that points nowhere useful.
 
-**Guarantee.** Backend-internal. Every thread that makes Objective-C calls holds
-its own pool, drained on that same OS thread, and completion handlers never
-release objects they did not retain.
+**Guarantee.** Backend-internal. Every Objective-C call that can produce an
+autoreleased object is made inside a pool held on one OS thread and drained on
+that same thread, and completion handlers never release objects they did not
+retain.
+
+**Two corrections, 2026-08-26.** This said *every* call holds a pool, and that
+was both stronger than the rule needs and expensive. A selector returning
+**void** autoreleases nothing, and that describes almost every call a dispatch
+makes — so those were paying a pool push and pop for objects that do not exist,
+which cost about 20% of a 790-node submission. The constructors that do return
+an autoreleased object keep theirs.
+
+And accel's Metal backend has **no completion handlers at all**: it waits and
+polls the command buffer's status. The divergence this section describes is real
+on the platform and does not currently arise here, which is worth knowing before
+someone adds the first handler — at which point it does.
 
 ---
 
