@@ -521,34 +521,3 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		attrs:    []uint64{uint64(opts.Block)},
 	}, accel.F32, out)
 }
-
-// segmentOffsets records the exclusive prefix sum of a count-per-row tensor.
-//
-// specs/046-segmented-extents.md §1.1: the offsets are a function of the
-// counts, so a caller who supplied both could supply two that disagree. They
-// are derived by the operator that needs them and are not part of the public
-// surface. A later caller that genuinely needs offsets it cannot derive is what
-// would change that, and there is none.
-//
-// The result is rows+1 long, so a kernel that owns row r has both ends of it
-// and the row's own count is off[r+1]-off[r]. The last entry is the total.
-func (b *Builder) segmentOffsets(counts *Tensor, rows int) *Tensor {
-	if poisoned(counts) {
-		return b.poison()
-	}
-	return b.record(node{
-		op: "SegmentOffsets", inputs: []*Tensor{counts},
-		kernel: &testkernels.SegmentOffsetsKernel,
-		uniform: func(map[string]ScalarValue) any {
-			return testkernels.SegmentDims{Rows: uint32(rows)}
-		},
-		grid: func(*Tensor) accel.WorkgroupCount {
-			// One workgroup of one invocation: the scan is serial and rows is a
-			// batch size. See the kernel for why a parallel scan would cost
-			// more than it saves at this size.
-			return accel.WorkgroupCount{X: 1}
-		},
-		reason: "the serial prefix sum: rows is a batch size, so the scan is a handful " +
-			"of adds before a dispatch that reads whole caches",
-	}, accel.U32, Shape{rows + 1})
-}
