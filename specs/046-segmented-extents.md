@@ -1,6 +1,6 @@
 ---
 title: "Segmented extents: a count per row, and the operations that read one"
-status: drafted
+status: in progress
 layer: tensor
 depends_on:
   - 007-tensor-layer.md
@@ -211,6 +211,35 @@ Each assertion names the mutation it catches.
   structural and this is what checks it.
 - **CPU and Metal agree** on a mixed step, bit for bit where the arithmetic is
   exact and within [008](008-numerics.md) §6's softmax bound where it is not.
+
+## 5.1 Built — 2026-08-26
+
+§1's primitive, §2's `QueryExtents`, and both kernels. Every assertion in §5 is
+built and each caught the mutation it names, except one that did not and
+corrected this spec instead — recorded in §3.
+
+Three things this took that were not in the plan:
+
+- **The segment lookup counts rows rather than searching for one.** The
+  searching form is correct, and it is *also* correct with `<=` on its upper
+  bound — but only because the loop keeps the last match, so a reader adding a
+  break would turn a harmless typo into a token attributed to the row before its
+  own. Reinstating that typo failed nothing, which is how the ambiguity was
+  found. A count has no such reading.
+- **The differential seeds V positive.** The first run disagreed by 266 ULP
+  against a ceiling of 32, and the cause was the seed: the default is symmetric
+  about zero, so a softmax-weighted sum of it cancelled to 8.5e-4 from values
+  near one, where 266 ULP is 2e-5 relative and is ordinary f32 noise magnified
+  by the cancellation. The ceiling is derived from [008](008-numerics.md) §6 and
+  stayed; the input changed so the ULP count measures the two lowerings.
+- **§5's members-run-separately assertion needed three knobs to be honest.** A
+  member run has to address the same physical blocks over the same cache and ask
+  the same questions, or it compares two different problems. The first version of
+  that test compared nothing at all: it built a member case, assigned it to the
+  blank identifier, and asserted the output was not NaN.
+
+**Not built:** §6 stays open, and [#18](https://github.com/golang-design/accel/issues/18)
+is where §1 gets its second caller.
 
 ## 6. Open
 
