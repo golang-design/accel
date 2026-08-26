@@ -151,6 +151,27 @@ func (GEMMDimsCodec) Encode(dst []byte, value GEMMDims) error {
 	return w.Err()
 }
 
+// LinearDimsCodec is the generated std140 codec for LinearDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type LinearDimsCodec struct{}
+
+// LinearDimsBlockSize is the encoded size of a LinearDims block, in bytes.
+const LinearDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (LinearDimsCodec) EncodedSize() int { return LinearDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (LinearDimsCodec) Encode(dst []byte, value LinearDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Batch)
+	w.U32(4, value.Heads)
+	w.U32(8, value.KeyDim)
+	w.U32(12, value.ValueDim)
+	return w.Err()
+}
+
 // RowDimsCodec is the generated std140 codec for RowDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -3737,6 +3758,143 @@ kernel void MatMulTiledF32F16(
 			slot.State = f
 		}
 		return matMulTiledF32F16Coop(t, kernelabi.UniformValue[GEMMDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[accel.Float16](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[256]accel.Float16](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// linearAttentionFlat is the generated flat lowering of LinearAttention.
+//
+// It is what the CPU backend runs. The authored LinearAttention is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func linearAttentionFlat(t accel.Thread, d LinearDims, q []float32, k []float32, v []float32, alpha []float32, beta []float32, offsets []uint32, state []float32, out []float32) {
+	var group uint32 = t.GroupID().X
+	var lane uint32 = t.LocalID().X
+	var seq uint32 = (group / d.Heads)
+	var h uint32 = (group % d.Heads)
+	var a uint32 = lane
+	var sBase uint32 = ((((seq * d.Heads) + h) * d.ValueDim) * d.KeyDim)
+	var first uint32 = offsets[seq]
+	var last uint32 = offsets[(seq + uint32(1))]
+	{
+		var tok uint32 = first
+		for ; tok < last; tok = (tok + uint32(1)) {
+			if a >= d.ValueDim {
+				continue
+			}
+			var row uint32 = (sBase + (a * d.KeyDim))
+			var qBase uint32 = (((tok * d.Heads) + h) * d.KeyDim)
+			var vBase uint32 = (((tok * d.Heads) + h) * d.ValueDim)
+			var u float32 = float32(0)
+			{
+				var b uint32 = uint32(0)
+				for ; b < d.KeyDim; b = (b + uint32(1)) {
+					u = float32(u + float32(state[(row+b)]*k[(qBase+b)]))
+				}
+			}
+			var g float32 = (beta[tok] * float32(v[(vBase+a)]-u))
+			var al float32 = alpha[tok]
+			{
+				var b uint32 = uint32(0)
+				for ; b < d.KeyDim; b = (b + uint32(1)) {
+					state[(row + b)] = float32(float32(al*state[(row+b)]) + float32(g*k[(qBase+b)]))
+				}
+			}
+			var o float32 = float32(0)
+			{
+				var b uint32 = uint32(0)
+				for ; b < d.KeyDim; b = (b + uint32(1)) {
+					o = float32(o + float32(state[(row+b)]*q[(qBase+b)]))
+				}
+			}
+			out[(vBase + a)] = o
+		}
+	}
+}
+
+// LinearAttentionKernel is the compiled form of LinearAttention.
+var LinearAttentionKernel = kernelabi.Kernel{
+	Name:          "LinearAttention",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "q", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "alpha", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "beta", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "eb58eadad488785150529d4dca56a566",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct LinearDims {
+    uint Batch;
+    uint Heads;
+    uint KeyDim;
+    uint ValueDim;
+};
+
+kernel void LinearAttention(
+    const device float *q [[buffer(0)]],
+    const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]],
+    const device float *alpha [[buffer(3)]],
+    const device float *beta [[buffer(4)]],
+    const device uint *offsets [[buffer(5)]],
+    device float *state [[buffer(6)]],
+    device float *out [[buffer(7)]],
+    constant uint *_lens [[buffer(8)]],
+    constant LinearDims &d [[buffer(9)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint group = _wid.x;
+    uint lane = _lid.x;
+    uint seq = (group / d.Heads);
+    uint h = (group % d.Heads);
+    uint a = lane;
+    uint sBase = ((((seq * d.Heads) + h) * d.ValueDim) * d.KeyDim);
+    uint first = offsets[seq];
+    uint last = offsets[(seq + uint(1))];
+    for (uint tok = first; (tok < last); tok = (tok + uint(1))) {
+        if ((a >= d.ValueDim)) {
+            continue;
+        }
+        uint row = (sBase + (a * d.KeyDim));
+        uint qBase = (((tok * d.Heads) + h) * d.KeyDim);
+        uint vBase = (((tok * d.Heads) + h) * d.ValueDim);
+        float u = float(0);
+        for (uint b = uint(0); (b < d.KeyDim); b = (b + uint(1))) {
+            u = (u + (state[(row + b)] * k[(qBase + b)]));
+        }
+        float g = (beta[tok] * (v[(vBase + a)] - u));
+        float al = alpha[tok];
+        for (uint b = uint(0); (b < d.KeyDim); b = (b + uint(1))) {
+            state[(row + b)] = ((al * state[(row + b)]) + (g * k[(qBase + b)]));
+        }
+        float o = float(0);
+        for (uint b = uint(0); (b < d.KeyDim); b = (b + uint(1))) {
+            o = (o + (state[(row + b)] * q[(qBase + b)]));
+        }
+        out[(vBase + a)] = o;
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "LinearDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, LinearDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		linearAttentionFlat(t, kernelabi.UniformValue[LinearDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Slice[uint32](a, 5), kernelabi.Slice[float32](a, 6), kernelabi.Slice[float32](a, 7))
 	},
 }
 
@@ -10573,6 +10731,7 @@ var Kernels = []*kernelabi.Kernel{
 	&MatMulTiledKernel,
 	&MatMulTiledF32Kernel,
 	&MatMulTiledF32F16Kernel,
+	&LinearAttentionKernel,
 	&MatVecKernel,
 	&QuantMatVecKernel,
 	&QuantMatVecF32Kernel,

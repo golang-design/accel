@@ -845,6 +845,32 @@ func diffCases() []diffCase {
 			// that a signed and an unsigned lowering compute differently. The
 			// seeded state is negative for those two indices, which is what
 			// makes this a comparison of signedness rather than of reachability.
+			// A gated delta recurrence: three passes over the state per token,
+			// with one workgroup per (sequence, head) walking its own tokens.
+			// The state is both read and written, so this compares the scan's
+			// result as well as its output.
+			kernel: &testkernels.LinearAttentionKernel,
+			counts: []int{4 * 2 * 6, 4 * 2 * 6, 4 * 2 * 4, 4, 4, 3, 2 * 2 * 4 * 6, 4 * 2 * 4},
+			uniforms: []any{testkernels.LinearDims{
+				Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4,
+			}},
+			groups: accel.WorkgroupCount{X: 2 * 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 3: // alpha: a decay under one
+					return 0.9
+				case 4: // beta: a write rate under one
+					return 0.5
+				case 5: // offsets: sequence 0 gets three tokens, sequence 1 one
+					return []float32{0, 3, 4}[i]
+				case 7: // the output starts empty
+					return 0
+				}
+				return defaultSeed(b, i) / 4
+			},
+			ulp: 32, why: "three sums of products per token, per section 8's propagation",
+		},
+		{
 			// The exclusive prefix sum. Integer, so the two backends agree
 			// exactly, and the seeded counts include a zero so the repeated
 			// offset a zero-count row produces is compared too.
