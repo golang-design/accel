@@ -54,10 +54,35 @@ type AttentionOptions struct {
 	// mask hides, so a prefill that extends an existing cache masks correctly
 	// rather than letting its first token see nothing.
 	//
-	// Still a scalar because a prefill is one sequence: specs/040-batch-scheduler.md
-	// owns batched prefill, and until it exists there is no row for this to
-	// differ across.
+	// Still a scalar because a prefill is one sequence: a ragged step derives
+	// each token's position from [AttentionOptions.QueryExtents] and Lengths
+	// instead, so there is no row for this to differ across.
 	BaseName string
+
+	// QueryExtents is a u32 tensor holding, per sequence, how many query tokens
+	// that sequence contributes to this step. Setting it makes q flat --
+	// [sum(QueryExtents), qHeads, headDim] -- so sequences may contribute
+	// different numbers of tokens, which is what lets a prefill chunk share a
+	// dispatch with decode steps.
+	//
+	// specs/046-segmented-extents.md. This is the segmented extent that spec
+	// states, and attention is its first caller rather than its owner: the same
+	// primitive is what a grouped GEMM's per-expert token counts are.
+	//
+	// # It is not Lengths
+	//
+	// Both are u32 and one per sequence, and they are different numbers.
+	// Lengths is how many cached positions a sequence attends *over*;
+	// QueryExtents is how many query tokens it contributes *this step*. A step
+	// mixing a 512-token chunk with three decodes has QueryExtents
+	// [512, 1, 1, 1] and Lengths whatever those four caches hold.
+	//
+	// # A count of zero is legal
+	//
+	// A sequence admitted this step with nothing to contribute yet is an
+	// ordinary member of the batch. It occupies no rows of q and is not an
+	// error.
+	QueryExtents *Tensor
 }
 
 // Attention scores a query against a cached key/value pair.
@@ -125,6 +150,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	// builds it, rather than a fifth rank.
 	qSeq, batch := 1, 1
 	prefill, batched := false, false
+	origShape := q.shape
 	flatten := func(from int) {
 		shape := Shape{q.shape[from], q.shape[from+1]}
 		q = &Tensor{
@@ -144,6 +170,36 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		return b.fail(1, "Attention", "q is %v; it is [qHeads, headDim] for one token, "+
 			"[qSeq, qHeads, headDim] for a prefill, or [batch, qSeq, qHeads, headDim] "+
 			"for several sequences stepping together", q.shape)
+	}
+
+	// A ragged step reuses the flat rank-3 shape and reads it differently: the
+	// leading axis is every sequence's tokens end to end rather than one
+	// sequence's. specs/046-segmented-extents.md §2.
+	//
+	// Which reading applies is decided by QueryExtents being supplied, and that
+	// is exactly the presence-of-a-field shape this project refused twice this
+	// milestone. It is safe here for a reason those were not: the two readings
+	// select *different kernels*, so specs/029-plan-cache.md's digest tells the
+	// plans apart structurally -- it covers the kernel's name and its own
+	// digest -- rather than relying on a bit somebody remembered to record.
+	tokens, ragged := 0, false
+	if opts.QueryExtents != nil {
+		if !prefill {
+			return b.fail(1, "Attention", "q is %v and QueryExtents is set; a ragged step "+
+				"is the flat [tokens, qHeads, headDim] form, because rank 2 is one token "+
+				"and rank 4 is the rectangular batch whose sequences all contribute the "+
+				"same count (specs/046-segmented-extents.md section 2)", origShape)
+		}
+		if opts.QueryExtents.dtype != accel.U32 {
+			return b.fail(1, "Attention", "QueryExtents is %v; it is a count per sequence, "+
+				"which is u32", opts.QueryExtents.dtype)
+		}
+		tokens, ragged, prefill = qSeq, true, false
+		batch = opts.QueryExtents.shape.Elements()
+		if batch == 0 {
+			return b.fail(1, "Attention", "QueryExtents is empty; it is one count per "+
+				"sequence and a step has at least one sequence")
+		}
 	}
 	if len(k.shape) != 3 || !k.shape.Equal(v.shape) {
 		return b.fail(1, "Attention", "the key cache is %v and the value cache is %v; both "+
@@ -205,6 +261,65 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	if got := opts.Lengths.shape.Elements(); got != batch {
 		return b.fail(1, "Attention", "Lengths holds %d entries and this step has %d "+
 			"sequence(s); it is one length per sequence", got, batch)
+	}
+
+	if ragged {
+		// specs/046-segmented-extents.md §4. Every refusal is host-side,
+		// because 043 §2's rule cuts both ways: a value that reaches the device
+		// as data cannot be checked there.
+		if opts.Pages == nil {
+			return b.fail(1, "Attention", "a ragged step of %d sequences needs Pages: "+
+				"they have different lengths, so a contiguous cache would pad every "+
+				"sequence to the longest, which is the allocation paging exists to "+
+				"avoid", batch)
+		}
+		if len(opts.Pages.shape) != 2 || opts.Pages.shape[0] != batch {
+			return b.fail(1, "Attention", "Pages is %v and QueryExtents names %d "+
+				"sequences; a page table is [batch, maxPages], one row of block ids "+
+				"per sequence", opts.Pages.shape, batch)
+		}
+		if cacheDType != accel.F32 {
+			return b.fail(1, "Attention", "the cache is %v and the ragged kernel reads "+
+				"f32; specs/010-kernel-corpus.md owns the narrow variant", cacheDType)
+		}
+		if opts.BaseName != "" {
+			return b.fail(1, "Attention", "BaseName is %q and QueryExtents is set; a "+
+				"ragged step derives each token's position from its sequence's length "+
+				"and count rather than from one base, so a base would be a value "+
+				"nothing reads (specs/046-segmented-extents.md section 2.2)",
+				opts.BaseName)
+		}
+		maxPages := opts.Pages.shape[1]
+		offsets := b.segmentOffsets(opts.QueryExtents, batch)
+		if poisoned(offsets) {
+			return b.poison()
+		}
+		return b.record(node{
+			op: "Attention",
+			inputs: []*Tensor{
+				q, readState(b, k), readState(b, v), opts.Pages,
+				opts.Lengths, offsets,
+			},
+			kernel: &testkernels.AttentionRaggedKernel,
+			reads:  []string{opts.ScaleName},
+			uniform: func(vals map[string]ScalarValue) any {
+				return testkernels.RaggedDims{
+					Batch: uint32(batch), QHeads: uint32(qHeads),
+					KVHeads: uint32(kvHeads), HeadDim: uint32(headDim),
+					Block: uint32(opts.Block), MaxPages: uint32(maxPages),
+					Scale: vals[opts.ScaleName].F32,
+				}
+			},
+			grid: func(*Tensor) accel.WorkgroupCount {
+				return accel.WorkgroupCount{X: tokens * qHeads}
+			},
+			reason: fmt.Sprintf("the ragged paged kernel: %d tokens over %d sequences, "+
+				"one workgroup per (token, head) with each token causal against its own "+
+				"position", tokens, batch),
+			rejected: []string{"the rectangular batched kernel: it gives every sequence " +
+				"the same token count, which is what a ragged step exists not to do"},
+			attrs: []uint64{uint64(opts.Block)},
+		}, accel.F32, Shape{tokens, qHeads, headDim})
 	}
 
 	if batched {
@@ -405,4 +520,35 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		rejected: rejected,
 		attrs:    []uint64{uint64(opts.Block)},
 	}, accel.F32, out)
+}
+
+// segmentOffsets records the exclusive prefix sum of a count-per-row tensor.
+//
+// specs/046-segmented-extents.md §1.1: the offsets are a function of the
+// counts, so a caller who supplied both could supply two that disagree. They
+// are derived by the operator that needs them and are not part of the public
+// surface. A later caller that genuinely needs offsets it cannot derive is what
+// would change that, and there is none.
+//
+// The result is rows+1 long, so a kernel that owns row r has both ends of it
+// and the row's own count is off[r+1]-off[r]. The last entry is the total.
+func (b *Builder) segmentOffsets(counts *Tensor, rows int) *Tensor {
+	if poisoned(counts) {
+		return b.poison()
+	}
+	return b.record(node{
+		op: "SegmentOffsets", inputs: []*Tensor{counts},
+		kernel: &testkernels.SegmentOffsetsKernel,
+		uniform: func(map[string]ScalarValue) any {
+			return testkernels.SegmentDims{Rows: uint32(rows)}
+		},
+		grid: func(*Tensor) accel.WorkgroupCount {
+			// One workgroup of one invocation: the scan is serial and rows is a
+			// batch size. See the kernel for why a parallel scan would cost
+			// more than it saves at this size.
+			return accel.WorkgroupCount{X: 1}
+		},
+		reason: "the serial prefix sum: rows is a batch size, so the scan is a handful " +
+			"of adds before a dispatch that reads whole caches",
+	}, accel.U32, Shape{rows + 1})
 }
