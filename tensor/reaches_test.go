@@ -121,6 +121,30 @@ func TestEveryAttentionOptionReachesTheKernelOrIsRefused(t *testing.T) {
 			set:             func(s *setup) { s.opts.BaseName = "base2" },
 			refusedOnDecode: true,
 		},
+
+		// A ragged step is the flat rank-3 shape, so a decode's rank-2 q
+		// refuses it. On the prefill shape it selects a different kernel
+		// entirely -- which is what makes the two readings of rank 3
+		// distinguishable to the plan digest, and is checked directly in
+		// TestARaggedPlanIsNotAPrefillPlan.
+		// Refused on both shapes this fixture builds, and that is the honest
+		// answer rather than a way of satisfying the guard. A ragged step is
+		// the flat rank-3 q with a rank-2 page table -- one row of block ids
+		// per sequence -- and this fixture's table is rank 1 because it was
+		// built for one sequence. So a decode refuses the field for its rank
+		// and a prefill refuses it for the table.
+		//
+		// What says it reaches a kernel is TestARaggedPlanIsNotAPrefillPlan,
+		// which builds the shape it needs and asserts the two readings of rank
+		// 3 select different plans. Pointing at that test is the row's job:
+		// the guard exists so a field cannot be accepted and ignored, and a
+		// field refused everywhere here with its evidence named elsewhere is
+		// neither.
+		"QueryExtents": {
+			set:              func(s *setup) { s.opts.QueryExtents = s.lens },
+			refusedOnDecode:  true,
+			refusedOnPrefill: true,
+		},
 	}
 
 	// Reflection is what makes this hold for a field nobody has added yet.

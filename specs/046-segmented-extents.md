@@ -152,8 +152,18 @@ prefill: the two are separated only by whether `QueryExtents` was supplied.
 Presence-of-a-field is the shape this project refused twice this milestone
 (`Pages` on prefill, `BaseName` on decode). With a **separate kernel** the plan
 digest distinguishes the two structurally — [029](029-plan-cache.md)'s hash
-covers the kernel's name and its digest, and the input count — so nothing has to
-remember to record a presence bit. §5 checks that rather than assuming it.
+covers the kernel's name and its digest — so nothing has to remember to record a
+presence bit. §5 checks that rather than assuming it.
+
+**And the kernel is not the only thing that separates them, which was found by
+checking.** Pointing the ragged branch at the prefill kernel *still* produces a
+different identity, because a ragged step also binds an operand a prefill does
+not — the derived offsets — and the digest covers the operand set as well. So
+the two readings differ twice over, and either difference alone is sufficient.
+Written down because the first version of this section named only the kernel,
+which was true and was not the whole reason: a reader who later merged the two
+kernels would have found the guarantee still holding for a reason this spec had
+not given them.
 
 **Not built here:** [#18](https://github.com/golang-design/accel/issues/18)'s
 grouped GEMM. It is the second caller of §1 and the reason §1 is written as a

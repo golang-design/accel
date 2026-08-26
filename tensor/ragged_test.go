@@ -420,3 +420,73 @@ func TestQueryExtentsNeedsTheFlatShape(t *testing.T) {
 		}
 	}
 }
+
+// A ragged plan and the prefill plan of the same rank are different plans.
+//
+// specs/046-segmented-extents.md §5, and the assertion §3's design rests on. A
+// flat ragged q is rank 3 and so is a single-sequence prefill: the two are
+// separated only by whether QueryExtents was supplied, which is the
+// presence-of-a-field shape this project refused twice this milestone.
+//
+// §3 claims it is safe here because the two readings select different kernels,
+// so 029's digest tells the plans apart structurally. That is a claim about the
+// digest, so it is asserted through Identity rather than reasoned from what the
+// hash covers. If it failed, a plan cache would serve a ragged plan for a
+// prefill — and the tokens it returned would be plausible.
+func TestARaggedPlanIsNotAPrefillPlan(t *testing.T) {
+	const tokens, qHeads, kvHeads, headDim = 3, 2, 1, 8
+	const block, maxPages, batch = 4, 3, 1
+
+	build := func(ragged bool) tensor.Identity {
+		rt := newRuntime(t)
+		b := rt.NewBuilder("identity")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+		q := tensor.Input(b, tensor.ValueDesc{
+			Name: "q", DType: accel.F32, Shape: tensor.Shape{tokens, qHeads, headDim},
+		})
+		lengths := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{batch},
+		})
+		capacity := batch * maxPages * block
+		kc := tensor.NewState(b, tensor.StateDesc{
+			Name: "kcache", DType: accel.F32,
+			Shape: tensor.Shape{capacity, kvHeads, headDim},
+		})
+		vc := tensor.NewState(b, tensor.StateDesc{
+			Name: "vcache", DType: accel.F32,
+			Shape: tensor.Shape{capacity, kvHeads, headDim},
+		})
+		opts := tensor.AttentionOptions{
+			Lengths: lengths, Block: block, ScaleName: "scale",
+		}
+		if ragged {
+			// The page table a ragged step takes: one row per sequence.
+			opts.Pages = tensor.Input(b, tensor.ValueDesc{
+				Name: "pages", DType: accel.U32, Shape: tensor.Shape{batch, maxPages},
+			})
+			opts.QueryExtents = tensor.Input(b, tensor.ValueDesc{
+				Name: "extents", DType: accel.U32, Shape: tensor.Shape{batch},
+			})
+		} else {
+			opts.Pages = tensor.Input(b, tensor.ValueDesc{
+				Name: "pages", DType: accel.U32, Shape: tensor.Shape{maxPages},
+			})
+			opts.BaseName = "base"
+		}
+		tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, opts))
+		return b.Identity()
+	}
+
+	if a, c := build(true), build(false); a == c {
+		t.Fatalf("a ragged step and a prefill over the same rank-3 q have the same plan "+
+			"identity %q; a plan cache would answer one with the other, and the tokens "+
+			"it returned would be plausible", a)
+	}
+
+	// And the same reading twice is the same plan, or the assertion above holds
+	// for any two graphs and says nothing about QueryExtents.
+	if a, c := build(true), build(true); a != c {
+		t.Fatalf("two identical ragged graphs have different identities %q and %q", a, c)
+	}
+}
