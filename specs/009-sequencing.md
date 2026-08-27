@@ -2167,21 +2167,43 @@ Two kinds came out, and they need different fixes:
    condition, name the wrong value, or panic formatting its own message, and
    nothing would say so. This is the recorded "refusals shipped untested" mode
    with a number against it for the first time.
-2. **Unreachable by construction** — a smaller family. `tensor.GroupedMatVec`'s
-   "w declares no experts" cannot fire: `Input` already refuses a dimension of
-   zero, so `w.shape[0]` is never zero. Confirmed by building the case and
-   reading which refusal answered. The same holds for the rank-zero guards in
-   `RMSNorm`, `Softmax`, `RoPE`, `Contiguous` and `LayerState`, all of which sit
-   behind `Input`'s "has no shape".
+2. **Unreachable by construction** — a claim that was mostly wrong. See the
+   correction below.
 
-The second kind is the one with a rule attached. **A refusal nothing can reach
-has no accepting half and never will**, which is the same defect as a spec
-asserting a refusal no code implements — the shape #24 was. It is recorded here
-rather than deleted on sight, because removing six defensive checks is one
-change with one argument, not a tidy-up to fold into a sweep.
+### Correction — 2026-08-27, same day
 
-Not scheduled yet. It is ready to build: the list is mechanical, the method
-above regenerates it, and the work is per-refusal rather than a design.
+The "unreachable by construction" family above was wrong, and wrong in a way
+worth keeping.
+
+It said `tensor.GroupedMatVec`'s "w declares no experts" could not fire, because
+`Input` refuses a dimension of zero. That is true of `Input` and says nothing
+about the operand, because **`Slice` permits an empty half-open range**:
+`Slice(w, 0, 0, 0)` is legal and yields a zero-element tensor that reaches the
+refusal directly. The rank-zero guards named alongside it are the same story —
+`Reshape(x, Shape{})` produces a rank-zero tensor, its element count still
+matching because an empty product is one.
+
+Both now have tests. So do twelve others; 65 untested sites are 51.
+
+**"Unreachable" concluded from one construction path is not a conclusion.** The
+check I ran built the operand with `Input`, found it refused, and stopped. Every
+view operator is another way to build one, and views are exactly where the
+degenerate shapes live. The generalizable form: a reachability argument has to
+name the *set* of ways a value arrives, and for a tensor library that set always
+includes the views.
+
+Two sites survive as genuinely dominated, and they are dominated by a line in
+the same function rather than by a constructor:
+
+- `Attention`'s ragged f16 branch — the dtype was already narrowed to f32-or-f16
+  a hundred lines earlier, so its `else if` cannot fire. Kept: if that earlier
+  set is ever widened to bf16, this is what stops bf16 reaching a kernel that
+  cannot read it.
+- `Contiguous`'s rank-zero guard — it sits behind an early return for an
+  already-contiguous layout, and a rank-zero tensor has no strides to be
+  non-contiguous with.
+
+The remaining 51 are ready to build: mechanical, per-refusal, no design in them.
 
 ## The consumer reports, and what they were actually about — 2026-08-24
 
