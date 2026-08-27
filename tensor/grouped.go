@@ -113,3 +113,100 @@ func GroupedMatVec(b *Builder, x, w, counts *Tensor) *Tensor {
 			"mixture of experts exists not to do"},
 	}, accel.F32, Shape{tokens, n})
 }
+
+// GroupedMatMul multiplies each expert's tokens by that expert's matrix.
+//
+//	out[t][n] = Σₖ x[t][k] · w[e(t)][k][n]
+//
+// # Why a separate operator from [GroupedMatVec]
+//
+// The shapes a decode step and a prefill have. A decode routes one token to a
+// few experts and reads those matrices once, so a workgroup per (token, column)
+// is right. A prefill has many tokens per expert, and reading an expert's matrix
+// once per token wastes the bandwidth a mixture-of-experts layer is built to
+// save — so this puts a workgroup on an (expert, column tile) and walks that
+// expert's whole segment through shared tiles.
+//
+// Each weight is read once per block of [testkernels.TileM] tokens rather than
+// once per token. specs/049-grouped-gemm.md §5.
+//
+// # It takes the same inputs
+//
+// x is [Σ counts, K] ordered by expert, w is [E, K, N], counts is one per
+// expert — [GroupedMatVec]'s arguments exactly, so switching between the two is
+// a one-word edit and not a re-plumbing.
+func GroupedMatMul(b *Builder, x, w, counts *Tensor) *Tensor {
+	if counts == nil {
+		return b.fail(1, "GroupedMatMul", "counts is nil; it is one token count per "+
+			"expert and is what says which rows belong to which weight matrix "+
+			"(specs/049-grouped-gemm.md)")
+	}
+	if poisoned(x, w, counts) {
+		return b.poison()
+	}
+	for _, c := range []struct {
+		name string
+		t    *Tensor
+		want DType
+	}{{"x", x, accel.F32}, {"w", w, accel.F32}, {"counts", counts, accel.U32}} {
+		if c.t.dtype != c.want {
+			return b.fail(1, "GroupedMatMul", "%s is %v and this kernel reads %v",
+				c.name, c.t.dtype, c.want)
+		}
+	}
+	if len(x.shape) != 2 {
+		return b.fail(1, "GroupedMatMul", "x is %v; it is [tokens, K] with the tokens "+
+			"of every expert end to end", x.shape)
+	}
+	if len(w.shape) != 3 {
+		return b.fail(1, "GroupedMatMul", "w is %v; it is [experts, K, N], one matrix "+
+			"per expert", w.shape)
+	}
+	tokens, k := x.shape[0], x.shape[1]
+	experts, wk, n := w.shape[0], w.shape[1], w.shape[2]
+	if wk != k {
+		return b.fail(1, "GroupedMatMul", "x is %v and w is %v; every expert contracts "+
+			"against the same width, so w's second axis is x's second", x.shape, w.shape)
+	}
+	if got := counts.shape.Elements(); got != experts {
+		return b.fail(1, "GroupedMatMul", "counts holds %d entries and w has %d "+
+			"experts; it is one token count per expert", got, experts)
+	}
+	if experts == 0 {
+		return b.fail(1, "GroupedMatMul", "w declares no experts")
+	}
+
+	offsets := b.segmentOffsets(counts, experts)
+	if poisoned(offsets) {
+		return b.poison()
+	}
+
+	return b.record(node{
+		op: "GroupedMatMul", inputs: []*Tensor{x, w, offsets},
+		kernel: &testkernels.GroupedMatMulKernel,
+		uniform: func(map[string]ScalarValue) any {
+			// Tokens is x's row count, and it is the bound the offsets cannot
+			// give: they are device data, so nothing here can check they sum to
+			// it. specs/049-grouped-gemm.md §5.
+			return testkernels.GroupedTiledDims{
+				Experts: uint32(experts), Tokens: uint32(tokens),
+				K: uint32(k), N: uint32(n),
+			}
+		},
+		grid: func(*Tensor) accel.WorkgroupCount {
+			// One workgroup per (expert, column tile). Not per token: a token
+			// block spanning two experts would need two weight matrices in one
+			// tile, which is the tile's whole reason for existing.
+			return accel.WorkgroupCount{
+				X: (n + testkernels.TileN - 1) / testkernels.TileN,
+				Y: experts,
+			}
+		},
+		reason: fmt.Sprintf("the tiled grouped kernel: %d experts over %d columns, "+
+			"each walking its own segment of %d tokens in blocks of %d",
+			experts, n, tokens, testkernels.TileM),
+		rejected: []string{"the grouped row kernel: it reduces one token per " +
+			"workgroup, so an expert's matrix is re-read once per token rather " +
+			"than once per block"},
+	}, accel.F32, Shape{tokens, n})
+}

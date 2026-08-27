@@ -195,3 +195,88 @@ func TestAGroupedProductRefusesAWeightWithNoExperts(t *testing.T) {
 		t.Errorf("the refusal should name the missing experts, got: %v", err)
 	}
 }
+
+// The batched grouped operator equals the row operator through the public
+// surface, over a batch no expert divides evenly.
+//
+// specs/049-grouped-gemm.md §5. Same inputs, same answer, different kernel:
+// what a caller gets by switching is speed, not arithmetic.
+func TestAGroupedMatMulEqualsTheMatVecThroughThePlan(t *testing.T) {
+	rt := newRuntime(t)
+	d := rt.Device()
+
+	const K, N = 40, 20
+	counts := []uint32{5, 0, 9}
+	experts := len(counts)
+	tokens := 0
+	for _, c := range counts {
+		tokens += int(c)
+	}
+
+	x := make([]float32, tokens*K)
+	for i := range x {
+		x[i] = float32(math.Sin(float64(i) * 0.19))
+	}
+	w := make([]float32, experts*K*N)
+	for e := range experts {
+		for i := range K * N {
+			w[e*K*N+i] = float32(math.Cos(float64(i)*0.11)) * float32(e+1)
+		}
+	}
+
+	run := func(label string, tiled bool) []float32 {
+		t.Helper()
+		b := rt.NewBuilder(label)
+		xv := tensor.Input(b, tensor.ValueDesc{
+			Name: "x", DType: accel.F32, Shape: tensor.Shape{tokens, K}})
+		wv := tensor.Weight(b, tensor.ValueDesc{
+			Name: "w", DType: accel.F32, Shape: tensor.Shape{experts, K, N}})
+		cv := tensor.Input(b, tensor.ValueDesc{
+			Name: "counts", DType: accel.U32, Shape: tensor.Shape{experts}})
+		if tiled {
+			tensor.Output(b, "out", tensor.GroupedMatMul(b, xv, wv, cv))
+		} else {
+			tensor.Output(b, "out", tensor.GroupedMatVec(b, xv, wv, cv))
+		}
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: label})
+		if err != nil {
+			t.Fatalf("compile %s: %v", label, err)
+		}
+		defer plan.Close()
+
+		out := f32Buffer(t, d, "out", make([]float32, tokens*N))
+		f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+			"x":      f32Buffer(t, d, "x", x),
+			"w":      f32Buffer(t, d, "w", w),
+			"counts": u32Buffer(t, d, "counts", counts),
+			"out":    out,
+		}})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit %s: %v", label, err)
+		}
+		got := make([]float32, tokens*N)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback %s: %v", label, err)
+		}
+		return got
+	}
+
+	tiled, row := run("grouped-tiled", true), run("grouped-row", false)
+	for i := range row {
+		if e := math.Abs(float64(tiled[i] - row[i])); e > 1e-4 {
+			t.Fatalf("element %d (token %d, column %d): tiled %v, row %v",
+				i, i/N, i%N, tiled[i], row[i])
+		}
+	}
+	// A real answer, not two agreeing zeros.
+	nonzero := false
+	for _, v := range row {
+		if v != 0 {
+			nonzero = true
+		}
+	}
+	if !nonzero {
+		t.Fatal("every element is zero, so the comparison says nothing")
+	}
+}

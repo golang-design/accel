@@ -57,8 +57,7 @@ e(t) = \big|\{r : \text{off}(r{+}1) \le t\}\big|$$
 **A matvec per token rather than a tiled GEMM per expert**, and that is a
 scoping choice with a reason. Decode is where MoE's memory advantage is felt: a
 step routes one token to $k$ experts and reads those $k$ matrices. A prefill
-wants the tiled form, which is the same extent and a different kernel, and
-[010](010-kernel-corpus.md) carries it as not registered.
+wants the tiled form, which is the same extent and a different kernel: §5.
 
 ## 3. Routing is not here, and composes
 
@@ -103,3 +102,78 @@ Each assertion names the mutation it catches.
   tensor — on a GPU, whatever allocation follows it, read as weights.
 - **CPU and Metal agree** within [008](008-numerics.md) §7's reduction bound,
   which is what a sum of products carries.
+
+## 5. The prefill shape — 2026-08-27
+
+`GroupedMatMul`. A decode step routes one token to $k$ experts; a prefill has
+many tokens per expert, and reading an expert's matrix once per token spends the
+bandwidth this layer exists to save.
+
+### 5.1 A workgroup owns an expert, not a token
+
+This is the whole design, and the alternative fails for a specific reason.
+
+```
+grid.X = ceil(N / TileN)      column tiles
+grid.Y = E                    one workgroup per expert
+```
+
+A token-blocked grid — the natural one, and what [MatMulTiled] uses — puts
+`TileM` consecutive rows in a tile. Those rows are consecutive in $x$, which is
+ordered by expert, so a block that straddles a segment boundary holds rows
+needing **two different weight matrices**. A shared tile can hold one. So either
+the caller pads every segment to a multiple of `TileM`, or the kernel masks and
+re-runs, or the workgroup owns a segment. The third costs nothing and constrains
+no caller.
+
+Each workgroup walks its own segment in blocks of `TileM`:
+
+$$
+\text{out}[t][n] = \sum_k x[t][k]\,w[e][k][n],
+\qquad t \in [\mathrm{off}(e),\ \mathrm{off}(e{+}1))
+$$
+
+**An expert nothing routed to has `first == last` and the loop does not run.**
+[046](046-segmented-extents.md) §1 property 1 again, and here it costs a
+workgroup launch rather than a branch — which matters because top-2-of-8 makes
+it the common case.
+
+### 5.2 What the tiling buys, exactly
+
+Each weight is read once per **token block**, so a segment of $n$ tokens reads
+its matrix $\lceil n/\text{TileM}\rceil$ times instead of $n$ times.
+
+It is *not* once per expert. The $K$ loop is inside the token-block loop, so a
+new block reloads both tiles. Once per expert would need the whole matrix
+resident, which is a different kernel with a different constraint. Stated
+because the weaker claim is the true one and the stronger one is what a reader
+assumes.
+
+### 5.3 The loop bound is clamped, and that is memory safety
+
+`last` comes from the offsets, which are device data. Nothing on the host can
+check that the counts sum to $x$'s row count — [046](046-segmented-extents.md)
+§1 property 3 — and this kernel's row index comes from those offsets rather than
+from the grid.
+
+**That makes the over-sum direction dangerous here in a way it is not in
+`GroupedMatVec`.** There the grid is derived from `x.shape[0]`, so a token index
+cannot leave the buffer however wrong the counts are, and counts summing past
+the rows are merely a wrong answer. Here they would read $x$ and **write** `out`
+past their ends.
+
+`Tokens` is `x.shape[0]`, which the host *does* know, and clamping `last` to it
+turns the stray write into a wrong answer. The under-sum direction is
+[046](046-segmented-extents.md) §1 property 3's padding and needs nothing here:
+rows past the last segment fall in no expert's loop and are never written.
+
+### 5.4 Done
+
+- **The tiled product equals the row kernel element for element**, within
+  [008](008-numerics.md) §7's reduction bound, over counts that are not
+  multiples of `TileM` and including an expert with none. Two different
+  traversals of one extent agreeing is the claim.
+- **Counts summing past $x$'s rows are clamped, not written past the end.**
+  Removing the clamp fails this with an out-of-range index, which is the
+  accepting half the guard needs.
+- **CPU and Metal agree** within the same bound.
