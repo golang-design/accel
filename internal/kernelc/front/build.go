@@ -1035,7 +1035,61 @@ func (c *checker) conversion(e *ast.CallExpr, to types.Type) ir.Value {
 	if x == nil {
 		return nil
 	}
+
+	// A float to an integer is refused: it is the one conversion pair with no
+	// defined result on any target.
+	//
+	// Go leaves a value the destination cannot hold undefined, MSL calls it
+	// implementation-defined, and SPIR-V's OpConvertFToS says undefined. Three
+	// targets, three ways to be wrong, one source.
+	//
+	// specs/002-compute-model.md §6.2 specifies the saturating form and
+	// specs/051-float-to-int.md built it, so there is a spelling to send a
+	// caller to. This refusal could not land before that: three graphics stages
+	// converted an interpolated texel coordinate this way and had nowhere to
+	// move to.
+	if isFloatKind(x.Type()) && isIntegerKind(t) {
+		c.errorf(e.Pos(), "converting %v to %v has no defined result on any target: Go "+
+			"leaves a value the destination cannot hold undefined, MSL calls it "+
+			"implementation-defined, and SPIR-V says undefined. Use kmath.To%s, which "+
+			"saturates to the destination's limits and converts a NaN to zero "+
+			"(specs/051-float-to-int.md)", x.Type(), t, saturatingName(t))
+		return nil
+	}
 	return ir.NewConvert(e.Pos(), t, x)
+}
+
+// isFloatKind reports whether a type is one of the floating-point kinds.
+func isFloatKind(t *ir.Type) bool {
+	if t == nil {
+		return false
+	}
+	return t.Kind == ir.F32 || t.Kind == ir.F16 || t.Kind == ir.BF16
+}
+
+// isIntegerKind reports whether a type is one of the integer kinds.
+func isIntegerKind(t *ir.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Kind {
+	case ir.I32, ir.U32, ir.I8, ir.U8:
+		return true
+	}
+	return false
+}
+
+// saturatingName is the kmath conversion for a destination, for the message.
+//
+// i8 and u8 have no entry: specs/002-compute-model.md makes the narrow integer
+// kinds storage, so a kernel converting into one has a second problem and the
+// message names the widest sensible destination rather than inventing a
+// function that is not there.
+func saturatingName(t *ir.Type) string {
+	if t.Kind == ir.U32 || t.Kind == ir.U8 {
+		return "U32"
+	}
+	return "I32"
 }
 
 // builtin admits len and rejects the rest by name.

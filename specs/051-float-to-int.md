@@ -1,6 +1,6 @@
 ---
 title: "Float to integer: saturating, NaN to zero, and the same answer everywhere"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -98,6 +98,37 @@ kernel subset that looks like Go and is not, which
 Each needs: the exported function, an IR op, an intrinsic entry, the CPU
 lowering, the MSL lowering, and a front-end refusal for the bare conversion
 naming the replacement.
+
+## 2.1 Built — 2026-08-27, and what is not
+
+**Built:** `kmath.ToI32` and `kmath.ToU32`, their IR ops, intrinsic entries, and
+both lowerings; the three `stages.go` sites migrated onto them; and the front-end
+refusal, which names `kmath.ToI32` or `kmath.ToU32` by the destination's
+signedness and carries two positioned rejection cases.
+
+**Deviation 1 — they are `kmath`, not `accel`.** §2 above says `accel.ToI32`.
+They went where every other scalar-math intrinsic already is, because the
+intrinsic table is keyed by package and function identity and `kmath` is the
+package the front end resolves scalar math from. Putting these two in the root
+package would have made them the only kernel-callable maths outside it.
+
+**Deviation 2 — `ToI8` and `ToU8` are not built.** §2 says four. The narrow
+integer kinds are storage by [002](002-compute-model.md), converted to f32 on
+load, and arithmetic on them is outside the subset — so a kernel that converted
+*into* an i8 could not then use the result. They arrive with a reason to want
+them, and the refusal already routes an i8 destination to `ToI32`, which is the
+widest sensible answer rather than a function that is not there.
+
+**Not built — the boundary differential.** §3's "CPU and Metal agree bit for bit
+across that whole set" is not asserted. The boundary set is checked on the CPU
+(`kmath/tofloat_test.go`), and the two backends are compared only through the
+three migrated stages, which exercise in-range coordinates. The MSL helper
+mirrors the Go branches line for line, which is an argument and not a test. A
+corpus kernel taking a float buffer and writing `ToI32` of it, seeded with the
+infinities, the NaN and the exact limits, is what closes this — and it is the
+one thing here that would catch a real divergence.
+
+So this spec stays *in progress* on that last item.
 
 ## 3. Done
 

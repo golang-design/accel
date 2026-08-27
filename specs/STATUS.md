@@ -912,7 +912,7 @@ relies on any of them; that is a fact with a shelf life, not a reprieve.
 | | Spec | The gap | Successor |
 | --- | --- | --- | --- |
 | 1 | [002](002-compute-model.md) §2.5 | ~~`Barrier` is normative over shared **and** storage; Metal emits `mem_threadgroup` only~~ — **closed 2026-08-27**, the lowering now matches §2.5's table. [050](050-barrier-scopes.md)'s masked variants remain | [050](050-barrier-scopes.md) |
-| 2 | [002](002-compute-model.md) §6.2 | a saturating float-to-int contract that does not exist, while `int32(f)` compiles and is undefined on every target — and **three shipped stages already rely on it** (`stages.go:173,174,210`), so this is live rather than latent and the intrinsics must land before any refusal | [051](051-float-to-int.md) |
+| 2 | [002](002-compute-model.md) §6.2 | ~~a saturating float-to-int contract that does not exist~~ — **the hazard is closed 2026-08-27**: `kmath.ToI32`/`ToU32` on both backends, the three stages migrated, the bare conversion refused by name. 051 stays in progress for the CPU-versus-Metal boundary differential, which is the only assertion that would catch a real divergence | [051](051-float-to-int.md) |
 | 3 | [029](029-plan-cache.md) §2 | the plan-cache key claims to cover every compile option that affects lowering, and hashes a constant string | — |
 
 029 is third rather than first only because `CompileOptions` currently carries

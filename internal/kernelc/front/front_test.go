@@ -126,6 +126,31 @@ func TestRejections(t *testing.T) {
 		want string // substring of the message
 	}{
 		{
+			// specs/051-float-to-int.md. Go leaves a float-to-integer conversion
+			// undefined for a value the destination cannot hold, and so do MSL
+			// and SPIR-V -- three targets, three ways to be wrong, one source.
+			// The message names kmath.ToI32 because a refusal with no
+			// replacement leaves a caller stuck, and this one could not land
+			// until that existed: three graphics stages converted an
+			// interpolated texel coordinate exactly this way.
+			name: "a float converted to an integer",
+			body: `//accel:kernel workgroup=1
+func K(t accel.Thread, in []float32, out []int32) {
+	out[0] = int32(in[0])
+}`,
+			line: 3, want: "kmath.ToI32",
+		},
+		{
+			// The unsigned destination names the unsigned replacement, since
+			// sending a caller to ToI32 for a uint32 would be one more edit.
+			name: "a float converted to an unsigned integer",
+			body: `//accel:kernel workgroup=1
+func K(t accel.Thread, in []float32, out []uint32) {
+	out[0] = uint32(in[0])
+}`,
+			line: 3, want: "kmath.ToU32",
+		},
+		{
 			// A scalar local is fine; an array-typed one is not registered as a
 			// local at all, so every read of it is refused by name.
 			//
@@ -1094,11 +1119,23 @@ func K(t accel.Thread, buf []float32) {
 		},
 		{
 			name: "every scalar dtype",
+			// e is read in a float context rather than converted. What this case
+			// is about is every scalar dtype being a legal binding and readable,
+			// and a float-to-integer conversion is refused since
+			// specs/051-float-to-int.md -- it has no defined result on any
+			// target and kmath.ToI32 is the spelling. Converting here would make
+			// the case about that instead, and the fixture header carries one
+			// import so it cannot reach kmath without giving every other case an
+			// unused one.
 			body: `//accel:kernel workgroup=8,4
 func K(t accel.Thread, a []int32, b []uint32, c []int8, d []uint8, e []float32) {
 	i := t.GlobalIndex()
 	if i < uint32(len(a)) {
-		a[i] = int32(b[i]) + int32(c[i]) + int32(d[i]) + int32(e[i])
+		n := int32(b[i]) + int32(c[i]) + int32(d[i])
+		if e[i] > 0 {
+			n = n + 1
+		}
+		a[i] = n
 	}
 }`,
 			read: []string{"b", "c", "d", "e"}, write: []string{"a"},

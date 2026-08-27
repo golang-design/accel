@@ -32,12 +32,18 @@ func TestATextureIsAStageBindingAndAFetchReadsIt(t *testing.T) {
 		reads bool
 	}{
 		{
+			// The coordinate is an integer varying rather than a converted
+			// float. A float-to-integer conversion is refused since
+			// specs/051-float-to-int.md, and this case is about a texture being
+			// a stage binding that a fetch reads -- converting here would make
+			// it about the conversion, and textureSource carries one import so
+			// it cannot reach kmath without giving the other cases an unused one.
 			name: "a fragment stage that fetches",
-			body: "type In struct{ UV accel.Vec2 }\n" +
+			body: "type In struct{ Texel accel.Vec2 }\n" +
 				"type Out struct{ C accel.Vec4 }\n\n" +
 				"//accel:fragment\n" +
 				"func F(f accel.Fragment, in In, src accel.Texture2D) Out {\n" +
-				"\treturn Out{accel.Fetch(src, int32(in.UV[0]), int32(in.UV[1]))}\n" +
+				"\treturn Out{accel.Fetch(src, 0, 0)}\n" +
 				"}",
 			want: "src", reads: true,
 		},
