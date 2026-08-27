@@ -439,6 +439,13 @@ const (
 	OpMin
 	OpMax
 
+	// Saturating float-to-integer conversions. Intrinsics rather than an
+	// ir.Convert because the conversion Go spells has no defined result for a
+	// value the destination cannot hold, and neither does MSL's or SPIR-V's --
+	// specs/051-float-to-int.md.
+	OpToI32
+	OpToU32
+
 	// Conversions between narrow storage and f32. They are intrinsics rather
 	// than IR conversions because every target spells them differently: a native
 	// instruction where the format exists, and a bit-packing sequence where it
@@ -565,6 +572,8 @@ var opcodeNames = [...]string{
 	OpAbs:                      "Abs",
 	OpMin:                      "Min",
 	OpMax:                      "Max",
+	OpToI32:                    "ToI32",
+	OpToU32:                    "ToU32",
 	OpF16ToF32:                 "Float16.F32",
 	OpBF16ToF32:                "BFloat16.F32",
 	OpF32ToF16:                 "ToFloat16",

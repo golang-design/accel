@@ -188,6 +188,30 @@ func (m *msl) prelude() {
 // The Go lowering has no equivalent because a mutex-free CPU emulation cannot
 // fail spuriously in the first place.
 var mslPrelude = []struct{ name, text string }{
+	// Saturating float-to-integer, specs/051-float-to-int.md §2.
+	//
+	// The branch order mirrors kmath.ToI32 and kmath.ToU32 exactly, because the
+	// intrinsic's class is Exact: the two backends must agree bit for bit, and
+	// the cheapest way to make that true is one shape written twice rather than
+	// two clever ones. MSL's int(x) is as undefined as Go's for a value the
+	// destination cannot hold, so clamping is not an optimisation of it.
+	//
+	// x != x is the NaN test in both, and it is spelled that way rather than
+	// with isnan() so the contraction-off pragma cannot change it.
+	{"to_i32", `static int _accel_to_i32(float x) {
+    if (x != x) { return 0; }
+    if (x <= -2147483648.0f) { return (-2147483647 - 1); }
+    if (x >= 2147483648.0f) { return 2147483647; }
+    return int(x);
+}
+`},
+	{"to_u32", `static uint _accel_to_u32(float x) {
+    if (x != x) { return 0u; }
+    if (x <= 0.0f) { return 0u; }
+    if (x >= 4294967296.0f) { return 4294967295u; }
+    return uint(x);
+}
+`},
 	{"cas_u32", `static uint _accel_cas_u32(device atomic_uint *p, uint expected, uint desired) {
     uint e = expected;
     while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
@@ -1032,6 +1056,20 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		return
 	case ir.OpGroupID:
 		m.printf("_wid")
+		return
+
+	case ir.OpToI32:
+		m.need["to_i32"] = true
+		m.printf("_accel_to_i32(")
+		m.value(v.Args[0])
+		m.printf(")")
+		return
+
+	case ir.OpToU32:
+		m.need["to_u32"] = true
+		m.printf("_accel_to_u32(")
+		m.value(v.Args[0])
+		m.printf(")")
 		return
 
 	case ir.OpBarrier:

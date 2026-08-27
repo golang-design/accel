@@ -1305,6 +1305,8 @@ var intrinsicMethod = map[ir.Opcode]string{
 var intrinsicFunc = map[ir.Opcode]string{
 	ir.OpSqrt:  "Sqrt",
 	ir.OpRSqrt: "RSqrt",
+	ir.OpToI32: "ToI32",
+	ir.OpToU32: "ToU32",
 	ir.OpExp:   "Exp",
 	ir.OpLog:   "Log",
 	ir.OpSin:   "Sin",

@@ -240,6 +240,11 @@ var table = map[key]*Intrinsic{
 	// that the key rejects a same-named function from anywhere else.
 	{kmathPkg, "", "Sqrt"}:  {Authored: "accel/kmath.Sqrt", Op: ir.OpSqrt, Result: ir.F32, Params: 1, Class: ClassBounded},
 	{kmathPkg, "", "RSqrt"}: {Authored: "accel/kmath.RSqrt", Op: ir.OpRSqrt, Result: ir.F32, Params: 1, Class: ClassBounded},
+	// Saturating float-to-integer, specs/051-float-to-int.md. Exact rather than
+	// bounded: the result is an integer and there is nothing to round, so the
+	// two backends must agree bit for bit.
+	{kmathPkg, "", "ToI32"}: {Authored: "accel/kmath.ToI32", Op: ir.OpToI32, Result: ir.I32, Params: 1, Class: ClassExact},
+	{kmathPkg, "", "ToU32"}: {Authored: "accel/kmath.ToU32", Op: ir.OpToU32, Result: ir.U32, Params: 1, Class: ClassExact},
 	{kmathPkg, "", "Exp"}:   {Authored: "accel/kmath.Exp", Op: ir.OpExp, Result: ir.F32, Params: 1, Class: ClassBounded},
 	{kmathPkg, "", "Log"}:   {Authored: "accel/kmath.Log", Op: ir.OpLog, Result: ir.F32, Params: 1, Class: ClassBounded},
 	{kmathPkg, "", "Sin"}:   {Authored: "accel/kmath.Sin", Op: ir.OpSin, Result: ir.F32, Params: 1, Class: ClassBounded},

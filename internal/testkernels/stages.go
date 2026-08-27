@@ -4,7 +4,10 @@
 
 package testkernels
 
-import "golang.design/x/accel"
+import (
+	"golang.design/x/accel"
+	"golang.design/x/accel/kmath"
+)
 
 // The graphics stages of specs/032-stage-abi.md, in the corpus so the front end
 // is exercised by code a reader can also read.
@@ -170,8 +173,8 @@ type TexelVaryings struct {
 //
 //accel:fragment
 func SampledFS(f accel.Fragment, in TexelVaryings, src accel.Texture2D) Solid {
-	x := int32(in.Texel[0])
-	y := int32(in.Texel[1])
+	x := kmath.ToI32(in.Texel[0])
+	y := kmath.ToI32(in.Texel[1])
 	here := accel.Fetch(src, x, y)
 	left := accel.Fetch(src, x-1, y)
 	return Solid{Colour: accel.Vec4{here[0], here[1], here[2], left[0]}}
@@ -207,5 +210,5 @@ func DisplacedVS(v accel.Vertex, height accel.Texture2D) (accel.Clip, TexelVaryi
 //accel:fragment
 func BlitFS(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
 	c := f.Coord()
-	return Solid{Colour: accel.Fetch(src, int32(c[0]), int32(c[1]))}
+	return Solid{Colour: accel.Fetch(src, kmath.ToI32(c[0]), kmath.ToI32(c[1]))}
 }

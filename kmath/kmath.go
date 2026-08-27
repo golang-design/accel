@@ -102,3 +102,45 @@ func Max(x, y float32) float32 {
 	}
 	return y
 }
+
+// ToI32 converts a float to an int32, saturating, with a NaN becoming zero.
+//
+// specs/051-float-to-int.md. Go's `int32(x)` is undefined for a value int32
+// cannot hold, and so are MSL's and SPIR-V's, so this is the spelling a kernel
+// gets and the bare conversion is not the same thing.
+//
+// # The bounds are exact, and that is why they are written as floats
+//
+// -2³¹ is representable in f32 exactly, so `x <= -2147483648` is a clean test
+// and the equal case is the answer. +2³¹ is representable too and int32's
+// maximum is one less, so the upper test is against 2147483648 and returns
+// MaxInt32 — testing against 2147483647 would compare against 2147483648 after
+// rounding and admit a value that does not fit.
+func ToI32(x float32) int32 {
+	switch {
+	case x != x: // NaN, and the only value not equal to itself
+		return 0
+	case x <= -2147483648:
+		return math.MinInt32
+	case x >= 2147483648:
+		return math.MaxInt32
+	}
+	return int32(x)
+}
+
+// ToU32 converts a float to a uint32, saturating, with a NaN becoming zero.
+//
+// [ToI32]'s contract with a lower bound of zero. Negative values clamp to zero
+// rather than wrapping, which is what the bare conversion would do on some
+// targets and is the difference this function exists for.
+func ToU32(x float32) uint32 {
+	switch {
+	case x != x:
+		return 0
+	case x <= 0:
+		return 0
+	case x >= 4294967296:
+		return math.MaxUint32
+	}
+	return uint32(x)
+}

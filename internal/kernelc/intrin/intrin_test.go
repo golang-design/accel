@@ -272,6 +272,8 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel/kmath.Sin",
 		"accel/kmath.Sqrt",
 		"accel/kmath.Tanh",
+		"accel/kmath.ToI32",
+		"accel/kmath.ToU32",
 	}
 	sort.Strings(want)
 	if len(names) != len(want) {
@@ -331,17 +333,23 @@ func TestKMathResolvesAndCarriesItsClass(t *testing.T) {
 		op     ir.Opcode
 		params int
 		class  intrin.Class
+		// result is per-case since specs/051-float-to-int.md: kmath was all f32
+		// in and f32 out until the saturating conversions, which take a float
+		// and return an integer.
+		result ir.Kind
 	}{
-		{"Sqrt", ir.OpSqrt, 1, intrin.ClassBounded},
-		{"RSqrt", ir.OpRSqrt, 1, intrin.ClassBounded},
-		{"Exp", ir.OpExp, 1, intrin.ClassBounded},
-		{"Log", ir.OpLog, 1, intrin.ClassBounded},
-		{"Sin", ir.OpSin, 1, intrin.ClassBounded},
-		{"Cos", ir.OpCos, 1, intrin.ClassBounded},
-		{"Tanh", ir.OpTanh, 1, intrin.ClassBounded},
-		{"Abs", ir.OpAbs, 1, intrin.ClassExact},
-		{"Min", ir.OpMin, 2, intrin.ClassExact},
-		{"Max", ir.OpMax, 2, intrin.ClassExact},
+		{"Sqrt", ir.OpSqrt, 1, intrin.ClassBounded, ir.F32},
+		{"RSqrt", ir.OpRSqrt, 1, intrin.ClassBounded, ir.F32},
+		{"ToI32", ir.OpToI32, 1, intrin.ClassExact, ir.I32},
+		{"ToU32", ir.OpToU32, 1, intrin.ClassExact, ir.U32},
+		{"Exp", ir.OpExp, 1, intrin.ClassBounded, ir.F32},
+		{"Log", ir.OpLog, 1, intrin.ClassBounded, ir.F32},
+		{"Sin", ir.OpSin, 1, intrin.ClassBounded, ir.F32},
+		{"Cos", ir.OpCos, 1, intrin.ClassBounded, ir.F32},
+		{"Tanh", ir.OpTanh, 1, intrin.ClassBounded, ir.F32},
+		{"Abs", ir.OpAbs, 1, intrin.ClassExact, ir.F32},
+		{"Min", ir.OpMin, 2, intrin.ClassExact, ir.F32},
+		{"Max", ir.OpMax, 2, intrin.ClassExact, ir.F32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := pkg.Scope().Lookup(tc.name)
@@ -368,8 +376,8 @@ func TestKMathResolvesAndCarriesItsClass(t *testing.T) {
 			if got.Stage != intrin.Flat {
 				t.Errorf("Stage = %v: scalar math needs no rendezvous", got.Stage)
 			}
-			if got.Result != ir.F32 {
-				t.Errorf("Result = %v, want f32: narrow types are storage and convert on load", got.Result)
+			if got.Result != tc.result {
+				t.Errorf("Result = %v, want %v", got.Result, tc.result)
 			}
 		})
 	}
