@@ -36,10 +36,41 @@ three targets disagree exactly where it matters:
 | MSL | implementation-defined | implementation-defined |
 | SPIR-V `OpConvertFToS` | undefined | undefined |
 
-**No kernel in the corpus converts a float to an integer today** — checked, not
-assumed — so nothing is wrong now. This is the same shape as
-[050](050-barrier-scopes.md): a gap that is latent because nobody has written
-the kernel the spec says is legal.
+## 1.1 It is live, not latent — corrected 2026-08-27
+
+The paragraph that stood here said **"no kernel in the corpus converts a float to
+an integer today — checked, not assumed"**, and called the gap latent. Both were
+wrong. Three kernels do it, all in graphics stages, all converting an
+interpolated coordinate for a texel fetch:
+
+```
+internal/testkernels/stages.go:173   x := int32(in.Texel[0])
+internal/testkernels/stages.go:174   y := int32(in.Texel[1])
+internal/testkernels/stages.go:210   accel.Fetch(src, int32(c[0]), int32(c[1]))
+```
+
+**How the error was made, because it generalises.** The check was a grep for
+`int32\([a-z]+\)` — a bare identifier inside the conversion. `int32(in.Texel[0])`
+is a selector and an index, so it could not match, and a second grep aimed at
+arithmetic missed it the same way. The pattern's shape decided the answer and the
+answer was reported as "checked".
+
+**What actually found them was the type checker.** Adding the refusal below to
+the front end named all three in one run, with positions. A conversion is a typed
+relation, and only the thing that knows the types can enumerate it — a lesson
+worth more than the finding, since this project greps for evidence constantly.
+
+**So the order of work is forced, and it is the opposite of the cheap one.** A
+refusal cannot land first: it would break three working stages that have no
+replacement to move to. The saturating intrinsics of §2 must exist *before* the
+bare conversion can be refused, and the refusal is the last step rather than the
+first.
+
+The three live sites are also the argument that the semantics matter. A texel
+coordinate arriving slightly out of range — which
+[032](032-stage-abi.md) §5 says returns zero from the fetch — currently produces
+an undefined integer *before* the fetch ever sees it, so the out-of-range rule
+those stages exist to demonstrate rests on a conversion that has no rule.
 
 ## 2. What gets built
 
@@ -70,6 +101,11 @@ naming the replacement.
 
 ## 3. Done
 
+- **The three live sites in `stages.go` keep working**, converting to the same
+  texel indices they do today for in-range coordinates. This is the accepting
+  half: three shipped stages already depend on this conversion, so the
+  intrinsics replace something the corpus runs rather than enabling something
+  new.
 - **Every boundary converts to its limit**: $\pm\infty$, values just inside and
   just outside each destination's range, and the exact limits themselves.
 - **NaN converts to zero**, for every destination, including a NaN whose payload
