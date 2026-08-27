@@ -289,8 +289,34 @@ wrong.
 ### What is still not built: the kernel
 
 The derivation is no longer the blocker; the kernel is ordinary work with an
-oracle. What it needs that this reference does not is a residency plan: lane $a$
-wants $S_0$'s row $a$ held across the chunk, which is $K$ floats per lane and
-spills at the widths a real model uses, so the kernel tiles over $K$ as well and
-that tiling is what has not been written. [010](010-kernel-corpus.md) carries
-`linear_attention_chunked` as not registered.
+oracle. What it needs is a residency plan, and the subset decides most of it.
+
+**A kernel cannot declare an array-typed local.** Checked, not assumed: the
+front end answers `arr is neither a parameter nor a local declared in this
+kernel` for `var arr [8]float32`, while a scalar local is accepted. So a lane
+cannot hold $C$ running values of its own, and everything array-shaped is a
+workgroup-shared parameter. That is stronger than the "$K$ floats per lane and
+it spills" this section first said — it is not expensive, it is inexpressible.
+
+What the transform needs per chunk, in shared memory, at workgroup width 128:
+
+| | shape | floats at $C=8$ | at $C=16$ |
+| --- | --- | ---: | ---: |
+| $W$, the solved writes | $C\times128$ | 1024 | 2048 |
+| $S_0k_i$ partials | $C\times128$ | 1024 | 2048 |
+| $S_0q_i$ partials | $C\times128$ | 1024 | 2048 |
+| $A$ and $k_j\!\cdot\!q_i$ | $2C^2$ | 128 | 512 |
+| **total** | | **12.8 KiB** | **26.6 KiB** |
+
+**So the chunk size is bounded by shared memory before it is bounded by
+anything numeric.** §6.1's warning about the decay quotient bites at large $C$;
+this bites first, and at 32 KiB of threadgroup memory $C=16$ is already close to
+the edge.
+
+The two passes over $K$ are what the plan buys: one accumulating every $S_0k_i$
+and $S_0q_i$ together — they read the same entry state, so they share the pass —
+and one rewriting the state. That is $3K$ of traffic per chunk against the
+sequential form's $3KC$.
+
+[010](010-kernel-corpus.md) carries `linear_attention_chunked` as not
+registered.

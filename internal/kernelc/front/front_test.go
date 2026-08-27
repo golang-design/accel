@@ -126,6 +126,27 @@ func TestRejections(t *testing.T) {
 		want string // substring of the message
 	}{
 		{
+			// A scalar local is fine; an array-typed one is not registered as a
+			// local at all, so every read of it is refused by name.
+			//
+			// Asserted because specs/047-linear-attention.md §6.1 reasons from
+			// it: a chunked scan cannot keep per-lane running values, so
+			// everything array-shaped has to be workgroup-shared, and that is
+			// what bounds its chunk size by shared memory rather than by
+			// arithmetic. If the subset ever gains local arrays this fails, and
+			// that spec's residency plan is the thing to revisit.
+			name: "an array-typed local",
+			// One reference, so there is one diagnostic. Both a write and a
+			// read of an unregistered local report the same sentence, and a
+			// body containing both leaves which one this case pins ambiguous.
+			body: `//accel:kernel workgroup=1
+func K(t accel.Thread, out []float32) {
+	var acc [4]float32
+	out[0] = acc[0]
+}`,
+			line: 4, want: "neither a parameter nor a local declared in this kernel",
+		},
+		{
 			name: "unknown accel directive",
 			body: `//accel:geometry
 func K(t accel.Thread, out []float32) { _ = t }`,
