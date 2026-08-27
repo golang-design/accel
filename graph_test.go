@@ -17,13 +17,35 @@ import (
 	"golang.design/x/accel"
 )
 
+// openDevice opens the CPU backend and makes a failing test say what it ran on.
+//
+// specs/011-conformance-harness.md §2: "Every test receives a profile
+// explicitly. Logs and failures include the complete identity, mode,
+// capabilities relevant to the case … A result without that context is not
+// actionable." The 2026-08-27 audit found that rule enforced nowhere — one file
+// imported internal/conformance/device and the rest opened a device directly,
+// so a failure named no backend, no mode and no capability.
+//
+// Reported here rather than at each call site, because thirty-four files share
+// this helper and a rule that needs thirty-four edits is a rule that decays.
+// Only on failure: a passing run says nothing, so the context costs nothing to
+// read and appears exactly where it is wanted.
 func openDevice(t *testing.T) *accel.Device {
 	t.Helper()
 	d, err := accel.OpenCPU(accel.CPUOptions{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	t.Cleanup(func() {
+		if t.Failed() {
+			i := d.Info()
+			t.Logf("device: backend=%v name=%q software=%t subgroups=%t "+
+				"atomicFloatStorage=%t maxUniformBlockBytes=%d",
+				i.Backend, i.Name, i.Software, i.Capabilities.Subgroups,
+				i.Capabilities.AtomicFloatAddStorage, i.Limits.MaxUniformBlockBytes)
+		}
+		_ = d.Close()
+	})
 	return d
 }
 

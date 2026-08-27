@@ -23,7 +23,17 @@ func newRuntime(t *testing.T) *tensor.Runtime {
 	if err != nil {
 		t.Fatalf("runtime: %v", err)
 	}
+	// A failing test says what it ran on. specs/011-conformance-harness.md §2:
+	// "a result without that context is not actionable." Reported here because
+	// every tensor test shares this helper, and only on failure so a passing run
+	// stays quiet. The root package's openDevice does the same.
 	t.Cleanup(func() {
+		if t.Failed() {
+			i := d.Info()
+			t.Logf("device: backend=%v name=%q software=%t subgroups=%t "+
+				"atomicFloatStorage=%t", i.Backend, i.Name, i.Software,
+				i.Capabilities.Subgroups, i.Capabilities.AtomicFloatAddStorage)
+		}
 		if err := rt.Close(); err != nil {
 			t.Errorf("runtime close: %v", err)
 		}

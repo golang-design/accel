@@ -101,6 +101,31 @@ Every test receives a profile explicitly. Logs and failures include the complete
 identity, mode, capabilities relevant to the case, numeric probe revision, and
 kernel source hashes. A result without that context is not actionable.
 
+#### Half built — 2026-08-27, and the half that matters
+
+**A failing test now reports its device.** The shared `openDevice` and
+`newRuntime` helpers log the backend, name, software flag, the capabilities a
+kernel selection turns on, and the uniform limit — on failure only, so a passing
+run stays quiet and the context appears exactly where it is wanted.
+
+Reported in the two helpers rather than at each call site, because thirty-four
+files share them and **a rule that needs thirty-four edits is a rule that
+decays** — which is how this one got here. The audit found it enforced nowhere:
+one file imported `internal/conformance/device` and the rest opened a device
+directly, so a failure named no backend, no mode and no capability.
+
+**Not built: "every test receives a profile explicitly."** The literal rule
+requires the twenty-odd direct `accel.OpenCPU` callers to take a
+`device.Profile`, and it is not obviously right — a graph-validation test or an
+error-message test has no numeric context to receive, and the ceremony would
+buy nothing. What the rule is *for* is the sentence after it, and that is now
+true.
+
+So the rule wants narrowing rather than enforcing: it should bind the tests that
+compare numbers or turn on capabilities, which are the ones where the profile
+changes the answer. Recorded as a decision rather than taken, since narrowing a
+normative rule is not a thing to do from inside an implementation.
+
 The CPU backend is mandatory on every platform. Hardware backends are enumerated
 and run when the milestone/CI tier requires them. Absence is a skip only when the
 job does not promise that backend; a dedicated Metal job with no Metal device is
