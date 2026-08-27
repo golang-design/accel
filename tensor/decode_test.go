@@ -1245,3 +1245,307 @@ func TestAnOutputNamingAStateIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A paged prefill over an f16 cache selects the narrow paged kernel and agrees
+// with the f32 one.
+//
+// [#25](https://github.com/golang-design/accel/issues/25). The narrow cache
+// existed for a contiguous prefill and for a paged decode, and not for the
+// combination -- which is the one a consumer actually reaches: a shared block
+// pool is addressed through a page table by construction, and every
+// conversation begins with a prefill. So the f16 cache was available to a
+// single-sequence contiguous caller and to nobody who pages, which is the
+// opposite of who wants it.
+//
+// The selection is asserted rather than only the compile, because the bug's
+// shape was a *silent* one. The narrow kernel was chosen and then overwritten
+// by the paged branch, so what a caller saw was a binding-width complaint about
+// a plan they had assembled correctly.
+func TestAPagedPrefillOverAnF16CacheSelectsTheNarrowKernel(t *testing.T) {
+	const (
+		qHeads, kvHeads, headDim = 4, 2, 16
+		block                    = 4
+		qSeq                     = 9
+		pageCount                = 4
+		poolBlocks               = 12
+		width                    = kvHeads * headDim
+	)
+	rt := newRuntime(t)
+	d := rt.Device()
+
+	rng := rand.New(rand.NewPCG(17, 29))
+	pool := make([]float32, poolBlocks*block*width)
+	for i := range pool {
+		pool[i] = float32(rng.NormFloat64())
+	}
+	qs := make([]float32, qSeq*qHeads*headDim)
+	for i := range qs {
+		qs[i] = float32(rng.NormFloat64())
+	}
+	pageTable := []uint32{3, 1, 5, 2}
+
+	// Both caches hold the same values, the narrow one rounded. Comparing the
+	// two answers is then a statement about the kernel rather than about the
+	// data, since the f32 run reads exactly what the f16 run rounds.
+	rounded := make([]float32, len(pool))
+	narrow := make([]accel.Float16, len(pool))
+	for i, v := range pool {
+		narrow[i] = accel.ToFloat16(v)
+		rounded[i] = narrow[i].F32()
+	}
+
+	run := func(label string, dt accel.DType) ([]float32, string) {
+		t.Helper()
+		b := rt.NewBuilder(label)
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+		pages := tensor.Input(b, tensor.ValueDesc{
+			Name: "pages", DType: accel.U32, Shape: tensor.Shape{pageCount}})
+		lengths := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1}})
+		q := tensor.Input(b, tensor.ValueDesc{
+			Name: "q", DType: accel.F32, Shape: tensor.Shape{qSeq, qHeads, headDim}})
+		kc := tensor.NewState(b, tensor.StateDesc{
+			Name: "kpool", DType: dt,
+			Shape: tensor.Shape{poolBlocks * block, kvHeads, headDim}})
+		vc := tensor.NewState(b, tensor.StateDesc{
+			Name: "vpool", DType: dt,
+			Shape: tensor.Shape{poolBlocks * block, kvHeads, headDim}})
+		tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+			Lengths: lengths, Pages: pages, Block: block,
+			ScaleName: "scale", BaseName: "base",
+		}))
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: label})
+		if err != nil {
+			t.Fatalf("compile %s: %v", label, err)
+		}
+		defer plan.Close()
+
+		sel := plan.Selections()
+		if len(sel) != 1 {
+			t.Fatalf("%s: selections are %+v, want one", label, sel)
+		}
+
+		bufs := map[string]accel.BufferView{
+			"pages": u32Buffer(t, d, "pages", pageTable),
+			"len":   u32Buffer(t, d, "len", []uint32{qSeq}),
+			"q":     f32Buffer(t, d, "q", qs),
+		}
+		out := f32Buffer(t, d, "out", make([]float32, qSeq*qHeads*headDim))
+		bufs["out"] = out
+		if dt == accel.F16 {
+			bufs["kpool"] = f16Buffer(t, d, "kpool", pool)
+			bufs["vpool"] = f16Buffer(t, d, "vpool", pool)
+		} else {
+			bufs["kpool"] = f32Buffer(t, d, "kpool", rounded)
+			bufs["vpool"] = f32Buffer(t, d, "vpool", rounded)
+		}
+		f := plan.Submit(d.Queue(), tensor.Bindings{
+			Buffers: bufs,
+			Scalars: map[string]tensor.ScalarValue{
+				"scale": tensor.F32(float32(1 / math.Sqrt(headDim))),
+				"base":  tensor.U32(0),
+			},
+		})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit %s: %v", label, err)
+		}
+		got := make([]float32, qSeq*qHeads*headDim)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback %s: %v", label, err)
+		}
+		return got, sel[0].Kernel
+	}
+
+	wide, wideKernel := run("pagedprefill32", accel.F32)
+	got, gotKernel := run("pagedprefill16", accel.F16)
+
+	if wideKernel != "AttentionPrefillPaged" {
+		t.Fatalf("the f32 cache selected %q", wideKernel)
+	}
+	if gotKernel != "AttentionPrefillPagedF16" {
+		t.Fatalf("a paged prefill over an f16 cache selected %q; the f32 kernel would "+
+			"read the halves as full floats and answer plausibly and wrongly", gotKernel)
+	}
+
+	// The f16 cache holds exactly what the f32 one holds, so the two differ
+	// only by the order the widened values are summed in --
+	// specs/008-numerics.md §7's reduction bound, not a quantization one.
+	for i := range wide {
+		if e := math.Abs(float64(got[i] - wide[i])); e > 1e-4 {
+			t.Fatalf("element %d: f16 cache %v, f32 cache %v (off %v)",
+				i, got[i], wide[i], e)
+		}
+	}
+	nonzero := false
+	for _, v := range wide {
+		if v != 0 {
+			nonzero = true
+		}
+	}
+	if !nonzero {
+		t.Fatal("every output is zero, so the comparison says nothing")
+	}
+}
+
+// Every attention shape, over both cache widths, either selects a kernel or is
+// refused by name.
+//
+// [#25](https://github.com/golang-design/accel/issues/25)'s real lesson, and
+// the reporter's framing rather than mine: #13 closed on "ScatterRows, prefill
+// and paged decode all take f16", and each of those three was true. The
+// *combination* was not. A gap in a matrix is invisible to any test that checks
+// the axes one at a time, which is what every f16 test here had been doing.
+//
+// The failure this forbids is the silent one. A missing combination that
+// refuses by name costs a caller one line of output; one that quietly selects
+// the wrong width costs them an afternoon inside a binding-size complaint about
+// a plan they assembled correctly. So an unbuilt cell is allowed and an
+// unnamed one is not.
+func TestEveryAttentionShapeOverBothCacheWidths(t *testing.T) {
+	const (
+		qHeads, kvHeads, headDim = 2, 1, 8
+		block                    = 4
+		capacity                 = 32
+	)
+	rt := newRuntime(t)
+
+	// Each shape as the caller writes it: the query rank and the options that
+	// select a path. The cache width is the other axis.
+	shapes := []struct {
+		name string
+		q    tensor.Shape
+		opts func(b *tensor.Builder) tensor.AttentionOptions
+	}{{
+		name: "decode",
+		q:    tensor.Shape{qHeads, headDim},
+		opts: func(b *tensor.Builder) tensor.AttentionOptions {
+			return tensor.AttentionOptions{
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "len", DType: accel.U32, Shape: tensor.Shape{1}}),
+				ScaleName: "scale",
+			}
+		},
+	}, {
+		name: "paged decode",
+		q:    tensor.Shape{qHeads, headDim},
+		opts: func(b *tensor.Builder) tensor.AttentionOptions {
+			return tensor.AttentionOptions{
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "len", DType: accel.U32, Shape: tensor.Shape{1}}),
+				Pages: tensor.Input(b, tensor.ValueDesc{
+					Name: "pages", DType: accel.U32, Shape: tensor.Shape{4}}),
+				Block: block, ScaleName: "scale",
+			}
+		},
+	}, {
+		name: "prefill",
+		q:    tensor.Shape{3, qHeads, headDim},
+		opts: func(b *tensor.Builder) tensor.AttentionOptions {
+			return tensor.AttentionOptions{
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "len", DType: accel.U32, Shape: tensor.Shape{1}}),
+				ScaleName: "scale", BaseName: "base",
+			}
+		},
+	}, {
+		name: "paged prefill",
+		q:    tensor.Shape{3, qHeads, headDim},
+		opts: func(b *tensor.Builder) tensor.AttentionOptions {
+			return tensor.AttentionOptions{
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "len", DType: accel.U32, Shape: tensor.Shape{1}}),
+				Pages: tensor.Input(b, tensor.ValueDesc{
+					Name: "pages", DType: accel.U32, Shape: tensor.Shape{4}}),
+				Block: block, ScaleName: "scale", BaseName: "base",
+			}
+		},
+	}, {
+		name: "batched decode",
+		q:    tensor.Shape{2, 1, qHeads, headDim},
+		opts: func(b *tensor.Builder) tensor.AttentionOptions {
+			return tensor.AttentionOptions{
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "len", DType: accel.U32, Shape: tensor.Shape{2}}),
+				Pages: tensor.Input(b, tensor.ValueDesc{
+					Name: "pages", DType: accel.U32, Shape: tensor.Shape{2, 4}}),
+				Block: block, ScaleName: "scale",
+			}
+		},
+	}, {
+		name: "ragged",
+		q:    tensor.Shape{3, qHeads, headDim},
+		opts: func(b *tensor.Builder) tensor.AttentionOptions {
+			return tensor.AttentionOptions{
+				Lengths: tensor.Input(b, tensor.ValueDesc{
+					Name: "len", DType: accel.U32, Shape: tensor.Shape{2}}),
+				Pages: tensor.Input(b, tensor.ValueDesc{
+					Name: "pages", DType: accel.U32, Shape: tensor.Shape{2, 4}}),
+				QueryExtents: tensor.Input(b, tensor.ValueDesc{
+					Name: "ext", DType: accel.U32, Shape: tensor.Shape{2}}),
+				Block: block, ScaleName: "scale",
+			}
+		},
+	}}
+
+	for _, sh := range shapes {
+		for _, dt := range []accel.DType{accel.F32, accel.F16} {
+			t.Run(sh.name+"/"+dt.String(), func(t *testing.T) {
+				b := rt.NewBuilder("matrix")
+				tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+				tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+				q := tensor.Input(b, tensor.ValueDesc{
+					Name: "q", DType: accel.F32, Shape: sh.q})
+				kc := tensor.NewState(b, tensor.StateDesc{
+					Name: "kc", DType: dt,
+					Shape: tensor.Shape{capacity, kvHeads, headDim}})
+				vc := tensor.NewState(b, tensor.StateDesc{
+					Name: "vc", DType: dt,
+					Shape: tensor.Shape{capacity, kvHeads, headDim}})
+				tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, sh.opts(b)))
+
+				plan, err := b.Compile(rt, tensor.CompileOptions{Label: "matrix"})
+				if err != nil {
+					// An unbuilt cell is allowed, and must say so in words a
+					// caller can act on: which width, and that a kernel is what
+					// is missing. A binding-size complaint is the failure this
+					// test exists to forbid.
+					msg := err.Error()
+					if strings.Contains(msg, "binding") && strings.Contains(msg, "slot") {
+						t.Fatalf("%s over an %v cache failed as a binding mismatch "+
+							"rather than a named refusal, which is #25's shape:\n%v",
+							sh.name, dt, err)
+					}
+					if !strings.Contains(msg, dt.String()) {
+						t.Errorf("the refusal should name the cache width %v, got %v",
+							dt, err)
+					}
+					t.Logf("not built, refused by name: %v", err)
+					return
+				}
+				defer plan.Close()
+
+				// The attention node, not the only node: a ragged step also
+				// records the prefix sum its extents need.
+				picked := ""
+				for _, s := range plan.Selections() {
+					if s.Op == "Attention" {
+						picked = s.Kernel
+					}
+				}
+				if picked == "" {
+					t.Fatalf("no attention node in %+v", plan.Selections())
+				}
+				// A narrow cache must reach a kernel that reads a narrow cache.
+				// This is the assertion #25 lacked: the plan compiled for f32
+				// and would have compiled for f16 too if the widths had not
+				// disagreed at bind time.
+				narrow := strings.HasSuffix(picked, "F16")
+				if want := dt == accel.F16; narrow != want {
+					t.Fatalf("%s over an %v cache selected %q", sh.name, dt, picked)
+				}
+			})
+		}
+	}
+}

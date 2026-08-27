@@ -423,9 +423,27 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		// softmax and the masking are the same; what differs is the binding, so
 		// this is a selection and Selections reports it -- the shape every
 		// other choice here takes.
-		prefillKernel := &testkernels.AttentionPrefillKernel
-		if cacheDType == accel.F16 {
+		// Chosen on the *pair* -- paged or not, and the cache's width -- in one
+		// place. Choosing on one and then overwriting with the other is what
+		// #25 was: the narrow selection was made here and discarded by the
+		// paged branch below, so an f16 paged prefill silently took the f32
+		// kernel and surfaced as a binding-width complaint about a plan the
+		// caller had assembled correctly.
+		//
+		// The switch is total by construction: cacheDType was narrowed to f32
+		// or f16 above, so a third width cannot fall through to a default that
+		// quietly means f32. A new width is a compile-time hole here rather
+		// than a wrong kernel at run time.
+		var prefillKernel *accel.Kernel
+		switch {
+		case opts.Pages != nil && cacheDType == accel.F16:
+			prefillKernel = &testkernels.AttentionPrefillPagedF16Kernel
+		case opts.Pages != nil:
+			prefillKernel = &testkernels.AttentionPrefillPagedKernel
+		case cacheDType == accel.F16:
 			prefillKernel = &testkernels.AttentionPrefillF16Kernel
+		default:
+			prefillKernel = &testkernels.AttentionPrefillKernel
 		}
 		prefillInputs := []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths}
 		prefillWhy := fmt.Sprintf("the causal prefill kernel: one workgroup per query "+
@@ -440,7 +458,10 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			}
 		}
 		if opts.Pages != nil {
-			prefillKernel = &testkernels.AttentionPrefillPagedKernel
+			// The kernel was chosen above. What this branch carries is the
+			// binding order, the uniform block and the reason -- all of which
+			// are the same for both cache widths.
+			//
 			// Pages before lengths, which is the kernel's binding order.
 			prefillInputs = []*Tensor{
 				q, readState(b, k), readState(b, v), opts.Pages, opts.Lengths,
