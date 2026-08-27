@@ -280,3 +280,110 @@ func TestAGroupedMatMulEqualsTheMatVecThroughThePlan(t *testing.T) {
 		t.Fatal("every element is zero, so the comparison says nothing")
 	}
 }
+
+// Every refusal both grouped operators make, each naming what it refused.
+//
+// Written with the operators rather than after them: the audit in
+// specs/009-sequencing.md found 39 refusals in this package that no test had
+// ever made fire, and GroupedMatMul shipped seven more of them. A refusal
+// nothing exercises may have the wrong condition or name the wrong value, and
+// the graph still compiles either way.
+//
+// Both operators are driven through one table because they take the same
+// arguments and make the same checks. A refusal added to one and not the other
+// shows up here as a case that passes for the wrong operator.
+func TestTheGroupedOperatorsRefusals(t *testing.T) {
+	rt := newRuntime(t)
+
+	f32 := func(b *tensor.Builder, n string, dims ...int) *tensor.Tensor {
+		return tensor.Input(b, tensor.ValueDesc{Name: n, DType: accel.F32, Shape: dims})
+	}
+	u32 := func(b *tensor.Builder, n string, dims ...int) *tensor.Tensor {
+		return tensor.Input(b, tensor.ValueDesc{Name: n, DType: accel.U32, Shape: dims})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		build func(b *tensor.Builder) (x, w, counts *tensor.Tensor)
+		want  string
+	}{{
+		name: "no counts at all",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 2, 4), f32(b, "w", 2, 4, 3), nil
+		},
+		want: "counts is nil",
+	}, {
+		name: "activations that are not f32",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			x := tensor.Input(b, tensor.ValueDesc{
+				Name: "x", DType: accel.F16, Shape: tensor.Shape{2, 4}})
+			return x, f32(b, "w", 2, 4, 3), u32(b, "c", 2)
+		},
+		want: "this kernel reads",
+	}, {
+		name: "counts that are not u32",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 2, 4), f32(b, "w", 2, 4, 3), f32(b, "c", 2)
+		},
+		want: "this kernel reads",
+	}, {
+		name: "activations of the wrong rank",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 8), f32(b, "w", 2, 4, 3), u32(b, "c", 2)
+		},
+		want: "it is [tokens, K]",
+	}, {
+		name: "weights of the wrong rank",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 2, 4), f32(b, "w", 4, 3), u32(b, "c", 2)
+		},
+		want: "it is [experts, K, N]",
+	}, {
+		name: "a contraction width the weights do not share",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 2, 4), f32(b, "w", 2, 5, 3), u32(b, "c", 2)
+		},
+		want: "every expert contracts",
+	}, {
+		name: "one count per expert, and not that many",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 2, 4), f32(b, "w", 2, 4, 3), u32(b, "c", 3)
+		},
+		want: "one token count per expert",
+	}, {
+		// Reachable only through a view: Input refuses a dimension of zero, and
+		// Slice permits an empty half-open range. The counts are sliced to match
+		// so the count-versus-expert check passes and this one answers.
+		name: "weights with no experts",
+		build: func(b *tensor.Builder) (*tensor.Tensor, *tensor.Tensor, *tensor.Tensor) {
+			return f32(b, "x", 2, 4),
+				tensor.Slice(b, f32(b, "w", 2, 4, 3), 0, 0, 0),
+				tensor.Slice(b, u32(b, "c", 2), 0, 0, 0)
+		},
+		want: "declares no experts",
+	}} {
+		for _, op := range []struct {
+			name string
+			call func(b *tensor.Builder, x, w, c *tensor.Tensor) *tensor.Tensor
+		}{
+			{"MatVec", tensor.GroupedMatVec},
+			{"MatMul", tensor.GroupedMatMul},
+		} {
+			t.Run(tc.name+"/"+op.name, func(t *testing.T) {
+				b := rt.NewBuilder("grouped-refusal")
+				x, w, c := tc.build(b)
+				op.call(b, x, w, c)
+				err := b.Err()
+				if err == nil {
+					t.Fatalf("Grouped%s accepted %s", op.name, tc.name)
+				}
+				if !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("the refusal should say %q, got %v", tc.want, err)
+				}
+				if !strings.Contains(err.Error(), "Grouped"+op.name) {
+					t.Errorf("the refusal should name Grouped%s, got %v", op.name, err)
+				}
+			})
+		}
+	}
+}

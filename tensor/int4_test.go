@@ -381,3 +381,77 @@ func TestAnInt4MatMulRefusesAVector(t *testing.T) {
 		t.Errorf("the refusal should name the operator that takes a vector, got %v", err)
 	}
 }
+
+// Every refusal the batched 4-bit operator makes.
+//
+// Int4MatVec's refusals have their own tests; these are Int4MatMul's, written
+// with the operator rather than after it. specs/009-sequencing.md's refusal
+// audit found 39 sites in this package that no test had made fire, and a new
+// operator that ships three more is the audit's finding repeating rather than
+// shrinking.
+func TestAnInt4MatMulRefusals(t *testing.T) {
+	rt := newRuntime(t)
+	const K, N = 64, 4
+
+	planes := func(b *tensor.Builder) (codes, scales, zeros *tensor.Tensor) {
+		codes = tensor.Weight(b, tensor.ValueDesc{
+			Name: "codes", DType: accel.U32, Shape: tensor.Shape{K * N / 8}})
+		scales = tensor.Weight(b, tensor.ValueDesc{
+			Name: "scales", DType: accel.F16, Shape: tensor.Shape{K * N / quant.Int4Group}})
+		zeros = tensor.Weight(b, tensor.ValueDesc{
+			Name: "zeros", DType: accel.F16, Shape: tensor.Shape{K * N / quant.Int4Group}})
+		return
+	}
+
+	for _, tc := range []struct {
+		name  string
+		build func(b *tensor.Builder)
+		want  string
+	}{{
+		// checkInt4's message, reached through the batched operator: the
+		// triple is validated before the poison test, so a missing plane names
+		// itself rather than failing later as "declares no output".
+		name: "a triple missing its zero plane",
+		build: func(b *tensor.Builder) {
+			c, s, _ := planes(b)
+			a := tensor.Input(b, tensor.ValueDesc{
+				Name: "a", DType: accel.F32, Shape: tensor.Shape{2, K}})
+			tensor.Int4MatMul(b, a, tensor.Int4{
+				Codes: c, Scales: s, Zeros: nil, Weights: K * N})
+		},
+		want: "the zero point is what makes four bits usable",
+	}, {
+		name: "activations that are not f32",
+		build: func(b *tensor.Builder) {
+			c, s, z := planes(b)
+			a := tensor.Input(b, tensor.ValueDesc{
+				Name: "a", DType: accel.F16, Shape: tensor.Shape{2, K}})
+			tensor.Int4MatMul(b, a, tensor.Int4{
+				Codes: c, Scales: s, Zeros: z, Weights: K * N})
+		},
+		want: "this kernel reads f32",
+	}, {
+		name: "a matrix whose weights are not a multiple of the width",
+		build: func(b *tensor.Builder) {
+			c, s, z := planes(b)
+			// 2 rows of 5 does not divide K*N.
+			a := tensor.Input(b, tensor.ValueDesc{
+				Name: "a", DType: accel.F32, Shape: tensor.Shape{2, 5}})
+			tensor.Int4MatMul(b, a, tensor.Int4{
+				Codes: c, Scales: s, Zeros: z, Weights: K * N})
+		},
+		want: "so the second is a multiple of the first",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := rt.NewBuilder("int4mm-refusal")
+			tc.build(b)
+			err := b.Err()
+			if err == nil {
+				t.Fatalf("Int4MatMul accepted %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal should say %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
