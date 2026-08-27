@@ -682,6 +682,15 @@ load-independent, so they are what the claim is stated in:
 and an allocation per node — so it cannot be slower, but how much faster is not
 something this machine can currently answer.
 
+**The pin is released, and that is checked rather than reasoned.** `Unpin`
+releases *every* object its Pinner holds, so the pattern is only safe because
+`Submit` holds the executable's mutex for its whole body: one object is pinned
+at a time and no call re-enters. A missed `Unpin` would not error — it would
+retain one slice per message send, forever, and show only as growth.
+`TestPinnedBytesDoNotAccumulate` submits a 256-node plan 300 times and requires
+the heap not to grow, which over 76 800 sends it does not; removing the `Unpin`
+fails it.
+
 **Where the remaining 23 per node are is not established.** They are not in
 accel's encode path: after these two changes it allocates nothing per node.
 They are below it, in the variadic slice `purego.SyscallN` takes, which is one

@@ -87,7 +87,7 @@ func benchSubmit(b *testing.B, e driver.Executable, nodes int) {
 // scales with a model's node count, from the per-encoder cost a barrier adds.
 // A real decode graph has both, and separating them is the point of the
 // measurement.
-func benchExecutable(b *testing.B, n int, barrier bool) driver.Executable {
+func benchExecutable(b testing.TB, n int, barrier bool) driver.Executable {
 	b.Helper()
 	ads, err := metal.Adapters()
 	if err != nil || len(ads) == 0 {
