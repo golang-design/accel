@@ -2205,6 +2205,72 @@ the same function rather than by a constructor:
 
 The remaining 51 are ready to build: mechanical, per-refusal, no design in them.
 
+### M11. The four open reports' remainders — complete 2026-08-27
+
+Each of #17, #18, #21 and #22 had its primary ask shipped in M10 and stayed open
+on a remainder. Three of the four turned out to be **one theme**: the decode
+shape was built and the prefill shape was not.
+
+| # | Remainder | Outcome |
+| --- | --- | --- |
+| 22 | tiled int4 GEMM | built — `QuantMatMulInt4` |
+| 18 | tiled grouped GEMM | built — `GroupedMatMul` |
+| 21 | the per-node submit cost | attributed and reduced; ICB re-priced, still unbuilt |
+| 17 | chunked linear attention | derivation done and guarded; kernel unbuilt |
+
+**The tiled forms were mechanical and their specs say the weaker true thing.**
+Both were derived from an existing kernel — `MatMulTiledF32`'s body with the
+weight fetch changed. Twice a first draft claimed more than the code did, and
+both corrections are the same shape: a comment that sounds like an invariant but
+names no test. `int4tiled.go` said its zero pad prevents a bias; it does not, on
+its own, because the other tile is zeroed at the same $k$ and the product is
+zero either way. Found by mutating it and watching the test pass.
+`groupedtiled.go`'s first draft claimed the weight tile is loaded once per
+expert; it is once per token *block*, because the $K$ loop is inside the block
+loop.
+
+**#18 reopened a memory-safety question #24 had closed.** Moving from a
+token-blocked grid to one workgroup per expert changes where the row index comes
+from: `GroupedMatVec` takes it from a grid derived from `x.shape[0]`, so it
+cannot leave the buffer however wrong the counts are, while `GroupedMatMul`
+takes it from the offsets, which are device data. The over-sum direction is a
+wrong answer in the first and a stray **write** in the second. I had published
+on #24 that over-sum is bounded and safe; that was true of every kernel then
+existing and would have been false the moment this one shipped. A `Tokens`
+uniform — `x.shape[0]`, which the host does know — is the bound the offsets
+cannot give. **What generalizes: a published boundary is a claim about the
+kernels that exist, and it has to be re-checked by anything that changes where
+an index comes from.**
+
+**#21 was worked by attribution rather than by building what was asked for.**
+The indirect command buffer is what the issue points at, and the cost it removes
+had already fallen 5× in M10. Before building it, `SetBytes` turned out to be
+the last reflected message send on the per-node path — kept that way for a
+correct reason, that it passes a Go pointer and a `uintptr` is not a reference
+the collector honours. The conclusion was wrong even though the reasoning was
+not: the address does not have to be *assumed* stable, `runtime.Pinner` makes it
+stable. Allocations per 790-node submission went 22946 → 18206.
+
+**Measured in allocations rather than nanoseconds, deliberately.** This machine
+sat above load 200 for the whole session and wall times swung 4× between runs of
+one benchmark. Allocations are load-independent, so the claim is stated in them,
+and no wall-clock claim is made at all. The load contamination is the same one
+recorded for M8's benchmarks; the difference is that this time a load-independent
+measure was available and used instead of waiting for a quiet machine.
+
+**#17's remainder was a derivation, not a kernel**, which §6 had already said.
+The UT transform: writing the recurrence's write vector as
+$w_t = \beta_t(v_t-u_t)$ and unrolling $S_t$ makes the $u_j$ cancel, leaving
+$(I+A)W = B$ with $A$ strictly lower triangular and built from one Gram matrix
+of the chunk's keys. It is checked against the sequential kernel at seven chunk
+sizes rather than against a restatement, and two mutations confirm the check
+discriminates. The kernel remains unbuilt and 010 says so — it now needs a
+residency plan rather than a derivation.
+
+**What did not get built, and is tracked rather than implied:**
+`linear_attention_chunked` and the Metal ICB, both carried in the specs that own
+them with the measurement or derivation that re-prices them.
+
 ## The consumer reports, and what they were actually about — 2026-08-24
 
 A consumer building an inference framework on this library filed nine issues.
