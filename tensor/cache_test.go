@@ -6,6 +6,7 @@ package tensor_test
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -444,5 +445,50 @@ func TestBucketSizesAreSortedAndCopied(t *testing.T) {
 	if _, err := tensor.NewBuckets(128, 64, 128); err == nil {
 		t.Fatal("a repeated bucket size was accepted; a caller's list saying " +
 			"something they did not mean should be refused rather than tidied")
+	}
+}
+
+// A new CompileOptions field fails until someone decides whether the plan-cache
+// key covers it.
+//
+// specs/029-plan-cache.md §2 says the key is "every compile option that affects
+// lowering". The digest hashes the constant string "opts v1" and no option at
+// all (tensor/cache.go). That is *correct today* — CompileOptions carries only
+// Label, which the spec excludes on purpose, since two plans differing in name
+// are the same plan. It stops being correct the moment the struct grows.
+//
+// The failure it would cause is the worst kind this cache can have: a second
+// compile with a different option returns the first plan, silently, because the
+// key could not tell them apart. Nothing about the graph would look wrong.
+//
+// So the field set is pinned. This is the same reflection guard
+// TestEveryAttentionOptionReachesTheKernelOrIsRefused uses on AttentionOptions,
+// for the same reason — a struct that grows a field nobody wired up is a defect
+// this package has shipped before.
+func TestCompileOptionsFieldsAreAccountedForInTheKey(t *testing.T) {
+	// Every field, and whether the key must hash it.
+	inKey := map[string]bool{
+		// Excluded by 029 §2: two plans differing only in what they are called
+		// are the same plan, and including it would double the cache for nothing.
+		"Label": false,
+	}
+
+	ty := reflect.TypeOf(tensor.CompileOptions{})
+	for i := range ty.NumField() {
+		f := ty.Field(i)
+		if _, known := inKey[f.Name]; !known {
+			t.Errorf("CompileOptions.%s is new and nothing here says whether the "+
+				"plan-cache key covers it.\n"+
+				"  tensor/cache.go hashes a constant, so an option that changes "+
+				"lowering would let a second compile return the first plan — "+
+				"silently, since the key cannot tell them apart.\n"+
+				"  Decide, hash it in key() if it affects lowering, and add it above "+
+				"with the reason (specs/029-plan-cache.md section 2).", f.Name)
+		}
+	}
+	for name := range inKey {
+		if _, ok := ty.FieldByName(name); !ok {
+			t.Errorf("CompileOptions.%s is listed here and no longer exists", name)
+		}
 	}
 }
