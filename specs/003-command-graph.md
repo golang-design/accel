@@ -1104,6 +1104,32 @@ var (
 )
 ```
 
+### Built — 2026-08-27: the sentinels, not the structure
+
+**Six sentinels ship and the binding checks wrap them**, so
+`errors.Is(err, accel.ErrDTypeMismatch)` works today:
+`ErrDTypeMismatch`, `ErrKindMismatch`, `ErrTooSmall`, `ErrUsageMissing`,
+`ErrSlotUnbound` and `ErrForeignResource`, at the six V-checks in
+`Graph.checkBinding` plus the submit-time unbound check.
+
+That is the half a caller can act on. The spec's own motivation for the taxonomy
+— a caller trying an f16 layout and falling back to f32 — needs to tell a dtype
+disagreement from a size one, and until now the only way was matching a message,
+which is a contract nobody wrote down and every wording change breaks.
+
+**Not built: the structure.** `BuildError`, `NodeError`, the recorded
+`callSite`, and the `model/attn.go:118:0: node 7 …` format. `runtime.Caller`
+appears nowhere in the root package, and build errors remain an `errors.Join` of
+formatted strings. The seven remaining sentinels above have no wrapped site
+either.
+
+**Why the split is where it is.** Wrapping is per-check and additive; the
+structure is a refactor of all 34 build-time error sites plus per-node call-site
+capture at record time, and it changes what every existing message looks like.
+Landing the matchable half first means a caller can branch correctly while the
+presentation is still a joined string — the reverse order would have given them
+a pretty message they still could not switch on.
+
 `errors.Is(err, accel.ErrDTypeMismatch)` works through `Unwrap() []error`, which
 is what a caller writing a fallback path (try f16, fall back to f32) actually
 needs. `errors.As` to `*NodeError` gets the node id for a caller that wants to

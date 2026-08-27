@@ -42,6 +42,44 @@ var (
 	// device rather than dropping the policy wholesale.
 	ErrPolicy = errors.New("accel: no adapter satisfied the policy")
 
+	// The binding sentinels of specs/003-command-graph.md's error taxonomy.
+	//
+	// They exist so a caller can branch on *which* declaration a bound resource
+	// failed rather than matching a string. The spec's example is the one that
+	// motivated them: a caller trying an f16 path and falling back to f32 needs
+	// to tell a dtype disagreement from a size one, and `errors.Is` is how.
+	//
+	// Added 2026-08-27 for the checks in checkBinding, which is where a caller's
+	// own resource meets the graph's declaration. The rest of that taxonomy --
+	// BuildError, NodeError and the recorded call site -- is not built; see
+	// specs/STATUS.md.
+
+	// ErrDTypeMismatch reports a view whose dtype is not the slot's. A
+	// reinterpreting view is legal on a buffer and not on a slot: the recorded
+	// nodes computed their byte offsets from the descriptor's dtype (V3).
+	ErrDTypeMismatch = errors.New("accel: dtype mismatch")
+
+	// ErrKindMismatch reports a resource bound to a slot of another kind, such
+	// as a buffer bound where a texture was declared (V2).
+	ErrKindMismatch = errors.New("accel: binding kind mismatch")
+
+	// ErrTooSmall reports a view with fewer elements than the recorded nodes
+	// declared they would read or write (V5).
+	ErrTooSmall = errors.New("accel: resource too small for declared access")
+
+	// ErrUsageMissing reports a resource created without a usage flag that the
+	// access recorded against it needs (V6).
+	ErrUsageMissing = errors.New("accel: resource lacks a required usage flag")
+
+	// ErrSlotUnbound reports a slot with no resource, or an index that is not
+	// one of the graph's slots (V1).
+	ErrSlotUnbound = errors.New("accel: binding slot has no resource")
+
+	// ErrForeignResource reports a resource belonging to another device. It is
+	// separate from ErrUsage because the fix is different: a usage violation is
+	// a flag at creation, and this is the wrong object entirely (V19).
+	ErrForeignResource = errors.New("accel: resource belongs to another device")
+
 	// ErrGraphInFlight reports an attempt to rebind or resubmit a graph while a
 	// submission of it is running. A graph's transients are one pool, so two
 	// overlapping submissions would write each other's intermediates, and a

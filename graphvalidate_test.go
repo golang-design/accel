@@ -498,3 +498,83 @@ func TestATransientCannotReachASlot(t *testing.T) {
 		t.Errorf("the refusal should name what the resource is: %v", err)
 	}
 }
+
+// Each binding refusal is matchable with errors.Is.
+//
+// specs/003-command-graph.md's error taxonomy, the half of it that shipped on
+// 2026-08-27. The spec's own argument for these is a caller writing a fallback
+// path — try an f16 layout, fall back to f32 — who has to tell a dtype
+// disagreement from a size one. Before this they could only match a string,
+// which is a contract nobody wrote down and every message change breaks.
+//
+// The messages are asserted elsewhere; what this asserts is the sentinel, since
+// those are two different promises and only one of them is machine-readable.
+func TestEveryBindingRefusalIsMatchable(t *testing.T) {
+	d := openDevice(t)
+
+	for _, tc := range []struct {
+		name string
+		is   error
+		run  func(t *testing.T) error
+	}{{
+		name: "a slot index the graph does not have",
+		is:   accel.ErrSlotUnbound,
+		run: func(t *testing.T) error {
+			g, _ := graphWithSlot(t, d, readSlot(4))
+			src := newBuffer(t, d, "src", 4, accel.BufferStorage)
+			return g.Bind(accel.SlotBinding{Slot: accel.Slot(99), Buffer: whole(t, src)})
+		},
+	}, {
+		name: "a slot left unbound at submit",
+		is:   accel.ErrSlotUnbound,
+		run: func(t *testing.T) error {
+			g, _ := graphWithSlot(t, d, readSlot(4))
+			return d.Queue().Submit(g).Wait()
+		},
+	}, {
+		name: "a view whose dtype is not the slot's",
+		is:   accel.ErrDTypeMismatch,
+		run: func(t *testing.T) error {
+			g, s := graphWithSlot(t, d, readSlot(4))
+			src := newBuffer(t, d, "src", 4, accel.BufferStorage)
+			v := whole(t, src)
+			v.DType = accel.U32
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: v})
+		},
+	}, {
+		name: "a view smaller than the recorded nodes need",
+		is:   accel.ErrTooSmall,
+		run: func(t *testing.T) error {
+			g, s := graphWithSlot(t, d, readSlot(8))
+			src := newBuffer(t, d, "src", 2, accel.BufferStorage)
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, src)})
+		},
+	}, {
+		name: "a buffer created without the usage the slot needs",
+		is:   accel.ErrUsageMissing,
+		run: func(t *testing.T) error {
+			g, s := graphWithSlot(t, d, readSlot(4))
+			src := newBuffer(t, d, "src", 4, accel.BufferCopyDst)
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, src)})
+		},
+	}, {
+		name: "a buffer from another device",
+		is:   accel.ErrForeignResource,
+		run: func(t *testing.T) error {
+			g, s := graphWithSlot(t, d, readSlot(4))
+			other := openDevice(t)
+			src := newBuffer(t, other, "src", 4, accel.BufferStorage)
+			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, src)})
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run(t)
+			if err == nil {
+				t.Fatalf("%s was accepted", tc.name)
+			}
+			if !errors.Is(err, tc.is) {
+				t.Errorf("errors.Is(_, %v) is false for:\n%v", tc.is, err)
+			}
+		})
+	}
+}

@@ -21,27 +21,28 @@ import (
 func (g *Graph) checkBinding(b SlotBinding) (driver.SlotBinding, error) {
 	d, ok := g.descriptor(b.Slot)
 	if !ok {
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind: slot %d is not one of this graph's %d",
-			int(b.Slot), len(g.slots))
+		return driver.SlotBinding{}, fmt.Errorf("%w: accel: Bind: slot %d is not one of this "+
+			"graph's %d", ErrSlotUnbound, int(b.Slot), len(g.slots))
 	}
 	v := b.Buffer
 	if v.Buffer == nil {
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: no resource bound", d.Name)
+		return driver.SlotBinding{}, fmt.Errorf("%w: accel: Bind %q: no resource bound",
+			ErrSlotUnbound, d.Name)
 	}
 
 	// V2: the kind the descriptor declared.
 	switch d.Kind {
 	case BindingStorageBuffer, BindingUniformBuffer:
 	default:
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: a buffer was bound to a %v slot",
-			d.Name, d.Kind)
+		return driver.SlotBinding{}, fmt.Errorf("%w: accel: Bind %q: a buffer was bound to a "+
+			"%v slot", ErrKindMismatch, d.Name, d.Kind)
 	}
 	// V3: dtype agreement, exactly. A reinterpreting view is legal on a buffer
 	// and not on a slot, because the recorded nodes computed their byte offsets
 	// from the descriptor's dtype.
 	if v.DType != d.DType {
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: the slot is %v and the view is %v",
-			d.Name, d.DType, v.DType)
+		return driver.SlotBinding{}, fmt.Errorf("%w: accel: Bind %q: the slot is %v and the "+
+			"view is %v", ErrDTypeMismatch, d.Name, d.DType, v.DType)
 	}
 	// V19: the resource is this device's and open. Repeated at submit, because a
 	// caller may close it after binding.
@@ -49,13 +50,13 @@ func (g *Graph) checkBinding(b SlotBinding) (driver.SlotBinding, error) {
 		return driver.SlotBinding{}, err
 	}
 	if v.Buffer.pool.dev != g.dev {
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: %q belongs to a different device",
-			d.Name, v.Buffer.desc.Label)
+		return driver.SlotBinding{}, fmt.Errorf("%w: accel: Bind %q: %q belongs to a different "+
+			"device", ErrForeignResource, d.Name, v.Buffer.desc.Label)
 	}
 	// V5: large enough for what the recorded nodes declared.
 	if v.Count < d.MinCount {
-		return driver.SlotBinding{}, fmt.Errorf("accel: Bind %q: the recorded nodes need %d "+
-			"elements and the view has %d", d.Name, d.MinCount, v.Count)
+		return driver.SlotBinding{}, fmt.Errorf("%w: accel: Bind %q: the recorded nodes need %d "+
+			"elements and the view has %d", ErrTooSmall, d.Name, d.MinCount, v.Count)
 	}
 	// V6: the usage the access needs was declared when the buffer was created.
 	if err := g.checkUsage(d, v.Buffer); err != nil {
@@ -80,8 +81,8 @@ func (g *Graph) checkUsage(d SlotDescriptor, b *Buffer) error {
 		need = BufferStorage
 	}
 	if b.desc.Usage&need == 0 {
-		return fmt.Errorf("accel: Bind %q: this slot needs %v and %q was created with %v",
-			d.Name, need, b.desc.Label, b.desc.Usage)
+		return fmt.Errorf("%w: accel: Bind %q: this slot needs %v and %q was created with %v",
+			ErrUsageMissing, d.Name, need, b.desc.Label, b.desc.Usage)
 	}
 	return nil
 }
@@ -372,8 +373,8 @@ func (g *Graph) checkBoundAtSubmit() error {
 	for s := 1; s <= len(g.slots); s++ {
 		b := g.bound[s]
 		if b.Buffer.Buffer == nil {
-			errs = append(errs, fmt.Errorf("accel: Submit: slot %q has no resource bound",
-				g.slots[s-1].Name))
+			errs = append(errs, fmt.Errorf("%w: accel: Submit: slot %q has no resource bound",
+				ErrSlotUnbound, g.slots[s-1].Name))
 			continue
 		}
 		if err := b.Buffer.check("Submit " + g.slots[s-1].Name); err != nil {
