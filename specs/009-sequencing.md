@@ -2142,6 +2142,47 @@ The corpus stopped compiling, which is loud. The quiet part is that the pairing
 of two supported features had no test until a kernel happened to use both, and
 the feature matrix is where that generalizes.
 
+## The refusal audit — 2026-08-27
+
+Run because [046](046-segmented-extents.md)'s correction prescribed it: *an
+assertion naming a specific refusal is a claim that some code refuses.* The
+inverse turned out to be the larger gap.
+
+**65 refusal sites in `tensor/` and `quant/` have no test.** Not missing
+refusals — refusals that exist in code and that nothing has ever made fire. The
+method, which is worth keeping because the obvious version of it is wrong:
+
+```sh
+go test -coverprofile=cover.out -coverpkg=./... ./...
+```
+
+Then **merge each block across test binaries before calling it uncovered**. With
+`-coverpkg=./...` every binary reports every block, so a naive scan for `count
+== 0` reports nearly every refusal in the repository and is useless. A block is
+uncovered only when its counts sum to zero.
+
+Two kinds came out, and they need different fixes:
+
+1. **Reachable and untested** — the bulk. An untested refusal may have the wrong
+   condition, name the wrong value, or panic formatting its own message, and
+   nothing would say so. This is the recorded "refusals shipped untested" mode
+   with a number against it for the first time.
+2. **Unreachable by construction** — a smaller family. `tensor.GroupedMatVec`'s
+   "w declares no experts" cannot fire: `Input` already refuses a dimension of
+   zero, so `w.shape[0]` is never zero. Confirmed by building the case and
+   reading which refusal answered. The same holds for the rank-zero guards in
+   `RMSNorm`, `Softmax`, `RoPE`, `Contiguous` and `LayerState`, all of which sit
+   behind `Input`'s "has no shape".
+
+The second kind is the one with a rule attached. **A refusal nothing can reach
+has no accepting half and never will**, which is the same defect as a spec
+asserting a refusal no code implements — the shape #24 was. It is recorded here
+rather than deleted on sight, because removing six defensive checks is one
+change with one argument, not a tidy-up to fold into a sweep.
+
+Not scheduled yet. It is ready to build: the list is mechanical, the method
+above regenerates it, and the work is per-refusal rather than a design.
+
 ## The consumer reports, and what they were actually about — 2026-08-24
 
 A consumer building an inference framework on this library filed nine issues.
