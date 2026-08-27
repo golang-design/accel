@@ -36,7 +36,15 @@ type raggedCase struct {
 	// different inputs -- which passes for sequence zero and says nothing about
 	// the rest.
 	qBase int
+
+	// pad is rows of q beyond what the counts claim. They belong to no
+	// sequence, which specs/046-segmented-extents.md §1 property 3 makes legal
+	// and defines as attending nothing.
+	pad int
 }
+
+// rows is how many rows q holds, which is the counts' total plus any padding.
+func (c raggedCase) rows() int { return c.tokens() + c.pad }
 
 // capacity is the cache allocation, which a member run inherits from the batch
 // it was a member of.
@@ -65,7 +73,7 @@ func runRaggedStep(t *testing.T, c raggedCase) []float32 {
 	d := rt.Device()
 	b := rt.NewBuilder("ragged")
 
-	tokens := c.tokens()
+	tokens := c.rows()
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 
 	q := tensor.Input(b, tensor.ValueDesc{
@@ -130,7 +138,7 @@ func runRaggedStep(t *testing.T, c raggedCase) []float32 {
 
 // raggedInputs builds queries, caches and a page table for a case.
 func raggedInputs(c raggedCase) (q, k, v []float32, pages []uint32) {
-	tokens := c.tokens()
+	tokens := c.rows()
 	q = make([]float32, tokens*c.qHeads*c.headDim)
 	for i := range q {
 		q[i] = float32(math.Sin(float64(c.qBase+i) * 0.41))
@@ -509,7 +517,7 @@ func TestARaggedStepRunsOverAnF16Cache(t *testing.T) {
 	rt := newRuntime(t)
 	b := rt.NewBuilder("f16ragged")
 
-	tokens := c.tokens()
+	tokens := c.rows()
 	tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
 	q := tensor.Input(b, tensor.ValueDesc{
 		Name: "q", DType: accel.F32, Shape: tensor.Shape{tokens, c.qHeads, c.headDim},
@@ -552,5 +560,63 @@ func TestARaggedStepRunsOverAnF16Cache(t *testing.T) {
 	if picked != "AttentionRaggedF16" {
 		t.Fatalf("a ragged step over an f16 cache selected %q; the f32 kernel would "+
 			"read the halves as full floats and draw a plausible wrong picture", picked)
+	}
+}
+
+// Rows of q past what the extents claim attend nothing and read zero.
+//
+// The end-to-end half of specs/046-segmented-extents.md §1 property 3, through
+// the real operator and a real dispatch rather than against the kernel directly.
+// Reported as [#24](https://github.com/golang-design/accel/issues/24): before
+// the guard, a token past every segment indexed one past the end of the
+// offsets, the lengths, and the page table, so the row it returned was another
+// sequence's cache.
+//
+// The refusal cannot be moved to record time. QueryExtents is a tensor, so its
+// sum is device data by specs/043-per-row-values.md §2 and Attention has
+// nothing to compare q.shape[0] against — which is why the behaviour is defined
+// here rather than left to a caller.
+func TestARaggedStepTreatsRowsPastTheExtentsAsPadding(t *testing.T) {
+	c := raggedCase{
+		batch: 3, qHeads: 2, kvHeads: 1, headDim: 8,
+		block: 4, maxPages: 3,
+		counts: []uint32{2, 1, 1}, lengths: []uint32{3, 4, 3},
+		pad: 2,
+	}
+	got := runRaggedStep(t, c)
+
+	width := c.qHeads * c.headDim
+	if want := c.rows() * width; len(got) != want {
+		t.Fatalf("the output is %d elements for %d rows", len(got), c.rows())
+	}
+
+	// The same step without the padding: every real row must be identical, so
+	// padding is proved inert rather than merely tolerated.
+	unpadded := c
+	unpadded.pad = 0
+	ref := runRaggedStep(t, unpadded)
+	for i := range ref {
+		if math.Abs(float64(got[i]-ref[i])) > 1e-5 {
+			t.Fatalf("padding changed token %d element %d: %v with padding, %v without",
+				i/width, i%width, got[i], ref[i])
+		}
+	}
+
+	// The pad rows are zero. A real row is not, which is what stops a guard
+	// that fired for every token from passing this.
+	for i := len(ref); i < len(got); i++ {
+		if got[i] != 0 {
+			t.Fatalf("pad row %d element %d is %v, want zero", i/width, i%width, got[i])
+		}
+	}
+	nonzero := false
+	for _, v := range ref {
+		if v != 0 {
+			nonzero = true
+		}
+	}
+	if !nonzero {
+		t.Fatal("every real row is zero, so the guard is firing for tokens that " +
+			"belong to a sequence")
 	}
 }

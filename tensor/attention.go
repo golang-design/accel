@@ -82,6 +82,19 @@ type AttentionOptions struct {
 	// A sequence admitted this step with nothing to contribute yet is an
 	// ordinary member of the batch. It occupies no rows of q and is not an
 	// error.
+	//
+	// # Rows of q past the total are padding
+	//
+	// The extents may sum to fewer rows than q holds. The extra rows belong to
+	// no sequence: they attend nothing and their output is zero, so a bucketed
+	// batch can pad q to a plan shape rather than inflating a real sequence's
+	// extent to absorb the difference.
+	//
+	// This is not checked here, and cannot be. The sum lives in a tensor, so it
+	// is device data by specs/043-per-row-values.md §2 and no value at record
+	// time can be compared against q.shape[0]. The kernel enforces it, which is
+	// why the behaviour is defined rather than left to a caller's discipline --
+	// specs/046-segmented-extents.md §1 property 3 and its correction.
 	QueryExtents *Tensor
 }
 

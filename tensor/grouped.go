@@ -38,6 +38,13 @@ import (
 //
 // Its count is zero and it contributes nothing. That is not an edge case here:
 // with top-2-of-8 routing, six experts get nothing on every single token.
+//
+// # Rows of x past the total are padding
+//
+// The counts may sum to fewer tokens than x holds. Those rows routed nowhere:
+// they read no weights and their output is zero. The sum is device data, so
+// this is enforced in the kernel rather than refused here --
+// specs/046-segmented-extents.md §1 property 3.
 func GroupedMatVec(b *Builder, x, w, counts *Tensor) *Tensor {
 	if counts == nil {
 		return b.fail(1, "GroupedMatVec", "counts is nil; it is one token count per "+
