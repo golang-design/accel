@@ -522,6 +522,42 @@ any target backend, and classifying it as a plain write would insert one per
 pair. Two nodes that both only `AtomicRMW` the same range get no edge. A node
 that reads or writes non-atomically after an `AtomicRMW` node does.
 
+#### The no-edge rule is unsound as written — 2026-08-27
+
+**Not implemented, and deliberately.** `AccessMode` is a three-value enum in code
+and atomics take ordinary write edges, which
+[STATUS.md](STATUS.md) files under *conservative, not wrong*. Making it
+non-conservative the way this paragraph specifies would make it wrong.
+
+The justification above is about **memory coherence**, and it is correct: two
+atomic read-modify-writes need no barrier to avoid corrupting the location. The
+rule it draws is about **ordering**, which is a different question, and the two
+come apart the moment an atomic is not commutative.
+
+`ExchangeU32`, `ExchangeI32`, `CompareExchangeU32` and `CompareExchangeI32` are
+in the intrinsic table and reachable from the corpus
+(`internal/testkernels/atomic.go:53,104`). Two nodes that each exchange a
+different value into one location produce a result that depends entirely on which
+ran last. Today they get a write-write edge and the caller gets the order they
+recorded. Under this rule the edge disappears and the answer becomes whichever
+dispatch the backend finished second — on Metal, where dispatches genuinely
+overlap; the CPU backend would hide it.
+
+That is a latent wrong answer of exactly the shape the rest of this week was
+spent closing, so it is recorded rather than shipped.
+
+**What a sound version needs.** The bit has to distinguish a *commutative* atomic
+from an exchange, or the rule has to key on something that already knows —
+`kernel.Kernel.OrderIndependent` is inferred by the compiler and means precisely
+"this kernel's observable result cannot depend on order". A node whose kernel
+carries it, and whose only access to the range is atomic, could lose the edge
+soundly. That is a smaller and better-founded rule than the one above, and it
+reuses a property nobody has to declare.
+
+**And it is a public API change either way.** `Access` is exported with three
+values; the eleven-bit mask replaces them. That is a breaking change and needs a
+decision, not an implementation.
+
 **Texture layout is derived, never declared.** The layout a texture must be in
 (`ShaderRead`, `ColourAttachment`, `DepthAttachment`, `DepthReadOnly`, `CopySrc`,
 `CopyDst`, `General`, `Present`) is a function of `(mode, stage)`, computed by the

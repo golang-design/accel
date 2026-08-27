@@ -938,9 +938,18 @@ finding is a lead, not a verdict.
 
 | | Spec | The gap |
 | --- | --- | --- |
-| 8 | [003](003-command-graph.md) | `AccessMode` is an 11-bit mask in the spec and a three-value enum in code, so the `AtomicRMW` no-edge rule is unbuilt and atomics take ordinary write edges |
+| 8 | [003](003-command-graph.md) | `AccessMode` is an 11-bit mask in the spec and a three-value enum in code, so the `AtomicRMW` no-edge rule is unbuilt and atomics take ordinary write edges. **Investigated 2026-08-27 and deliberately not built**: the rule as written is unsound. Exchange and compare-exchange are reachable from the corpus and are not commutative, so dropping the edge makes the result depend on which dispatch finished last — visible on Metal, hidden on the CPU. 003 records what a sound version needs (`OrderIndependent`, which the compiler already infers) and that the mask is a breaking public API change needing a decision |
 | 9 | [044](044-unbounded-context.md) §7 | ~~`Selections()` does not report the tile count~~ — **closed 2026-08-27** for the contiguous decode. The paged variants' loop is bounded by the page table's reach rather than a cache shape, so their count is a different quantity and 044 §7 records why it is not printed as the same one |
 | 10 | [025](025-tensor-operators.md) §6 | ~~no test runs the operators themselves on both backends~~ — **closed 2026-08-27**: `GatherRows`, `RoPE`, `Softmax` and the views now agree across backends through a composed plan, not through the kernel differential |
+
+### Tier 3 outcome — 2026-08-27
+
+Items 9 and 10 are closed. **Item 8 is closed as a decision rather than as
+code**, and it is the one place in this plan where executing the spec would have
+been the wrong move: 003's `AtomicRMW` no-edge rule is unsound for the
+non-commutative atomics the corpus already reaches, so the conservative
+behaviour it complains about is the correct one until the rule is narrowed. The
+finding and the sounder alternative are in 003.
 
 ### 4. Discipline erosion — the checks that were supposed to stop all of the above
 
