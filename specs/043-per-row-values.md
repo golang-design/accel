@@ -76,6 +76,29 @@ A model constant shared by every row is what a uniform block is *for*. Moving
 those would cost a binding and a buffer write to say something that does not
 change, which is the mirror of the mistake this spec fixes.
 
+### 2.2 A row is not always a token — 2026-08-28
+
+The line above is right and the word doing the work in it is **row**, which this
+spec left to context. [047](047-linear-attention.md) §4 read it as "per token",
+wrote `Alpha` and `Beta` as `[tokens]`, and made a gated delta network's
+per-head decay inexpressible ([#27](https://github.com/golang-design/accel/issues/27)).
+
+The test the line needs is not "does this differ per token" but **which axes does
+the kernel's parallel unit carry**. A linear-attention workgroup is one
+(sequence, head) walking its own tokens, so its row is (token, head) and every
+term of the recurrence carries a head index — which was visible in the spec's own
+formula, beside the two gates that did not.
+
+| Kernel's parallel unit | A row is | So a per-row value is |
+| --- | --- | --- |
+| one query token | the token | `[tokens]` |
+| one (sequence, head), scanning tokens | (token, head) | `[tokens, heads]` |
+| one sequence | the sequence | `[sequences]` |
+
+Where both readings are real, the **rank** decides, and never the element count:
+a `[tokens*heads]` tensor written as rank 1 holds the right number of floats and
+says nothing about which axis is which.
+
 ## 3. Orthogonality: this replaces, it does not add
 
 Each change removes a declared scalar and adds a tensor operand. The surface is

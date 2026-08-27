@@ -133,8 +133,52 @@ $K-1$ packing copies per layer where a kernel would take one, so it is *one less
 kernel to unblock* rather than one less to want — recorded in
 [010](010-kernel-corpus.md) and folded into the chunked scan if that is built.
 
-**Fusing the gates.** $\alpha$ and $\beta$ arrive as per-token tensors, which is
-[043](043-per-row-values.md) §2 applied without argument: they differ per row.
+**Fusing the gates.** $\alpha$ and $\beta$ arrive as tensors rather than
+uniforms, which is [043](043-per-row-values.md) §2: they differ per row.
+
+> **Amended 2026-08-28.** This paragraph said they are *per-token* tensors, and
+> that was wrong rather than incomplete —
+> [#27](https://github.com/golang-design/accel/issues/27). §1's recurrence
+> carries a head index on every term except $\alpha$ and $\beta$, and a gated
+> delta network produces both **per value head**: the projection is
+> `2 * num_value_heads` wide and heads forgetting at different rates is the
+> point of the gate. So a shape of $[\text{tokens}]$ made the published layer
+> inexpressible, and the consumer's alternatives were one dispatch per head —
+> 3072 for a 64-layer model where 64 would do — or a model that is not the
+> model. §4.1 is what was built.
+
+## 4.1 The gate's rank says which row it is per — built 2026-08-28
+
+$\alpha$ and $\beta$ take either shape, and the **rank** decides:
+
+| Shape | Meaning | `GateHeads` |
+| --- | --- | --- |
+| $[\text{tokens}]$ | every head shares this token's gate | 1 |
+| $[\text{tokens}, \text{heads}]$ | each head decays at its own rate | heads |
+
+The kernel reads one index for both, because `GateHeads` is a stride as well as
+a count:
+
+$$\text{gate} = t \cdot \text{GateHeads} + (h \bmod \text{GateHeads})$$
+
+At `GateHeads == 1` the modulo pins every head to gate 0 and the stride is 1, so
+this is $\alpha_t$; at `GateHeads == heads` the modulo is the identity and it is
+$\alpha_{t,h}$. One kernel, no branch, and the shared layout keeps meaning what
+it meant.
+
+**Three rules that are checked rather than stated.**
+
+1. **Rank, never element count.** A $[\text{tokens} \times \text{heads}]$ gate
+   written as rank 1 holds the right number of floats and says nothing about
+   which axis is which, so it is refused. Accepting it would run a caller's
+   transposed gate.
+2. **$\alpha$ and $\beta$ share a layout.** Every model that produces one
+   produces the other from the same projection. Coupled is the reversible
+   choice: coupled to independent is a widening, the reverse breaks callers.
+   §6 records the trigger to revisit.
+3. **The layout reaches the plan key.** It is a `node.attrs` entry, not only an
+   operand shape, because a value a kernel reads and a cache key infers is the
+   defect [009](009-sequencing.md) records twice.
 
 ## 5. Done
 
@@ -155,7 +199,20 @@ Each assertion names the mutation it catches.
 - **The state's shape is `[slots, heads, V, K]` and a step writes only its own
   slot**, asserted by leaving another slot filled with a sentinel.
 - **CPU and Metal agree** within [008](008-numerics.md) §6's bound for a sum of
-  products, which is what all three passes are.
+  products, which is what all three passes are. Both gate layouts run as cases,
+  the per-head one with the two heads given different decays — a lowering that
+  dropped the head term from the gate index then disagrees on a value rather
+  than on nothing.
+- **A per-head gate decays each head at its own rate**, with head 0 given the
+  identity gate and head 1 total decay. Opposite gates rather than merely
+  different ones: two similar gates land within tolerance of each other, so a
+  kernel reading $\alpha_t$ and ignoring $h$ passes that version. Confirmed by
+  reinstating exactly that.
+- **A per-head gate holding one value everywhere equals the shared gate.** What
+  says the wider layout reduces to the narrower one instead of being a second
+  operator that agrees on the fixture.
+- **The two layouts do not hash to one plan key**, so a cache cannot serve a
+  shared-gate plan for a per-head request.
 
 ## 5.1 Built — 2026-08-26
 
@@ -199,10 +256,15 @@ produces.
 
   So the work is a derivation before it is a kernel, and this kernel is what the
   derivation would be checked against. **The derivation is done — §6.1.**
-- **Whether $\alpha$ and $\beta$ should be one tensor.** They are two per-token
-  scalars and every model that has one has the other. Two bindings is two things
-  to bind wrongly; one interleaved tensor is a layout a caller has to know.
-  Left as two until a caller says.
+- **Whether $\alpha$ and $\beta$ should be one tensor.** They are two gates of
+  the same shape and every model that has one has the other. Two bindings is two
+  things to bind wrongly; one interleaved tensor is a layout a caller has to
+  know. Left as two until a caller says — and §4.1 now makes them share a *rank*
+  as well as a length, which is one fewer way to bind them inconsistently.
+- **Whether $\alpha$ and $\beta$ may have different layouts.** §4.1 requires
+  them to match. The trigger to revisit is a caller with a per-head decay and a
+  shared write rate; nothing published does that today, and coupled-to-
+  independent is a widening rather than a break.
 
 ## 6.1 The UT transform, derived — 2026-08-27
 
