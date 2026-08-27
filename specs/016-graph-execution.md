@@ -1,6 +1,6 @@
 ---
 title: "Edge inference, barrier planning, and flat dispatch"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md

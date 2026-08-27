@@ -1,6 +1,6 @@
 ---
 title: "Prefill buckets and the plan cache, and the key that makes one safe"
-status: implemented
+status: in progress
 layer: tensor
 depends_on:
   - 007-tensor-layer.md

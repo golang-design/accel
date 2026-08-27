@@ -78,7 +78,7 @@ numbered in.
 
 | Spec | Status | Covers |
 | --- | --- | --- |
-| [001-device-resources.md](001-device-resources.md) | Implemented | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
+| [001-device-resources.md](001-device-resources.md) | In progress | Devices, pooled memory with explicit memory kinds, buffers, views, textures, transfers, lifetime |
 | [002-compute-model.md](002-compute-model.md) | In progress | Workgroups, shared memory, barriers, atomics, subgroups, the dtype set, capabilities |
 | [031-shared-transients.md](031-shared-transients.md) | Implemented | M8: one transient pool shared by several graphs, and the in-flight rule that makes it safe |
 | [032-stage-abi.md](032-stage-abi.md) | In progress | 005's first child: the vertex and fragment signatures, varyings, clip and depth ranges, texel fetch, and what the IR gains |
@@ -93,18 +93,18 @@ numbered in.
 | [005-graphics.md](005-graphics.md) | Drafted | The normative parent of [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md) and [041](041-msaa.md): graphics constraints, with its four open questions closed in those children |
 | [006-backends.md](006-backends.md) | In progress | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 | [008-numerics.md](008-numerics.md) | In progress | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
-| [012-kernel-pipeline.md](012-kernel-pipeline.md) | Implemented | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
-| [013-kernel-subset.md](013-kernel-subset.md) | Implemented | M2 child: control flow, helpers, and the positioned rejection corpus |
-| [014-kernel-uniforms.md](014-kernel-uniforms.md) | Implemented | M2 child: std140 layout, generated uniform codecs, and `UniformBuffer[T]` |
-| [015-graph-recording.md](015-graph-recording.md) | Implemented | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
-| [016-graph-execution.md](016-graph-execution.md) | Implemented | M3 child: edge inference, sub-range hazards, barrier planning, and the flat dispatch node |
-| [017-graph-aliasing.md](017-graph-aliasing.md) | Implemented | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
-| [018-cooperative-lowering.md](018-cooperative-lowering.md) | Implemented | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
-| [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | Implemented | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
+| [012-kernel-pipeline.md](012-kernel-pipeline.md) | In progress | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
+| [013-kernel-subset.md](013-kernel-subset.md) | In progress | M2 child: control flow, helpers, and the positioned rejection corpus |
+| [014-kernel-uniforms.md](014-kernel-uniforms.md) | In progress | M2 child: std140 layout, generated uniform codecs, and `UniformBuffer[T]` |
+| [015-graph-recording.md](015-graph-recording.md) | In progress | M3 child: recording, slots, build validation, submission and fences, and the record-order plan that becomes the oracle |
+| [016-graph-execution.md](016-graph-execution.md) | In progress | M3 child: edge inference, sub-range hazards, barrier planning, and the flat dispatch node |
+| [017-graph-aliasing.md](017-graph-aliasing.md) | In progress | M3 child: interference over reachability, greedy packing, and the whole-plan differential fuzz |
+| [018-cooperative-lowering.md](018-cooperative-lowering.md) | In progress | M4 child: the uniformity analysis, the state split, the workgroup scheduler, and both lowerings from one IR |
+| [019-cooperative-diagnostics.md](019-cooperative-diagnostics.md) | In progress | M4 child: shared-memory definition, barrier arrival, and conflicting access, each reported deterministically |
 | [020-cooperative-atomics.md](020-cooperative-atomics.md) | In progress | M4 child: atomics, emulated subgroups and their sweeps, capability inference, and `reduce_sum` |
 | [021-metal-bringup.md](021-metal-bringup.md) | Implemented | M6 child: the Objective-C shim and its ownership rule, enumeration, storage modes, a straight-line MSL emitter, and one kernel on the GPU |
-| [022-msl-target.md](022-msl-target.md) | Implemented | M6 child: the Metal numeric profile, then threadgroup memory, barriers, atomics, subgroups, helpers and intrinsics in MSL |
-| [023-metal-graph.md](023-metal-graph.md) | Implemented | M6 child: multi-node re-encoding, indirect dispatch, completion-handler lifetime, device loss, and the M6 E2E |
+| [022-msl-target.md](022-msl-target.md) | In progress | M6 child: the Metal numeric profile, then threadgroup memory, barriers, atomics, subgroups, helpers and intrinsics in MSL |
+| [023-metal-graph.md](023-metal-graph.md) | In progress | M6 child: multi-node re-encoding, indirect dispatch, completion-handler lifetime, device loss, and the M6 E2E |
 
 ## Layer 2: the tensor
 
@@ -112,16 +112,16 @@ numbered in.
 | --- | --- | --- |
 | [007-tensor-layer.md](007-tensor-layer.md) | In progress | Caller-owned plans and state, concrete ports, unquantized f16/f32 operators, minimal prefill and decode |
 | [024-tensor-bringup.md](024-tensor-bringup.md) | Implemented | M7 child: the builder, shape and dtype inference, lowering to a recorder, plans and bindings, and the elementwise operators on both backends |
-| [025-tensor-operators.md](025-tensor-operators.md) | Implemented | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
+| [025-tensor-operators.md](025-tensor-operators.md) | In progress | M7 child: views and indexing, materialization, `Rows`, `RMSNorm`, `Softmax`, `RoPE`, `MatMul` and `Linear` |
 | [026-tensor-decode.md](026-tensor-decode.md) | Implemented | M7 child: persistent state as versions, the KV cache, attention, and the decode step |
 | [027-quantization.md](027-quantization.md) | Implemented | M8: the symmetric int8 block representation, its derived error bound, and quantized Rows and GEMM |
 | [028-sampling.md](028-sampling.md) | Implemented | M8: argmax, categorical sampling, and top-k/top-p truncation, with the random draw as an input so a token is reproducible — public `tensor` operators, batched, one draw per row |
-| [029-plan-cache.md](029-plan-cache.md) | Implemented | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
-| [030-paged-kv.md](030-paged-kv.md) | Implemented | M8: a block pool and page tables, so sequences of different lengths share one cache |
+| [029-plan-cache.md](029-plan-cache.md) | In progress | M8: prefill buckets, and a plan cache whose key is the six things that make reuse safe |
+| [030-paged-kv.md](030-paged-kv.md) | In progress | M8: a block pool and page tables, so sequences of different lengths share one cache |
 | [043-per-row-values.md](043-per-row-values.md) | Implemented | M8: the one line behind five consumer reports — a value every row of a dispatch shares is a scalar, and a value that differs per row is a tensor |
-| [044-unbounded-context.md](044-unbounded-context.md) | Implemented | M8: attention over a cache larger than a workgroup, and why the loop is bounded by a binding's extent rather than by the length |
-| [049-grouped-gemm.md](049-grouped-gemm.md) | In progress | One weight matrix per segment, chosen at runtime — a mixture-of-experts layer over 046's extent (accel issue 18) |
-| [048-int4.md](048-int4.md) | In progress | An asymmetric grouped 4-bit weight representation and its derived bound, which decides whether a 27B-class model fits one device (accel issue 22) |
+| [044-unbounded-context.md](044-unbounded-context.md) | In progress | M8: attention over a cache larger than a workgroup, and why the loop is bounded by a binding's extent rather than by the length |
+| [049-grouped-gemm.md](049-grouped-gemm.md) | Implemented | One weight matrix per segment, chosen at runtime — a mixture-of-experts layer over 046's extent (accel issue 18) |
+| [048-int4.md](048-int4.md) | Implemented | An asymmetric grouped 4-bit weight representation and its derived bound, which decides whether a 27B-class model fits one device (accel issue 22) |
 | [047-linear-attention.md](047-linear-attention.md) | In progress | A matrix state per sequence and a scan over 046's segmented extent, so hybrid models whose three-in-four layers are not softmax attention become expressible |
 | [046-segmented-extents.md](046-segmented-extents.md) | In progress | A count per row, the offsets it implies, and the ragged query extent that closes accel issue 16. Written as a primitive because issue 18's grouped GEMM is its second caller |
 | [045-texture-attachments.md](045-texture-attachments.md) | In progress | M9: attachments become textures, a view names a subresource and may reinterpret its format, and a stage can fetch a texel. Resources, the render API, both backends, V13 and the stage half of texel fetch are built (§8); binding a texture to a pass, mip levels above one, and feedback rejection are owed |

@@ -1,6 +1,6 @@
 ---
 title: "Grouped GEMM: one weight matrix per segment, chosen at runtime"
-status: in progress
+status: implemented
 layer: tensor
 depends_on:
   - 010-kernel-corpus.md

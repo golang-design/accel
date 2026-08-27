@@ -1,6 +1,6 @@
 ---
 title: "The resumable cooperative lowering and the workgroup scheduler"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md

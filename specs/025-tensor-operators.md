@@ -1,6 +1,6 @@
 ---
 title: "The v0 tensor operator set: views, indexing, normalization, and matrix multiplication"
-status: implemented
+status: in progress
 layer: tensor
 depends_on:
   - 007-tensor-layer.md

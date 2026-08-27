@@ -1,6 +1,6 @@
 ---
 title: "Graph recording, the record-order plan, and transfer submission"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md

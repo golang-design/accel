@@ -1,6 +1,6 @@
 ---
 title: "Kernel pipeline: the generator, the IR, and one kernel end to end"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md

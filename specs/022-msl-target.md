@@ -1,6 +1,6 @@
 ---
 title: "The rest of the MSL target, and the Metal numeric profile"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md

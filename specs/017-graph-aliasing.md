@@ -1,6 +1,6 @@
 ---
 title: "Transient aliasing and the whole-plan oracle"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 015-graph-recording.md

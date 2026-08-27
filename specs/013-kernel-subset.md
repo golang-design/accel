@@ -1,6 +1,6 @@
 ---
 title: "Kernel subset: control flow, helpers, and the full rejection corpus"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 012-kernel-pipeline.md

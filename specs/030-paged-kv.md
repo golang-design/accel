@@ -1,6 +1,6 @@
 ---
 title: "A paged KV cache, and the sharing it makes possible"
-status: implemented
+status: in progress
 layer: tensor
 depends_on:
   - 007-tensor-layer.md

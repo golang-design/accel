@@ -1,6 +1,6 @@
 ---
 title: "Cooperative diagnostics: shared-memory definition, arrival, and conflicting access"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 018-cooperative-lowering.md

@@ -1,6 +1,6 @@
 ---
 title: "Kernel uniforms: std140 codecs and typed binding"
-status: implemented
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md

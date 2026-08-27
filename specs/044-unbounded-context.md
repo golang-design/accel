@@ -1,6 +1,6 @@
 ---
 title: "Attention over a cache larger than a workgroup"
-status: implemented
+status: in progress
 layer: tensor
 depends_on:
   - 002-compute-model.md
