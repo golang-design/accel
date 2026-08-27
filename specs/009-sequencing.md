@@ -2203,7 +2203,36 @@ the same function rather than by a constructor:
   already-contiguous layout, and a rank-zero tensor has no strides to be
   non-contiguous with.
 
-The remaining 51 are ready to build: mechanical, per-refusal, no design in them.
+### Closed — 2026-08-27
+
+**The count was measuring two different things.** A `b.fail` records a refusal
+against the *caller's* line: something a caller can provoke and should be told
+about. A plain `error` return in `compile.go` or `plan.go` is an invariant of
+the lowering, reached only if the builder handed the compiler something it does
+not construct. Both matched the audit's grep, and only the first is debt.
+
+Split that way, and after the work: **every caller-facing refusal in `tensor`
+and `quant` is now exercised**, except four that are dominated and carry their
+reasoning where it can be checked — `attention.go`'s ragged f16 branch (the
+dtype was narrowed a hundred lines earlier), `pack.go`'s two (an early return
+for a packed layout, and a stride nothing produces), and `policy.go`'s
+empty-history guard (no operator makes a zero-element `State`). `tensor` went
+89.9% → 94.8% across the sweep.
+
+Eleven internal error returns remain untested and are **not** counted as debt.
+Reaching them means constructing invalid internal state, which would mean
+exporting internals to test them — a worse trade than leaving a guard
+unexercised. Two of the ten in `compile.go` turned out to be caller-facing after
+all and are now tested: compiling against no runtime, and a strided operand
+reaching a kernel that indexes contiguously.
+
+**The unreachability mistake tried to happen a third time.** `LayerState`'s
+"has no shape" guard looks dead: `NewState` refuses a shape with no axes, so no
+state can start rank-zero. But `LayerState` *reduces* rank — it indexes a layer
+off the front — so applying it twice to a rank-1 state reaches the guard. Same
+shape as the `Slice` case: reasoning from how a value is *declared* rather than
+from every operator that *produces* one. The rule earned its third confirmation:
+enumerate the producers.
 
 ### M11. The four open reports' remainders — complete 2026-08-27
 
