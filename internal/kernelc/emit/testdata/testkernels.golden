@@ -171,6 +171,27 @@ func (GroupedDimsCodec) Encode(dst []byte, value GroupedDims) error {
 	return w.Err()
 }
 
+// GroupedTiledDimsCodec is the generated std140 codec for GroupedTiledDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type GroupedTiledDimsCodec struct{}
+
+// GroupedTiledDimsBlockSize is the encoded size of a GroupedTiledDims block, in bytes.
+const GroupedTiledDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (GroupedTiledDimsCodec) EncodedSize() int { return GroupedTiledDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (GroupedTiledDimsCodec) Encode(dst []byte, value GroupedTiledDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Experts)
+	w.U32(4, value.Tokens)
+	w.U32(8, value.K)
+	w.U32(12, value.N)
+	return w.Err()
+}
+
 // LinearDimsCodec is the generated std140 codec for LinearDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -3973,6 +3994,255 @@ kernel void GroupedMatVec(
 			slot.State = f
 		}
 		return groupedMatVecCoop(t, kernelabi.UniformValue[GroupedDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[uint32](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Shared[[128]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
+// groupedMatMulFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type groupedMatMulFrame struct {
+	pc     int
+	lx0    uint32
+	ly1    uint32
+	tid2   uint32
+	e3     uint32
+	col4   uint32
+	first5 uint32
+	last6  uint32
+	wBase7 uint32
+	zero8  float32
+	r09    uint32
+	row10  uint32
+	acc11  float32
+	k012   uint32
+	kk13   uint32
+	nn14   uint32
+	kk215  uint32
+	k16    uint32
+}
+
+// groupedMatMulCoop runs one invocation of GroupedMatMul to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func groupedMatMulCoop(t accel.Thread, d GroupedTiledDims, x []float32, w []float32, offsets []uint32, out []float32, tileA *[128]float32, tileB *[256]float32, f *groupedMatMulFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lx0 = t.LocalID().X
+			f.ly1 = t.LocalID().Y
+			f.tid2 = ((f.ly1 * uint32(16)) + f.lx0)
+			f.e3 = t.GroupID().Y
+			f.col4 = ((t.GroupID().X * uint32(16)) + f.lx0)
+			f.first5 = offsets[f.e3]
+			f.last6 = offsets[(f.e3 + uint32(1))]
+			if f.last6 > d.Tokens {
+				f.last6 = d.Tokens
+			}
+			f.wBase7 = ((f.e3 * d.K) * d.N)
+			f.zero8 = float32(0)
+			f.pc = 1
+			continue
+		case 1:
+			f.r09 = f.first5
+			f.pc = 12
+			continue
+		case 2:
+			f.row10 = (f.r09 + f.ly1)
+			f.acc11 = float32(0)
+			f.pc = 3
+			continue
+		case 3:
+			f.k012 = uint32(0)
+			f.pc = 9
+			continue
+		case 4:
+			if (f.row10 < f.last6) && ((f.k012 + f.lx0) < d.K) {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = x[(((f.row10 * d.K) + f.k012) + f.lx0)]
+			} else {
+				tr.Write(0, int(f.tid2))
+				tileA[f.tid2] = f.zero8
+			}
+			f.kk13 = (f.tid2 / uint32(16))
+			f.nn14 = (f.tid2 % uint32(16))
+			if ((f.k012 + f.kk13) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn14) < d.N) {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = w[(((f.wBase7 + ((f.k012 + f.kk13) * d.N)) + (t.GroupID().X * uint32(16))) + f.nn14)]
+			} else {
+				tr.Write(1, int(f.tid2))
+				tileB[f.tid2] = f.zero8
+			}
+			f.kk215 = (f.kk13 + uint32(8))
+			if ((f.k012 + f.kk215) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn14) < d.N) {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = w[(((f.wBase7 + ((f.k012 + f.kk215) * d.N)) + (t.GroupID().X * uint32(16))) + f.nn14)]
+			} else {
+				tr.Write(1, int((f.tid2 + uint32(128))))
+				tileB[(f.tid2 + uint32(128))] = f.zero8
+			}
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: ""}
+			return true
+		case 6:
+			{
+				f.k16 = uint32(0)
+				for ; f.k16 < uint32(16); f.k16 = (f.k16 + uint32(1)) {
+					f.acc11 = float32(f.acc11 + float32(tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k16)))]*tileB[tr.ReadAt(1, int(((f.k16*uint32(16))+f.lx0)))]))
+				}
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.pc = 8
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: ""}
+			return true
+		case 8:
+			f.k012 = (f.k012 + uint32(16))
+			f.pc = 9
+			continue
+		case 9:
+			if f.k012 < d.K {
+				f.pc = 4
+				continue
+			}
+			f.pc = 10
+			continue
+		case 10:
+			if (f.row10 < f.last6) && (f.col4 < d.N) {
+				out[((f.row10 * d.N) + f.col4)] = f.acc11
+			}
+			f.pc = 11
+			continue
+		case 11:
+			f.r09 = (f.r09 + uint32(8))
+			f.pc = 12
+			continue
+		case 12:
+			if f.r09 < f.last6 {
+				f.pc = 2
+				continue
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// GroupedMatMulKernel is the compiled form of GroupedMatMul.
+var GroupedMatMulKernel = kernelabi.Kernel{
+	Name:          "GroupedMatMul",
+	WorkgroupSize: accel.ID3{X: 16, Y: 8, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "w", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "d00deb934f204c8224ed09c63d408ca3",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct GroupedTiledDims {
+    uint Experts;
+    uint Tokens;
+    uint K;
+    uint N;
+};
+
+kernel void GroupedMatMul(
+    const device float *x [[buffer(0)]],
+    const device float *w [[buffer(1)]],
+    const device uint *offsets [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant GroupedTiledDims &d [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float tileA[128];
+    threadgroup float tileB[256];
+    uint lx = _lid.x;
+    uint ly = _lid.y;
+    uint tid = ((ly * uint(16)) + lx);
+    uint e = _wid.y;
+    uint col = ((_wid.x * uint(16)) + lx);
+    uint first = offsets[e];
+    uint last = offsets[(e + uint(1))];
+    if ((last > d.Tokens)) {
+        last = d.Tokens;
+    }
+    uint wBase = ((e * d.K) * d.N);
+    float zero = float(0);
+    for (uint r0 = first; (r0 < last); r0 = (r0 + uint(8))) {
+        uint row = (r0 + ly);
+        float acc = float(0);
+        for (uint k0 = uint(0); (k0 < d.K); k0 = (k0 + uint(16))) {
+            if (((row < last) && ((k0 + lx) < d.K))) {
+                tileA[tid] = x[(((row * d.K) + k0) + lx)];
+            } else {
+                tileA[tid] = zero;
+            }
+            uint kk = (tid / uint(16));
+            uint nn = (tid % uint(16));
+            if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+                tileB[tid] = w[(((wBase + ((k0 + kk) * d.N)) + (_wid.x * uint(16))) + nn)];
+            } else {
+                tileB[tid] = zero;
+            }
+            uint kk2 = (kk + uint(8));
+            if ((((k0 + kk2) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
+                tileB[(tid + uint(128))] = w[(((wBase + ((k0 + kk2) * d.N)) + (_wid.x * uint(16))) + nn)];
+            } else {
+                tileB[(tid + uint(128))] = zero;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
+                acc = (acc + (tileA[((ly * uint(16)) + k)] * tileB[((k * uint(16)) + lx)]));
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        if (((row < last) && (col < d.N))) {
+            out[((row * d.N) + col)] = acc;
+        }
+    }
+}
+`,
+	OrderIndependent: true,
+	Suspensions:      2,
+	SharedSizes:      []int{128, 256},
+	SharedBytes:      1536,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		var s1 [256]float32
+		kernelabi.Poison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "GroupedTiledDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, GroupedTiledDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*groupedMatMulFrame)
+		if f == nil {
+			f = &groupedMatMulFrame{}
+			slot.State = f
+		}
+		return groupedMatMulCoop(t, kernelabi.UniformValue[GroupedTiledDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[uint32](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[256]float32](a, 1), f, slot, slot.Shared)
 	},
 }
 
@@ -11779,6 +12049,7 @@ var Kernels = []*kernelabi.Kernel{
 	&MatMulTiledF32Kernel,
 	&MatMulTiledF32F16Kernel,
 	&GroupedMatVecKernel,
+	&GroupedMatMulKernel,
 	&QuantMatVecInt4Kernel,
 	&QuantMatMulInt4Kernel,
 	&LinearAttentionKernel,

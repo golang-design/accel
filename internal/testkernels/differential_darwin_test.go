@@ -922,6 +922,29 @@ func diffCases() []diffCase {
 			ulp: 8,
 		},
 		{
+			// The tiled grouped product: a workgroup per (expert, column tile)
+			// walking its own segment through shared tiles. The offsets decide
+			// the loop bound, so a backend that disagreed about the segment
+			// walk would show as whole rows differing rather than as rounding.
+			kernel: &testkernels.GroupedMatMulKernel,
+			counts: []int{6 * 40, 2 * 40 * 20, 3, 6 * 20},
+			uniforms: []any{testkernels.GroupedTiledDims{
+				Experts: 2, Tokens: 6, K: 40, N: 20,
+			}},
+			groups: accel.WorkgroupCount{X: 2, Y: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 2: // offsets: expert 0 gets four tokens, expert 1 two
+					return []float32{0, 4, 6}[i]
+				case 3: // the output starts empty
+					return 0
+				}
+				return defaultSeed(b, i)
+			},
+			why: "a sum of products over a shared tile, per section 7's reduction bound",
+			ulp: 8,
+		},
+		{
 			// A grouped product: a segment lookup choosing which weight matrix
 			// a token multiplies against, then the row kernels' reduction. The
 			// lookup is integer and must agree exactly; the reduction carries

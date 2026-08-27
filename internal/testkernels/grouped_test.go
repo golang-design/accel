@@ -243,3 +243,126 @@ func TestAGroupedTokenPastTheLastExpertIsPadding(t *testing.T) {
 		}
 	}
 }
+
+func runGroupedTiled(t *testing.T, d testkernels.GroupedTiledDims, x, w []float32,
+	offsets []uint32) []float32 {
+
+	t.Helper()
+	out := make([]float32, d.Tokens*d.N)
+	if err := kernel.DispatchCooperative(&testkernels.GroupedMatMulKernel,
+		accel.ID3{X: (d.N + testkernels.TileN - 1) / testkernels.TileN, Y: d.Experts},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{x, w, offsets, out},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	return out
+}
+
+// The tiled grouped product equals the row kernel, element for element.
+//
+// specs/049-grouped-gemm.md §5. The two walk the extent differently -- the row
+// kernel looks up each token's expert, the tiled one is dispatched per expert
+// and walks that expert's segment -- so agreement is a statement about the
+// extent being read the same way by two different traversals.
+func TestTheTiledGroupedProductMatchesTheRowKernel(t *testing.T) {
+	// Counts that are not multiples of TileM, and an expert with none, so the
+	// segment-edge masking runs rather than dividing evenly.
+	counts := []uint32{11, 0, 3, 20}
+	dv := testkernels.GroupedDims{Experts: 4, K: 40, N: 20}
+	x, w, offsets := groupedFixture(dv, counts)
+	total := offsets[dv.Experts]
+
+	want := runGrouped(t, dv, x, w, offsets)
+	got := runGroupedTiled(t, testkernels.GroupedTiledDims{
+		Experts: dv.Experts, Tokens: total, K: dv.K, N: dv.N,
+	}, x, w, offsets)
+
+	for i := range want {
+		// The two sum in different orders -- a tree over 128 lanes against a
+		// sequential walk within each K tile -- so specs/008-numerics.md §7's
+		// reduction bound rather than equality.
+		if e := math.Abs(float64(got[i] - want[i])); e > 1e-4 {
+			t.Fatalf("element %d (token %d, column %d): tiled %v, row kernel %v",
+				i, uint32(i)/dv.N, uint32(i)%dv.N, got[i], want[i])
+		}
+	}
+}
+
+// Counts summing past x's rows are clamped rather than written past the end.
+//
+// The memory-safety guard specs/049-grouped-gemm.md §5 states, and it exists
+// only in this kernel. [GroupedMatVec]'s token index comes from the grid, which
+// is derived from x's row count, so it cannot leave the buffer however wrong the
+// counts are. Here the index comes from the *offsets*, which are device data
+// that no host check can validate -- specs/046-segmented-extents.md §1 property
+// 3 -- so without the Tokens bound this reads x and writes out past their ends.
+//
+// A write, not just a read, which is what makes it worse than the over-sum case
+// on issue #24 and why that issue's boundary does not cover this kernel.
+func TestATiledGroupedProductClampsCountsPastTheRows(t *testing.T) {
+	dv := testkernels.GroupedDims{Experts: 2, K: 40, N: 20}
+	x, w, offsets := groupedFixture(dv, []uint32{4, 4})
+	total := offsets[dv.Experts] // 8 rows of x exist
+
+	// The counts now claim more tokens than x holds: 4 + 12 against 8 rows.
+	overOffsets := []uint32{0, 4, 16}
+
+	got := runGroupedTiled(t, testkernels.GroupedTiledDims{
+		Experts: dv.Experts, Tokens: total, K: dv.K, N: dv.N,
+	}, x, w, overOffsets)
+
+	if len(got) != int(total*dv.N) {
+		t.Fatalf("the output is %d elements for %d rows", len(got), total)
+	}
+
+	// The rows that do exist are still that expert's product. Expert 1 claims
+	// rows 4..15 and only 4..7 exist, so those four must be right and nothing
+	// past them may have been touched -- which a panic here would already say.
+	for tok := uint32(4); tok < total; tok++ {
+		for n := uint32(0); n < dv.N; n++ {
+			want := 0.0
+			for k := uint32(0); k < dv.K; k++ {
+				want += float64(x[tok*dv.K+k]) * float64(w[1*dv.K*dv.N+k*dv.N+n])
+			}
+			if e := math.Abs(float64(got[tok*dv.N+n]) - want); e > 1e-4 {
+				t.Fatalf("token %d column %d is %v, want %v", tok, n,
+					got[tok*dv.N+n], want)
+			}
+		}
+	}
+}
+
+// The authored tiled grouped kernel and its generated lowering agree.
+func TestTheAuthoredTiledGroupedKernelMatchesItsLowering(t *testing.T) {
+	dv := testkernels.GroupedDims{Experts: 3, K: 40, N: 18}
+	x, w, offsets := groupedFixture(dv, []uint32{5, 0, 9})
+	total := offsets[dv.Experts]
+	d := testkernels.GroupedTiledDims{
+		Experts: dv.Experts, Tokens: total, K: dv.K, N: dv.N,
+	}
+
+	groups := kernel.ID3{
+		X: (d.N + testkernels.TileN - 1) / testkernels.TileN, Y: d.Experts, Z: 1,
+	}
+	authored := make([]float32, total*d.N)
+	for gy := range groups.Y {
+		for gx := range groups.X {
+			var tileA [128]float32
+			var tileB [256]float32
+			kernel.RunAuthored(kernel.ID3{X: 16, Y: 8, Z: 1},
+				kernel.ID3{X: gx, Y: gy}, groups, 128, func(th kernel.Thread) {
+					testkernels.GroupedMatMul(th, d, x, w, offsets, authored,
+						&tileA, &tileB)
+				})
+		}
+	}
+
+	generated := runGroupedTiled(t, d, x, w, offsets)
+	for i := range authored {
+		if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+		}
+	}
+}
