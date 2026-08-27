@@ -58,11 +58,44 @@ them differently.**
 2. **The counts are u32 and the offsets are u32.** A segmented axis is a count
    of elements, and [043](043-per-row-values.md) already made every per-row
    quantity u32 for the reason a length is one.
-3. **$\sum n_r$ must equal the flat axis exactly, and a mismatch is refused.**
-   Not padding, not truncation. [044](044-unbounded-context.md) deviation 6 is
-   the precedent: a bound the kernel clamps is a wrong answer the kernel cannot
-   distinguish from a right one, so anything the host *can* check, the host
-   refuses.
+3. **$\sum n_r$ may not exceed the flat axis, and rows past it are padding.**
+   Where the host can see both sides, a mismatch is refused:
+   [044](044-unbounded-context.md) deviation 6 is the precedent, because a bound
+   the kernel clamps is a wrong answer the kernel cannot distinguish from a
+   right one. But the counts are *device* data by
+   [043](043-per-row-values.md) §2, so their sum is not a value the host has at
+   record time. The check has to live where the value does, and that is the
+   kernel:
+
+   $$
+   \text{seq}(t) = \big|\{r : \mathrm{off}(r{+}1) \le t\}\big|,
+   \qquad
+   \text{seq}(t) = R \iff t \ge \mathrm{off}(R)
+   $$
+
+   ```
+   off = [0, 2, 3, 3]        R = 3 rows, 3 elements claimed
+   x   = [ a b | c |  | p ]  4 rows supplied
+          row0  r1  r2  ^ belongs to no row
+   ```
+
+   **A flat index at or past $\mathrm{off}(R)$ belongs to no row.** The kernel
+   computes nothing for it and writes an identity — zero for a sum, for an
+   attention output, for a product. That makes a padded buffer legal, which is
+   worth having on its own: a bucketed batch can pad to a plan shape and let the
+   extra rows fall off the end, instead of inflating a real row's count to
+   absorb them.
+
+   **Clamping to $R-1$ is the option rejected.** It puts the read back in range
+   and keeps a wrong answer, which is what this property exists to prevent.
+   Returning an identity is distinguishable; a stray token silently added to the
+   last row is not.
+
+   **Cost, stated.** A caller whose counts are wrong by mistake now reads zeros
+   where it expected answers, rather than crashing. That is worse for a caller
+   who would have preferred the crash, and it is the price of the only
+   memory-safe behaviour available without a host check that cannot be written.
+   `seq(t) == R` is not otherwise reachable, so nothing else pays it.
 
 ### 1.1 Offsets are derived, not supplied
 
@@ -203,8 +236,9 @@ Each assertion names the mutation it catches.
 - **A token attends its own position and not the next one.** Constructed so the
   next position holds a value that would change the output: reading it is the
   causal leak §2.2 describes, and it is invisible in a smooth distribution.
-- **$\sum n_r \ne$ `q.shape[0]` is refused at record time**, naming both
-  numbers. Treating the tail as padding passes every other test here.
+- **A token past the last segment is padding**: it writes zero, reads nothing
+  out of bounds, and disturbs no row that does belong to a sequence. §1 property
+  3, and the assertion that replaced a wrong one — see the correction below.
 - **Two graphs differing only in whether `QueryExtents` was supplied have
   different plan identities**, asserted through [`Builder.Identity`] rather than
   reasoned from the digest's inputs — §3 claims the kernel choice makes this
@@ -269,3 +303,31 @@ specs at once to see it.
   the caller also knows. Deriving one would remove a binding and a way to get it
   wrong, and it would also couple two things a scheduler currently sets
   independently. Left alone until a caller asks.
+
+## 6. Correction — 2026-08-27
+
+§5 asserted that `$\sum n_r \ne$ q.shape[0]` was **refused at record time**.
+That was never true and could not have been. `QueryExtents` is a tensor, so its
+sum is device data by [043](043-per-row-values.md) §2, and `tensor.Attention`
+has no value to compare `q.shape[0]` against. No code implemented the refusal
+and no test checked it, which is how an assertion this specific survived: the
+prose stated a guarantee and nothing was on the hook for it.
+
+What it cost: the kernels took the invariant as given. `AttentionRagged`,
+`AttentionRaggedF16` and `GroupedMatVec` computed the segment index as a count
+of the rows ending at or before a token, so a token past every row produced
+`seq == R` — one past the end of `offsets`, of `lengths`, and of the page
+table's rows. A panic on the CPU backend; on a GPU, a read of the next
+sequence's cache returned as this token's answer.
+
+Found by [tgo](https://github.com/latere-ai/tgo), the validating consumer, and
+filed as [#24](https://github.com/golang-design/accel/issues/24). What
+generalizes: **an assertion naming a specific refusal is a claim that some code
+refuses.** The spec review that would have caught this is grepping each Done
+bullet for the code that implements it, and it is cheap.
+
+Fixing it also found a second bug one layer down. The guard is the first kernel
+construct to return early *and* hold barriers, and the generator lowered a bare
+`return` into the resumable form, whose Go signature returns "did this
+invocation suspend". The corpus stopped compiling, which is the loud failure;
+the quiet one was that no test covered the pairing until a kernel used it.

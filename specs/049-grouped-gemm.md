@@ -34,8 +34,10 @@ w       = [E, K, N]           one matrix per expert
 out     = [7, N]
 ```
 
-**A count of zero is an expert nothing routed to**, which §1 already makes an
-ordinary member rather than a case. That matters more here than it did for
+**A count of zero is an expert nothing routed to**, which
+[046](046-segmented-extents.md) §1 already makes an ordinary member rather than
+a case. **A token past the last expert's segment routed nowhere**, which the
+same property makes padding: it reads no weights and its output row is zero. That matters more here than it did for
 attention: with top-2-of-8 routing, six experts get nothing on a single token
 and a naive implementation divides by the count.
 
@@ -95,5 +97,9 @@ Each assertion names the mutation it catches.
   token**, which fails for a kernel that indexes the weight tensor by anything
   other than the segment it looked up — including one that always reads expert
   zero, which passes every single-expert test.
+- **A token past the last expert's segment writes zero and reads no weights**,
+  [046](046-segmented-extents.md) §1 property 3. The stray index lands on the
+  weight base here rather than on an offset, so the read is a matrix past the
+  tensor — on a GPU, whatever allocation follows it, read as weights.
 - **CPU and Metal agree** within [008](008-numerics.md) §7's reduction bound,
   which is what a sum of products carries.
