@@ -145,3 +145,68 @@ func Int4MatVec(b *Builder, a *Tensor, w Int4) *Tensor {
 			"zero point, so it cannot express where a 4-bit group's codes sit"},
 	}, accel.F32, Shape{n})
 }
+
+// Int4MatMul multiplies a batch of f32 activations by a packed 4-bit matrix.
+//
+//	out[m][n] = Σₖ a[m][k] · ((code(k·N+n) − z[g]) · s[g])
+//
+// # Why a separate operator from [Int4MatVec]
+//
+// The shapes a decode step and a prefill have, and they want different kernels
+// for the reason specs/048-int4.md §5 gives. A decode reads the whole model to
+// produce one token, so its matvec is bound by how fast the weights arrive. A
+// prefill has many tokens against the same matrix, so the matrix is read once
+// per tile of tokens and the unpacking is amortised over the tile rather than
+// repeated per token.
+//
+// Taking a vector here would work and would be slower than [Int4MatVec], and
+// taking a matrix there would not compile. A caller should see which one they
+// wrote, which is [QuantMatMul]'s argument one width down.
+//
+// The accuracy is [Int4MatVec]'s: the same representation, the same
+// reconstruction, and specs/048-int4.md §3's bound covers both.
+func Int4MatMul(b *Builder, a *Tensor, w Int4) *Tensor {
+	// Checked before the poison test, for the reason Int4MatVec records.
+	if why := checkInt4(w, "the weight matrix"); why != "" {
+		return b.fail(1, "Int4MatMul", "%s", why)
+	}
+	if poisoned(a) || poisoned(w.Codes, w.Scales, w.Zeros) {
+		return b.poison()
+	}
+	if a.dtype != accel.F32 {
+		return b.fail(1, "Int4MatMul", "activations are %v and this kernel reads f32",
+			a.dtype)
+	}
+	if len(a.shape) != 2 {
+		return b.fail(1, "Int4MatMul", "activations are %v; this is the batched form "+
+			"and takes [rows, K]. One row is Int4MatVec, which is the decode shape "+
+			"and reads the matrix once per token", a.shape)
+	}
+	m, k := a.shape[0], a.shape[1]
+	if k == 0 || w.Weights%k != 0 {
+		return b.fail(1, "Int4MatMul", "activations are %d wide and the matrix holds "+
+			"%d weights; the matrix is [K, N] with K the activation width, so the "+
+			"second is a multiple of the first", k, w.Weights)
+	}
+	n := w.Weights / k
+
+	return b.record(node{
+		op: "Int4MatMul", inputs: []*Tensor{a, w.Codes, w.Scales, w.Zeros},
+		kernel: &testkernels.QuantMatMulInt4Kernel,
+		uniform: func(map[string]ScalarValue) any {
+			return testkernels.GEMMDims{M: uint32(m), K: uint32(k), N: uint32(n)}
+		},
+		grid: func(*Tensor) accel.WorkgroupCount {
+			// One workgroup per output tile. The tile is the reason this
+			// operator exists: every weight it unpacks is read TileM times.
+			return accel.WorkgroupCount{
+				X: (n + testkernels.TileN - 1) / testkernels.TileN,
+				Y: (m + testkernels.TileM - 1) / testkernels.TileM,
+			}
+		},
+		reason: fmt.Sprintf("the tiled 4-bit kernel: %d rows over %d columns, each "+
+			"weight unpacked once per tile and read %d times", m, n, testkernels.TileM),
+		rejected: []string{"the 4-bit row kernel: it reduces one row per workgroup, so " +
+			"a batch would re-read and re-unpack the whole matrix per token"},
+	}, accel.F32, Shape{m, n})
+}

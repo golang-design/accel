@@ -268,3 +268,116 @@ func TestAnInt4MatVecRefusesWrongActivations(t *testing.T) {
 		})
 	}
 }
+
+// A 4-bit matmul through the public surface equals the matvec, row for row.
+//
+// specs/048-int4.md §5. The prefill shape against the decode shape over one
+// weight matrix: the operators pick different kernels, and the answer is the
+// same product either way. Compared against the matvec rather than against the
+// exact product because §3's budget already covers the distance to exact, and
+// what this asserts is that choosing the batched operator does not change the
+// arithmetic a caller gets.
+func TestAnInt4MatMulEqualsTheMatVecRowForRow(t *testing.T) {
+	const K, N, M = 200, 20, 5
+	rt := newRuntime(t)
+	d := rt.Device()
+
+	rng := rand.New(rand.NewPCG(53, 59))
+	w := make([]float32, K*N)
+	for i := range w {
+		w[i] = rng.Float32()*2 - 1
+	}
+	a := make([]float32, M*K)
+	for i := range a {
+		a[i] = float32(math.Sin(float64(i) * 0.23))
+	}
+	codes, scales, zeros := quant.Int4Quantize(w)
+
+	run := func(label string, rows int, act []float32, batched bool) []float32 {
+		t.Helper()
+		b := rt.NewBuilder(label)
+		shape := tensor.Shape{K}
+		if batched {
+			shape = tensor.Shape{rows, K}
+		}
+		av := tensor.Input(b, tensor.ValueDesc{
+			Name: "a", DType: accel.F32, Shape: shape})
+		cw := tensor.Weight(b, tensor.ValueDesc{
+			Name: "codes", DType: accel.U32, Shape: tensor.Shape{len(codes)}})
+		sw := tensor.Weight(b, tensor.ValueDesc{
+			Name: "scales", DType: accel.F16, Shape: tensor.Shape{len(scales)}})
+		zw := tensor.Weight(b, tensor.ValueDesc{
+			Name: "zeros", DType: accel.F16, Shape: tensor.Shape{len(zeros)}})
+		m := tensor.Int4{Codes: cw, Scales: sw, Zeros: zw, Weights: K * N}
+		if batched {
+			tensor.Output(b, "out", tensor.Int4MatMul(b, av, m))
+		} else {
+			tensor.Output(b, "out", tensor.Int4MatVec(b, av, m))
+		}
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: label})
+		if err != nil {
+			t.Fatalf("compile %s: %v", label, err)
+		}
+		defer plan.Close()
+
+		out := f32Buffer(t, d, "out", make([]float32, rows*N))
+		f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+			"a":      f32Buffer(t, d, "a", act),
+			"codes":  u32Buffer(t, d, "codes", codes),
+			"scales": f16Buffer(t, d, "scales", f32s(scales)),
+			"zeros":  f16Buffer(t, d, "zeros", f32s(zeros)),
+			"out":    out,
+		}})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit %s: %v", label, err)
+		}
+		got := make([]float32, rows*N)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback %s: %v", label, err)
+		}
+		return got
+	}
+
+	batched := run("int4mm", M, a, true)
+	for m := range M {
+		row := run("int4mv", 1, a[m*K:(m+1)*K], false)
+		for n := range N {
+			var mag float64
+			for k := range K {
+				mag += math.Abs(float64(a[m*K+k]) * float64(w[k*N+n]))
+			}
+			// The two sum in different orders, so specs/008-numerics.md §7's
+			// reduction bound rather than equality.
+			if e := math.Abs(float64(batched[m*N+n] - row[n])); e > mag*1e-6 {
+				t.Fatalf("row %d column %d: batched %v, matvec %v, off by %v where "+
+					"the reduction budget is %v", m, n, batched[m*N+n], row[n], e,
+					mag*1e-6)
+			}
+		}
+	}
+}
+
+// The batched operator refuses what the row operator takes, and says which.
+func TestAnInt4MatMulRefusesAVector(t *testing.T) {
+	rt := newRuntime(t)
+	b := rt.NewBuilder("int4mm")
+	av := tensor.Input(b, tensor.ValueDesc{
+		Name: "a", DType: accel.F32, Shape: tensor.Shape{64}})
+	cw := tensor.Weight(b, tensor.ValueDesc{
+		Name: "codes", DType: accel.U32, Shape: tensor.Shape{64 * 4 / 8}})
+	sw := tensor.Weight(b, tensor.ValueDesc{
+		Name: "scales", DType: accel.F16, Shape: tensor.Shape{2}})
+	zw := tensor.Weight(b, tensor.ValueDesc{
+		Name: "zeros", DType: accel.F16, Shape: tensor.Shape{2}})
+	tensor.Int4MatMul(b, av, tensor.Int4{
+		Codes: cw, Scales: sw, Zeros: zw, Weights: 64 * 4})
+
+	err := b.Err()
+	if err == nil {
+		t.Fatal("a vector was accepted by the batched operator")
+	}
+	if !strings.Contains(err.Error(), "Int4MatVec") {
+		t.Errorf("the refusal should name the operator that takes a vector, got %v", err)
+	}
+}
