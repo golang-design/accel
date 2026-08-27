@@ -45,8 +45,12 @@ x        = [ a b c | d | e f g h ]      one flat axis of length 8
 **`off` has `R+1` entries and the last one is the total.** That is not a
 convenience: a kernel that owns row `r` needs both ends of it, and deriving the
 end as `off(r) + n[r]` reads two buffers where one would do. The extra entry
-also makes the total available without a reduction, which is what lets a caller
-be refused for a flat buffer whose length disagrees with the counts.
+also makes the total available without a reduction, which is what lets **the
+kernel** recognise a flat index that belongs to no row — property 3 below.
+
+Not a caller: `off(R)` is a value in a device buffer, so the host cannot read it
+at record time and no refusal can be built on it. An earlier revision of this
+paragraph said it could, which is the mistake §6 corrects.
 
 **Three properties are stated here so that three callers cannot each decide
 them differently.**
@@ -312,6 +316,11 @@ sum is device data by [043](043-per-row-values.md) §2, and `tensor.Attention`
 has no value to compare `q.shape[0]` against. No code implemented the refusal
 and no test checked it, which is how an assertion this specific survived: the
 prose stated a guarantee and nothing was on the hook for it.
+
+The claim appeared **twice**: §5's Done bullet, and §1's paragraph on why `off`
+carries `R+1` entries, which said the spare entry was what let a caller be
+refused. Both are corrected. Two statements of one wrong idea is why it read as
+settled.
 
 What it cost: the kernels took the invariant as given. `AttentionRagged`,
 `AttentionRaggedF16` and `GroupedMatVec` computed the segment index as a count
