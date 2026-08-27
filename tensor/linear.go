@@ -103,7 +103,8 @@ func LinearAttention(b *Builder, q, k, v *Tensor, s *State, o LinearOptions) (*T
 	if o.QueryExtents == nil || o.Alpha == nil || o.Beta == nil {
 		return fail("QueryExtents, Alpha and Beta are all " +
 			"required: the extent says which tokens belong to which sequence, and the " +
-			"two gates are per token (specs/047-linear-attention.md)")
+			"two gates are per token, or per token and head " +
+			"(specs/047-linear-attention.md)")
 	}
 	for _, c := range []struct {
 		name string
