@@ -887,6 +887,17 @@ func (e *emitter) stmt(s ir.Stmt, depth int) {
 			break
 		}
 		if s.Value == nil {
+			// The resumable lowering reports whether the invocation suspended,
+			// so an authored `return` -- which says this invocation is finished
+			// -- is `return false`, the same value the scheduler reads when the
+			// body runs off its end. A bare `return` there emits a function
+			// that does not compile, which is how this was found: the segment
+			// guard in AttentionRagged is the first kernel to return early
+			// *and* hold barriers.
+			if e.frameLocals != nil {
+				e.printf("%sreturn false\n", indent(depth))
+				return
+			}
 			e.printf("%sreturn\n", indent(depth))
 			return
 		}

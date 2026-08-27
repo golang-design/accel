@@ -569,3 +569,52 @@ func TestADirectlyAssignedRendezvousIsAccepted(t *testing.T) {
 		}
 	}
 }
+
+// A kernel that returns early and holds barriers lowers the return to the value
+// the scheduler reads as "finished", not to a bare return.
+//
+// The resumable lowering reports whether the invocation suspended, so its Go
+// signature returns bool. A bare `return` there emits a function that does not
+// compile -- the whole corpus fails to build, which is loud, but only while some
+// kernel in it happens to return early. This asserts the lowering directly so
+// the guard is checked whether or not a corpus kernel uses it.
+//
+// Found by fixing golang-design/accel#24: the segment guard in AttentionRagged
+// is the first kernel to return early *and* hold barriers, and the two features
+// had never met.
+func TestAnEarlyReturnInACooperativeKernelReportsFinished(t *testing.T) {
+	body := ir.NewBlock(0,
+		ir.NewIf(0,
+			ir.NewConst(0, &ir.Type{Kind: ir.Bool}, constant.MakeBool(true)),
+			ir.NewBlock(0, ir.NewReturn(0, nil)),
+			nil),
+		ir.NewExprStmt(0,
+			ir.NewIntrinsic(0, &ir.Type{Kind: ir.Invalid}, ir.OpBarrier, nil, nil)))
+
+	k := &ir.Func{
+		Name: "EarlyOut", Stage: ir.StageCompute, Cooperative: true,
+		Workgroup: [3]uint32{128, 1, 1}, Thread: 0,
+		Body: body,
+		Params: []*ir.Param{
+			ir.NewParam(0, &ir.Type{Kind: ir.ID3Kind}, 0, "t", nil),
+		},
+	}
+
+	out, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	src := string(out)
+
+	if !strings.Contains(src, "return false") {
+		t.Errorf("the early return should lower to the finished value, got:\n%s", src)
+	}
+	// The bare form is what did not compile. Checked as a line so that
+	// "return false" does not satisfy it.
+	for _, line := range strings.Split(src, "\n") {
+		if strings.TrimSpace(line) == "return" {
+			t.Errorf("a bare return survived into the resumable lowering:\n%s", src)
+			break
+		}
+	}
+}
