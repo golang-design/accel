@@ -410,37 +410,47 @@ func TestAReplicatedPerHeadGateEqualsASharedOne(t *testing.T) {
 // absence of it failed CI over: every other test here runs the generated form,
 // so nothing calls the authored function, and on Linux the Metal differential
 // is not there to cover it either.
+// Both gate layouts, because the gate index divides by GateHeads and a lowering
+// that diverged only at a non-unit divisor is exactly what one layout hides.
 func TestTheAuthoredLinearKernelMatchesItsLowering(t *testing.T) {
-	d := linearDims()
-	counts := []uint32{2, 1}
-	q, k, v, alpha, beta, state, offsets := linearFixture(d, counts)
+	for _, gateHeads := range []uint32{1, 2} {
+		t.Run(fmt.Sprintf("gateHeads=%d", gateHeads), func(t *testing.T) {
+			d := linearDims()
+			d.GateHeads = gateHeads
+			counts := []uint32{2, 1}
+			q, k, v, alpha, beta, state, offsets := linearFixture(d, counts)
 
-	authoredState := append([]float32(nil), state...)
-	total := offsets[d.Batch]
-	authored := make([]float32, total*d.Heads*d.ValueDim)
-	groups := kernel.ID3{X: d.Batch * d.Heads, Y: 1, Z: 1}
-	for g := range groups.X {
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
-			groups, 128, func(th kernel.Thread) {
-				testkernels.LinearAttention(th, d, q, k, v, alpha, beta, offsets,
-					authoredState, authored)
-			})
-	}
+			authoredState := append([]float32(nil), state...)
+			total := offsets[d.Batch]
+			authored := make([]float32, total*d.Heads*d.ValueDim)
+			groups := kernel.ID3{X: d.Batch * d.Heads, Y: 1, Z: 1}
+			for g := range groups.X {
+				kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+					groups, 128, func(th kernel.Thread) {
+						testkernels.LinearAttention(th, d, q, k, v, alpha, beta, offsets,
+							authoredState, authored)
+					})
+			}
 
-	generated := runLinear(t, d, q, k, v, alpha, beta, state, offsets)
+			generated := runLinear(t, d, q, k, v, alpha, beta, state, offsets)
 
-	// Within a bound for the reason every f32 comparison of the two forms here
-	// carries one: the generated lowering rounds each product explicitly and
-	// ordinary Go may fuse a multiply and an add on a target with FMA.
-	for i := range authored {
-		if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
-			t.Fatalf("output %d: authored %v, generated %v", i, authored[i], generated[i])
-		}
-	}
-	for i := range authoredState {
-		if math.Abs(float64(authoredState[i]-state[i])) > 1e-5 {
-			t.Fatalf("state %d: authored %v, generated %v", i, authoredState[i], state[i])
-		}
+			// Within a bound for the reason every f32 comparison of the two forms
+			// here carries one: the generated lowering rounds each product
+			// explicitly and ordinary Go may fuse a multiply and an add on a
+			// target with FMA.
+			for i := range authored {
+				if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+					t.Fatalf("output %d: authored %v, generated %v",
+						i, authored[i], generated[i])
+				}
+			}
+			for i := range authoredState {
+				if math.Abs(float64(authoredState[i]-state[i])) > 1e-5 {
+					t.Fatalf("state %d: authored %v, generated %v",
+						i, authoredState[i], state[i])
+				}
+			}
+		})
 	}
 }
 

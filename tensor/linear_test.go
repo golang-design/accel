@@ -442,6 +442,42 @@ func TestTheGateLayoutReachesThePlanKey(t *testing.T) {
 	}
 }
 
+// A plan says which gate layout it was built for.
+//
+// The digest above is what a cache reads and this is what a person reads. A
+// reason that did not name the layout would leave the two plans distinguishable
+// only by a hash, which is no help to anyone holding the wrong one.
+func TestALinearPlanReasonNamesTheGateLayout(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		gateHeads int
+		want      string
+	}{
+		{"shared", 0, "shared by every head"},
+		{"per head", 2, "a gate per token per head, 2 of them"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := buildLinear(t, linearCase{
+				batch: 1, heads: 2, keyDim: 4, valueDim: 4, counts: []uint32{2},
+				gateHeads: c.gateHeads,
+			})
+			var found string
+			for _, s := range p.plan.Selections() {
+				if strings.Contains(s.Reason, "gated delta scan") {
+					found = s.Reason
+				}
+			}
+			if found == "" {
+				t.Fatalf("no selection reports the gated delta scan: %+v",
+					p.plan.Selections())
+			}
+			if !strings.Contains(found, c.want) {
+				t.Errorf("the scan reports %q, which does not say %q", found, c.want)
+			}
+		})
+	}
+}
+
 // The dtypes and shapes a gated delta layer refuses.
 //
 // Every field is required, so "accepted and ignored" cannot happen here -- what
