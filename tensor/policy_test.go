@@ -184,6 +184,19 @@ func TestValidateRefusesAPolicyRatherThanRepairingIt(t *testing.T) {
 		{"a top-p above one", tensor.SamplingOptions{Temperature: 1, TopP: 1.5}, "fraction"},
 		{"a negative repetition penalty",
 			tensor.SamplingOptions{Temperature: 1, Repetition: -1}, "flips the sign"},
+		{"a NaN temperature",
+			tensor.SamplingOptions{Temperature: float32(math.NaN())}, "Temperature is NaN"},
+		{"a negative top-k",
+			tensor.SamplingOptions{Temperature: 1, TopK: -1}, "TopK is -1"},
+		{"a NaN repetition penalty",
+			tensor.SamplingOptions{Temperature: 1, Repetition: float32(math.NaN())},
+			"Repetition is NaN"},
+		{"a NaN presence penalty",
+			tensor.SamplingOptions{Temperature: 1, Presence: float32(math.NaN())},
+			"Presence is NaN"},
+		{"a NaN frequency penalty",
+			tensor.SamplingOptions{Temperature: 1, Frequency: float32(math.NaN())},
+			"Frequency is NaN"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.o.Validate()
@@ -306,5 +319,150 @@ func TestASequenceReproducesFromOneSeedAcrossAnInterleave(t *testing.T) {
 	if same == len(first) {
 		t.Fatalf("two different seeds produced the same %d tokens: the draw is not "+
 			"reaching the walk", len(first))
+	}
+}
+
+// Scalars refuses a history window it cannot honour.
+//
+// specs/039-sampling-policy.md section 4: n is how much of the ring is filled,
+// and it is refused above the capacity rather than clamped, because a clamp
+// turns a caller's off-by-one into a penalty over a window they did not ask for.
+func TestSamplingScalarsRefuseAnImpossibleWindow(t *testing.T) {
+	penalised := tensor.SamplingOptions{Temperature: 1, Repetition: 1.1}
+	if !penalised.Penalised() {
+		t.Fatal("the fixture is not a penalised policy, so neither branch is reached")
+	}
+
+	for _, c := range []struct {
+		name       string
+		n, histCap uint32
+		want       string
+	}{
+		{"no capacity at all", 0, 0, "history capacity is 0"},
+		{"a count past the end", 9, 8, "holds 9 of a capacity of 8"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := penalised.Scalars("s", c.n, c.histCap)
+			if err == nil {
+				t.Fatalf("n=%d cap=%d was accepted", c.n, c.histCap)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("refused with %q, which does not mention %q", err, c.want)
+			}
+		})
+	}
+
+	// An unpenalised policy reaches neither: the window belongs to the penalty.
+	plain := tensor.SamplingOptions{Temperature: 1}
+	if _, err := plain.Scalars("s", 9, 0); err != nil {
+		t.Fatalf("an unpenalised policy should not consult the window: %v", err)
+	}
+}
+
+// Sample's refusals, each naming what it refused.
+//
+// specs/039-sampling-policy.md: a policy quietly changed into a different one
+// produces plausible tokens and no evidence, so every one of these refuses
+// rather than repairs. They are checked here because a refusal nothing exercises
+// may have the wrong condition or name the wrong value, and the graph would
+// still compile.
+func TestSampleRefusals(t *testing.T) {
+	rt := newRuntime(t)
+	const vocab = 8
+
+	logits := func(b *tensor.Builder) *tensor.Tensor {
+		return tensor.Input(b, tensor.ValueDesc{
+			Name: "logits", DType: accel.F32, Shape: tensor.Shape{vocab}})
+	}
+	draws := func(b *tensor.Builder) *tensor.Tensor {
+		return tensor.Input(b, tensor.ValueDesc{
+			Name: "draws", DType: accel.F32, Shape: tensor.Shape{1}})
+	}
+	state := func(b *tensor.Builder, n string, dt accel.DType, dims ...int) *tensor.State {
+		return tensor.NewState(b, tensor.StateDesc{Name: n, DType: dt, Shape: dims})
+	}
+	pen := tensor.SamplingOptions{Temperature: 1, Repetition: 1.1}
+
+	for _, tc := range []struct {
+		name  string
+		build func(b *tensor.Builder)
+		want  string
+	}{{
+		name: "a policy that does not validate",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), nil, nil,
+				tensor.SamplingOptions{Temperature: -1}, "s")
+		},
+		want: "divisor",
+	}, {
+		name: "a penalty with no history",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), nil,
+				state(b, "c", accel.U32, vocab), pen, "s")
+		},
+		want: "history is nil",
+	}, {
+		name: "a penalty with no counts",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b),
+				state(b, "h", accel.U32, 4), nil, pen, "s")
+		},
+		want: "counts is nil",
+	}, {
+		name: "storage with no penalty to read it",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), state(b, "h", accel.U32, 4),
+				state(b, "c", accel.U32, vocab),
+				tensor.SamplingOptions{Temperature: 1}, "s")
+		},
+		want: "storage nothing reads",
+	}, {
+		name: "greedy decoding handed a draw",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), nil, nil,
+				tensor.SamplingOptions{Temperature: 0}, "s")
+		},
+		want: "consumes no randomness",
+	}, {
+		name: "a stochastic policy with no draw",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), nil, nil, nil,
+				tensor.SamplingOptions{Temperature: 1}, "s")
+		},
+		want: "draws against its own uniform",
+	}, {
+		name: "counts that are not u32",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), state(b, "h", accel.U32, 4),
+				state(b, "c", accel.F32, vocab), pen, "s")
+		},
+		want: "the penalty counts tokens",
+	}, {
+		name: "counts that are not one per token id",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), state(b, "h", accel.U32, 4),
+				state(b, "c", accel.U32, vocab+1), pen, "s")
+		},
+		want: "one count per token id",
+	}, {
+		name: "a history that does not hold ids",
+		build: func(b *tensor.Builder) {
+			tensor.Sample(b, logits(b), draws(b), state(b, "h", accel.F32, 4),
+				state(b, "c", accel.U32, vocab), pen, "s")
+		},
+		want: "it holds token ids",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := rt.NewBuilder("sample")
+			tensor.DeclareSamplingScalars(b, pen, "s")
+			tc.build(b)
+			err := b.Err()
+			if err == nil {
+				t.Fatalf("%s was accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal should say %q, got %v", tc.want, err)
+			}
+		})
 	}
 }
