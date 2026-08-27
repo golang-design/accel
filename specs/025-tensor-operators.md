@@ -132,6 +132,26 @@ materialization is.
 
 ## 6. Done
 
+### The both-backends bullet — 2026-08-27
+
+The first bullet below says "every operator above builds, infers, lowers, and
+runs on both backends", and half of it rested on the corpus differential, which
+compares **kernels** rather than the operators that select and drive them. The
+difference is not academic: an operator computing the wrong grid, materializing
+the wrong view, or binding its operands in the wrong order passes every kernel
+differential and fails a plan.
+
+`TestTheRemainingOperatorsAgreeOnCPUAndMetal` closes it for the operators no
+other cross-backend test reached — `GatherRows`, `RoPE`, `Softmax`, and the
+views through `Reshape`, `Transpose`, `Slice` and `Contiguous`. Composed into one
+graph on purpose: each alone is a shape the corpus already covers, and what this
+adds is a view feeding a kernel and a kernel feeding a view surviving the trip.
+
+**`Broadcast` is deliberately not in it.** This version materializes only a
+contiguous run repeated a whole number of times, so broadcasting `[width]` to
+`[rows, width]` is refused — which is this spec's own boundary to state and not
+something to work around inside a backend-agreement test.
+
 - every operator above builds, infers, lowers, and runs on both backends;
 - the refusals are checked by a table, including every view rule; and
 - a transformer feed-forward block — normalize, project, activate — compiles,

@@ -221,7 +221,7 @@ The measured properties §7 asked for:
 | correct at a boundary that is not a tile multiple | lengths 129, 300, 512 and a paged 300 over a 38-entry table |
 | shared memory does not grow with capacity | two `[128]` arrays, unchanged; the accumulator is a local |
 | a score range wide enough to overflow one-pass softmax | the running maximum, exercised by the rescale test in deviation 4 |
-| `Selections()` names the kernel and the tile count | **not done.** The reason string still names the kernel and not the count |
+| `Selections()` names the kernel and the tile count | **done 2026-08-27** for the contiguous decode: the reason carries the cached positions *and* `n tile(s) of 128`, asserted at two lengths so the number is read rather than pattern-matched. The paged and batched variants still report the page-block size instead — their loop is bounded by the page table's reach rather than by a cache shape, so the count they would print is a different quantity and naming it the same thing would be worse than omitting it |
 
 ### Deviation 1: the loop is bounded by the binding, not by the length
 
@@ -337,7 +337,9 @@ directly. No new operand.
 
 ### What this did not close
 
-- `Selections()` still reports the kernel without the block count.
+- ~~`Selections()` still reports the kernel without the block count.~~ **Closed
+  2026-08-27** for the contiguous decode; see §7's table for why the paged
+  variants are not the same question.
 - Issue 9, the `LayerState` view, is untouched: `Attention` still refuses a
   non-zero offset.
 - [040](040-batch-scheduler.md)'s second length cap changed shape rather than

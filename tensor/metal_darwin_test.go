@@ -379,3 +379,132 @@ func TestContiguousRunsOnMetal(t *testing.T) {
 		}
 	}
 }
+
+// The operators 025 lists that no other cross-backend test reaches: the views,
+// Softmax, RoPE and GatherRows.
+//
+// specs/025-tensor-operators.md §6's first Done bullet says "every operator
+// above builds, infers, lowers, and runs on both backends", and the audit on
+// 2026-08-27 found that half of it rested on the corpus differential — which
+// compares *kernels*, not the operators that select and drive them. The
+// difference is real: an operator that computed the wrong grid, materialized the
+// wrong view, or bound its operands in the wrong order would pass every kernel
+// differential and fail here.
+//
+// Composed into one graph on purpose. Each operator alone is a shape the corpus
+// already covers; what this adds is that a view feeding a kernel, and a kernel
+// feeding a view, survive the trip on both backends.
+func TestTheRemainingOperatorsAgreeOnCPUAndMetal(t *testing.T) {
+	const rows, width = 4, 32
+	const tableRows = 6
+
+	table := make([]float32, tableRows*width)
+	for i := range table {
+		table[i] = float32(math.Sin(float64(i) * 0.13))
+	}
+	ids := []uint32{4, 0, 5, 1}
+	pos := []uint32{0, 1, 2, 3}
+	bias := make([]float32, rows*width)
+	for i := range bias {
+		bias[i] = float32(i%7) * 0.25
+	}
+
+	run := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		rt, err := tensor.NewRuntime(d)
+		if err != nil {
+			t.Fatalf("runtime: %v", err)
+		}
+		b := rt.NewBuilder("ops")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "theta", Kind: tensor.ScalarF32})
+
+		tbl := tensor.Weight(b, tensor.ValueDesc{
+			Name: "table", DType: accel.F32, Shape: tensor.Shape{tableRows, width}})
+		idv := tensor.Input(b, tensor.ValueDesc{
+			Name: "ids", DType: accel.U32, Shape: tensor.Shape{rows}})
+		posv := tensor.Input(b, tensor.ValueDesc{
+			Name: "pos", DType: accel.U32, Shape: tensor.Shape{rows}})
+		bv := tensor.Input(b, tensor.ValueDesc{
+			Name: "bias", DType: accel.F32, Shape: tensor.Shape{rows, width}})
+
+		// GatherRows feeding an elementwise add: a kernel's result used as an
+		// operand. Broadcast is deliberately not here -- this version
+		// materializes only a contiguous run repeated whole, so a broadcast of
+		// [width] to [rows, width] is refused, and that refusal is 025's to
+		// cover rather than something to work around in a backend agreement test.
+		g := tensor.Add(b, tensor.GatherRows(b, tbl, idv), bv)
+
+		// RoPE over the gathered rows, reshaped to the [tokens, heads, dim] the
+		// operator takes and back again — a kernel feeding a view.
+		r := tensor.Reshape(b, g, tensor.Shape{rows, 1, width})
+		r = tensor.RoPE(b, r, width/2, "theta", posv)
+		r = tensor.Reshape(b, r, tensor.Shape{rows, width})
+
+		// A transposed operand materialized explicitly, which is the boundary
+		// 025 draws: a copy of a matrix is asked for, never implied.
+		tr := tensor.Contiguous(b, tensor.Transpose(b, r, 0, 1))
+
+		// Softmax over the last axis of the transposed thing, then a slice.
+		// Axis 1 is the last of the transposed [width, rows], and it is stated
+		// rather than defaulted: Softmax refuses any other, so a default that
+		// happened to be right would be an accident this test relied on.
+		sm := tensor.Softmax(b, tr, tensor.SoftmaxOptions{Axis: 1})
+		tensor.Output(b, "y", tensor.Contiguous(b, tensor.Slice(b, sm, 0, 1, width)))
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "ops"})
+		if err != nil {
+			t.Fatalf("compile: %v", err)
+		}
+		n := (width - 1) * rows
+		out := f32Buffer(t, d, "y", make([]float32, n))
+		f := plan.Submit(d.Queue(), tensor.Bindings{
+			Buffers: map[string]accel.BufferView{
+				"table": f32Buffer(t, d, "table", table),
+				"ids":   u32Buffer(t, d, "ids", ids),
+				"pos":   u32Buffer(t, d, "pos", pos),
+				"bias":  f32Buffer(t, d, "bias", bias),
+				"y":     out,
+			},
+			Scalars: map[string]tensor.ScalarValue{"theta": tensor.F32(10000)},
+		})
+		if err := f.Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		got := make([]float32, n)
+		if err := d.Queue().ReadBuffer(out.Buffer, 0, got); err != nil {
+			t.Fatalf("readback: %v", err)
+		}
+		if err := plan.Close(); err != nil {
+			t.Fatalf("plan close: %v", err)
+		}
+		return got
+	}
+
+	cpuDev, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("open CPU: %v", err)
+	}
+	defer cpuDev.Close()
+	cpu := run(t, cpuDev)
+	gpu := run(t, openMetalRuntimeDevice(t))
+
+	// RoPE reaches sin and cos and Softmax reaches exp and a division, both
+	// bounded by specs/008-numerics.md §6 and doubled for two implementations,
+	// rounded the way specs/022-msl-target.md derives its ceilings. The views
+	// and the gather are exact and contribute nothing to this.
+	if r := numeq.WithinULP(gpu, cpu, 16); !r.Equal {
+		t.Fatalf("the operator set disagrees between backends: %v\n  the ceiling is "+
+			"RoPE's sin/cos and Softmax's exp; the views and the gather are exact", r)
+	}
+
+	nonzero := 0
+	for _, v := range gpu {
+		if v != 0 {
+			nonzero++
+		}
+	}
+	if nonzero < len(gpu)/2 {
+		t.Fatalf("only %d of %d outputs are non-zero, so the plan did not run",
+			nonzero, len(gpu))
+	}
+}

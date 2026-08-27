@@ -939,8 +939,8 @@ finding is a lead, not a verdict.
 | | Spec | The gap |
 | --- | --- | --- |
 | 8 | [003](003-command-graph.md) | `AccessMode` is an 11-bit mask in the spec and a three-value enum in code, so the `AtomicRMW` no-edge rule is unbuilt and atomics take ordinary write edges |
-| 9 | [044](044-unbounded-context.md) §7 | `Selections()` does not report the tile count |
-| 10 | [025](025-tensor-operators.md) §6 | the ten operators lower on CPU and their kernels agree on Metal, and no test runs the operators themselves on both |
+| 9 | [044](044-unbounded-context.md) §7 | ~~`Selections()` does not report the tile count~~ — **closed 2026-08-27** for the contiguous decode. The paged variants' loop is bounded by the page table's reach rather than a cache shape, so their count is a different quantity and 044 §7 records why it is not printed as the same one |
+| 10 | [025](025-tensor-operators.md) §6 | ~~no test runs the operators themselves on both backends~~ — **closed 2026-08-27**: `GatherRows`, `RoPE`, `Softmax` and the views now agree across backends through a composed plan, not through the kernel differential |
 
 ### 4. Discipline erosion — the checks that were supposed to stop all of the above
 

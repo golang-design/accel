@@ -558,8 +558,14 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		grid: func(*Tensor) accel.WorkgroupCount {
 			return accel.WorkgroupCount{X: qHeads}
 		},
-		reason: fmt.Sprintf("%s: one workgroup per query head over %d cached positions",
-			decodeWhy, k.shape[0]),
+		// The tile count, not just the position count. specs/044-unbounded-context.md
+		// §7 asks for it and §9 recorded it as not done: a caller reading
+		// Selections wants to know how many times the block loop runs, because
+		// that is the number that grows with context and the position count is
+		// the number they already had.
+		reason: fmt.Sprintf("%s: one workgroup per query head over %d cached positions, "+
+			"%d tile(s) of %d", decodeWhy, k.shape[0],
+			(k.shape[0]+testkernels.AttnBlock-1)/testkernels.AttnBlock, testkernels.AttnBlock),
 		rejected: rejected,
 		attrs:    []uint64{uint64(opts.Block)},
 	}, accel.F32, out)

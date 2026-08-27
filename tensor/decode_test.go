@@ -1549,3 +1549,57 @@ func TestEveryAttentionShapeOverBothCacheWidths(t *testing.T) {
 		}
 	}
 }
+
+// Selections reports how many tiles the block loop runs, not only the kernel.
+//
+// specs/044-unbounded-context.md §7 asks for "the kernel and the tile count",
+// and §9 recorded it as not done: the reason string carried the cached-position
+// count, which is the number a caller already had. The tile count is the one
+// that grows with context, and it is what says whether a step is one pass or
+// forty.
+//
+// Asserted at two lengths so the number is read rather than pattern-matched: a
+// reason that hard-coded "1 tile" would pass a single-length test.
+func TestSelectionsReportsTheTileCount(t *testing.T) {
+	rt := newRuntime(t)
+
+	// AttnBlock is the loop's width; these straddle it deliberately.
+	for _, c := range []struct {
+		cached int
+		tiles  string
+	}{
+		{64, "1 tile(s)"},
+		{300, "3 tile(s)"},
+	} {
+		b := rt.NewBuilder("tiles")
+		tensor.Scalar(b, tensor.ScalarDesc{Name: "scale", Kind: tensor.ScalarF32})
+		q := tensor.Input(b, tensor.ValueDesc{
+			Name: "q", DType: accel.F32, Shape: tensor.Shape{2, 8}})
+		ln := tensor.Input(b, tensor.ValueDesc{
+			Name: "len", DType: accel.U32, Shape: tensor.Shape{1}})
+		kc := tensor.NewState(b, tensor.StateDesc{
+			Name: "kc", DType: accel.F32, Shape: tensor.Shape{c.cached, 1, 8}})
+		vc := tensor.NewState(b, tensor.StateDesc{
+			Name: "vc", DType: accel.F32, Shape: tensor.Shape{c.cached, 1, 8}})
+		tensor.Output(b, "out", tensor.Attention(b, q, kc, vc, tensor.AttentionOptions{
+			Lengths: ln, ScaleName: "scale",
+		}))
+
+		plan, err := b.Compile(rt, tensor.CompileOptions{Label: "tiles"})
+		if err != nil {
+			t.Fatalf("compile at %d: %v", c.cached, err)
+		}
+		reason := ""
+		for _, s := range plan.Selections() {
+			if s.Op == "Attention" {
+				reason = s.Reason
+			}
+		}
+		plan.Close()
+
+		if !strings.Contains(reason, c.tiles) {
+			t.Errorf("a %d-position cache should report %q, got:\n%s",
+				c.cached, c.tiles, reason)
+		}
+	}
+}
