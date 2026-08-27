@@ -18,11 +18,25 @@ resumable cooperative lowerings, and the positioned rejection corpus.
 compiles on a device, so the sentence that used to stand here, listing MSL among
 the unbuilt targets, was a milestone out of date.
 
-What remains unbuilt is the GLSL, SPIR-V and HLSL emitters, which need the
-backends that consume them, and the `//accel:vertex` and `//accel:fragment`
-directives that [000](000-decisions.md) keeps reserved while graphics is post-v0.
+**The graphics directives too — corrected 2026-08-27.** The paragraph that stood
+here also listed `//accel:vertex` and `//accel:fragment` among the unbuilt, on
+the grounds that [000](000-decisions.md) keeps them reserved while graphics is
+post-v0. They are built: `front.go:81` parses both, `internal/testkernels/stages.go`
+carries the stage corpus, and six vertex and six fragment artifacts lower to MSL.
+The same mistake as the MSL sentence above, one milestone later, and it is why
+this spec now names its outstanding work in [STATUS.md](STATUS.md) rather than in
+a paragraph that has to be remembered.
+
+What remains unbuilt is the **GLSL ES 3.1 / GLSL 4.3 and HLSL SM 6 emitters**,
+which need the backends that consume them and which [006](006-backends.md)
+records as unbuilt; and the **target generation policy** of §"Generated files" —
+`-targets=cpu,metal` does not exist, the generated record carries a single
+`MSL string` rather than an ordered target set, and "requesting a not-yet-admitted
+target fails generation" is therefore unreachable. SPIR-V is
+[038](038-spirv-target.md)'s, not this spec's.
+
 This spec is *in progress* on that basis: the IR and the analyses are shared by
-every target and are done, one text target is done, and three are not.
+every target and are done, two text targets are done, and two are not.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 5. A kernel is written
 once, in Go, type-checked once, and lowered from one typed IR to every backend.

@@ -15,12 +15,20 @@ render pass becomes a node in the graph of [003](003-command-graph.md), how draw
 are issued, how a rasterized G-buffer is handed to a compute pass without leaving
 the device, and how a frame reaches a screen.
 
-**Status: normative parent design. The four child specs exist as of
-2026-08-23.**
-[`000-decisions.md`](000-decisions.md)'s v0 milestone is compute only. This spec
-fixes the architectural boundaries and the cross-component invariants, but it
-does not freeze a public graphics API before any implementation has tested that
-shape. Implementation was gated on four tightly scoped child specs, which are:
+**Status: in progress — corrected 2026-08-27.** This spec said `drafted`, which
+means nothing it specifies has shipped, and said it "does not freeze a public
+graphics API before any implementation has tested that shape". Both were wrong:
+the API is public and frozen — `render.go` (1103 lines), `surface.go` (637),
+`vertexlayout.go`, `textureview.go` — both backends render and present, and they
+are compared pixel by pixel. What the sentence described was the intent at the
+time of writing, and it was never revised when the children landed.
+
+[`000-decisions.md`](000-decisions.md)'s v0 milestone still says compute only,
+and it is stale in the same way; see [STATUS.md](STATUS.md).
+
+This spec fixes the architectural boundaries and the cross-component invariants.
+Implementation was gated on tightly scoped child specs — **five, not the four
+this table listed**, since [041](041-msaa.md) was added:
 
 | | Child | Covers |
 | --- | --- | --- |
@@ -28,6 +36,15 @@ shape. Implementation was gated on four tightly scoped child specs, which are:
 | 2 | [033](033-render-api.md) | render pipeline, pass, attachment, and draw APIs |
 | 3 | [034](034-surface-present.md) | surfaces, acquisition, resize, and present |
 | 4 | [035](035-cpu-rasterizer.md) | the CPU reference rasterizer and its conformance corpus |
+| 5 | [041](041-msaa.md) | sample positions, resolve, and what the oracle can prove once a pattern exists |
+
+**One thing this parent specifies has no owning child**, and it is the one the
+worked example below is organised around: the render-to-compute handoff where
+compute reads the attachments as textures with no copy. A texture in a compute
+kernel is refused by name — `Texture2D` and `Fetch` reach vertex and fragment
+stages only, and `Binding.Texture` is refused on every dispatch path — and
+[032](032-stage-abi.md) §5.1 explicitly declines to own it. So variant 2, the
+texture-to-buffer transfer node, is the only handoff that records today.
 
 Each child may refine names and descriptor layout while preserving this parent's
 decisions, and each does: render passes are graph nodes, attachment formats are

@@ -483,18 +483,20 @@ alone would count its hazard against an earlier writer twice.
 | a colour attachment | `StageColourOutput` |
 | a depth attachment | `StageEarlyDepth \| StageLateDepth` |
 
-Three of the ten names above are not produced by any declaration yet, and are
-left unimplemented rather than declared as constants nothing sets — which is the
-defect class [042](042-surface-completion.md) exists to remove:
+**One of the ten names above is not produced by any declaration yet** — corrected
+2026-08-27, and it said three. `StageVertex` and `StageFragment` are produced and
+exercised (`infer.go:66`, `render_texture_test.go:82,119`); a texel fetch in a
+fragment stage is what [045](045-texture-attachments.md) added, and this
+paragraph was written before it. Left unimplemented rather than declared as a
+constant nothing sets — which is the defect class
+[042](042-surface-completion.md) exists to remove:
 
 - **`StageHost`.** A host write is staged through an upload pool and reaches the
   queue as a blit, so its queue-side stage is genuinely `StageTransfer`. A
   host-visible write that is not a queue operation at all is the case that needs
   this bit, and it arrives with the residency question, not before it.
-- **`StageVertex` and `StageFragment`.** Nothing a pass declares is read by a
-  shader stage: uniforms are by-value and there is no texel fetch. They arrive
-  with the accesses that produce them — a uniform buffer in a pass, and
-  [033](033-render-api.md)'s texture attachments.
+  (`StageVertex` and `StageFragment` stood here for the reason above, and are
+  built.)
 
 A depth attachment names both fragment-test stages rather than one. Which of the
 two actually runs the test depends on whether the pipeline's fragment stage can
@@ -1332,11 +1334,17 @@ one costs a device round trip.**
 
 Node kind, whether a texture copy repacks, the row pitch the backend chose, and
 barrier positions are public as soon as build completes. Aggregate transient
-memory is public through `Graph.Memory`. Exact inferred edges, access declarations,
-transient identities, and pool offsets remain an internal normalized plan
-snapshot used by 011's planner goldens and fuzz oracle. They are intentionally
-not a stable user API: exposing backend-aligned placement would make an
-implementation detail part of the compatibility contract.
+memory is public through `Graph.Memory`.
+
+**Transient placement became public, and this paragraph did not** — corrected
+2026-08-27. It said transient identities and pool offsets were "intentionally
+not a stable user API", on the argument that exposing backend-aligned placement
+would make an implementation detail part of the compatibility contract.
+`Graph.TransientPlacement()` (`graph.go:495`) is exported, documented and
+tested, and so are `Graph.Barriers()`, `Graph.Hazards()` and `Graph.Edges()`.
+The argument was not wrong; it was overtaken, and the spec kept asserting the
+old boundary. What genuinely remains internal is the *normalized plan snapshot*
+[011](011-conformance-harness.md)'s goldens and fuzz oracle compare against.
 
 ```go
 // NodeStats reports what the builder decided about one node. Valid as soon as
@@ -1741,16 +1749,16 @@ passes on one device and fails on the next.
   Vulkan events, and D3D12 enhanced barriers all exist and none are used. The
   current design drains the pipeline where a range-scoped barrier would not. This
   is the largest known performance gap in the barrier design.
-- **There is no timing observability at all.** The statistics section reports
-  what the plan decided and what the device counted, and nothing about how long
-  anything took. A fence guarantees nothing about partial progress, so per-node
-  timing needs GPU timestamp queries, which [005](005-graphics.md) defers as a
-  profiling concern. The consequence is worth stating plainly: at v0 a caller
-  asking "which node is slow" has no answer from this library, on a library whose
-  reason to exist is throughput. The shape when it arrives is a timestamp pool
-  written at node boundaries, opt-in for the same reason the run-time counters
-  are, and it should not be designed out by the barrier batching, which currently
-  merges the boundaries a timestamp would sit on.
+- **Timing observability is per submission, not per node** — corrected
+  2026-08-27, and this entry used to say there was none at all. There is:
+  `Recorder.CollectTimings` and `SubmissionStats.Elapsed` (`graph.go:770`),
+  tested at `timing_test.go:26,111` and on Metal. What is still missing is the
+  *per-node* half, which needs GPU timestamp queries. So a caller asking "which
+  node is slow" still has no answer, and one asking "how long did this
+  submission take" now does. The remaining shape is a timestamp pool written at
+  node boundaries, opt-in for the same reason the run-time counters are, and it
+  should not be designed out by the barrier batching, which currently merges the
+  boundaries a timestamp would sit on.
 - **Cross-queue ownership transfer.** Vulkan requires a release plus acquire pair
   when a resource moves between queue families; concurrent sharing mode avoids it
   and is slower on some hardware. Neither chosen. It bites only with two queue

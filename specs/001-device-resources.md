@@ -1763,12 +1763,32 @@ descriptor and why its doc comment already says it is worth setting.
 
 ## 11. Testing
 
-**What is built and what is not.** §§1-3 and §§5-8 are implemented on the CPU
-backend, excluding textures. **§4 in full (textures, formats, row pitch) is the
-one section still unbuilt**, deferred with reasons in
-[`009-sequencing.md`](009-sequencing.md)'s M1 section; this spec therefore stays
-*in progress* rather than implemented, and §4's obligations below are exactly
-what remains.
+**What is built and what is not — corrected 2026-08-27.** This paragraph said §4
+(textures, formats, row pitch) was "the one section still unbuilt", while the
+frontmatter said `implemented`. Both were wrong, and they were wrong in opposite
+directions, which is how a reader could check one against the other and still
+learn nothing.
+
+§4 is built and tested — formats, views, row pitch and the repack are all
+exercised. What is outstanding is narrower and elsewhere:
+
+- **§3.5's byte-order refusal is at the wrong entry point.** The normative text
+  says `OpenDevice` fails naming the architecture. `OpenDevice` performs no
+  endianness check at all; the only guard is in `hostBytes`
+  (`transfer.go:312`), so a big-endian host would open a device, allocate,
+  build and submit, and fail at the first host transfer with a message that
+  names neither the architecture nor the rule.
+- **§4.2's plan-time pitch reporting.** `CopyStats` is declared
+  (`limits.go:124`) and `NodeStats` carries a `Copy *CopyStats` field
+  (`graph.go:485`) that **nothing ever assigns**. A recorded texture copy
+  therefore reports nothing about its pitch or its repack, while §4.2 says the
+  caller has it as soon as `Build` returns.
+- **§8.1 names an API that does not exist**: `Recorder.CopyToBuffer`, twice in
+  one section. The record-time host write is spelled `Recorder.UploadToBuffer`.
+
+The full list is in [STATUS.md](STATUS.md), which is where this spec's
+outstanding work now lives so that it cannot disagree with the frontmatter
+again.
 
 Two things that were outstanding at M1 closed at M3, on 2026-08-23. **§7.4,
 device loss**, is terminal and reported through the fence, with the
