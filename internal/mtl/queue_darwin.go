@@ -7,6 +7,7 @@
 package mtl
 
 import (
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -25,7 +26,15 @@ type Queue struct{ id objc.ID }
 type CommandBuffer struct{ id objc.ID }
 
 // ComputeEncoder encodes compute work into a command buffer.
-type ComputeEncoder struct{ id objc.ID }
+type ComputeEncoder struct {
+	id objc.ID
+
+	// pin holds the byte slice SetBytes is passing while the call runs. See
+	// SetBytes: it is reused across calls so that the fast message send costs
+	// no allocation, and a Pinner must not be copied, which is why every method
+	// here takes a pointer receiver.
+	pin runtime.Pinner
+}
 
 // BlitEncoder encodes copies into a command buffer.
 type BlitEncoder struct{ id objc.ID }
@@ -114,12 +123,23 @@ func (e *ComputeEncoder) SetBytes(data []byte, index int) {
 	if len(data) == 0 {
 		return
 	}
-	// Not [send]: the pointer is Go memory. A uintptr is not a reference the
+	// Pinned, then sent the fast way. A uintptr is not a reference the
 	// collector honours, and nothing here proves the slice is on the heap
-	// rather than on a stack that may grow and move under the call. The
-	// reflected form takes an unsafe.Pointer, which escape analysis does
-	// account for, and this is the one call on the path where that matters.
-	e.id.Send(selSetBytes, unsafe.Pointer(&data[0]), uintptr(len(data)), uintptr(index))
+	// rather than on a stack that may grow and move under the call -- so the
+	// address has to be made stable rather than assumed to be.
+	//
+	// runtime.Pinner is what makes it stable: Pin prevents the object being
+	// moved or freed until Unpin, which covers both halves of the problem and
+	// keeps it alive across the call without a KeepAlive.
+	//
+	// This was the reflected form, and it was the only reflected call left on
+	// the per-node path -- about 3.7x the cost of a direct send, and the
+	// boxing of its arguments was most of the allocation a submission did.
+	// specs/006-backends.md section 4.3.
+	e.pin.Pin(&data[0])
+	send(e.id, selSetBytes, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)),
+		uintptr(index))
+	e.pin.Unpin()
 }
 
 // Dispatch launches a grid of threadgroups.

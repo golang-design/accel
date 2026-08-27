@@ -170,6 +170,11 @@ type executable struct {
 	// encoding, which happens under the same lock that records the fence.
 	uniformBufs [][]byte
 
+	// lensBuf is scratch for one dispatch's binding lengths, reused for the
+	// same reason uniformBufs is: a fresh slice per node is an allocation on
+	// the hot path, and a submission encodes hundreds of nodes.
+	lensBuf []uint32
+
 	// The render path's compiled objects, cached for the life of the
 	// executable: the plan fixes every input to each of them, so a replayed
 	// graph compiles nothing.
@@ -427,7 +432,10 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 
 	enc := p.compute()
 	enc.SetPipeline(pipe)
-	lens := make([]uint32, len(d.Bindings))
+	if cap(e.lensBuf) < len(d.Bindings) {
+		e.lensBuf = make([]uint32, len(d.Bindings))
+	}
+	lens := e.lensBuf[:len(d.Bindings)]
 	for i, o := range d.Bindings {
 		r, err := e.operand(o)
 		if err != nil {
@@ -509,9 +517,13 @@ func checkUniforms(d *driver.Dispatch) error {
 // layout and reallocating them per submit would allocate on the hot path.
 func (e *executable) encodeUniforms(n *driver.PlanNode, into [][]byte) error {
 	for i, u := range n.Dispatch.Kernel.Uniforms {
-		if len(into[i]) != u.Size {
+		// Capacity, not length. Consecutive nodes in one graph have different
+		// uniform sizes, so testing the exact length reallocated whenever two
+		// neighbours disagreed -- which for a transformer is most of them.
+		if cap(into[i]) < u.Size {
 			into[i] = make([]byte, u.Size)
 		}
+		into[i] = into[i][:u.Size]
 		if err := u.Encode(into[i], n.Dispatch.Uniforms[i]); err != nil {
 			return fmt.Errorf("accel: node %d parameter %d (%s): %w", n.ID, i, u.Name, err)
 		}

@@ -653,6 +653,46 @@ the next change to this path has a baseline.
 
 What remains after that is genuinely the encoder, and it is still per node.
 
+#### The last reflected call, and what the per-node cost is made of — 2026-08-27
+
+`SetBytes` was still using the reflected send after the rest of the path moved
+to direct `objc_msgSend`, and its comment said why: it passes a **Go** pointer,
+and a `uintptr` is not a reference the collector honours. That reasoning was
+right and its conclusion was not — the address does not have to be *assumed*
+stable, it can be *made* stable. `runtime.Pinner` prevents the object being moved
+or freed until `Unpin`, which covers both halves and keeps it alive across the
+call without a `KeepAlive`.
+
+It was the only reflected call left on the per-node path, and it ran at least
+twice per node (the binding lengths, then each uniform block).
+
+**Measured in allocations, not in nanoseconds, and that is deliberate.** This
+machine's load average sat above 200 for the whole session, which made wall
+times swing by 4× between runs of the same benchmark — the contamination
+[009](009-sequencing.md) already records once. Allocations per submission are
+load-independent, so they are what the claim is stated in:
+
+| 790 nodes, `Submit` | allocs/op | per node |
+| --- | ---: | ---: |
+| before | 22946 | 29.0 |
+| after the pinned send | 18997 | 24.0 |
+| after reusing the lengths scratch | 18206 | 23.0 |
+
+**No wall-clock claim is made here.** The change removes work — a reflected call
+and an allocation per node — so it cannot be slower, but how much faster is not
+something this machine can currently answer.
+
+**Where the remaining 23 per node are is not established.** They are not in
+accel's encode path: after these two changes it allocates nothing per node.
+They are below it, in the variadic slice `purego.SyscallN` takes, which is one
+per message send and there are about ten sends per node. That is a hypothesis
+with an obvious test and it has not been run, so it is recorded as a hypothesis.
+
+**This does not close the ICB question, it re-prices it.** The cost is still per
+node — `BenchmarkSubmitAttribution` shows `ns/node` flat from 64 to 790 nodes,
+and flatness is a shape rather than a magnitude, so it survives the load the
+absolute numbers do not.
+
 `MTLIndirectCommandBuffer` is the escape: compute commands encoded once into an
 ICB, then executed from a fresh command buffer per submission with a single
 `executeCommandsInBuffer`. The costs are real: it requires argument buffers for
