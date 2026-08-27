@@ -47,8 +47,16 @@ func linearRef(d testkernels.LinearDims, q, k, v, alpha, beta []float32,
 					for b := 0; b < int(d.KeyDim); b++ {
 						u += s[row+b] * float64(k[qBase+b])
 					}
-					g := float64(beta[tok]) * (float64(v[vBase+a]) - u)
-					al := float64(alpha[tok])
+					// Which gate this head reads, spelled as a branch rather
+					// than as the kernel's modulo. The two agree only if the
+					// kernel's arithmetic is right, which is the point of a
+					// reference written from the layout instead of the code.
+					gate := int(tok) * int(d.GateHeads)
+					if d.GateHeads > 1 {
+						gate += int(h)
+					}
+					g := float64(beta[gate]) * (float64(v[vBase+a]) - u)
+					al := float64(alpha[gate])
 					for b := 0; b < int(d.KeyDim); b++ {
 						s[row+b] = al*s[row+b] + g*float64(k[qBase+b])
 					}
@@ -86,8 +94,8 @@ func linearFixture(d testkernels.LinearDims, counts []uint32) (q, k, v, alpha, b
 	for i := range v {
 		v[i] = float32(math.Sin(float64(i)*0.23)) * 2
 	}
-	alpha = make([]float32, sum)
-	beta = make([]float32, sum)
+	alpha = make([]float32, sum*d.GateHeads)
+	beta = make([]float32, len(alpha))
 	for i := range alpha {
 		// A decay under one and a write rate under one, which is the regime
 		// these layers run in: a gate at exactly one or zero is the identity
@@ -120,7 +128,7 @@ func runLinear(t *testing.T, d testkernels.LinearDims, q, k, v, alpha, beta,
 }
 
 func linearDims() testkernels.LinearDims {
-	return testkernels.LinearDims{Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4}
+	return testkernels.LinearDims{Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4, GateHeads: 1}
 }
 
 // One token matches the recurrence written out.
@@ -180,10 +188,11 @@ func TestALinearScanCarriesTheStateBetweenTokens(t *testing.T) {
 			counts = []uint32{0, 1}
 		}
 		off := []uint32{0, counts[0], counts[0] + counts[1]}
+		gh := int(d.GateHeads)
 		one := runLinear(t, d,
 			q2[tok*widthQ:(tok+1)*widthQ], k2[tok*widthQ:(tok+1)*widthQ],
 			v2[tok*widthV:(tok+1)*widthV],
-			a2[tok:tok+1], b2[tok:tok+1], state2, off)
+			a2[tok*gh:(tok+1)*gh], b2[tok*gh:(tok+1)*gh], state2, off)
 		copy(stepped[tok*widthV:], one)
 	}
 
@@ -247,6 +256,150 @@ func TestALinearStepKeepsSequencesApart(t *testing.T) {
 		if state[slot+i] != before[i] {
 			t.Fatalf("sequence 1 contributed no tokens and its state element %d moved "+
 				"from %v to %v", i, before[i], state[slot+i])
+		}
+	}
+}
+
+// A per-head gate decays each head at its own rate.
+//
+// accel issue 27: the state is per head and every term of §1's recurrence
+// carries a head index except alpha and beta, so a model whose heads forget at
+// different rates -- which is what a gated delta network publishes -- was
+// inexpressible. This is the accepting half of accepting `[tokens, heads]`.
+//
+// # The oracle is the kernel itself, one head at a time, and the comparison is
+// exact
+//
+// A head's arithmetic does not depend on how many heads are beside it: the same
+// three passes run over the same values in the same order. So running head h
+// alone -- Heads and GateHeads both 1, over h's slice of q, k, v and the state
+// -- must reproduce h's part of the two-head answer **bit for bit**, and there
+// is no bound to derive and no tolerance to choose. A kernel that read alpha[t]
+// and ignored the head disagrees, because the single-head run is handed h's own
+// gate whatever h is.
+//
+// The gates are opposites rather than merely different for the same reason the
+// per-head assertion at the end exists: two similar gates make one head's answer
+// a plausible answer for the other, and a head-blind kernel then passes.
+func TestALinearGateAppliesPerHead(t *testing.T) {
+	d := linearDims()
+	d.GateHeads = d.Heads
+	counts := []uint32{2, 1}
+	q, k, v, alpha, beta, state, offsets := linearFixture(d, counts)
+
+	// Head 0: alpha=1, beta=0, so its state is left exactly as it was. Head 1:
+	// alpha=0, so whatever it had is gone after one token.
+	for tok := range offsets[d.Batch] {
+		alpha[tok*d.GateHeads+0], beta[tok*d.GateHeads+0] = 1, 0
+		alpha[tok*d.GateHeads+1], beta[tok*d.GateHeads+1] = 0, 0.5
+	}
+	before := append([]float32(nil), state...)
+
+	got := runLinear(t, d, q, k, v, alpha, beta, state, offsets)
+
+	// Head h alone, over h's slice of everything.
+	tokens := int(offsets[d.Batch])
+	for h := range int(d.Heads) {
+		one := d
+		one.Heads, one.GateHeads = 1, 1
+		pick := func(src []float32, width int) []float32 {
+			out := make([]float32, tokens*width)
+			for tok := range tokens {
+				copy(out[tok*width:], src[(tok*int(d.Heads)+h)*width:][:width])
+			}
+			return out
+		}
+		hq, hk := pick(q, int(d.KeyDim)), pick(k, int(d.KeyDim))
+		hv := pick(v, int(d.ValueDim))
+		hAlpha, hBeta := make([]float32, tokens), make([]float32, tokens)
+		for tok := range tokens {
+			hAlpha[tok] = alpha[tok*int(d.GateHeads)+h]
+			hBeta[tok] = beta[tok*int(d.GateHeads)+h]
+		}
+		// The state, gathered per (slot, head) and put back the same way.
+		rows := int(d.ValueDim * d.KeyDim)
+		hState := make([]float32, int(d.Batch)*rows)
+		for seq := range int(d.Batch) {
+			copy(hState[seq*rows:], before[(seq*int(d.Heads)+h)*rows:][:rows])
+		}
+		hOut := runLinear(t, one, hq, hk, hv, hAlpha, hBeta, hState, offsets)
+
+		for tok := range tokens {
+			for a := range int(d.ValueDim) {
+				want := hOut[tok*int(d.ValueDim)+a]
+				if g := got[(tok*int(d.Heads)+h)*int(d.ValueDim)+a]; g != want {
+					t.Fatalf("token %d head %d element %d is %v beside the other head and "+
+						"%v alone: this head's gate did not reach it", tok, h, a, g, want)
+				}
+			}
+		}
+		for seq := range int(d.Batch) {
+			for i := range rows {
+				want := hState[seq*rows+i]
+				if g := state[(seq*int(d.Heads)+h)*rows+i]; g != want {
+					t.Fatalf("slot %d head %d state element %d is %v beside the other head "+
+						"and %v alone", seq, h, i, g, want)
+				}
+			}
+		}
+	}
+
+	// And the two heads did visibly different things, so the agreements above
+	// are not two heads that happened to be handed the same gate.
+	rows := int(d.ValueDim * d.KeyDim)
+	for i := range rows {
+		if state[i] != before[i] {
+			t.Fatalf("head 0 had alpha=1 and beta=0 and its state element %d still moved "+
+				"from %v to %v", i, before[i], state[i])
+		}
+	}
+	moved := false
+	for i := rows; i < 2*rows; i++ {
+		if state[i] != before[i] {
+			moved = true
+			break
+		}
+	}
+	if !moved {
+		t.Fatal("head 1 had alpha=0 and its state came back unchanged, so both heads " +
+			"were stepped with head 0's gate")
+	}
+}
+
+// A per-head gate holding the same value in every head equals a shared gate.
+//
+// The other half of issue 27: `[tokens]` had to keep meaning what it meant, and
+// this says the wider layout reduces to it rather than being a second kernel
+// that happens to agree on the fixture.
+func TestAReplicatedPerHeadGateEqualsASharedOne(t *testing.T) {
+	shared := linearDims()
+	counts := []uint32{2, 1}
+	q, k, v, alpha, beta, state, offsets := linearFixture(shared, counts)
+	sharedOut := runLinear(t, shared, q, k, v, alpha, beta, state, offsets)
+
+	perHead := shared
+	perHead.GateHeads = perHead.Heads
+	q2, k2, v2, _, _, state2, _ := linearFixture(shared, counts)
+	wide := make([]float32, len(alpha)*int(perHead.GateHeads))
+	wideBeta := make([]float32, len(wide))
+	for tok := range alpha {
+		for h := range int(perHead.GateHeads) {
+			wide[tok*int(perHead.GateHeads)+h] = alpha[tok]
+			wideBeta[tok*int(perHead.GateHeads)+h] = beta[tok]
+		}
+	}
+	wideOut := runLinear(t, perHead, q2, k2, v2, wide, wideBeta, state2, offsets)
+
+	for i := range sharedOut {
+		if sharedOut[i] != wideOut[i] {
+			t.Fatalf("output %d is %v with one gate per token and %v with that same gate "+
+				"copied to every head", i, sharedOut[i], wideOut[i])
+		}
+	}
+	for i := range state {
+		if state[i] != state2[i] {
+			t.Fatalf("state %d is %v with one gate per token and %v with that same gate "+
+				"copied to every head", i, state[i], state2[i])
 		}
 	}
 }
@@ -421,8 +574,12 @@ func chunkedLinearRef(d testkernels.LinearDims, q, k, v, alpha, beta,
 // length, because the transform's index arithmetic is where an off-by-one lives
 // and a chunk that always divides evenly hides it. Chunk 1 is the degenerate
 // case and must reduce to the recurrence exactly.
+//
+// The shared gate only: chunkedLinearRef takes the running product of alpha
+// over a chunk and indexes it per token, so a per-head gate needs the
+// derivation carried through that product before it needs a kernel.
 func TestTheChunkedFormEqualsTheSequentialKernel(t *testing.T) {
-	d := testkernels.LinearDims{Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4}
+	d := testkernels.LinearDims{Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4, GateHeads: 1}
 	counts := []uint32{7, 5}
 
 	for _, chunk := range []int{1, 2, 3, 4, 5, 8, 16} {

@@ -198,7 +198,7 @@ func (GroupedTiledDimsCodec) Encode(dst []byte, value GroupedTiledDims) error {
 type LinearDimsCodec struct{}
 
 // LinearDimsBlockSize is the encoded size of a LinearDims block, in bytes.
-const LinearDimsBlockSize = 16
+const LinearDimsBlockSize = 32
 
 // EncodedSize reports the std140 block size.
 func (LinearDimsCodec) EncodedSize() int { return LinearDimsBlockSize }
@@ -210,6 +210,7 @@ func (LinearDimsCodec) Encode(dst []byte, value LinearDims) error {
 	w.U32(4, value.Heads)
 	w.U32(8, value.KeyDim)
 	w.U32(12, value.ValueDim)
+	w.U32(16, value.GateHeads)
 	return w.Err()
 }
 
@@ -4740,6 +4741,7 @@ func linearAttentionFlat(t accel.Thread, d LinearDims, q []float32, k []float32,
 	var sBase uint32 = ((((seq * d.Heads) + h) * d.ValueDim) * d.KeyDim)
 	var first uint32 = offsets[seq]
 	var last uint32 = offsets[(seq + uint32(1))]
+	var gh uint32 = (h % d.GateHeads)
 	{
 		var tok uint32 = first
 		for ; tok < last; tok = (tok + uint32(1)) {
@@ -4749,6 +4751,7 @@ func linearAttentionFlat(t accel.Thread, d LinearDims, q []float32, k []float32,
 			var row uint32 = (sBase + (a * d.KeyDim))
 			var qBase uint32 = (((tok * d.Heads) + h) * d.KeyDim)
 			var vBase uint32 = (((tok * d.Heads) + h) * d.ValueDim)
+			var gate uint32 = ((tok * d.GateHeads) + gh)
 			var u float32 = float32(0)
 			{
 				var b uint32 = uint32(0)
@@ -4756,8 +4759,8 @@ func linearAttentionFlat(t accel.Thread, d LinearDims, q []float32, k []float32,
 					u = float32(u + float32(state[(row+b)]*k[(qBase+b)]))
 				}
 			}
-			var g float32 = (beta[tok] * float32(v[(vBase+a)]-u))
-			var al float32 = alpha[tok]
+			var g float32 = (beta[gate] * float32(v[(vBase+a)]-u))
+			var al float32 = alpha[gate]
 			{
 				var b uint32 = uint32(0)
 				for ; b < d.KeyDim; b = (b + uint32(1)) {
@@ -4790,7 +4793,7 @@ var LinearAttentionKernel = kernelabi.Kernel{
 		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "e88120431c3f99b688b101fe7db0e48f",
+	Digest:           "a538a60d4f3efb91b673f6261a31ff1a",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -4802,6 +4805,8 @@ struct LinearDims {
     uint Heads;
     uint KeyDim;
     uint ValueDim;
+    uint GateHeads;
+    char _tail[12];
 };
 
 kernel void LinearAttention(
@@ -4829,6 +4834,7 @@ kernel void LinearAttention(
     uint sBase = ((((seq * d.Heads) + h) * d.ValueDim) * d.KeyDim);
     uint first = offsets[seq];
     uint last = offsets[(seq + uint(1))];
+    uint gh = (h % d.GateHeads);
     for (uint tok = first; (tok < last); tok = (tok + uint(1))) {
         if ((a >= d.ValueDim)) {
             continue;
@@ -4836,12 +4842,13 @@ kernel void LinearAttention(
         uint row = (sBase + (a * d.KeyDim));
         uint qBase = (((tok * d.Heads) + h) * d.KeyDim);
         uint vBase = (((tok * d.Heads) + h) * d.ValueDim);
+        uint gate = ((tok * d.GateHeads) + gh);
         float u = float(0);
         for (uint b = uint(0); (b < d.KeyDim); b = (b + uint(1))) {
             u = (u + (state[(row + b)] * k[(qBase + b)]));
         }
-        float g = (beta[tok] * (v[(vBase + a)] - u));
-        float al = alpha[tok];
+        float g = (beta[gate] * (v[(vBase + a)] - u));
+        float al = alpha[gate];
         for (uint b = uint(0); (b < d.KeyDim); b = (b + uint(1))) {
             state[(row + b)] = ((al * state[(row + b)]) + (g * k[(qBase + b)]));
         }
@@ -4854,7 +4861,7 @@ kernel void LinearAttention(
 }
 `,
 	Uniforms: []kernelabi.Uniform{
-		{Name: "d", Type: "LinearDims", Size: 16, Encode: func(dst []byte, v any) error {
+		{Name: "d", Type: "LinearDims", Size: 32, Encode: func(dst []byte, v any) error {
 			return kernelabi.EncodeUniform(dst, v, LinearDimsCodec{}.Encode)
 		}},
 	},

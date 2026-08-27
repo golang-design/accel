@@ -18,6 +18,19 @@ type LinearDims struct {
 	// derives rather than asserts.
 	KeyDim   uint32
 	ValueDim uint32
+
+	// GateHeads is how many gates a token carries: 1 when every head shares
+	// one, Heads when each head has its own. It is a count rather than a flag
+	// because it is also the stride between one token's gates and the next.
+	//
+	// Both are real. A per-head decay is what a gated delta network publishes
+	// -- the projection producing it is 2*num_value_heads wide -- and a shared
+	// gate is what a model with one decay per token needs. Which one a step is
+	// doing is the rank of alpha (accel issue 27).
+	//
+	// Zero is not a value. Like Heads it is a divisor, so a LinearDims left
+	// zero here is not a shape this kernel has a reading of.
+	GateHeads uint32
 }
 
 // LinearAttention steps a gated delta recurrence over a segmented extent.
@@ -74,6 +87,12 @@ func LinearAttention(t accel.Thread, d LinearDims, q []float32, k []float32,
 	first := offsets[seq]
 	last := offsets[seq+1]
 
+	// Which of this token's gates this head reads. GateHeads is 1 or Heads, so
+	// the modulo pins every head to gate 0 in the first case and is the
+	// identity in the second -- one index, no branch, and no separate kernel
+	// for a shared gate.
+	gh := h % d.GateHeads
+
 	for tok := first; tok < last; tok++ {
 		if a >= d.ValueDim {
 			continue
@@ -81,6 +100,7 @@ func LinearAttention(t accel.Thread, d LinearDims, q []float32, k []float32,
 		row := sBase + a*d.KeyDim
 		qBase := (tok*d.Heads + h) * d.KeyDim
 		vBase := (tok*d.Heads + h) * d.ValueDim
+		gate := tok*d.GateHeads + gh
 
 		// Pass one: u = S k, this lane's element of it. Every lane reads the
 		// whole of k and its own row of S, so nothing is shared and there is
@@ -94,8 +114,8 @@ func LinearAttention(t accel.Thread, d LinearDims, q []float32, k []float32,
 		// as a subtraction of two products, because that is §1's expansion and
 		// the two spellings round differently -- the reference is written from
 		// the same expression for that reason.
-		g := beta[tok] * (v[vBase+a] - u)
-		al := alpha[tok]
+		g := beta[gate] * (v[vBase+a] - u)
+		al := alpha[gate]
 		for b := uint32(0); b < d.KeyDim; b++ {
 			state[row+b] = al*state[row+b] + g*k[qBase+b]
 		}

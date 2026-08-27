@@ -927,7 +927,7 @@ func diffCases() []diffCase {
 			kernel: &testkernels.LinearAttentionKernel,
 			counts: []int{4 * 2 * 6, 4 * 2 * 6, 4 * 2 * 4, 4, 4, 3, 2 * 2 * 4 * 6, 4 * 2 * 4},
 			uniforms: []any{testkernels.LinearDims{
-				Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4,
+				Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4, GateHeads: 1,
 			}},
 			groups: accel.WorkgroupCount{X: 2 * 2},
 			seed: func(b, i int) float32 {
@@ -939,6 +939,33 @@ func diffCases() []diffCase {
 				case 5: // offsets: sequence 0 gets three tokens, sequence 1 one
 					return []float32{0, 3, 4}[i]
 				case 7: // the output starts empty
+					return 0
+				}
+				return defaultSeed(b, i) / 4
+			},
+			ulp: 32, why: "three sums of products per token, per section 8's propagation",
+		},
+		{
+			// The same scan with a gate per head (accel issue 27). The gate
+			// index is `tok*GateHeads + h%GateHeads`, so this is the case where
+			// the modulo is the identity rather than a constant zero, and the
+			// two heads are given different decays so a lowering that dropped
+			// the head term disagrees on a value rather than on nothing.
+			kernel: &testkernels.LinearAttentionKernel,
+			counts: []int{4 * 2 * 6, 4 * 2 * 6, 4 * 2 * 4, 4 * 2, 4 * 2, 3, 2 * 2 * 4 * 6, 4 * 2 * 4},
+			uniforms: []any{testkernels.LinearDims{
+				Batch: 2, Heads: 2, KeyDim: 6, ValueDim: 4, GateHeads: 2,
+			}},
+			groups: accel.WorkgroupCount{X: 2 * 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 3: // alpha, one per (token, head): head 1 forgets faster
+					return 0.9 - 0.4*float32(i%2)
+				case 4: // beta, likewise
+					return 0.5 - 0.2*float32(i%2)
+				case 5:
+					return []float32{0, 3, 4}[i]
+				case 7:
 					return 0
 				}
 				return defaultSeed(b, i) / 4
