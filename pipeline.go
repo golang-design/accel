@@ -66,6 +66,28 @@ func (d *Device) newComputePipeline(desc ComputePipelineDescriptor) (*ComputePip
 		}
 	}
 
+	// A uniform block larger than the device allows, refused here rather than at
+	// the dispatch that binds it.
+	//
+	// specs/014-kernel-uniforms.md §2. NewUniformBuffer already checks a block a
+	// caller allocates, and that covers nothing here: a kernel's declared
+	// uniforms are encoded inline per dispatch and never pass through it. So a
+	// kernel whose struct exceeds the limit compiled, and the failure landed on
+	// whichever device had the smaller number, at submission, naming neither the
+	// struct nor the limit.
+	//
+	// Pipeline creation is the first moment a kernel and a device are both in
+	// hand, which is the same argument the requirement check below makes.
+	for _, u := range k.Uniforms {
+		if limit := d.Limits().MaxUniformBlockBytes; u.Size > limit {
+			return nil, fmt.Errorf("accel: NewComputePipeline %q: kernel %q's uniform %q "+
+				"encodes to %s and this device's MaxUniformBlockBytes is %s. std140 pads: "+
+				"an array of scalars has a stride of sixteen, so arrays belong in storage "+
+				"buffers (specs/014-kernel-uniforms.md section 2)",
+				label, k.Name, u.Name, humanBytes(u.Size), humanBytes(limit))
+		}
+	}
+
 	// V10, V11, and V17 in one call. Requirements are what the kernel body
 	// implies, derived by the compiler and never declared by hand, so this
 	// compares the record against what the device reports rather than trusting

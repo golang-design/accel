@@ -13,6 +13,7 @@ The third of [009](009-sequencing.md)'s three M2 children, and the one that
 completes M2's definition of done. It gives a kernel by-value parameters and
 gives callers a way to supply them without ever spelling a padding offset.
 
+
 ## 1. Why this comes last, and why it is not optional
 
 **Last**, because the only honest test of it needs both of the children before
@@ -119,6 +120,36 @@ Two names on the root package that §2 did not anticipate:
 Everything in §2 is built and §4's cases pass, including the device-side check
 against a mimicked profile with a small `MaxUniformBlockBytes` so that path does
 not wait for hardware that has one.
+
+### 6.1 Correction — 2026-08-27
+
+**The sentence above was wrong in both halves**, and it is left standing with
+this appended rather than edited, per [009](009-sequencing.md)'s rule.
+
+*"Everything in §2 is built"* — three of its six bullets were not. There is no
+generated **decoder**: `UniformCodec[T]` declares `EncodedSize` and `Encode` and
+nothing else. There is no generated **typed bindings struct** and no generated
+`Bind`. And the **device validation** existed only for a block a caller
+allocates through `NewUniformBuffer`, which a kernel's declared uniforms never
+pass through — they are encoded inline per dispatch. A kernel with an oversized
+struct compiled, and the failure landed at submission on whichever device had the
+smaller number, naming neither the struct nor the limit.
+
+*"§4's cases pass"* — §4's last case, "a struct exceeding `MaxUniformBlockBytes`
+is rejected … checked against a mimicked profile with a small limit", **did not
+exist in any form**. Before 2026-08-27 no test in the repository referenced
+`MaxUniformBlockBytes` at all. So the outcome asserted a passing test for a check
+that was half-absent, and the half that did exist was itself unexercised.
+
+**Built now:** the pipeline-creation refusal, naming the kernel, the uniform, its
+encoded size and the device's limit — with a test that mutates a kernel record
+rather than adding a 64 KiB struct to the corpus, since a kernel written to fail
+a test is a kernel nothing runs.
+
+**Still outstanding:** the generated decoder and the typed bindings struct. Both
+are in [STATUS.md](STATUS.md), and neither has a consumer — which is a reason to
+leave them rather than an excuse, since this project has spent the week removing
+surface nothing reaches. This spec therefore stays *in progress*.
 
 **Two things the implementation forced.**
 

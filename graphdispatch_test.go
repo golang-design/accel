@@ -413,6 +413,29 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 		!strings.Contains(err.Error(), "dispatches nothing") {
 		t.Errorf("a zero workgroup extent should be rejected, got %v", err)
 	}
+
+	// A uniform block past the device's limit, specs/014-kernel-uniforms.md §2.
+	//
+	// NewUniformBuffer checks a block the caller allocates and cannot see this
+	// one: a kernel's declared uniforms are encoded inline per dispatch and
+	// never pass through it. So the record is mutated rather than a kernel
+	// written, because no real kernel has a 64 KiB struct and one added to the
+	// corpus to fail this test would be a kernel nothing runs.
+	fat := testkernels.AttentionDecodeKernel
+	if len(fat.Uniforms) == 0 {
+		t.Fatal("the fixture kernel declares no uniform, so this case checks nothing")
+	}
+	fat.Uniforms = append([]kernelabi.Uniform(nil), fat.Uniforms...)
+	fat.Uniforms[0].Size = d.Limits().MaxUniformBlockBytes + 16
+	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &fat}); err == nil {
+		t.Error("a uniform block past MaxUniformBlockBytes should be rejected")
+	} else {
+		for _, want := range []string{"MaxUniformBlockBytes", fat.Uniforms[0].Name} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal should name %q, got %v", want, err)
+			}
+		}
+	}
 }
 
 func TestADeviceWillNotCloseUnderAPipeline(t *testing.T) {
