@@ -1,6 +1,6 @@
 ---
 title: "Barrier storage classes, and what a barrier makes visible on each backend"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -48,6 +48,31 @@ and 002 will have told them it was legal.
                          the left is wrong on
                          the right, silently
 ```
+
+## 1.1 Half of it is built — 2026-08-27
+
+**`Barrier` now emits the scope §2.5 specifies.** The MSL lowering is
+`threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)`, which
+is verbatim the target text §2.5's lowering table gives. 118 barriers across the
+corpus changed and nothing else did, and CPU and Metal still agree — so the
+guarantee is now delivered rather than promised.
+
+**The assertion is on the emitted text, not on a result**, and that was forced
+rather than chosen. A kernel whose data fits in one workgroup gets the right
+answer either way, and Apple hardware may make a storage write visible across a
+threadgroup barrier regardless — "may" being what undefined behaviour looks like
+from the inside. §2.5's table gives the target text per backend, which is what
+makes this checkable at all.
+
+**What the old code got wrong is worth keeping.** The emitter emitted the narrow
+scope *and carried a comment asserting the narrow rule as if it were the spec's*.
+Code and its own justification were wrong together, so reading either against the
+other would not have caught it — only reading both against §2.5 did.
+
+What remains of this spec is §2's masked variants: `BarrierShared`,
+`BarrierStorage` and `SubgroupBarrier`, which let a caller ask for the cheaper
+scope deliberately. That matters on tiled mobile hardware for the reason §2.5
+gives, and it is additive now that the default is correct.
 
 ## 2. What gets built
 

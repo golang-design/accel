@@ -911,7 +911,7 @@ relies on any of them; that is a fact with a shelf life, not a reprieve.
 
 | | Spec | The gap | Successor |
 | --- | --- | --- | --- |
-| 1 | [002](002-compute-model.md) §2.5 | `Barrier` is normative over shared **and** storage; Metal emits `mem_threadgroup` only | [050](050-barrier-scopes.md) |
+| 1 | [002](002-compute-model.md) §2.5 | ~~`Barrier` is normative over shared **and** storage; Metal emits `mem_threadgroup` only~~ — **closed 2026-08-27**, the lowering now matches §2.5's table. [050](050-barrier-scopes.md)'s masked variants remain | [050](050-barrier-scopes.md) |
 | 2 | [002](002-compute-model.md) §6.2 | a saturating float-to-int contract that does not exist, while `int32(f)` compiles and is undefined on every target | [051](051-float-to-int.md) |
 | 3 | [029](029-plan-cache.md) §2 | the plan-cache key claims to cover every compile option that affects lowering, and hashes a constant string | — |
 

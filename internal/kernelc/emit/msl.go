@@ -1035,11 +1035,22 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		return
 
 	case ir.OpBarrier:
-		// Threadgroup scope only, which is what Thread.Barrier means in
-		// specs/002-compute-model.md section 3: it orders shared memory within
-		// one workgroup and says nothing about device memory, which the graph's
-		// barriers order between dispatches.
-		m.printf("threadgroup_barrier(mem_flags::mem_threadgroup)")
+		// Shared *and* storage, which is what Thread.Barrier means:
+		// specs/002-compute-model.md §2.5's table gives this exact lowering.
+		//
+		// Corrected 2026-08-27. This emitted mem_threadgroup alone, and the
+		// comment that stood here asserted the narrower rule as if it were the
+		// spec's -- so the code and its own justification were wrong together,
+		// which is why reading either against the other would not have caught
+		// it. §2.5 is unambiguous: t.Barrier() makes shared and storage writes
+		// visible across the workgroup.
+		//
+		// Nothing in the corpus depended on the storage half, so this was a
+		// latent divergence rather than a live wrong answer -- and it stayed
+		// latent only until someone wrote the kernel §2.5 says is legal.
+		// specs/050-barrier-scopes.md owns the masked variants that let a
+		// caller ask for the cheaper one on purpose.
+		m.printf("threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)")
 		return
 
 	case ir.OpSubgroupSize:

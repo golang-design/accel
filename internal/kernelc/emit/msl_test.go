@@ -158,3 +158,34 @@ func TestMSLBitwiseOperatorsAreTranslated(t *testing.T) {
 		t.Errorf("a bare ^ reached the output, where C reads it as exclusive-or:\n%s", src)
 	}
 }
+
+// A barrier lowers to the scope specs/002-compute-model.md §2.5 specifies.
+//
+// Asserted on the emitted text rather than on a result, and that is the whole
+// point of the test. `t.Barrier()` is normative over shared *and* storage
+// memory, and a lowering that names only threadgroup scope still produces the
+// right answer for every kernel whose data fits in one workgroup — which is
+// every kernel in this corpus. So a behavioural test cannot fail reliably here:
+// Apple hardware may make the write visible anyway, and "may" is exactly what
+// undefined behaviour looks like from the inside.
+//
+// §2.5's lowering table gives the target text for each backend, which makes
+// this checkable rather than a matter of reading intent. This is the MSL row.
+func TestABarrierLowersToTheScopeTheSpecStates(t *testing.T) {
+	k := corpusKernel(t, "ReduceSum")
+	src, err := emit.MSL(k)
+	if err != nil {
+		t.Fatalf("MSL: %v", err)
+	}
+	if !strings.Contains(src, "threadgroup_barrier(") {
+		t.Fatalf("no barrier reached the output, so this test checks nothing:\n%s", src)
+	}
+	// Both classes. Order and spelling follow mem_flags, not the spec's prose.
+	for _, want := range []string{"mem_flags::mem_threadgroup", "mem_flags::mem_device"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("§2.5 makes Barrier order shared and storage, and the lowering "+
+				"omits %s — a kernel publishing through a buffer across a barrier "+
+				"is then undefined on this backend:\n%s", want, src)
+		}
+	}
+}

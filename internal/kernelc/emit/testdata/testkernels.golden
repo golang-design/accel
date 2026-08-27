@@ -1129,15 +1129,15 @@ kernel void AttentionDecode(
             }
             s = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
         red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -1146,15 +1146,15 @@ kernel void AttentionDecode(
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -1459,15 +1459,15 @@ kernel void AttentionDecodeF16(
             }
             s = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
         red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -1476,15 +1476,15 @@ kernel void AttentionDecodeF16(
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -1812,15 +1812,15 @@ kernel void AttentionDecodeBatched(
             }
             s = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
         red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -1829,15 +1829,15 @@ kernel void AttentionDecodeBatched(
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -2100,7 +2100,7 @@ kernel void Exchange(
     uint lid = _lid.x;
     uint gid = _gid.x;
     sh[lid] = in[gid];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     uint next = (lid + uint(1));
     if ((next == uint(64))) {
         next = uint(0);
@@ -2225,12 +2225,12 @@ kernel void ReduceLoop(
     uint lid = _lid.x;
     uint gid = _gid.x;
     sh[lid] = in[gid];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(32); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if ((lid == uint(0))) {
         out[_wid.x] = sh[int(0)];
@@ -2391,31 +2391,31 @@ kernel void ReduceUnrolled(
     uint lid = _lid.x;
     uint gid = _gid.x;
     sh[lid] = in[gid];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid < uint(32))) {
         sh[lid] = (sh[lid] + sh[(lid + uint(32))]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid < uint(16))) {
         sh[lid] = (sh[lid] + sh[(lid + uint(16))]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid < uint(8))) {
         sh[lid] = (sh[lid] + sh[(lid + uint(8))]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid < uint(4))) {
         sh[lid] = (sh[lid] + sh[(lid + uint(4))]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid < uint(2))) {
         sh[lid] = (sh[lid] + sh[(lid + uint(2))]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid < uint(1))) {
         sh[lid] = (sh[lid] + sh[(lid + uint(1))]);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     if ((lid == uint(0))) {
         out[_wid.x] = sh[int(0)];
     }
@@ -3332,13 +3332,13 @@ kernel void MatMulTiled(
         } else {
             tileB[(tid + uint(128))] = zero;
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
             float av = float(tileA[((ly * uint(16)) + k)]);
             float bv = float(tileB[((k * uint(16)) + lx)]);
             acc = (acc + (av * bv));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((row < d.M) && (col < d.N))) {
         out[((row * d.N) + col)] = acc;
@@ -3546,13 +3546,13 @@ kernel void MatMulTiledF32(
         } else {
             tileB[(tid + uint(128))] = zero;
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
             float av = tileA[((ly * uint(16)) + k)];
             float bv = tileB[((k * uint(16)) + lx)];
             acc = (acc + (av * bv));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((row < d.M) && (col < d.N))) {
         out[((row * d.N) + col)] = acc;
@@ -3763,13 +3763,13 @@ kernel void MatMulTiledF32F16(
         } else {
             tileB[(tid + uint(128))] = zeroB;
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
             float av = tileA[((ly * uint(16)) + k)];
             float bv = float(tileB[((k * uint(16)) + lx)]);
             acc = (acc + (av * bv));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((row < d.M) && (col < d.N))) {
         out[((row * d.N) + col)] = acc;
@@ -3961,12 +3961,12 @@ kernel void GroupedMatVec(
         acc = (acc + (x[((tok * d.K) + k)] * w[((wBase + (k * d.N)) + col)]));
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if ((lid == uint(0))) {
         out[((tok * d.N) + col)] = sh[int(0)];
@@ -4208,11 +4208,11 @@ kernel void GroupedMatMul(
             } else {
                 tileB[(tid + uint(128))] = zero;
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
             for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
                 acc = (acc + (tileA[((ly * uint(16)) + k)] * tileB[((k * uint(16)) + lx)]));
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         if (((row < last) && (col < d.N))) {
             out[((row * d.N) + col)] = acc;
@@ -4388,12 +4388,12 @@ kernel void QuantMatVecInt4(
         }
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((lid == uint(0)) && (col < d.N))) {
         out[col] = sh[int(0)];
@@ -4621,13 +4621,13 @@ kernel void QuantMatMulInt4(
         } else {
             tileB[(tid + uint(128))] = zero;
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
             float av = tileA[((ly * uint(16)) + k)];
             float bv = tileB[((k * uint(16)) + lx)];
             acc = (acc + (av * bv));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((row < d.M) && (col < d.N))) {
         out[((row * d.N) + col)] = acc;
@@ -4920,12 +4920,12 @@ kernel void MatVec(
         }
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((lid == uint(0)) && (col < d.N))) {
         out[col] = sh[int(0)];
@@ -5090,12 +5090,12 @@ kernel void QuantMatVec(
         }
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((lid == uint(0)) && (col < d.N))) {
         out[col] = sh[int(0)];
@@ -5260,12 +5260,12 @@ kernel void QuantMatVecF32(
         }
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((lid == uint(0)) && (col < d.N))) {
         out[col] = sh[int(0)];
@@ -5473,13 +5473,13 @@ kernel void LinearTiled(
         } else {
             tileB[(tid + uint(128))] = zero;
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint k = uint(0); (k < uint(16)); k = (k + uint(1))) {
             float av = float(tileA[((ly * uint(16)) + k)]);
             float bv = float(tileB[((k * uint(16)) + lx)]);
             acc = (acc + (av * bv));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if (((row < d.M) && (col < d.N))) {
         out[((row * d.N) + col)] = (acc + bias[col]);
@@ -5645,12 +5645,12 @@ kernel void RMSNorm(
         acc = (acc + (v * v));
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     float mean = (sh[int(0)] / float(d.Width));
     float scale = rsqrt((mean + d.Eps));
@@ -5866,26 +5866,26 @@ kernel void Softmax(
         m = max(m, v);
     }
     sh[lid] = m;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = max(sh[lid], sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     float rowMax = sh[int(0)];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     float acc = float(0);
     for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
         acc = (acc + precise::exp((x[(base + i)] - rowMax)));
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     float total = sh[int(0)];
     for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
@@ -6282,15 +6282,15 @@ kernel void AttentionDecodePaged(
             }
             s = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
         red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -6299,15 +6299,15 @@ kernel void AttentionDecodePaged(
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -6625,15 +6625,15 @@ kernel void AttentionDecodePagedF16(
             }
             s = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
         red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -6642,15 +6642,15 @@ kernel void AttentionDecodePagedF16(
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -6994,15 +6994,15 @@ kernel void AttentionPrefillPagedF16(
             }
             score = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
         red[lane] = score;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -7011,15 +7011,15 @@ kernel void AttentionPrefillPagedF16(
         if (visible) {
             e = precise::exp((score - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -7582,15 +7582,15 @@ kernel void AttentionPrefill(
             }
             score = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
         red[lane] = score;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -7599,15 +7599,15 @@ kernel void AttentionPrefill(
         if (visible) {
             e = precise::exp((score - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -7942,15 +7942,15 @@ kernel void AttentionPrefillF16(
             }
             score = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
         red[lane] = score;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -7959,15 +7959,15 @@ kernel void AttentionPrefillF16(
         if (visible) {
             e = precise::exp((score - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -8310,15 +8310,15 @@ kernel void AttentionPrefillPaged(
             }
             score = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
         red[lane] = score;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -8327,15 +8327,15 @@ kernel void AttentionPrefillPaged(
         if (visible) {
             e = precise::exp((score - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -8969,15 +8969,15 @@ kernel void AttentionRagged(
             }
             score = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
         red[lane] = score;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -8986,15 +8986,15 @@ kernel void AttentionRagged(
         if (visible) {
             e = precise::exp((score - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -9375,15 +9375,15 @@ kernel void AttentionRaggedF16(
             }
             score = (dot * d.Scale);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
         red[lane] = score;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = max(red[lane], red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
         float next = max(m, blockMax);
@@ -9392,15 +9392,15 @@ kernel void AttentionRaggedF16(
         if (visible) {
             e = precise::exp((score - next));
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
         red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         l = ((alpha * l) + red[int(0)]);
         m = next;
@@ -9777,12 +9777,12 @@ kernel void ReduceSum(
         acc = (acc + in[i]);
     }
     sh[lid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if ((lid == uint(0))) {
         out[int(0)] = sh[int(0)];
@@ -9954,7 +9954,7 @@ kernel void SampleArgmax(
     }
     best[lane] = v;
     at[lane] = idx;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lane < stride)) {
             float a = best[lane];
@@ -9967,7 +9967,7 @@ kernel void SampleArgmax(
                 at[lane] = at[(lane + stride)];
             }
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     if ((lane == uint(0))) {
         out[r] = at[int(0)];
@@ -11900,7 +11900,7 @@ kernel void TopKMask(
         }
         best[lane] = v;
         at[lane] = idx;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 float a = best[lane];
@@ -11913,11 +11913,11 @@ kernel void TopKMask(
                     at[lane] = at[(lane + stride)];
                 }
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         frontV = best[int(0)];
         frontI = at[int(0)];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
         float w = weights[(base + i)];
@@ -12215,15 +12215,15 @@ kernel void TopPMask(
         sum = (sum + weights[(base + i)]);
     }
     best[lane] = sum;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lane < stride)) {
             best[lane] = (best[lane] + best[(lane + stride)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     float target = (best[int(0)] * d.P);
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     float frontV = as_type<float>(0x7F7FC99Eu) /* 3.4e+38 */;
     uint frontI = uint(0);
     float kept = float(0);
@@ -12249,7 +12249,7 @@ kernel void TopPMask(
         }
         best[lane] = v;
         at[lane] = idx;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
                 float a = best[lane];
@@ -12262,14 +12262,14 @@ kernel void TopPMask(
                     at[lane] = at[(lane + stride)];
                 }
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         if ((kept < target)) {
             frontV = best[int(0)];
             frontI = at[int(0)];
             kept = (kept + frontV);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
     for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
         float w = weights[(base + i)];
