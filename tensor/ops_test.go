@@ -704,3 +704,71 @@ func TestGatherRowsReadsAnF16Table(t *testing.T) {
 		}
 	}
 }
+
+// The rank-zero guards fire, and are reachable only through a reshape.
+//
+// Input requires at least one dimension, so a rank-zero operand cannot be
+// declared. Reshape to an empty shape produces one -- the element count still
+// matches, since an empty product is one -- and every operator that indexes
+// x.shape[0] needs the guard that answers here.
+//
+// Written after a reachability check against Input alone reported these as dead
+// code. A branch that no constructor reaches may still be reachable through a
+// view, and "unreachable" concluded from one construction path is not a
+// conclusion.
+//
+// Contiguous is deliberately absent. Its rank-zero guard sits behind an early
+// return for an already-contiguous layout, and a rank-zero tensor has no
+// strides to be non-contiguous with, so that one really is dominated -- which
+// is a claim about two lines of the same function rather than about how the
+// operand was built.
+func TestTheRankZeroGuardsAreReachableThroughAReshape(t *testing.T) {
+	rt := newRuntime(t)
+
+	rank0 := func(b *tensor.Builder, name string) *tensor.Tensor {
+		x := tensor.Input(b, tensor.ValueDesc{
+			Name: name, DType: accel.F32, Shape: tensor.Shape{1}})
+		return tensor.Reshape(b, x, tensor.Shape{})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		build func(b *tensor.Builder)
+		want  string
+	}{{
+		name: "RMSNorm",
+		build: func(b *tensor.Builder) {
+			g := tensor.Input(b, tensor.ValueDesc{
+				Name: "g", DType: accel.F32, Shape: tensor.Shape{1}})
+			tensor.RMSNorm(b, rank0(b, "x"), g, 1e-5)
+		},
+		want: "x has no shape",
+	}, {
+		name: "Softmax",
+		build: func(b *tensor.Builder) {
+			tensor.Softmax(b, rank0(b, "x"), tensor.SoftmaxOptions{})
+		},
+		want: "x has no shape",
+	}, {
+		name: "RoPE",
+		build: func(b *tensor.Builder) {
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "theta", Kind: tensor.ScalarF32})
+			pos := tensor.Input(b, tensor.ValueDesc{
+				Name: "pos", DType: accel.U32, Shape: tensor.Shape{1}})
+			tensor.RoPE(b, rank0(b, "x"), 2, "theta", pos)
+		},
+		want: "x has no shape",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := rt.NewBuilder("rank0")
+			tc.build(b)
+			err := b.Err()
+			if err == nil {
+				t.Fatalf("%s accepted a rank-zero operand", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the refusal should say %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

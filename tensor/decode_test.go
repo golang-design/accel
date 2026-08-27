@@ -349,6 +349,127 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 			tensor.LayerState(b, cache(b, "c", 2, 8, 4), 5)
 		},
 		want: "layer 5",
+	}, {
+		// specs/046 and 010: the query is f32 in every registered kernel, so a
+		// narrowed query is refused rather than silently widened.
+		name: "a query that is not f32",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			q := tensor.Input(b, tensor.ValueDesc{
+				Name: "q", DType: accel.F16, Shape: tensor.Shape{4, 8}})
+			tensor.Attention(b, q, cache(b, "k", 4, 2, 8), cache(b, "v", 4, 2, 8), opts(b))
+		},
+		want: "registered kernels read an f32",
+	}, {
+		name: "a cache that is neither f32 nor f16",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			kc := tensor.NewState(b, tensor.StateDesc{
+				Name: "k", DType: accel.U32, Shape: tensor.Shape{4, 2, 8}})
+			vc := tensor.NewState(b, tensor.StateDesc{
+				Name: "v", DType: accel.U32, Shape: tensor.Shape{4, 2, 8}})
+			tensor.Attention(b, f32(b, "q", 4, 8), kc, vc, opts(b))
+		},
+		want: "registered kernels read f32 or",
+	}, {
+		name: "extents that are not u32",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := opts(b)
+			o.QueryExtents = f32(b, "ext", 2)
+			o.Pages = u32(b, "pages", 2, 3)
+			o.Block = 4
+			tensor.Attention(b, f32(b, "q", 3, 4, 8), cache(b, "k", 16, 2, 8),
+				cache(b, "v", 16, 2, 8), o)
+		},
+		want: "it is a count per sequence",
+	}, {
+		name: "a query head narrower than the cache's",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 4, 2, 16),
+				cache(b, "v", 4, 2, 16), opts(b))
+		},
+		want: "q's head is 8 wide and the cache's is 16",
+	}, {
+		name: "a scale name that names no scalar",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := opts(b)
+			o.ScaleName = "nosuch"
+			tensor.Attention(b, f32(b, "q", 4, 8), cache(b, "k", 4, 2, 8),
+				cache(b, "v", 4, 2, 8), o)
+		},
+		want: `"nosuch" is not a declared f32 scalar`,
+	}, {
+		// The key cache's staleness is covered elsewhere; the value cache has
+		// its own branch and its own message, and a copy-paste that checked k
+		// twice would pass every test that only writes to k.
+		name: "a stale value cache",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			kc, vc := cache(b, "k", 8, 2, 8), cache(b, "v", 8, 2, 8)
+			stale := vc
+			vc = tensor.ScatterRows(b, vc, f32(b, "r", 1, 16), u32(b, "i", 1))
+			_ = vc
+			tensor.Attention(b, f32(b, "q", 2, 8), kc, stale, opts(b))
+		},
+		want: "the value cache is",
+	}, {
+		name: "a ragged page table whose rows are not the sequences",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := opts(b)
+			o.Lengths = u32(b, "len2", 2)
+			o.QueryExtents = u32(b, "ext", 2)
+			o.Pages = u32(b, "pages", 5, 3)
+			o.Block = 4
+			tensor.Attention(b, f32(b, "q", 3, 4, 8), cache(b, "k", 16, 2, 8),
+				cache(b, "v", 16, 2, 8), o)
+		},
+		want: "one row of block ids per sequence",
+	}, {
+		name: "a batched decode over an f16 cache",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			kc := tensor.NewState(b, tensor.StateDesc{
+				Name: "k", DType: accel.F16, Shape: tensor.Shape{16, 2, 8}})
+			vc := tensor.NewState(b, tensor.StateDesc{
+				Name: "v", DType: accel.F16, Shape: tensor.Shape{16, 2, 8}})
+			o := opts(b)
+			o.Lengths = u32(b, "len2", 2)
+			o.Pages = u32(b, "pages", 2, 3)
+			o.Block = 4
+			tensor.Attention(b, f32(b, "q", 2, 1, 4, 8), kc, vc, o)
+		},
+		want: "batched decode kernel",
+	}, {
+		name: "a base name that names no u32 scalar",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarF32})
+			o := opts(b)
+			o.BaseName = "base"
+			tensor.Attention(b, f32(b, "q", 2, 4, 8), cache(b, "k", 8, 2, 8),
+				cache(b, "v", 8, 2, 8), o)
+		},
+		want: `"base" is not a declared u32 scalar`,
+	}, {
+		// Reachable only through a view. Input refuses a dimension of zero, so
+		// the empty tensor this needs cannot be declared -- but Slice permits
+		// an empty half-open range, and the result is a legal zero-element
+		// operand. Checking reachability against the constructor alone says
+		// this branch is dead, and it is not.
+		name: "extents sliced empty",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			o := opts(b)
+			o.Lengths = u32(b, "len2", 2)
+			o.QueryExtents = tensor.Slice(b, u32(b, "ext", 2), 0, 0, 0)
+			tensor.Attention(b, f32(b, "q", 3, 4, 8), cache(b, "k", 16, 2, 8),
+				cache(b, "v", 16, 2, 8), o)
+		},
+		want: "QueryExtents is empty",
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := rt.NewBuilder(tc.name)

@@ -162,3 +162,36 @@ func TestAGroupedMatVecRefusesWrongTypes(t *testing.T) {
 		})
 	}
 }
+
+// A weight tensor with no experts is refused.
+//
+// Reachable only through a view: Input refuses a dimension of zero, so the
+// empty operand this needs cannot be declared, but Slice permits an empty
+// half-open range and yields a legal zero-element tensor. The counts are
+// sliced to match, so the earlier count-versus-expert check passes and this
+// branch is the one that answers.
+//
+// Recorded because the first reachability check got it wrong: testing against
+// the constructor alone reported this refusal as dead code.
+func TestAGroupedProductRefusesAWeightWithNoExperts(t *testing.T) {
+	rt := newRuntime(t)
+	b := rt.NewBuilder("grouped")
+
+	x := tensor.Input(b, tensor.ValueDesc{
+		Name: "x", DType: accel.F32, Shape: tensor.Shape{2, 4}})
+	w := tensor.Input(b, tensor.ValueDesc{
+		Name: "w", DType: accel.F32, Shape: tensor.Shape{3, 4, 3}})
+	counts := tensor.Input(b, tensor.ValueDesc{
+		Name: "counts", DType: accel.U32, Shape: tensor.Shape{3}})
+
+	tensor.GroupedMatVec(b, x, tensor.Slice(b, w, 0, 0, 0),
+		tensor.Slice(b, counts, 0, 0, 0))
+
+	err := b.Err()
+	if err == nil {
+		t.Fatal("a weight tensor with no experts was accepted")
+	}
+	if !strings.Contains(err.Error(), "declares no experts") {
+		t.Errorf("the refusal should name the missing experts, got: %v", err)
+	}
+}
