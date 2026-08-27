@@ -13,6 +13,13 @@ The decisions everything here is built on live in
 [`000-decisions.md`](000-decisions.md). It is normative: a spec that contradicts
 it is wrong.
 
+**What is actually unbuilt lives in [`STATUS.md`](STATUS.md)**, per spec, with
+the evidence. Read it before planning anything. The `Status` column below says
+whether a spec is finished; `STATUS.md` says what is left in the ones that are
+not, which is the question the column cannot answer. It was written after an
+audit on 2026-08-27 found fifteen specs claiming `Implemented` while each owned
+at least one unbuilt section.
+
 **M0 through M7 are complete, and M8 is five of seven.** Compute runs end to end
 on the CPU backend and on Metal: pooled memory and typed views; kernels written
 in the Go subset, compiled to a generated lowering and to MSL from one IR;
