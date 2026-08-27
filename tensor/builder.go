@@ -320,11 +320,49 @@ func Output(b *Builder, name string, x *Tensor) {
 		b.fail(1, "Output", "%q is declared twice", name)
 		return
 	}
+	// An output is matched to its producer by tensor identity, and a view is a
+	// different tensor than the node result it aliases. So a view reaching here
+	// unresolved names no producer, nothing writes the port, and the caller
+	// reads zeros from a graph that compiled -- which is what
+	// [#26](https://github.com/golang-design/accel/issues/26) was.
+	//
+	// Resolved rather than refused where the bytes are the same ones. Reshape
+	// requires a contiguous operand and produces a contiguous result, so a
+	// reshaped node result is the node's own bytes under a different shape: the
+	// port can bind the producer directly and describe it with the shape the
+	// caller asked for.
+	//
+	// Anything else -- a slice, a transpose, an offset view -- is a different
+	// set of bytes than the producer wrote, and binding the producer would hand
+	// back the wrong elements rather than none. That is refused here, naming the
+	// operator that materialises it, because Contiguous of a *strided* view
+	// records a pack whose result is a real node.
+	//
+	// Only a view with no port of its own. A value read out of a State carries
+	// the state's port and is a view of the writing node's result, so resolving
+	// it here would hide the refusal compile makes for exactly that case --
+	// which exists because it was the same silent-zeros bug, found earlier and
+	// through a different door.
+	t := x
+	if x.port == "" && x.node >= 0 && x.node < len(b.nodes) {
+		if produced := b.nodes[x.node].out; produced != x {
+			if !x.contiguousLayout() ||
+				x.shape.Elements() != produced.shape.Elements() {
+				b.fail(1, "Output", "%q is a strided or partial view of %s's result, "+
+					"and an output port binds the whole of what a node wrote. Insert "+
+					"Contiguous to materialise it -- that records a copy whose result "+
+					"is a value in its own right", name, b.nodes[x.node].op)
+				return
+			}
+			t = produced
+		}
+	}
+
 	b.byName[name] = len(b.ports)
 	b.ports = append(b.ports, PortDesc{
 		Name: name, DType: x.dtype, Shape: x.shape, Kind: PortOutput,
 	})
-	b.outputs = append(b.outputs, output{name: name, t: x})
+	b.outputs = append(b.outputs, output{name: name, t: t})
 }
 
 // record appends an operator node and returns its result tensor.

@@ -231,9 +231,14 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	// consumers bind that port's slot instead. Parallel to views because a node
 	// has exactly one result and it is one or the other.
 	wroteSlot := make([]accel.Slot, len(b.nodes))
-	outputOf := map[*Tensor]string{}
+	// Every name a value was given, not the last one. Keyed by tensor, so two
+	// ports naming one value used to collide and the earlier port was never
+	// written -- the same silent-zeros shape as
+	// [#26](https://github.com/golang-design/accel/issues/26), found probing
+	// next to it.
+	outputOf := map[*Tensor][]string{}
 	for _, o := range b.outputs {
-		outputOf[o.t] = o.name
+		outputOf[o.t] = append(outputOf[o.t], o.name)
 	}
 
 	var errs []error
@@ -288,7 +293,11 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 
 // lowerNode turns one operator into a dispatch.
 func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
-	wroteSlot []accel.Slot, outputOf map[*Tensor]string, i int) error {
+	wroteSlot []accel.Slot, outputOf map[*Tensor][]string, i int) error {
+
+	// The extra ports naming this node's result, empty for the ordinary case of
+	// one name or none. See the fan-out branch below.
+	var fanout []string
 
 	pipe, err := p.rt.pipeline(n.kernel, fmt.Sprintf("%s.%s", p.label, n.op))
 	if err != nil {
@@ -326,9 +335,23 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		// read against it.
 		result = accel.Binding{Slot: p.slots[window{n.outPort, n.outOff, n.out.shape.Elements()}]}
 		wroteSlot[i] = result.Slot
-	} else if name, wanted := outputOf[n.out]; wanted {
-		wroteSlot[i] = p.slots[p.whole(name)]
+	} else if names, wanted := outputOf[n.out]; wanted && len(names) == 1 {
+		wroteSlot[i] = p.slots[p.whole(names[0])]
 		result = accel.Binding{Slot: wroteSlot[i]}
+	} else if wanted {
+		// Several ports name this value. A dispatch writes one place, so it
+		// writes a transient and every port takes a copy of it -- including the
+		// first, because picking one to write directly and copying to the rest
+		// would order the copies against a slot the graph already has a writer
+		// for, and a transient has exactly one.
+		v := r.Transient(accel.BufferDescriptor{
+			DType: n.out.dtype, Count: n.out.shape.Elements(),
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+			Label: fmt.Sprintf("%s.%s.%d.fanout", p.label, n.op, i),
+		})
+		views[i] = v
+		result = accel.Binding{Buffer: v}
+		fanout = names
 	} else {
 		v := r.Transient(accel.BufferDescriptor{
 			DType: n.out.dtype, Count: n.out.shape.Elements(),
@@ -427,6 +450,22 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 			r.CopyToSlot(inPlaceResult.Slot, 0, inPlaceCount, inPlaceScratch)
 		}
 		views[i] = inPlaceScratch
+	}
+
+	// Every port that named this value takes a copy of the transient. The
+	// source is a buffer and each destination a slot, which is the direction
+	// copyInto lowers; slot to slot is not one it has.
+	for _, name := range fanout {
+		dst := accel.Binding{Slot: p.slots[p.whole(name)]}
+		if err := p.copyInto(r, dst, accel.Binding{Buffer: views[i]},
+			n.out.shape.Elements()); err != nil {
+			return fmt.Errorf("accel/tensor: %s output %q: %w", n.op, name, err)
+		}
+		p.selections = append(p.selections, KernelSelection{
+			Op: n.op, Kernel: "copy",
+			Reason: "copying the result into " + name + ", because several ports " +
+				"name this value and a dispatch writes one place",
+		})
 	}
 	return nil
 }
