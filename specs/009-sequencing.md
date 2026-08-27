@@ -410,7 +410,16 @@ V12–V16 are 005; the rest are assigned. V24 is split across 015 and 017, becau
 its "including a transient" term cannot exist before placements do, and a V24
 missing a term silently is a check passing for the wrong reason.
 
-### M4. Cooperative execution model on the CPU
+### M4. Cooperative execution model on the CPU — complete 2026-08-23
+
+**The completion marker is added 2026-08-27**, and M4 was the only milestone in
+M0–M7 without one while M5, M6 and M7 carried theirs. All six of its done
+criteria hold, and its own outcome section below still says two of them were
+deferred — subgroup shuffles and scans, and the strict-mode narrowing. Both
+shipped (`internal/testkernels/subgroup.go:100,146,183`,
+`internal/cpu/profile.go:302,349`), and the child table above already recorded
+them. So this milestone disagreed with itself in two places and with its
+children in a third.
 
 The cooperative lowering is a compiler pass, not a runtime option, so it is its
 own milestone rather than a line item under the GEMM. 004 replaces
@@ -2387,6 +2396,20 @@ The unverified work includes texture row pitch, which reads
 `kernel.RunAuthored`, which runs one goroutine per invocation — both exactly the
 shape of thing that behaves differently elsewhere. A session with CI working
 should re-run the matrix over that range before treating any of it as verified.
+
+### Closed — 2026-08-27
+
+Actions recovered and the range has been through the matrix many times over: the
+work since has pushed repeatedly with both `ci` (Linux, macOS, Windows) and
+`ci-metal` green, including the texture row pitch and `kernel.RunAuthored` this
+section named. One `ci-metal` failure in that period was the same runner-acquisition
+fault rather than a test, and passed on re-run.
+
+Kept rather than deleted, because the three things CI caught and local runs could
+not are the argument for the gate, and a section that records why a gap mattered
+is worth more than the absence of one. **What was wrong was leaving it stating a
+present-tense risk after the risk closed** — a reader arriving today was told the
+range is unverified, which stopped being true and nothing said so.
 
 ## Risks and retirement tests
 

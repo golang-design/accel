@@ -225,11 +225,19 @@ cleanup. Required milestone scenarios are:
 | --- | --- |
 | M1 | Open CPU → allocate → write → read → close — **done 2026-08-22** |
 | M2 | Kernel source → generator → direct flat adapter → checked output — **done 2026-08-22** |
-| M3 | Upload → flat Add graph → readback → rebind and replay |
-| M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised |
-| M5 | Upload → portable tiled GEMM graph → readback in strict mode |
+| M3 | Upload → flat Add graph → readback → rebind and replay — **done**, `graphoracle_test.go`, `graphfuzz_test.go` |
+| M4 | Upload → shared-memory tree reduction graph → readback, with every cooperative diagnostic exercised — **done** |
+| M5 | Upload → portable tiled GEMM graph → readback in strict mode — **done**, `graphdispatch_test.go:520` |
 | M6 | M5 scenario selected explicitly on Metal — **built 2026-08-23** for the compute half: `Enumerate` finds the adapter, `OpenDevice` opens it by id, and a recorded graph runs upload → dispatch → readback |
-| M7 | Allocate model/KV/IO → compile explicit prefill/decode plans → prefill → repeated decode → logits |
+| M7 | Allocate model/KV/IO → compile explicit prefill/decode plans → prefill → repeated decode → logits — **done**, `tensor/model_test.go:42`, `tensor/parity_test.go:38` |
+
+**The M3, M4, M5 and M7 markers are added 2026-08-27, and their absence was the
+worst defect this spec had.** [009](009-sequencing.md) recorded all four
+milestones complete; this table carried no marker for any of them; and the tests
+existed the whole time. So the two specs a reader would consult about the same
+question gave different answers, and neither said which to believe. That is the
+failure [STATUS.md](STATUS.md) exists to end, and it is why a status claim now
+belongs in one place.
 
 M7 additionally runs fused Attention present and absent, incremental-decode
 versus minimal-prefill parity, and a two-layer golden model on CPU and Metal.
@@ -356,13 +364,22 @@ unordered map output. Stable ordering is part of every serializer.
   is stronger than the parse this spec could have settled for. The offline
   toolchain is not installed and is not needed.
 
-  The cross-backend entry gate is a **differential over the whole corpus**: all
-  29 kernels run on both backends from one generated record, 22 agreeing bit for
-  bit and 7 within a ceiling taken from [008](008-numerics.md) §6 for the
-  bounded primitive each reaches. A kernel reaching none keeps an exact
-  comparison, which is what stops a ceiling spreading. The case table is checked
-  against the generated corpus list, so a kernel added and never compared is an
-  error rather than a silent gap.
+  The cross-backend entry gate is a **differential over the whole corpus**:
+  every compute kernel runs on both backends from one generated record, most
+  agreeing bit for bit and the rest within a ceiling taken from
+  [008](008-numerics.md) §6 for the bounded primitive each reaches. A kernel
+  reaching none keeps an exact comparison, which is what stops a ceiling
+  spreading. The case table is checked against the generated corpus list, so a
+  kernel added and never compared is an error rather than a silent gap.
+
+  **The counts that stood here are gone rather than refreshed — 2026-08-27.**
+  They said "all 29 kernels … 22 agreeing bit for bit and 7 within a ceiling",
+  against a corpus that is now 72 kernels with 61 differential cases over 58 of
+  them, 21 carrying a ceiling. Every number was stale, and they were stale
+  because nothing recomputes them: a count written into prose is a claim that
+  ages every time the corpus grows. The gate that matters is the one in the
+  sentence above — a kernel with no case is an error — and that is enforced in
+  code (`differential_darwin_test.go`), which is why it did not rot.
 
   One thing the harness had to learn: **the oracle is configured to the device
   it checks.** The CPU emulates subgroups at a width a caller chooses, default
