@@ -97,7 +97,7 @@ numbered in.
 | [041-msaa.md](041-msaa.md) | Drafted | 005's fifth child: sample positions, resolve, and what the CPU oracle can still prove once a sample pattern exists |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
-| [005-graphics.md](005-graphics.md) | Drafted | The normative parent of [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md) and [041](041-msaa.md): graphics constraints, with its four open questions closed in those children |
+| [005-graphics.md](005-graphics.md) | In progress | The normative parent of [032](032-stage-abi.md) through [035](035-cpu-rasterizer.md) and [041](041-msaa.md): graphics constraints, with its four open questions closed in those children |
 | [006-backends.md](006-backends.md) | In progress | The backend contract, the capability matrix, per-backend assessment, graph lowering, the CPU oracle |
 | [008-numerics.md](008-numerics.md) | In progress | Proven exact domains, normative primitive ceilings, derived reductions, and composed error budgets |
 | [012-kernel-pipeline.md](012-kernel-pipeline.md) | In progress | M2 child: the whole compiler pipeline for one straight-line kernel, and why the cut is vertical |
@@ -131,6 +131,9 @@ numbered in.
 | [048-int4.md](048-int4.md) | Implemented | An asymmetric grouped 4-bit weight representation and its derived bound, which decides whether a 27B-class model fits one device (accel issue 22) |
 | [047-linear-attention.md](047-linear-attention.md) | In progress | A matrix state per sequence and a scan over 046's segmented extent, so hybrid models whose three-in-four layers are not softmax attention become expressible |
 | [046-segmented-extents.md](046-segmented-extents.md) | In progress | A count per row, the offsets it implies, and the ragged query extent that closes accel issue 16. Written as a primitive because issue 18's grouped GEMM is its second caller |
+| [050-barrier-scopes.md](050-barrier-scopes.md) | Drafted | 002's first successor: `BarrierShared`/`BarrierStorage`/`SubgroupBarrier`, and making Metal order storage memory as §2.5 already promises |
+| [051-float-to-int.md](051-float-to-int.md) | Drafted | 002's second successor: saturating float-to-integer intrinsics with NaN to zero, and refusing the bare conversion Go does not define |
+| [052-dispatch-shape.md](052-dispatch-shape.md) | Drafted | 002's third successor: `WorkgroupSize`/`NumGroups`/`GlobalSize` on the thread, and their entries in §3.3's uniformity seeds |
 | [045-texture-attachments.md](045-texture-attachments.md) | In progress | M9: attachments become textures, a view names a subresource and may reinterpret its format, and a stage can fetch a texel. Resources, the render API, both backends, V13 and the stage half of texel fetch are built (§8); binding a texture to a pass, mip levels above one, and feedback rejection are owed |
 | [042-surface-completion.md](042-surface-completion.md) | In progress | Completing the public surface: what each exported declaration does, refuses, or is still owed |
 | [039-sampling-policy.md](039-sampling-policy.md) | In progress | Post-v0: temperature, penalties, the composition order, and a seeded stream that makes a whole sequence reproducible rather than one token. The stream, the penalty kernels, the composed policy and §9's assertions are built, including the cross-backend token differential; four deviations are recorded |

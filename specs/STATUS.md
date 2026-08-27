@@ -27,9 +27,8 @@ operator refusals.
 As of 2026-08-27: **31 in progress**, 9 implemented, 4 drafted,
 with **266 outstanding items** across the in-progress set.
 
-009, 010 and 011 were re-audited separately and appear in their own section at
-the end. Three specs (003, 004, 005) are still being audited and are added when
-that lands.
+All 50 specs are audited. 003, 004, 005, 009, 010 and 011 were re-audited after
+the first pass failed on them and appear in their own sections at the end.
 
 ## Implemented — nothing outstanding
 
@@ -673,8 +672,30 @@ In progress with four independent unbuilt chunks that ship separately.
   records, and the compile-time proof that a declared maximum position and base
   stay inside [008](008-numerics.md)'s bounded sin/cos domain.
 
-**40 successor specs** across the nine, replacing prose that cannot be finished
-with units that can.
+### [005-graphics.md](005-graphics.md) → 1 successor
+
+Almost every unbuilt item in 005 already has an owning in-progress child —
+stencil, depth bias and the blend constant to [033](033-render-api.md) and
+[035](035-cpu-rasterizer.md), lines and points to 035, MSAA to
+[041](041-msaa.md), the flat tag to [032](032-stage-abi.md). Exactly one chunk
+has no owner, and it is the one the spec is organised around.
+
+- **Compute-visible textures and the render-to-compute handoff** — give the
+  compute argument set a texture channel, lift the `//accel:kernel` texture
+  refusal, accept `Binding.Texture` on a dispatch, declare the access as a
+  sampled read in a shader stage so the attachment-to-compute barrier is
+  inferred, and land the two tests 005 names: pixel-origin agreement in its
+  discriminating three-path form, and "the handoff stays on device", asserting
+  no host transfer node between the geometry pass and the tonemap.
+
+### [003-command-graph.md](003-command-graph.md) → 1 successor
+
+- **Graph build diagnostics** — `BuildError`/`NodeError`, the thirteen missing
+  sentinels, a `runtime.Caller` capture per node, the `file:line:col` message
+  format, and the test that matches against the test's own file name.
+
+**42 successor specs** across the eleven, replacing prose that cannot be
+finished with units that can.
 
 The first is written: [050-barrier-scopes.md](050-barrier-scopes.md), the
 highest-priority piece of 002's split, because it is the one gap that is a
@@ -770,3 +791,97 @@ Not splittable: a build history has no shippable chunks. The fix is three edits.
 **Not splittable.** Its three big unbuilt chunks all need 010's per-variant
 records first, so they cannot ship independently of that successor. The rest is
 accuracy work.
+
+## 003, 004 and 005 — audited separately
+
+The last three. 005's status was wrong and is corrected; the other two carry the
+right word and the wrong outstanding list.
+
+### [003-command-graph.md](003-command-graph.md)
+
+Status correct, and it **names no outstanding sections anywhere**, which the
+rule requires. Nearly all of it is built and tested — recording, edge inference,
+memory planning, barrier insertion, validation, fences, statistics, and the
+worked example's goldens verified exactly (22/12/16 MiB, 7 barriers, 9 hazards).
+
+**Unbuilt:**
+
+- **The error taxonomy and call sites.** `BuildError`, `NodeError` and 13 of the
+  16 sentinels do not exist; build errors are an `errors.Join` of formatted
+  strings, and `runtime.Caller` appears nowhere in the root package. The whole
+  `model/attn.go:118:0: node 7 …` format is unbuilt, and no other spec re-owns it.
+- **`AccessMode` as an 11-bit mask.** The code has a three-value enum
+  `Access{Read,Write,ReadWrite}`. The consequence is the finding: **the
+  `AtomicRMW` rule is unbuilt** — "two nodes that both only AtomicRMW one range
+  get no edge" has no implementation and no test, so atomics take ordinary write
+  edges.
+- **Texture layout derivation** — deferred behind Vulkan and D3D12, which do not
+  exist.
+
+**Unbacked:**
+
+- "Three of the ten `StageMask` names are not produced by any declaration yet …
+  `StageVertex` and `StageFragment` arrive with 033" — both exist and are
+  exercised. Only `StageHost` remains.
+- "**There is no timing observability at all**" — closed by
+  `Recorder.CollectTimings` and `SubmissionStats.Elapsed`.
+- "Transient identities and pool offsets are intentionally not a stable user
+  API" — contradicted by the public, documented, tested
+  `Graph.TransientPlacement()`.
+- "Plan structure is identical across backends for one recording" — no test
+  compares plans across CPU and Metal, only results.
+
+### [004-kernel-authoring.md](004-kernel-authoring.md)
+
+Status correct, **outstanding list wrong**: the header says the
+`//accel:vertex` and `//accel:fragment` directives are unbuilt. They are built,
+with six vertex and six fragment artifacts in the corpus.
+
+**Unbuilt:** the GLSL ES 3.1 / GLSL 4.3 and HLSL SM 6 emitters, both correctly
+gated on backends [006](006-backends.md) lists as unbuilt; and the **target
+generation policy** — `-targets=cpu,metal` does not exist, the record carries a
+single `MSL string` rather than an ordered target set, and "requesting a
+not-yet-admitted target fails generation" is unreachable.
+
+**Unbacked:** "**helpers take values, never storage** … both cases produce one
+error naming the restriction." The compiler *accepts* slice helper parameters by
+design, and the corpus uses one. The rule was a GLSL ES 3.1 constraint, GLSL is
+unbuilt, and MSL passes a device pointer to a function without complaint — so
+this is a rule the code deliberately does not enforce while the spec asserts it
+does.
+
+### [005-graphics.md](005-graphics.md)  ·  status corrected `drafted` → `in progress`
+
+`drafted` means nothing it specifies has shipped. Most of it has: both backends
+render, present, and are compared pixel by pixel — `render.go` (1103 lines),
+`surface.go` (637), `internal/raster/` (2553), the Metal `CAMetalLayer` drawable
+path, the top-left fill rule, perspective-correct interpolation.
+
+**Unbuilt, and one of these has no owner:**
+
+- **The render-to-compute handoff, variant 1** — "compute reads the attachments
+  as textures, the normal path, no copy at all". A texture in a compute kernel
+  is *refused by name*: `Texture2D`/`Fetch` reach vertex and fragment stages
+  only, and `Binding.Texture` is refused on every dispatch path.
+  [032](032-stage-abi.md) §5.1 explicitly declines to own this. **So the
+  deferred-renderer graph this spec is organised around cannot be recorded**,
+  and the discriminating pixel-origin test it names is unbuildable for the same
+  reason. This is the one chunk with no owning child.
+- Depth bias, fill mode and the blend constant; the whole of stencil; the sample
+  count field; line and point topologies — each already owned by an in-progress
+  child (033, 035, 041), not by 005.
+- **Integer varyings must be flat-interpolated** — no `accel:"flat"` tag
+  handling and no rejection. The rasterizer carries a `Flat []bool` mask that no
+  front end populates. Owned by 032 §3.1.
+
+**Unbacked:**
+
+- "**Status: normative parent design** … does not freeze a public graphics API
+  before any implementation has tested that shape." The API is public and frozen.
+- "**Rasterizer-ordered access**: the CPU rasterizer must emulate the same order
+  before it can report ROA support." The CPU profile reports
+  `RasterizerOrderedAccess: true` and nothing consumes it — no stage
+  requirement, no ordering in the rasterizer, no build-time gate. **A capability
+  advertised and not emulated.**
+- "The CPU rasterizer: triangles, lines, and points" — triangles only.
+- "The four child specs exist as of 2026-08-23" — there are five.

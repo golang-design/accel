@@ -1,6 +1,6 @@
 ---
 title: "Graphics: render pipelines, passes, draws, and present"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 001-device-resources.md
