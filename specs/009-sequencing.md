@@ -2100,6 +2100,48 @@ added after a miss:
   differential inflates it on darwin and the gate is the slowest useful signal
   there is.
 
+#### Correction — 2026-08-27: the extent invariant was never enforced
+
+Appended rather than edited into the outcome above, per the maintenance rule.
+
+M10 built [046](046-segmented-extents.md)'s segmented extent and reported it as
+paying for itself three times. It did, and all three callers shipped a
+memory-safety bug, filed by the consumer as
+[#24](https://github.com/golang-design/accel/issues/24).
+
+The lookup finds a token's row by counting the rows that end at or before it.
+For a token past every row that count is $R$, one index past the end of
+`offsets`, of `lengths`, and of the page table's rows — a panic on the CPU
+backend, and on a GPU another sequence's cache returned as this token's answer.
+`AttentionRagged`, `AttentionRaggedF16` and `GroupedMatVec` all had it;
+`LinearAttention` takes its row from the group id and never did.
+
+**The wrong assumption was written down as a guarantee.** 046 §5 asserted that
+`sum(n) != q.shape[0]` was *refused at record time*, naming both numbers. No
+code implemented it and no test checked it, and none could: the counts are a
+tensor, so the sum is device data by [043](043-per-row-values.md) §2 and the
+host has no value to compare against. Three kernels then took the invariant as
+given, which is exactly what a stated guarantee invites.
+
+What found it: the consumer, with a probe. What would have found it here:
+grepping each Done bullet for the code that implements it. **An assertion naming
+a specific refusal is a claim that some code refuses**, and that claim is
+checkable mechanically. This is the second time a gap survived because prose had
+no accepting half — the first was recorded above — and the shape is the same
+both times.
+
+The fix makes padding *legal* rather than clamping the index: a row past the
+total attends nothing and writes zero, which a caller can assert, where a stray
+token added to the last row is a wrong answer nothing can distinguish from a
+right one. It also buys the bucketed-batch case for free.
+
+**A second bug, one layer down.** The guard is the first kernel construct to
+return early *and* hold barriers, and the generator lowered a bare `return` into
+the resumable form, whose Go signature returns "did this invocation suspend".
+The corpus stopped compiling, which is loud. The quiet part is that the pairing
+of two supported features had no test until a kernel happened to use both, and
+the feature matrix is where that generalizes.
+
 ## The consumer reports, and what they were actually about — 2026-08-24
 
 A consumer building an inference framework on this library filed nine issues.
