@@ -157,6 +157,7 @@ upstream was blocked on it:
 | --- | --- |
 | `CastF32ToF16` | round-to-nearest-even narrowing; agrees bit for bit between backends, over inputs with bits below f16's precision so the rounding actually happens |
 | `CastF16ToF32` | exact widening: every f16 value is an f32 value, so anything but equality is a bug rather than a rounding difference |
+| `SaturatingConvert` | `kmath.ToI32` and `ToU32` over their boundaries — NaN, both infinities, and the exact limits — on both backends. The two lowerings are written separately and mirror each other by hand, so this is the only thing that would catch a compare reading `<` where the other reads `<=` ([051](051-float-to-int.md) §2.1) |
 | `AttentionPrefill` | matched against a straight quadruple loop in f64 at four shapes, and **equal to incremental decode over the same cache** |
 
 **A conversion is a kernel because the alternative is three synchronisation

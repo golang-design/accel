@@ -1,6 +1,6 @@
 ---
 title: "Float to integer: saturating, NaN to zero, and the same answer everywhere"
-status: in progress
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -16,11 +16,15 @@ backend gives it.
 [002](002-compute-model.md) §6.2's last rows. Split out of 002 as an independent
 chunk — see [STATUS.md](STATUS.md)'s split plan.
 
-## 1. What is unspecified today, and why it compiles
+## 1. What was unspecified, and why it compiled
+
+*Past tense as of 2026-08-27: §2.1 records what shipped. This section is kept as
+the statement of the problem, because the argument for the shape of the answer
+is in it.*
 
 002 §6.2 states a saturating contract: a value past the destination's range
 clamps to its limit, and a NaN becomes zero. Neither the API nor the check
-exists.
+existed.
 
 - `accel.ToI32`, `ToU32`, `ToI8`, `ToU8` — no matches anywhere in the tree.
 - The front end's `conversion` (`internal/kernelc/front/build.go:1024`) accepts
@@ -74,7 +78,15 @@ those stages exist to demonstrate rests on a conversion that has no rule.
 
 ## 2. What gets built
 
-Four intrinsics, not a conversion rule, and the difference is the point.
+**Two intrinsics — amended 2026-08-27, and it said four.** `ToI8` and `ToU8` are
+removed from this spec's scope rather than left outstanding, because building
+them would be wrong rather than merely unfinished: [002](002-compute-model.md)
+makes the narrow integer kinds *storage*, converted to f32 on load, and
+arithmetic on them is outside the subset. A kernel that converted into an `i8`
+could not then use the result, so the function would exist to produce a value
+nothing can consume. If narrow arithmetic ever arrives they arrive with it.
+
+Intrinsics rather than a conversion rule, and that difference is the point.
 
 $$
 \mathrm{ToI32}(x) = \begin{cases}
@@ -85,8 +97,8 @@ $$
 \end{cases}
 $$
 
-where $\lfloor\cdot\rfloor_0$ is truncation toward zero. `ToU32`, `ToI8` and
-`ToU8` are the same with their own limits and a lower bound of zero.
+where $\lfloor\cdot\rfloor_0$ is truncation toward zero. `ToU32` is the same with
+its own upper limit and a lower bound of zero.
 
 **A named call rather than a conversion expression**, because `int32(f)` reads
 like Go and Go does not promise this. A reader who writes the conversion gets a
@@ -112,23 +124,25 @@ intrinsic table is keyed by package and function identity and `kmath` is the
 package the front end resolves scalar math from. Putting these two in the root
 package would have made them the only kernel-callable maths outside it.
 
-**Deviation 2 — `ToI8` and `ToU8` are not built.** §2 says four. The narrow
-integer kinds are storage by [002](002-compute-model.md), converted to f32 on
-load, and arithmetic on them is outside the subset — so a kernel that converted
-*into* an i8 could not then use the result. They arrive with a reason to want
-them, and the refusal already routes an i8 destination to `ToI32`, which is the
-widest sensible answer rather than a function that is not there.
+**Deviation 2 — `ToI8` and `ToU8` are out of scope, not outstanding.** §2 said
+four and is amended to two, with the reason there: converting *into* a narrow
+integer produces a value the subset cannot then use. The refusal routes an `i8`
+destination to `ToI32`, which is the widest sensible answer rather than a
+function that is not there. This is an amendment rather than a gap, which is why
+the spec can be `implemented` — a section removed for a stated reason is not a
+section left unbuilt.
 
-**Not built — the boundary differential.** §3's "CPU and Metal agree bit for bit
-across that whole set" is not asserted. The boundary set is checked on the CPU
-(`kmath/tofloat_test.go`), and the two backends are compared only through the
-three migrated stages, which exercise in-range coordinates. The MSL helper
-mirrors the Go branches line for line, which is an argument and not a test. A
-corpus kernel taking a float buffer and writing `ToI32` of it, seeded with the
-infinities, the NaN and the exact limits, is what closes this — and it is the
-one thing here that would catch a real divergence.
+**The boundary differential is built** — `SaturatingConvert` in the corpus, and
+a case in the cross-backend differential seeded with NaN, both infinities, and
+the exact limits. No ULP ceiling: the outputs are integers of an exact class, so
+any difference at all is a divergence.
 
-So this spec stays *in progress* on that last item.
+**One mutation was neutral, and that is worth recording.** Changing the MSL's
+`x <= -2147483648.0f` to `<` does *not* fail, because at exactly $-2^{31}$ the
+fall-through `int(x)` returns the same value — the boundary is representable and
+the clamp is redundant there. So the code is robust at that edge and the
+mutation proves nothing. Diverging the NaN result does fail, naming the kernel.
+Both facts are the test's discriminating power measured rather than assumed.
 
 ## 3. Done
 

@@ -126,6 +126,58 @@ func diffCases() []diffCase {
 			groups: accel.WorkgroupCount{X: 4},
 			ulp:    16, why: "SiLU's exp and division, then a multiply",
 		},
+		{
+			// The saturating conversions over their boundaries, on both
+			// backends. specs/051-float-to-int.md §2.1: the two lowerings are
+			// written separately and mirror each other by hand, which is an
+			// argument rather than a test, and this is the test.
+			//
+			// No ulp: the outputs are integers and the class is Exact, so any
+			// difference at all is a divergence. That is the point of comparing
+			// here rather than through the graphics stages, which only ever pass
+			// in-range coordinates and would agree under either lowering.
+			kernel: &testkernels.SaturatingConvertKernel,
+			counts: []int{16, 16, 16},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0 // the two outputs start empty
+				}
+				// Every case the branches distinguish, and the exact limits
+				// rather than values near them: a lowering that reads < where
+				// the other reads <= differs only at the limit itself.
+				switch i {
+				case 0:
+					return float32(math.NaN())
+				case 1:
+					return float32(math.Inf(1))
+				case 2:
+					return float32(math.Inf(-1))
+				case 3:
+					return 0
+				case 4:
+					return 1.9
+				case 5:
+					return -1.9
+				case 6:
+					return -2147483648 // -2^31, exactly int32's minimum
+				case 7:
+					return 2147483648 // +2^31, one past int32's maximum
+				case 8:
+					return 4294967296 // 2^32, one past uint32's maximum
+				case 9:
+					return 4294967040 // the largest f32 below 2^32
+				case 10:
+					return -0.5 // negative but truncating to zero
+				case 11:
+					return 1e30
+				case 12:
+					return -1e30
+				}
+				return float32(i) * 1.5
+			},
+			why: "integer results of an exact class, so they agree or they do not",
+		},
 		{kernel: &testkernels.SegmentSumKernel, counts: []int{256, 8}, groups: accel.WorkgroupCount{X: 1}},
 		{kernel: &testkernels.CountAboveKernel, counts: []int{256, 1}, groups: accel.WorkgroupCount{X: 16}},
 		{kernel: &testkernels.HistogramKernel, counts: []int{256, 4}, groups: accel.WorkgroupCount{X: 4}},

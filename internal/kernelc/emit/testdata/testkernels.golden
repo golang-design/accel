@@ -2026,6 +2026,72 @@ kernel void CastBF16ToF32(
 	},
 }
 
+// saturatingConvertFlat is the generated flat lowering of SaturatingConvert.
+//
+// It is what the CPU backend runs. The authored SaturatingConvert is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func saturatingConvertFlat(t accel.Thread, in []float32, outI []int32, outU []uint32) {
+	var i uint32 = t.GlobalID().X
+	if i < uint32(int32(len(in))) {
+		outI[i] = kmath.ToI32(in[i])
+		outU[i] = kmath.ToU32(in[i])
+	}
+}
+
+// SaturatingConvertKernel is the compiled form of SaturatingConvert.
+var SaturatingConvertKernel = kernelabi.Kernel{
+	Name:          "SaturatingConvert",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "outI", DType: kernelabi.I32, Access: kernelabi.Write},
+		{Name: "outU", DType: kernelabi.U32, Access: kernelabi.Write},
+	},
+	Digest:           "c1e68695281806e755171afc6385a013",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static int _accel_to_i32(float x) {
+    if (x != x) { return 0; }
+    if (x <= -2147483648.0f) { return (-2147483647 - 1); }
+    if (x >= 2147483648.0f) { return 2147483647; }
+    return int(x);
+}
+
+static uint _accel_to_u32(float x) {
+    if (x != x) { return 0u; }
+    if (x <= 0.0f) { return 0u; }
+    if (x >= 4294967296.0f) { return 4294967295u; }
+    return uint(x);
+}
+
+kernel void SaturatingConvert(
+    const device float *in [[buffer(0)]],
+    device int *outI [[buffer(1)]],
+    device uint *outU [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < uint(int(_lens[0])))) {
+        outI[i] = _accel_to_i32(in[i]);
+        outU[i] = _accel_to_u32(in[i]);
+    }
+}
+`,
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		saturatingConvertFlat(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[int32](a, 1), kernelabi.Slice[uint32](a, 2))
+	},
+}
+
 // exchangeFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -12414,6 +12480,7 @@ var Kernels = []*kernelabi.Kernel{
 	&CastF32ToF16Kernel,
 	&CastF16ToF32Kernel,
 	&CastBF16ToF32Kernel,
+	&SaturatingConvertKernel,
 	&ExchangeKernel,
 	&ReduceLoopKernel,
 	&ReduceUnrolledKernel,
