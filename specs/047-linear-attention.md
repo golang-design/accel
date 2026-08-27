@@ -198,10 +198,99 @@ produces.
   genuinely changes and the bound between the two forms has to be derived.
 
   So the work is a derivation before it is a kernel, and this kernel is what the
-  derivation would be checked against. Scoped here rather than attempted,
-  because a chunked scan that is fast and subtly wrong is worse than a slow one
-  that is right — and the consumer has not yet measured the slow one.
+  derivation would be checked against. **The derivation is done — §6.1.**
 - **Whether $\alpha$ and $\beta$ should be one tensor.** They are two per-token
   scalars and every model that has one has the other. Two bindings is two things
   to bind wrongly; one interleaved tensor is a layout a caller has to know.
   Left as two until a caller says.
+
+## 6.1 The UT transform, derived — 2026-08-27
+
+§6 said the chunked form needs a second representation because
+$u_j = S_{j-1}k_j$ is the recurrence again. It does, and this is it: **the
+sequential dependency becomes a triangular solve whose coefficients are one
+Gram matrix.**
+
+### The substitution
+
+Write the recurrence's write vector as $w_t = \beta_t(v_t - u_t)$, so that
+$S_t = \alpha_t S_{t-1} + w_t k_t^\top$. Let $d_t = \prod_{i\le t}\alpha_i$ be
+the decay accumulated through token $t$ of the chunk, with $d_{-1} = 1$.
+Unrolling from the chunk's entry state $S_0$:
+
+$$S_t = d_t S_0 + \sum_{j\le t} \frac{d_t}{d_j}\, w_j k_j^\top$$
+
+Substituting that into $u_t = S_{t-1}k_t$ and then into $w_t$'s own definition
+gives an equation in the $w$ alone — the $u_j$ never appear:
+
+$$w_t \;+\; \beta_t\sum_{j<t}\frac{d_{t-1}}{d_j}(k_j\cdot k_t)\,w_j
+\;=\; \beta_t\big(v_t - d_{t-1}S_0k_t\big)$$
+
+which is $(I + A)W = B$ with $A$ **strictly lower triangular**:
+
+$$A_{tj} = \beta_t\,\frac{d_{t-1}}{d_j}\,(k_j\cdot k_t)\ \ (j<t),
+\qquad B_t = \beta_t\big(v_t - d_{t-1}S_0k_t\big)$$
+
+$A$ is one $C\times C$ Gram matrix of the chunk's keys, scaled per entry. That
+is the whole content of the transform: what was $C$ dependent steps over a
+$K\times V$ state becomes one forward substitution over $C$ rows.
+
+```
+sequential                    chunked
+  t=0 ─ S ─ t=1 ─ S ─ t=2       KKᵀ  ──▶  A   (one GEMM)
+      each step touches                    │
+      the whole K×V state       B ──▶ (I+A)W = B   (forward substitution,
+                                            │       C rows, no state)
+                                            ▼
+                                S₀ read once, S_C written once
+```
+
+### What comes out
+
+With $W$ solved, the outputs and the exit state are both plain contractions:
+
+$$o_t = d_t\,S_0q_t \;+\; \sum_{j\le t}\frac{d_t}{d_j}(k_j\cdot q_t)\,w_j
+\qquad
+S_C = d_{C-1}S_0 \;+\; \sum_j \frac{d_{C-1}}{d_j}\,w_jk_j^\top$$
+
+### Why it is worth a kernel
+
+Not arithmetic — the operation counts are close. **Global traffic.** The
+sequential kernel reads and writes the $K\times V$ state three times per token
+(§1's three passes). The chunked form reads $S_0$ once and writes $S_C$ once per
+chunk, so the state crosses memory $2$ times per $C$ tokens instead of $3C$.
+That is the reason the form exists, and it is a memory claim rather than a FLOP
+one.
+
+### The ratio is the numerical hazard
+
+$d_{t-1}/d_j$ is $\prod_{i=j+1}^{t-1}\alpha_i$, computed as a quotient of two
+cumulative products. Both shrink geometrically, so at $\alpha = 0.5$ and
+$C = 64$ the denominator is near $10^{-20}$ and the quotient is computed from
+two numbers that have each lost most of their significance. **A chunk size is
+therefore part of the representation, not a tuning knob**, and a kernel that
+takes $C$ from the caller has to refuse the sizes where the quotient is not
+trustworthy — or form the product directly, which costs $O(C)$ per entry and
+removes the hazard.
+
+### Checked, and against what
+
+`TestTheChunkedFormEqualsTheSequentialKernel` runs the transform against
+`LinearAttention` itself at chunk sizes 1, 2, 3, 4, 5, 8 and 16 over sequences
+of 7 and 5 tokens — sizes that do not divide the lengths, because a chunk that
+always divides evenly hides the index arithmetic where an off-by-one lives.
+Chunk 1 is the degenerate case and must reproduce the recurrence exactly.
+
+Two mutations confirm it discriminates: dropping $d_{t-1}$ from $A_{tj}$, and
+dropping it from $B_t$. Each fails five or six of the seven sizes — and chunk 1
+correctly survives the first, because there is no $j<t$ term for it to get
+wrong.
+
+### What is still not built: the kernel
+
+The derivation is no longer the blocker; the kernel is ordinary work with an
+oracle. What it needs that this reference does not is a residency plan: lane $a$
+wants $S_0$'s row $a$ held across the chunk, which is $K$ floats per lane and
+spills at the widths a real model uses, so the kernel tiles over $K$ as well and
+that tiling is what has not been written. [010](010-kernel-corpus.md) carries
+`linear_attention_chunked` as not registered.
