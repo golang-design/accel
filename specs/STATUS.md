@@ -885,3 +885,71 @@ path, the top-left fill rule, perspective-correct interpolation.
   advertised and not emulated.**
 - "The CPU rasterizer: triangles, lines, and points" — triangles only.
 - "The four child specs exist as of 2026-08-23" — there are five.
+
+## What to do first
+
+266 items is a backlog, not a plan. What makes one is knowing which kind of
+wrong each item is, because they are not comparable: a latent wrong answer and a
+missing convenience both read as "outstanding" and only one of them can cost a
+consumer their afternoon.
+
+### 1. Latent wrong answers — a caller who writes the obvious thing gets a wrong result
+
+Nothing is broken today. Each of these is a guarantee the specs make that the
+implementation does not, so the failure arrives the first time somebody writes
+the code the spec says is legal. Verified mechanically that no current code
+relies on any of them; that is a fact with a shelf life, not a reprieve.
+
+| | Spec | The gap | Successor |
+| --- | --- | --- | --- |
+| 1 | [002](002-compute-model.md) §2.5 | `Barrier` is normative over shared **and** storage; Metal emits `mem_threadgroup` only | [050](050-barrier-scopes.md) |
+| 2 | [002](002-compute-model.md) §6.2 | a saturating float-to-int contract that does not exist, while `int32(f)` compiles and is undefined on every target | [051](051-float-to-int.md) |
+| 3 | [029](029-plan-cache.md) §2 | the plan-cache key claims to cover every compile option that affects lowering, and hashes a constant string | — |
+
+029 is third rather than first only because `CompileOptions` currently carries
+nothing but `Label`, which is excluded by design. **It becomes first the day
+that struct grows a field**, and it will grow one silently.
+
+### 2. Advertised and absent — a caller queries a capability, or reads an API, that is not there
+
+| | Spec | The gap |
+| --- | --- | --- |
+| 4 | [005](005-graphics.md) | the CPU profile reports `RasterizerOrderedAccess: true` and nothing emulates it — no stage requirement, no ordering, no build-time gate |
+| 5 | [030](030-paged-kv.md) | `BlockPool` is presented as caller-facing and lives in `tensor/internal/pagetable`, imported only by its own test |
+| 6 | [014](014-kernel-uniforms.md) §2 | no generated decoder, no generated bindings struct, no uniform-size validation against the device limit |
+| 7 | [003](003-command-graph.md) | the whole error taxonomy — `BuildError`, `NodeError`, thirteen sentinels, and the `file:line:col` format |
+
+4 is the one to take first: a capability bit is a promise a caller *plans*
+around, and this one is false. Either emulate the ordering or stop reporting it.
+
+### 3. Conservative, not wrong — correct today and slower or narrower than specified
+
+| | Spec | The gap |
+| --- | --- | --- |
+| 8 | [003](003-command-graph.md) | `AccessMode` is an 11-bit mask in the spec and a three-value enum in code, so the `AtomicRMW` no-edge rule is unbuilt and atomics take ordinary write edges |
+| 9 | [044](044-unbounded-context.md) §7 | `Selections()` does not report the tile count |
+| 10 | [025](025-tensor-operators.md) §6 | the ten operators lower on CPU and their kernels agree on Metal, and no test runs the operators themselves on both |
+
+### 4. Discipline erosion — the checks that were supposed to stop all of the above
+
+These are last by urgency and first by leverage. Every item above exists because
+one of these is unbuilt.
+
+| | Spec | The gap |
+| --- | --- | --- |
+| 11 | [011](011-conformance-harness.md) §2 | "every test receives a profile explicitly" is enforced nowhere: one file imports the conformance device package, 26 call `accel.OpenCPU` directly |
+| 12 | [011](011-conformance-harness.md) §4 | the static check that rejects ad hoc comparison helpers and tolerance arguments — the thing that would keep [008](008-numerics.md)'s no-tolerances rule true |
+| 13 | [010](010-kernel-corpus.md) | 010's own rule, unapplied to 010: 22 of 72 kernels reach no operator, and four carry rows that do not say so |
+| 14 | [000](000-decisions.md) | layering rule 3, "no backend-specific type appears in a public signature", violated by `OpenCPU`, `CPUOptions` and `CPUMode` — and no test checks any of the four layering rules |
+
+14 needs a decision before work: either the public surface changes or the rule
+does. It is a normative document contradicted by the API it governs, and leaving
+both standing is what made the rest of this list possible.
+
+### The shape of the whole finding
+
+Two-thirds of the 266 items are **unbacked** rather than **unbuilt** — the code
+exists and nothing checks it. That is the same defect this project spent the
+week removing from operator refusals, one level up, and §4 above is where it
+stops recurring. Fixing §1 makes the library correct; fixing §4 makes it stay
+correct.
