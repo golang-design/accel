@@ -176,3 +176,70 @@ func TestTheAuthoredGroupedKernelMatchesItsLowering(t *testing.T) {
 		}
 	}
 }
+
+// A token past the last expert's segment is padding: it writes zero and reads
+// no weights out of bounds.
+//
+// [#24](https://github.com/golang-design/accel/issues/24) was filed against the
+// ragged attention kernel; this is the same lookup in the same shape, and a fix
+// to one kernel and not the other is the divergence sharing a primitive invites.
+// Here the stray index lands on `wBase`, so the read is a matrix past the weight
+// tensor rather than a neighbouring sequence's cache.
+func TestAGroupedTokenPastTheLastExpertIsPadding(t *testing.T) {
+	d := testkernels.GroupedDims{Experts: 3, K: 64, N: 4}
+	// x holds five tokens; the counts claim four.
+	x, w, _ := groupedFixture(d, []uint32{2, 1, 2})
+	short := []uint32{0, 2, 2, 4}
+
+	const rows = 5
+	out := make([]float32, rows*d.N)
+	if err := kernel.DispatchCooperative(&testkernels.GroupedMatVecKernel,
+		accel.ID3{X: rows * d.N},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{x, w, short, out},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	// The four real tokens still take their own expert's matrix.
+	for e := uint32(0); e < d.Experts; e++ {
+		for tok := short[e]; tok < short[e+1]; tok++ {
+			for n := uint32(0); n < d.N; n++ {
+				want := 0.0
+				for k := uint32(0); k < d.K; k++ {
+					want += float64(x[tok*d.K+k]) * float64(w[e*d.K*d.N+k*d.N+n])
+				}
+				if got := float64(out[tok*d.N+n]); math.Abs(got-want) > 1e-4 {
+					t.Fatalf("padding changed a real token: %d column %d is %v, want %v",
+						tok, n, got, want)
+				}
+			}
+		}
+	}
+
+	// The pad row is zero, and asserted rather than assumed unwritten.
+	for i := int(short[d.Experts]) * int(d.N); i < len(out); i++ {
+		if out[i] != 0 {
+			t.Fatalf("the pad row is not zero: element %d is %v", i, out[i])
+		}
+	}
+
+	// The authored form takes the same branch. The differential against the
+	// lowering only runs where Metal does, so without this the guard is
+	// uncovered on the platform the coverage gate measures.
+	authored := make([]float32, len(out))
+	groups := kernel.ID3{X: rows * d.N, Y: 1, Z: 1}
+	for g := range groups.X {
+		var sh [128]float32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			groups, 128, func(th kernel.Thread) {
+				testkernels.GroupedMatVec(th, d, x, w, short, authored, &sh)
+			})
+	}
+	for i := range authored {
+		if math.Abs(float64(authored[i]-out[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], out[i])
+		}
+	}
+}

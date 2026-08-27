@@ -68,6 +68,8 @@ func AttentionRagged(t accel.Thread, d RaggedDims, q []float32, k []float32,
 	h := group % d.QHeads
 	kvHead := h / (d.QHeads / d.KVHeads)
 
+	qBase := (tok*d.QHeads + h) * d.HeadDim
+
 	// Which sequence this token belongs to, as a *count* rather than a search:
 	// the number of rows that end at or before it. For offsets [0,3,3,7] and
 	// token 3 that is two -- rows 0 and 1 both end at or before 3 -- and row 2
@@ -91,6 +93,32 @@ func AttentionRagged(t accel.Thread, d RaggedDims, q []float32, k []float32,
 		}
 	}
 
+	// A token past the last segment belongs to no sequence, and is padding.
+	//
+	// specs/046-segmented-extents.md §1 property 3: the host refuses what the
+	// host can check, and the sum of a *device* count buffer is not that. So this
+	// is the one place the invariant can be enforced, and without this guard
+	// `seq` reaches Batch -- one past the end of `offsets`, of `lengths`, and of
+	// the page table's rows. On the CPU backend that is a panic; on a GPU it is a
+	// read of the next sequence's cache and a fluent wrong answer.
+	//
+	// Padding is made *legal* rather than clamped. Attributing a stray token to
+	// the last sequence would put the read back in range and keep the wrong
+	// answer, which §1 property 3 rejects for the reason 044 deviation 6 gives.
+	// A pad row scores nothing and its output is zero -- a value a caller can
+	// assert, which "left untouched" is not -- so a bucketed batch can pad q to a
+	// plan shape and let the extra rows fall off the end.
+	//
+	// The whole workgroup takes this branch or none of it does: `tok` comes from
+	// GroupID and `offsets` is not written during the dispatch, so no lane is
+	// left waiting at a barrier the others returned past.
+	if seq >= d.Batch {
+		if lane < d.HeadDim {
+			out[qBase+lane] = 0
+		}
+		return
+	}
+
 	// The token's index within its own sequence, and from that its position in
 	// the sequence -- which is not its index in the flat buffer.
 	//
@@ -105,7 +133,6 @@ func AttentionRagged(t accel.Thread, d RaggedDims, q []float32, k []float32,
 	limit := kvLen - n + i
 
 	pageBase := seq * d.MaxPages
-	qBase := (tok*d.QHeads + h) * d.HeadDim
 
 	// The table's reach, not the pool's: a pool holds every sequence's blocks,
 	// so looping over it would walk another sequence's cache. Same argument as

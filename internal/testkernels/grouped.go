@@ -61,6 +61,19 @@ func GroupedMatVec(t accel.Thread, d GroupedDims, x []float32, w []float32,
 			e = e + 1
 		}
 	}
+	// A token past the last expert's segment routed nowhere, and is padding.
+	//
+	// [AttentionRagged]'s guard, for its reason, and one index short of it: the
+	// count loop stops at Experts so it reads no offset out of range, but `e`
+	// reaching Experts makes `wBase` address a matrix past the weight tensor --
+	// on a GPU, whatever allocation follows it, read as weights.
+	// specs/049-grouped-gemm.md §1.
+	if e >= d.Experts {
+		if lid == 0 {
+			out[tok*d.N+col] = 0
+		}
+		return
+	}
 	wBase := e * d.K * d.N
 
 	acc := float32(0)

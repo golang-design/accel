@@ -453,3 +453,156 @@ func TestTheAuthoredF16RaggedKernelMatchesItsLowering(t *testing.T) {
 		}
 	}
 }
+
+// shortenOffsets rebuilds an offsets array from counts that sum to less than
+// the query buffer holds, which is the shape a padded batch has.
+func shortenOffsets(batch uint32, counts []uint32) []uint32 {
+	off := make([]uint32, batch+1)
+	sum := uint32(0)
+	for r, c := range counts {
+		off[r] = sum
+		sum += c
+	}
+	off[batch] = sum
+	return off
+}
+
+// A token past the last segment is padding: it scores nothing, writes zero, and
+// reads nothing out of bounds.
+//
+// The bug this pins ([#24](https://github.com/golang-design/accel/issues/24)):
+// the segment lookup counts the rows that end at or before a token, so a token
+// past every row counted every row and produced seq == Batch. That is one past
+// the end of offsets, of lengths, and of the page table's rows -- a panic on the
+// CPU backend and, on a GPU, another sequence's cache read as this one's.
+//
+// specs/046-segmented-extents.md §1 property 3 is why the check is here and not
+// in tensor.Attention: the sum of a device count buffer is not a value the host
+// can see at record time, so the kernel is the only place that can enforce it.
+func TestARaggedTokenPastTheLastSegmentIsPadding(t *testing.T) {
+	d := testkernels.RaggedDims{
+		Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+		Block: 4, MaxPages: 3, Scale: float32(1 / math.Sqrt(8)),
+	}
+	// q holds four rows; the extents claim three. The fourth is padding.
+	q, k, v, pages, lengths, _ := raggedFixture(d, []uint32{3, 1, 0})
+	short := shortenOffsets(d.Batch, []uint32{2, 1, 0})
+
+	const rows = 4
+	if got := int(short[d.Batch]); got != rows-1 {
+		t.Fatalf("the fixture is not padded: extents sum to %d and q has %d rows",
+			got, rows)
+	}
+
+	out := make([]float32, rows*d.QHeads*d.HeadDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionRaggedKernel,
+		accel.ID3{X: rows * d.QHeads},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{q, k, v, pages, lengths, short, out},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	// The real rows are unaffected: padding must not perturb the tokens that do
+	// belong to a sequence. The reference runs over the same short extents.
+	want := raggedRef(t, d, q, k, v, pages, lengths, short)
+	for i := range want {
+		if math.Abs(float64(out[i]-want[i])) > 1e-5 {
+			t.Fatalf("padding changed a real token: element %d is %v, want %v",
+				i, out[i], want[i])
+		}
+	}
+
+	// The pad row is zero. Asserted rather than left untouched, because a test
+	// that only checks the dispatch returned would pass against a buffer that
+	// happened to hold anything.
+	for i := len(want); i < len(out); i++ {
+		if out[i] != 0 {
+			t.Fatalf("the pad row is not zero: element %d is %v", i, out[i])
+		}
+	}
+
+	// The authored form takes the same branch, which is what the Linux gate
+	// sees: the differential against the lowering only runs where Metal does.
+	authored := make([]float32, len(out))
+	groups := kernel.ID3{X: rows * d.QHeads, Y: 1, Z: 1}
+	for g := range groups.X {
+		var scores, red [128]float32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			groups, 128, func(th kernel.Thread) {
+				testkernels.AttentionRagged(th, d, q, k, v, pages, lengths,
+					short, authored, &scores, &red)
+			})
+	}
+	for i := range authored {
+		if math.Abs(float64(authored[i]-out[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], out[i])
+		}
+	}
+}
+
+// The f16 cache variant guards the same way, and is checked because it is a
+// separate kernel rather than a flag: a fix applied to one and not the other is
+// exactly the divergence a mechanically derived variant invites.
+func TestAnF16RaggedTokenPastTheLastSegmentIsPadding(t *testing.T) {
+	d := testkernels.RaggedDims{
+		Batch: 2, QHeads: 2, KVHeads: 1, HeadDim: 8,
+		Block: 4, MaxPages: 3, Scale: float32(1 / math.Sqrt(8)),
+	}
+	q, k32, v32, pages, lengths, _ := raggedFixture(d, []uint32{2, 1})
+	short := shortenOffsets(d.Batch, []uint32{1, 1})
+
+	k16 := make([]accel.Float16, len(k32))
+	v16 := make([]accel.Float16, len(v32))
+	for i := range k32 {
+		k16[i] = accel.ToFloat16(k32[i])
+		v16[i] = accel.ToFloat16(v32[i])
+	}
+
+	const rows = 3
+	out := make([]float32, rows*d.QHeads*d.HeadDim)
+	if err := kernel.DispatchCooperative(&testkernels.AttentionRaggedF16Kernel,
+		accel.ID3{X: rows * d.QHeads},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{q, k16, v16, pages, lengths, short, out},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	real := int(short[d.Batch]) * int(d.QHeads) * int(d.HeadDim)
+	for i := real; i < len(out); i++ {
+		if out[i] != 0 {
+			t.Fatalf("the pad row is not zero: element %d is %v", i, out[i])
+		}
+	}
+	// A real row still attended: a guard that returned for every token would
+	// pass the zero check above and nothing else.
+	nonzero := false
+	for i := range real {
+		if out[i] != 0 {
+			nonzero = true
+		}
+	}
+	if !nonzero {
+		t.Fatal("every real row is zero, so the guard is firing for tokens that " +
+			"belong to a sequence")
+	}
+
+	authored := make([]float32, len(out))
+	groups := kernel.ID3{X: rows * d.QHeads, Y: 1, Z: 1}
+	for g := range groups.X {
+		var scores, red [128]float32
+		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			groups, 128, func(th kernel.Thread) {
+				testkernels.AttentionRaggedF16(th, d, q, k16, v16, pages, lengths,
+					short, authored, &scores, &red)
+			})
+	}
+	for i := range authored {
+		if math.Abs(float64(authored[i]-out[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], out[i])
+		}
+	}
+}

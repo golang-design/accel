@@ -50,6 +50,8 @@ func AttentionRaggedF16(t accel.Thread, d RaggedDims, q []float32, k []accel.Flo
 	h := group % d.QHeads
 	kvHead := h / (d.QHeads / d.KVHeads)
 
+	qBase := (tok*d.QHeads + h) * d.HeadDim
+
 	// Which sequence this token belongs to, as a *count* rather than a search:
 	// the number of rows that end at or before it. For offsets [0,3,3,7] and
 	// token 3 that is two -- rows 0 and 1 both end at or before 3 -- and row 2
@@ -73,6 +75,18 @@ func AttentionRaggedF16(t accel.Thread, d RaggedDims, q []float32, k []accel.Flo
 		}
 	}
 
+	// A token past the last segment is padding, and scores nothing.
+	// [AttentionRagged]'s guard, for its reason: without it `seq` reaches Batch,
+	// one past the end of `offsets`, `lengths`, and the page table's rows. The
+	// cache being f16 changes nothing about the lookup, which is why this is the
+	// same six lines.
+	if seq >= d.Batch {
+		if lane < d.HeadDim {
+			out[qBase+lane] = 0
+		}
+		return
+	}
+
 	// The token's index within its own sequence, and from that its position in
 	// the sequence -- which is not its index in the flat buffer.
 	//
@@ -87,7 +101,6 @@ func AttentionRaggedF16(t accel.Thread, d RaggedDims, q []float32, k []accel.Flo
 	limit := kvLen - n + i
 
 	pageBase := seq * d.MaxPages
-	qBase := (tok*d.QHeads + h) * d.HeadDim
 
 	// The table's reach, not the pool's: a pool holds every sequence's blocks,
 	// so looping over it would walk another sequence's cache. Same argument as

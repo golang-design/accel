@@ -3823,6 +3823,12 @@ func groupedMatVecCoop(t accel.Thread, d GroupedDims, x []float32, w []float32, 
 					}
 				}
 			}
+			if f.e4 >= d.Experts {
+				if f.lid1 == uint32(0) {
+					out[((f.tok2 * d.N) + f.col3)] = float32(0)
+				}
+				return false
+			}
 			f.wBase6 = ((f.e4 * d.K) * d.N)
 			f.acc7 = float32(0)
 			{
@@ -3885,7 +3891,7 @@ var GroupedMatVecKernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "076794c887d9ad6b10f9988508215dac",
+	Digest:    "93414711cd3b9dc67155195f471bb859",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3921,6 +3927,12 @@ kernel void GroupedMatVec(
         if ((offsets[(r + uint(1))] <= tok)) {
             e = (e + uint(1));
         }
+    }
+    if ((e >= d.Experts)) {
+        if ((lid == uint(0))) {
+            out[((tok * d.N) + col)] = float(0);
+        }
+        return;
     }
     uint wBase = ((e * d.K) * d.N);
     float acc = float(0);
@@ -7758,14 +7770,14 @@ type attentionRaggedFrame struct {
 	tok2       uint32
 	h3         uint32
 	kvHead4    uint32
-	seq5       uint32
-	r6         uint32
-	i7         uint32
-	n8         uint32
-	kvLen9     uint32
-	limit10    uint32
-	pageBase11 uint32
-	qBase12    uint32
+	qBase5     uint32
+	seq6       uint32
+	r7         uint32
+	i8         uint32
+	n9         uint32
+	kvLen10    uint32
+	limit11    uint32
+	pageBase12 uint32
 	capacity13 uint32
 	bound14    uint32
 	m15        float32
@@ -7803,28 +7815,34 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			f.tok2 = (f.group0 / d.QHeads)
 			f.h3 = (f.group0 % d.QHeads)
 			f.kvHead4 = (f.h3 / (d.QHeads / d.KVHeads))
-			f.seq5 = uint32(0)
+			f.qBase5 = (((f.tok2 * d.QHeads) + f.h3) * d.HeadDim)
+			f.seq6 = uint32(0)
 			{
-				f.r6 = uint32(0)
-				for ; f.r6 < d.Batch; f.r6 = (f.r6 + uint32(1)) {
-					if offsets[(f.r6+uint32(1))] <= f.tok2 {
-						f.seq5 = (f.seq5 + uint32(1))
+				f.r7 = uint32(0)
+				for ; f.r7 < d.Batch; f.r7 = (f.r7 + uint32(1)) {
+					if offsets[(f.r7+uint32(1))] <= f.tok2 {
+						f.seq6 = (f.seq6 + uint32(1))
 					}
 				}
 			}
-			f.i7 = (f.tok2 - offsets[f.seq5])
-			f.n8 = (offsets[(f.seq5+uint32(1))] - offsets[f.seq5])
-			f.kvLen9 = lengths[f.seq5]
-			f.limit10 = ((f.kvLen9 - f.n8) + f.i7)
-			f.pageBase11 = (f.seq5 * d.MaxPages)
-			f.qBase12 = (((f.tok2 * d.QHeads) + f.h3) * d.HeadDim)
+			if f.seq6 >= d.Batch {
+				if f.lane1 < d.HeadDim {
+					out[(f.qBase5 + f.lane1)] = float32(0)
+				}
+				return false
+			}
+			f.i8 = (f.tok2 - offsets[f.seq6])
+			f.n9 = (offsets[(f.seq6+uint32(1))] - offsets[f.seq6])
+			f.kvLen10 = lengths[f.seq6]
+			f.limit11 = ((f.kvLen10 - f.n9) + f.i8)
+			f.pageBase12 = (f.seq6 * d.MaxPages)
 			f.capacity13 = (d.MaxPages * d.Block)
-			f.bound14 = (f.limit10 + uint32(1))
+			f.bound14 = (f.limit11 + uint32(1))
 			if f.bound14 > f.capacity13 {
 				f.bound14 = f.capacity13
 			}
-			if f.kvLen9 > f.capacity13 {
-				f.kvLen9 = f.capacity13
+			if f.kvLen10 > f.capacity13 {
+				f.kvLen10 = f.capacity13
 			}
 			f.m15 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l16 = float32(0)
@@ -7838,14 +7856,14 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 		case 2:
 			f.pos19 = (f.base18 + f.lane1)
 			f.score20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			f.visible21 = ((f.pos19 <= f.limit10) && (f.pos19 < f.kvLen9))
+			f.visible21 = ((f.pos19 <= f.limit11) && (f.pos19 < f.kvLen10))
 			if f.visible21 {
-				f.phys22 = ((pages[(f.pageBase11+(f.pos19/d.Block))] * d.Block) + (f.pos19 % d.Block))
+				f.phys22 = ((pages[(f.pageBase12+(f.pos19/d.Block))] * d.Block) + (f.pos19 % d.Block))
 				f.dot23 = float32(0)
 				{
 					f.j24 = uint32(0)
 					for ; f.j24 < d.HeadDim; f.j24 = (f.j24 + uint32(1)) {
-						f.dot23 = float32(f.dot23 + float32(q[(f.qBase12+f.j24)]*k[((((f.phys22*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.j24)]))
+						f.dot23 = float32(f.dot23 + float32(q[(f.qBase5+f.j24)]*k[((((f.phys22*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.j24)]))
 					}
 				}
 				f.score20 = float32(f.dot23 * d.Scale)
@@ -7952,8 +7970,8 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 				{
 					f.j31 = uint32(0)
 					for ; f.j31 < uint32(128); f.j31 = (f.j31 + uint32(1)) {
-						if ((f.base18 + f.j31) <= f.limit10) && ((f.base18 + f.j31) < f.kvLen9) {
-							f.phys32 = ((pages[(f.pageBase11+((f.base18+f.j31)/d.Block))] * d.Block) + ((f.base18 + f.j31) % d.Block))
+						if ((f.base18 + f.j31) <= f.limit11) && ((f.base18 + f.j31) < f.kvLen10) {
+							f.phys32 = ((pages[(f.pageBase12+((f.base18+f.j31)/d.Block))] * d.Block) + ((f.base18 + f.j31) % d.Block))
 							f.o17 = float32(f.o17 + float32(scores[tr.ReadAt(0, int(f.j31))]*v[((((f.phys32*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
 						}
 					}
@@ -7974,7 +7992,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 23:
 			if f.lane1 < d.HeadDim {
-				out[(f.qBase12 + f.lane1)] = float32(f.o17 / f.l16)
+				out[(f.qBase5 + f.lane1)] = float32(f.o17 / f.l16)
 			}
 			return false
 		}
@@ -7995,7 +8013,7 @@ var AttentionRaggedKernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "71730e8b88cffad2ff7d6530d18e6928",
+	Digest:    "d8ccaff864ba6e521254593c16fb4803",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8035,18 +8053,24 @@ kernel void AttentionRagged(
     uint tok = (group / d.QHeads);
     uint h = (group % d.QHeads);
     uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint qBase = (((tok * d.QHeads) + h) * d.HeadDim);
     uint seq = uint(0);
     for (uint r = uint(0); (r < d.Batch); r = (r + uint(1))) {
         if ((offsets[(r + uint(1))] <= tok)) {
             seq = (seq + uint(1));
         }
     }
+    if ((seq >= d.Batch)) {
+        if ((lane < d.HeadDim)) {
+            out[(qBase + lane)] = float(0);
+        }
+        return;
+    }
     uint i = (tok - offsets[seq]);
     uint n = (offsets[(seq + uint(1))] - offsets[seq]);
     uint kvLen = lengths[seq];
     uint limit = ((kvLen - n) + i);
     uint pageBase = (seq * d.MaxPages);
-    uint qBase = (((tok * d.QHeads) + h) * d.HeadDim);
     uint capacity = (d.MaxPages * d.Block);
     uint bound = (limit + uint(1));
     if ((bound > capacity)) {
@@ -8152,14 +8176,14 @@ type attentionRaggedF16Frame struct {
 	tok2       uint32
 	h3         uint32
 	kvHead4    uint32
-	seq5       uint32
-	r6         uint32
-	i7         uint32
-	n8         uint32
-	kvLen9     uint32
-	limit10    uint32
-	pageBase11 uint32
-	qBase12    uint32
+	qBase5     uint32
+	seq6       uint32
+	r7         uint32
+	i8         uint32
+	n9         uint32
+	kvLen10    uint32
+	limit11    uint32
+	pageBase12 uint32
 	capacity13 uint32
 	bound14    uint32
 	m15        float32
@@ -8197,28 +8221,34 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			f.tok2 = (f.group0 / d.QHeads)
 			f.h3 = (f.group0 % d.QHeads)
 			f.kvHead4 = (f.h3 / (d.QHeads / d.KVHeads))
-			f.seq5 = uint32(0)
+			f.qBase5 = (((f.tok2 * d.QHeads) + f.h3) * d.HeadDim)
+			f.seq6 = uint32(0)
 			{
-				f.r6 = uint32(0)
-				for ; f.r6 < d.Batch; f.r6 = (f.r6 + uint32(1)) {
-					if offsets[(f.r6+uint32(1))] <= f.tok2 {
-						f.seq5 = (f.seq5 + uint32(1))
+				f.r7 = uint32(0)
+				for ; f.r7 < d.Batch; f.r7 = (f.r7 + uint32(1)) {
+					if offsets[(f.r7+uint32(1))] <= f.tok2 {
+						f.seq6 = (f.seq6 + uint32(1))
 					}
 				}
 			}
-			f.i7 = (f.tok2 - offsets[f.seq5])
-			f.n8 = (offsets[(f.seq5+uint32(1))] - offsets[f.seq5])
-			f.kvLen9 = lengths[f.seq5]
-			f.limit10 = ((f.kvLen9 - f.n8) + f.i7)
-			f.pageBase11 = (f.seq5 * d.MaxPages)
-			f.qBase12 = (((f.tok2 * d.QHeads) + f.h3) * d.HeadDim)
+			if f.seq6 >= d.Batch {
+				if f.lane1 < d.HeadDim {
+					out[(f.qBase5 + f.lane1)] = float32(0)
+				}
+				return false
+			}
+			f.i8 = (f.tok2 - offsets[f.seq6])
+			f.n9 = (offsets[(f.seq6+uint32(1))] - offsets[f.seq6])
+			f.kvLen10 = lengths[f.seq6]
+			f.limit11 = ((f.kvLen10 - f.n9) + f.i8)
+			f.pageBase12 = (f.seq6 * d.MaxPages)
 			f.capacity13 = (d.MaxPages * d.Block)
-			f.bound14 = (f.limit10 + uint32(1))
+			f.bound14 = (f.limit11 + uint32(1))
 			if f.bound14 > f.capacity13 {
 				f.bound14 = f.capacity13
 			}
-			if f.kvLen9 > f.capacity13 {
-				f.kvLen9 = f.capacity13
+			if f.kvLen10 > f.capacity13 {
+				f.kvLen10 = f.capacity13
 			}
 			f.m15 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l16 = float32(0)
@@ -8232,14 +8262,14 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 		case 2:
 			f.pos19 = (f.base18 + f.lane1)
 			f.score20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			f.visible21 = ((f.pos19 <= f.limit10) && (f.pos19 < f.kvLen9))
+			f.visible21 = ((f.pos19 <= f.limit11) && (f.pos19 < f.kvLen10))
 			if f.visible21 {
-				f.phys22 = ((pages[(f.pageBase11+(f.pos19/d.Block))] * d.Block) + (f.pos19 % d.Block))
+				f.phys22 = ((pages[(f.pageBase12+(f.pos19/d.Block))] * d.Block) + (f.pos19 % d.Block))
 				f.dot23 = float32(0)
 				{
 					f.j24 = uint32(0)
 					for ; f.j24 < d.HeadDim; f.j24 = (f.j24 + uint32(1)) {
-						f.dot23 = float32(f.dot23 + float32(q[(f.qBase12+f.j24)]*k[((((f.phys22*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.j24)].F32()))
+						f.dot23 = float32(f.dot23 + float32(q[(f.qBase5+f.j24)]*k[((((f.phys22*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.j24)].F32()))
 					}
 				}
 				f.score20 = float32(f.dot23 * d.Scale)
@@ -8346,8 +8376,8 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 				{
 					f.j31 = uint32(0)
 					for ; f.j31 < uint32(128); f.j31 = (f.j31 + uint32(1)) {
-						if ((f.base18 + f.j31) <= f.limit10) && ((f.base18 + f.j31) < f.kvLen9) {
-							f.phys32 = ((pages[(f.pageBase11+((f.base18+f.j31)/d.Block))] * d.Block) + ((f.base18 + f.j31) % d.Block))
+						if ((f.base18 + f.j31) <= f.limit11) && ((f.base18 + f.j31) < f.kvLen10) {
+							f.phys32 = ((pages[(f.pageBase12+((f.base18+f.j31)/d.Block))] * d.Block) + ((f.base18 + f.j31) % d.Block))
 							f.o17 = float32(f.o17 + float32(scores[tr.ReadAt(0, int(f.j31))]*v[((((f.phys32*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)].F32()))
 						}
 					}
@@ -8368,7 +8398,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 23:
 			if f.lane1 < d.HeadDim {
-				out[(f.qBase12 + f.lane1)] = float32(f.o17 / f.l16)
+				out[(f.qBase5 + f.lane1)] = float32(f.o17 / f.l16)
 			}
 			return false
 		}
@@ -8389,7 +8419,7 @@ var AttentionRaggedF16Kernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "33e12b08603f4a540e5097137d057350",
+	Digest:    "1eb766e261e22777d6aef5ab23e6ca68",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8429,18 +8459,24 @@ kernel void AttentionRaggedF16(
     uint tok = (group / d.QHeads);
     uint h = (group % d.QHeads);
     uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint qBase = (((tok * d.QHeads) + h) * d.HeadDim);
     uint seq = uint(0);
     for (uint r = uint(0); (r < d.Batch); r = (r + uint(1))) {
         if ((offsets[(r + uint(1))] <= tok)) {
             seq = (seq + uint(1));
         }
     }
+    if ((seq >= d.Batch)) {
+        if ((lane < d.HeadDim)) {
+            out[(qBase + lane)] = float(0);
+        }
+        return;
+    }
     uint i = (tok - offsets[seq]);
     uint n = (offsets[(seq + uint(1))] - offsets[seq]);
     uint kvLen = lengths[seq];
     uint limit = ((kvLen - n) + i);
     uint pageBase = (seq * d.MaxPages);
-    uint qBase = (((tok * d.QHeads) + h) * d.HeadDim);
     uint capacity = (d.MaxPages * d.Block);
     uint bound = (limit + uint(1));
     if ((bound > capacity)) {
