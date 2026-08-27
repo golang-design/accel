@@ -16,7 +16,23 @@ import (
 type linearCase struct {
 	batch, heads, keyDim, valueDim int
 	counts                         []uint32
+
+	// gateHeads is how many gates a token carries, or zero for the rank-1
+	// shape where every head shares one. Zero rather than one, so every case
+	// written before the per-head layout existed still builds what it built.
+	gateHeads int
 }
+
+// gateShape is the shape of Alpha and Beta: [tokens] or [tokens, heads].
+func (c linearCase) gateShape() tensor.Shape {
+	if c.gateHeads == 0 {
+		return tensor.Shape{c.tokens()}
+	}
+	return tensor.Shape{c.tokens(), c.gateHeads}
+}
+
+// gates is how many f32 entries that shape holds.
+func (c linearCase) gates() int { return c.gateShape().Elements() }
 
 func (c linearCase) tokens() int {
 	n := 0
@@ -51,10 +67,10 @@ func buildLinear(t *testing.T, c linearCase) *linearPlan {
 		Name: "v", DType: accel.F32, Shape: tensor.Shape{tokens, c.heads, c.valueDim},
 	})
 	alpha := tensor.Input(b, tensor.ValueDesc{
-		Name: "alpha", DType: accel.F32, Shape: tensor.Shape{tokens},
+		Name: "alpha", DType: accel.F32, Shape: c.gateShape(),
 	})
 	beta := tensor.Input(b, tensor.ValueDesc{
-		Name: "beta", DType: accel.F32, Shape: tensor.Shape{tokens},
+		Name: "beta", DType: accel.F32, Shape: c.gateShape(),
 	})
 	extents := tensor.Input(b, tensor.ValueDesc{
 		Name: "extents", DType: accel.U32, Shape: tensor.Shape{c.batch},
@@ -119,8 +135,8 @@ func linearInputs(c linearCase, seed int) (q, k, v, alpha, beta []float32) {
 	for i := range v {
 		v[i] = float32(math.Sin(float64(seed*3+i)*0.23)) * 2
 	}
-	alpha = make([]float32, tokens)
-	beta = make([]float32, tokens)
+	alpha = make([]float32, c.gates())
+	beta = make([]float32, len(alpha))
 	for i := range alpha {
 		alpha[i], beta[i] = 0.9, 0.5
 	}
@@ -314,12 +330,127 @@ func TestALinearGateIsPerTokenNotPerSequence(t *testing.T) {
 	}
 }
 
+// A per-head gate reaches the kernel through the operator.
+//
+// accel issue 27. The state is per head and every term of the recurrence
+// carries a head index except the two gates, so a gated delta network -- where
+// the projection producing them is 2*num_value_heads wide and the whole point
+// is that heads forget at different rates -- was inexpressible. The consumer's
+// alternatives were 48 dispatches per layer or a model that is not the model.
+//
+// # What the two halves check
+//
+// A `[tokens, heads]` gate holding one value everywhere must equal the
+// `[tokens]` gate holding it, which says the wider layout did not become a
+// second operator. Then two heads with opposite gates must disagree, which is
+// what says the head index is read: a kernel that took alpha[tok] and ignored
+// the head passes the first half exactly.
+func TestALinearPerHeadGateReachesTheKernel(t *testing.T) {
+	const heads = 2
+	shared := linearCase{
+		batch: 2, heads: heads, keyDim: 4, valueDim: 4, counts: []uint32{2, 1},
+	}
+	perHead := shared
+	perHead.gateHeads = heads
+	tokens := shared.tokens()
+
+	q, k, v, alpha, beta := linearInputs(shared, 3)
+	sharedOut := buildLinear(t, shared).step(t, q, k, v, alpha, beta, shared.counts)
+
+	// The same gate, written out per head.
+	wide, wideBeta := make([]float32, tokens*heads), make([]float32, tokens*heads)
+	for tok := range tokens {
+		for h := range heads {
+			wide[tok*heads+h], wideBeta[tok*heads+h] = alpha[tok], beta[tok]
+		}
+	}
+	wideOut := buildLinear(t, perHead).step(t, q, k, v, wide, wideBeta, shared.counts)
+	for i := range sharedOut {
+		if sharedOut[i] != wideOut[i] {
+			t.Fatalf("output %d is %v with one gate per token and %v with that gate "+
+				"copied to every head", i, sharedOut[i], wideOut[i])
+		}
+	}
+
+	// Now the heads disagree: head 0 keeps its state and writes nothing, head 1
+	// forgets everything. A kernel reading one gate for both cannot produce two
+	// different answers here.
+	for tok := range tokens {
+		wide[tok*heads+0], wideBeta[tok*heads+0] = 1, 0
+		wide[tok*heads+1], wideBeta[tok*heads+1] = 0, 0.5
+	}
+	split := buildLinear(t, perHead).step(t, q, k, v, wide, wideBeta, shared.counts)
+
+	// Compare the two heads of one token. They read the same state -- a fresh
+	// zero buffer -- and differ only in their gate, so an equal pair says the
+	// gate did not reach the kernel per head.
+	same := true
+	for a := range shared.valueDim {
+		h0 := split[(0*heads+0)*shared.valueDim+a]
+		h1 := split[(0*heads+1)*shared.valueDim+a]
+		if h0 != h1 {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("head 0 had alpha=1, beta=0 and head 1 had alpha=0, beta=0.5, and the " +
+			"two produced the same output: the kernel read one gate for both heads")
+	}
+}
+
+// The two gate layouts do not share a compiled plan.
+//
+// A plan cached under a key that ignores the layout would answer a per-head
+// request with a shared-gate plan, which specs/009-sequencing.md records twice
+// as the shape of defect a digest misses.
+func TestTheGateLayoutReachesThePlanKey(t *testing.T) {
+	rt := newRuntime(t)
+	id := func(gateHeads int) tensor.Identity {
+		c := linearCase{
+			batch: 1, heads: 2, keyDim: 4, valueDim: 4, counts: []uint32{2},
+			gateHeads: gateHeads,
+		}
+		b := rt.NewBuilder("gatekey")
+		tokens := c.tokens()
+		mk := func(name string, s tensor.Shape) *tensor.Tensor {
+			return tensor.Input(b, tensor.ValueDesc{Name: name, DType: accel.F32, Shape: s})
+		}
+		st := tensor.NewState(b, tensor.StateDesc{
+			Name: "state", DType: accel.F32,
+			Shape: tensor.Shape{c.batch, c.heads, c.valueDim, c.keyDim},
+		})
+		o, _ := tensor.LinearAttention(b,
+			mk("q", tensor.Shape{tokens, c.heads, c.keyDim}),
+			mk("k", tensor.Shape{tokens, c.heads, c.keyDim}),
+			mk("v", tensor.Shape{tokens, c.heads, c.valueDim}), st,
+			tensor.LinearOptions{
+				Alpha: mk("alpha", c.gateShape()), Beta: mk("beta", c.gateShape()),
+				QueryExtents: tensor.Input(b, tensor.ValueDesc{
+					Name: "ext", DType: accel.U32, Shape: tensor.Shape{c.batch},
+				}),
+			})
+		tensor.Output(b, "out", o)
+		if err := b.Err(); err != nil {
+			t.Fatalf("gateHeads %d does not build: %v", gateHeads, err)
+		}
+		return b.Identity()
+	}
+	if id(0) == id(2) {
+		t.Fatal("a [tokens] gate and a [tokens, heads] gate hash to one plan key, so a " +
+			"cache would serve the first plan compiled for either")
+	}
+}
+
 // The dtypes and shapes a gated delta layer refuses.
 //
 // Every field is required, so "accepted and ignored" cannot happen here -- what
 // these cover is the caller who supplied all three and got one wrong.
 func TestALinearStepRefusesWrongTypesAndShapes(t *testing.T) {
-	const batch, heads, keyDim, valueDim, tokens = 2, 1, 4, 4, 3
+	// More than one head, because the gate rows below are exactly the cases a
+	// single head cannot tell apart: at heads == 1 a flattened [tokens*heads]
+	// gate *is* [tokens], and two gates of different rank agree on the layout.
+	const batch, heads, keyDim, valueDim, tokens = 2, 2, 4, 4, 3
 
 	type parts struct {
 		q, k, v, alpha, beta, ext tensor.ValueDesc
@@ -354,6 +485,26 @@ func TestALinearStepRefusesWrongTypesAndShapes(t *testing.T) {
 			p.k.Shape = tensor.Shape{tokens, keyDim}
 			p.v.Shape = tensor.Shape{tokens, valueDim}
 		}, "end to end"},
+
+		// The per-head layout's own refusals (accel issue 27). The first is why
+		// the check is on rank and not on Elements: this holds exactly as many
+		// floats as a [tokens, heads] gate and says nothing about which axis is
+		// which, so accepting it would make a caller's transposed gate run.
+		{"a flattened per-head gate", func(p *parts) {
+			p.alpha.Shape = tensor.Shape{tokens * heads}
+			p.beta.Shape = tensor.Shape{tokens * heads}
+		}, "per token"},
+		{"a gate whose second axis is not the head count", func(p *parts) {
+			p.alpha.Shape = tensor.Shape{tokens, heads + 1}
+			p.beta.Shape = tensor.Shape{tokens, heads + 1}
+		}, "head count"},
+		{"a gate of rank three", func(p *parts) {
+			p.alpha.Shape = tensor.Shape{tokens, heads, 1}
+			p.beta.Shape = tensor.Shape{tokens, heads, 1}
+		}, "per token"},
+		{"two gates of different layouts", func(p *parts) {
+			p.alpha.Shape = tensor.Shape{tokens, heads}
+		}, "share a layout"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := good

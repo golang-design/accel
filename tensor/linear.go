@@ -13,13 +13,26 @@ import (
 
 // LinearOptions configures a gated delta layer.
 //
-// specs/047-linear-attention.md. Every field is per token or per sequence and
-// none is a scalar, which is specs/043-per-row-values.md §2 applied without
-// argument: a gate differs per token and an extent differs per sequence.
+// specs/047-linear-attention.md. No field is a scalar, which is
+// specs/043-per-row-values.md §2: a gate differs per row and an extent differs
+// per sequence.
 type LinearOptions struct {
-	// Alpha and Beta are f32 tensors with one entry per token, in the flat
-	// order q is in. Alpha decays the state and Beta writes into it: the
-	// recurrence is S <- alpha*S + beta*k*(v - S k)^T.
+	// Alpha and Beta are f32 gates, in the flat token order q is in. Alpha
+	// decays the state and Beta writes into it: the recurrence is
+	// S <- alpha*S + beta*k*(v - S k)^T.
+	//
+	// The **rank** says which row the gate is per, and both are real:
+	//
+	//	[tokens]         one gate per token, shared by every head
+	//	[tokens, heads]  one gate per head, which is what a gated delta
+	//	                 network publishes -- the projection producing them
+	//	                 is 2*num_value_heads wide, and heads forgetting at
+	//	                 different rates is the point of the gate
+	//
+	// Element count does not decide it: a [tokens*heads] gate written as rank
+	// 1 holds the right number of floats and says nothing, so it is refused.
+	// Alpha and Beta share a layout, because every model that produces one
+	// produces the other from the same projection (accel issue 27).
 	Alpha *Tensor
 	Beta  *Tensor
 
@@ -31,6 +44,15 @@ type LinearOptions struct {
 	//
 	// A count of zero is legal. specs/046-segmented-extents.md §1.
 	QueryExtents *Tensor
+}
+
+// gateReason says which gate layout a plan was built for, so the two are
+// distinguishable in a Plan's reasons and not only in its digest.
+func gateReason(gateHeads int) string {
+	if gateHeads == 1 {
+		return "one gate per token, shared by every head"
+	}
+	return fmt.Sprintf("a gate per token per head, %d of them", gateHeads)
 }
 
 // LinearAttention steps a gated delta recurrence and returns this step's output.
@@ -118,14 +140,44 @@ func LinearAttention(b *Builder, q, k, v *Tensor, s *State, o LinearOptions) (*T
 		return fail("QueryExtents is empty; it is one count per " +
 			"sequence and a step has at least one sequence")
 	}
+	// The gate's **rank** says which layout it is, not its element count. A
+	// [tokens*heads] gate flattened to rank 1 holds the right number of floats
+	// and means nothing, so it stays refused; only a written second axis says
+	// the caller meant one gate per head.
+	gateHeads := 0
 	for _, g := range []struct {
 		name string
 		t    *Tensor
 	}{{"Alpha", o.Alpha}, {"Beta", o.Beta}} {
-		if got := g.t.shape.Elements(); got != tokens {
-			return fail("%s holds %d entries and this step has "+
-				"%d token(s); a gate is per token, not per sequence -- QueryExtents is "+
-				"the per-sequence one", g.name, got, tokens)
+		var want int
+		switch len(g.t.shape) {
+		case 1:
+			want = 1
+		case 2:
+			want = g.t.shape[1]
+			if want != heads && want != 1 {
+				return fail("%s is %v and this step has %d head(s); "+
+					"the second axis of a gate is 1 or the head count",
+					g.name, g.t.shape, heads)
+			}
+		default:
+			want = -1
+		}
+		if want < 0 || g.t.shape[0] != tokens {
+			return fail("%s is %v and this step has %d token(s) "+
+				"of %d head(s). A gate is per token, shaped [tokens]; or per token "+
+				"and head, shaped [tokens, heads], which is what a gated delta network "+
+				"publishes because heads forget at different rates. The per-sequence "+
+				"value is QueryExtents (accel issue 27)",
+				g.name, g.t.shape, tokens, heads)
+		}
+		if gateHeads == 0 {
+			gateHeads = want
+		} else if gateHeads != want {
+			return fail("Alpha is %v and Beta is %v; the two gates "+
+				"share a layout, because every model that produces one produces the "+
+				"other from the same projection (specs/047-linear-attention.md section 6)",
+				o.Alpha.shape, o.Beta.shape)
 		}
 	}
 
@@ -166,6 +218,7 @@ func LinearAttention(b *Builder, q, k, v *Tensor, s *State, o LinearOptions) (*T
 			return testkernels.LinearDims{
 				Batch: uint32(batch), Heads: uint32(heads),
 				KeyDim: uint32(keyDim), ValueDim: uint32(valueDim),
+				GateHeads: uint32(gateHeads),
 			}
 		},
 		grid: func(*Tensor) accel.WorkgroupCount {
@@ -174,8 +227,14 @@ func LinearAttention(b *Builder, q, k, v *Tensor, s *State, o LinearOptions) (*T
 			// between this and softmax attention.
 			return accel.WorkgroupCount{X: batch * heads}
 		},
+		// The gate layout is read through the uniform, so it is recorded here
+		// too. Alpha's shape already differs between the two layouts and the
+		// digest covers operand shapes, but a value a kernel reads and the key
+		// infers is the shape of defect specs/009-sequencing.md records twice.
+		attrs: []uint64{uint64(gateHeads)},
 		reason: fmt.Sprintf("the gated delta scan: %d sequences of %d heads, each "+
-			"walking its own tokens with a [%d, %d] state", batch, heads, valueDim, keyDim),
+			"walking its own tokens with a [%d, %d] state and %s",
+			batch, heads, valueDim, keyDim, gateReason(gateHeads)),
 		rejected: []string{"a chunked parallel form: it reassociates the recurrence, " +
 			"which is faster and is a different summation order, so it needs its own " +
 			"numeric bound derived against this one (specs/047-linear-attention.md section 4)"},
