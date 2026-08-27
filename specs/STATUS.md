@@ -27,8 +27,9 @@ operator refusals.
 As of 2026-08-27: **31 in progress**, 9 implemented, 4 drafted,
 with **266 outstanding items** across the in-progress set.
 
-Six specs (003, 004, 005, 009, 010, 011) are re-audited separately and are
-added below when that lands.
+009, 010 and 011 were re-audited separately and appear in their own section at
+the end. Three specs (003, 004, 005) are still being audited and are added when
+that lands.
 
 ## Implemented — nothing outstanding
 
@@ -654,6 +655,118 @@ In progress with three independent unbuilt chunks in disjoint files, each shippa
 - **Subresources: mip chains and array layers end to end** — Size a mip chain in textureBytes, compute a subresource byte offset for texture-buffer copies, and narrow the recorded access range so the barrier plan reasons per subresource; then lift the texturealloc.go:76-85 refusals. Un-skips TestADisjointSubresourceIsNotFeedback. Closes §7
 - **The format table's remaining consumers** — Give Blendable a consumer — validate a blend state against the attachment format at pipeline build — and add the missing TextureSampled usage check for a texture bound through RenderPass.SetTexture. Closes §1's "built and thrown away" symptom.
 
-**36 successor specs** across the eight, replacing prose that cannot be finished
+### [010-kernel-corpus.md](010-kernel-corpus.md) → 4 successors
+
+In progress with four independent unbuilt chunks that ship separately.
+
+- **Kernel registry and identity** — `KernelID`/`KernelMeta`, generated
+  per-variant records, duplicate and equal-priority rejection at init, and the
+  package-location decision: either build §1's `tensor/internal/kernels/` tree
+  or formally supersede it.
+- **Layout classes and materialization** — §2's four classes as compile-time
+  entities, the writable-layout rejection, and `Contiguous`'s
+  explicit-materialization boundary now that `Pack` exists.
+- **Deterministic selection** — §4's rules 1–7, the plan recording selected ids
+  alongside rejected candidates and reasons, and §3's fused-attention
+  present/absent case driven by removing a record from the registry.
+- **Numeric recipes and the RoPE domain proof** — §5's per-family recipe
+  records, and the compile-time proof that a declared maximum position and base
+  stay inside [008](008-numerics.md)'s bounded sin/cos domain.
+
+**40 successor specs** across the nine, replacing prose that cannot be finished
 with units that can.
 
+The first is written: [050-barrier-scopes.md](050-barrier-scopes.md), the
+highest-priority piece of 002's split, because it is the one gap that is a
+latent wrong answer rather than missing surface.
+
+
+## 009, 010 and 011 — audited separately
+
+These three were re-audited after the first pass failed on them. They are the
+process specs, and two of the findings are about the register itself.
+
+### [009-sequencing.md](009-sequencing.md)
+
+The build history. The status vocabulary fits it badly — a milestone log can
+never be `implemented` — and what matters is whether its recorded outcomes are
+true. Mostly they are. Three are stale enough to mislead:
+
+- **"An unverified commit range"** tells a reader the matrix has not been run
+  over it. Six consecutive green `ci` and `ci-metal` runs on main through
+  2026-08-27 say otherwise. The section outlived its cause.
+- **M4's outcome contradicts M4's own child table.** The outcome says subgroup
+  shuffles, scans and the strict-mode narrowing were deferred or not built; all
+  three shipped (`internal/testkernels/subgroup.go:100,146,183`,
+  `internal/cpu/profile.go:302,349`). All six of M4's done criteria hold, and M4
+  is the only milestone in M0–M7 carrying **no completion marker**.
+- **M8's status row** says the sampling policy integration remains. It is built
+  and reachable (`tensor/policy.go:350,358,375`).
+
+Not splittable: a build history has no shippable chunks. The fix is three edits.
+
+### [010-kernel-corpus.md](010-kernel-corpus.md)  · **too large, see the split plan**
+
+**Unbuilt:**
+
+- **§1's package layout** — `tensor/internal/kernels/{elementwise,layout,…}` does
+  not exist and everything lives in one flat `internal/testkernels`. §3.1
+  mentions the real location but never records §1 as superseded. This is the
+  section the naming requirement misses.
+- **§1's record types** — `KernelID`, `KernelMeta`, `LayoutClass`,
+  `NumericRecipe`, `Priority`: zero matches repo-wide.
+- **§2's layout classes** — no compile-time `contiguous` / `row_contiguous` /
+  `broadcast_read` / `general_read`; only the informal `bcast` and `strided`
+  node flags.
+- **§4's selection rules 1–7**, and **§5's numeric recipe records**.
+- **`rows` with i32 ids** — `GatherRows`/`ScatterRows` take `[]uint32` only,
+  while §3 promises i32/u32 and §7 requires the invalid-id cases for both.
+
+**Unbacked:**
+
+- **010's own rule, applied to 010.** "A corpus entry with no operator reaching
+  it is recorded as unreachable rather than as done." **50 of 72 kernels are
+  reachable from a `tensor/` operator; 22 are not**, and four of those carry
+  rows that do not say so — `ReduceSum`, `ElemBias`, `AtomicOpsI32`,
+  `AtomicAddF32`.
+- **`PackKernel` is reachable and has no row**, while §3.1 implies the base
+  `contiguous_copy` is missing.
+- §4 quotes `var Kernels = []*accel.Kernel{…}`; the real type is
+  `[]*kernelabi.Kernel` since those names left the root package.
+- The scope line still excludes quantized and sampling kernels while §3 now
+  carries rows for both.
+
+### [011-conformance-harness.md](011-conformance-harness.md)
+
+**Unbuilt:**
+
+- **§2's central rule, "every test receives a profile explicitly"** — enforced
+  nowhere. `internal/conformance/device` is imported by exactly one file while
+  **26 test files call `accel.OpenCPU`/`OpenDevice` directly**.
+- **§2's hardware enumeration** — `device.All()` returns three CPU profiles and
+  no Metal profile, though §13 promises them at M6 and 009 records M6 complete.
+- **§3's manifest** of present/absent cases — no form of it exists.
+- **§4's static conformance check**, which would scan comparison call sites and
+  reject ad hoc helpers and tolerance parameters. No code.
+- **§6's kernel runner and generated manifest**, **§10's branch manifests**, and
+  **§12's artifact retention** (CI uploads `cover.out` and nothing else).
+
+**Unbacked:**
+
+- **§8's E2E table and §13 disagree with 009 about M3, M4, M5 and M7.** The
+  tests exist — `graphdispatch_test.go:520`, `tensor/model_test.go:42`,
+  `tensor/parity_test.go:38`, `graphoracle_test.go` — 009 records them complete,
+  and 011 carries no marker. **Two specs, one question, two answers**, which is
+  the failure this register exists to end. 011 is the stale one.
+- **§13's M6 counts are stale in every number**: "all 29 kernels … 22 agreeing
+  bit for bit and 7 within a ceiling" against a corpus of 72, with 61
+  differential cases over 58 kernels and 21 carrying a ceiling.
+- **§13 claims the comparison package "has no tolerance parameter and will not
+  grow one"**, while `WithinULP(got, want, ceiling uint64)` takes a
+  caller-supplied ceiling. The argument that a ceiling is not a tolerance rests
+  on it coming from 008's table, and the §4 check that would enforce that is
+  itself unbuilt.
+
+**Not splittable.** Its three big unbuilt chunks all need 010's per-variant
+records first, so they cannot ship independently of that successor. The rest is
+accuracy work.
