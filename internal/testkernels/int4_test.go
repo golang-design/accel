@@ -184,3 +184,125 @@ func TestTheAuthoredInt4KernelMatchesItsLowering(t *testing.T) {
 		}
 	}
 }
+
+// The tiled 4-bit kernel agrees with the row kernel, row for row.
+//
+// specs/048-int4.md §5. The two decode the same representation at different
+// points -- the row kernel per use in its inner loop, the tiled one once per
+// element as it fills the shared tile -- so this is what says the fourth
+// spelling of the nibble order agrees with the third.
+//
+// A differential rather than a bound: both kernels approximate the same exact
+// product, and asking whether they agree with each other is a sharper question
+// than asking whether each lands inside a budget wide enough for both. The
+// budget is checked against the row kernel above.
+func TestTheTiledInt4KernelMatchesTheRowKernel(t *testing.T) {
+	const K, N, M = 200, 20, 13
+	rng := rand.New(rand.NewPCG(41, 43))
+
+	w := make([]float32, K*N)
+	for i := range w {
+		w[i] = 0.75 + rng.Float32()*0.5
+	}
+	packed, scales, zeros := quant.Int4Quantize(w)
+
+	// None of M, K or N is a multiple of its tile, so every edge guard runs.
+	// That is coverage rather than a bound: the pads in the two shared tiles are
+	// mutually redundant -- the A tile is zeroed at the same k the B tile is --
+	// so no single wrong pad value changes an answer here. The kernel's comment
+	// records that, having been checked by mutation rather than assumed.
+	a := make([]float32, M*K)
+	for i := range a {
+		a[i] = float32(math.Sin(float64(i) * 0.29))
+	}
+
+	tiled := make([]float32, M*N)
+	if err := kernel.DispatchCooperative(&testkernels.QuantMatMulInt4Kernel,
+		accel.ID3{
+			X: (N + testkernels.TileN - 1) / testkernels.TileN,
+			Y: (M + testkernels.TileM - 1) / testkernels.TileM,
+		},
+		kernelabi.Args{
+			Uniforms: []any{testkernels.GEMMDims{M: M, K: K, N: N}},
+			Slices:   []any{a, packed, scales, zeros, tiled},
+		}); err != nil {
+		t.Fatalf("tiled dispatch: %v", err)
+	}
+
+	for m := range M {
+		row := make([]float32, N)
+		if err := kernel.DispatchCooperative(&testkernels.QuantMatVecInt4Kernel,
+			accel.ID3{X: N},
+			kernelabi.Args{
+				Uniforms: []any{testkernels.GEMMDims{K: K, N: N}},
+				Slices:   []any{a[m*K : (m+1)*K], packed, scales, zeros, row},
+			}); err != nil {
+			t.Fatalf("row dispatch: %v", err)
+		}
+		for n := range N {
+			// The two sum in different orders -- the row kernel by a tree over
+			// 128 lanes, the tiled one sequentially within each K tile -- so
+			// specs/008-numerics.md section 7's reduction bound applies rather
+			// than equality.
+			var mag float64
+			for k := range K {
+				mag += math.Abs(float64(a[m*K+k]) * float64(w[k*N+n]))
+			}
+			if e := math.Abs(float64(tiled[m*N+n] - row[n])); e > mag*1e-6 {
+				t.Fatalf("row %d column %d: tiled %v, row kernel %v, off by %v "+
+					"where the reduction budget is %v",
+					m, n, tiled[m*N+n], row[n], e, mag*1e-6)
+			}
+		}
+	}
+}
+
+// The authored tiled 4-bit kernel and its generated lowering agree.
+func TestTheAuthoredTiledInt4KernelMatchesItsLowering(t *testing.T) {
+	const K, N, M = 128, 18, 9
+	rng := rand.New(rand.NewPCG(7, 11))
+
+	w := make([]float32, K*N)
+	for i := range w {
+		w[i] = 0.75 + rng.Float32()*0.5
+	}
+	packed, scales, zeros := quant.Int4Quantize(w)
+	a := make([]float32, M*K)
+	for i := range a {
+		a[i] = float32(math.Cos(float64(i) * 0.31))
+	}
+	d := testkernels.GEMMDims{M: M, K: K, N: N}
+
+	groups := kernel.ID3{
+		X: (N + testkernels.TileN - 1) / testkernels.TileN,
+		Y: (M + testkernels.TileM - 1) / testkernels.TileM,
+		Z: 1,
+	}
+	authored := make([]float32, M*N)
+	for gy := range groups.Y {
+		for gx := range groups.X {
+			var tileA [128]float32
+			var tileB [256]float32
+			kernel.RunAuthored(kernel.ID3{X: 16, Y: 8, Z: 1},
+				kernel.ID3{X: gx, Y: gy}, groups, 128, func(th kernel.Thread) {
+					testkernels.QuantMatMulInt4(th, d, a, packed, scales, zeros,
+						authored, &tileA, &tileB)
+				})
+		}
+	}
+
+	generated := make([]float32, M*N)
+	if err := kernel.DispatchCooperative(&testkernels.QuantMatMulInt4Kernel,
+		accel.ID3{X: groups.X, Y: groups.Y},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{a, packed, scales, zeros, generated},
+		}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for i := range authored {
+		if math.Abs(float64(authored[i]-generated[i])) > 1e-5 {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+		}
+	}
+}

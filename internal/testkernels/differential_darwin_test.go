@@ -896,6 +896,32 @@ func diffCases() []diffCase {
 			ulp: 8,
 		},
 		{
+			// The tiled 4-bit product: the same unpacking as the matvec above,
+			// moved into a shared-tile load, plus two barriers. K is not a
+			// multiple of TileK, so the edge guards run on both backends and a
+			// tile the two lower differently shows as a wrong element rather
+			// than as a rounding difference.
+			kernel:   &testkernels.QuantMatMulInt4Kernel,
+			counts:   []int{3 * 40, 40 * 16 / 8, 8, 8, 3 * 16},
+			uniforms: []any{testkernels.GEMMDims{M: 3, K: 40, N: 16}},
+			groups:   accel.WorkgroupCount{X: 1, Y: 1},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1: // the packed codes, as u32 words
+					return float32(i%251 + 1)
+				case 2: // scales: positive and modest
+					return 0.25
+				case 3: // zero points
+					return 4
+				case 4: // the output starts empty
+					return 0
+				}
+				return defaultSeed(b, i)
+			},
+			why: "a sum of products over a shared tile, per section 7's reduction bound",
+			ulp: 8,
+		},
+		{
 			// A grouped product: a segment lookup choosing which weight matrix
 			// a token multiplies against, then the row kernels' reduction. The
 			// lookup is integer and must agree exactly; the reduction carries
