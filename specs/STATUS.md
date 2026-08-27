@@ -924,7 +924,7 @@ that struct grows a field**, and it will grow one silently.
 | | Spec | The gap |
 | --- | --- | --- |
 | 4 | [005](005-graphics.md) | `RasterizerOrderedAccess` is reported and **unreachable**: the ordering holds (the rasterizer is sequential) and nothing can observe it, because no fragment stage binds a written slice |
-| 5 | [030](030-paged-kv.md) | `BlockPool` is presented as caller-facing and lives in `tensor/internal/pagetable`, imported only by its own test |
+| 5 | [030](030-paged-kv.md) | ~~`BlockPool` is presented as caller-facing and lives in `tensor/internal/pagetable`~~ — **closed 2026-08-27**: it is `tensor.BlockPool`, and its own doc's condition for re-exporting ("until an operator accepts a page table") had been met by `Attention` and gone unnoticed |
 | 6 | [014](014-kernel-uniforms.md) §2 | no generated decoder, no generated bindings struct, no uniform-size validation against the device limit |
 | 7 | [003](003-command-graph.md) | the whole error taxonomy — `BuildError`, `NodeError`, thirteen sentinels, and the `file:line:col` format |
 

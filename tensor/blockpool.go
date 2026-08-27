@@ -2,14 +2,7 @@
 // All rights reserved. Use of this source code is governed by
 // a BSD-style license that can be found in the LICENSE file.
 
-// Package pagetable is the block pool behind a paged KV cache.
-//
-// It is internal until an operator accepts a page table. It was exported from
-// tensor with six declarations and no consumer — no operator takes one, so a
-// caller could build a pool, allocate blocks, and have nowhere to put the
-// result. specs/030-paged-kv.md's attention is what gives it a caller, and it
-// re-exports then. See specs/036-documentation.md's freeze record, section 5.3.
-package pagetable
+package tensor
 
 import (
 	"errors"
@@ -20,10 +13,19 @@ import (
 // BlockPool hands out fixed-size pieces of one KV cache so sequences of
 // different lengths can share it.
 //
-//	pool := pagetable.NewBlockPool(blocks, positionsPerBlock)
+//	pool, err := tensor.NewBlockPool(blocks, positionsPerBlock)
 //	pages, err := pool.Grow(nil, 40) // enough blocks for 40 positions
-//	...
+//	// bind pages as Attention's AttentionOptions.Pages
 //	pool.Free(pages)
+//
+// # Why it is public now and was not
+//
+// It lived in tensor/internal/pagetable, whose doc said it was internal "until
+// an operator accepts a page table": six exported declarations with no consumer
+// would have let a caller build a pool, allocate blocks, and have nowhere to put
+// the result. [Attention] takes a page table through
+// [AttentionOptions.Pages], so the condition that doc named has been met and
+// this re-exports as it said it would. specs/030-paged-kv.md §4.1.
 //
 // A sequence's page table is the list of physical blocks it holds, and the
 // blocks need not be adjacent — which is the whole point. A cache sized for the

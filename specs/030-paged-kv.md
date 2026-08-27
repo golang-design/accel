@@ -111,7 +111,20 @@ and a wrong answer silently truncates somebody's context.
 
 ## 4.1 Outcome — 2026-08-23
 
-Built as `AttentionDecodePaged` and `tensor.BlockPool`. The paged step produces
+Built as `AttentionDecodePaged` and `tensor.BlockPool` — **and the second half of
+that sentence only became true on 2026-08-27.** The pool shipped into
+`tensor/internal/pagetable`, whose own doc said it stayed internal "until an
+operator accepts a page table" and would re-export then. `Attention` has taken a
+page table through `AttentionOptions.Pages` since this milestone, so the
+condition was met at the moment this outcome was written and nobody noticed for
+four days. It is now `tensor.BlockPool`, with an end-to-end test that binds
+pool-allocated pages to a decode rather than asserting the slice.
+
+**What generalises: a deferral with a stated trigger needs something watching the
+trigger.** The doc was right, specific, and self-executing in every respect
+except that nothing re-read it when the condition changed.
+
+The paged step produces
 **exactly** what the contiguous one does over the same logical positions — not
 within a budget, because paging is an addressing change and the arithmetic is
 identical, so any difference at all is an indexing bug.
