@@ -315,6 +315,30 @@ unreachable rather than as done. `tensor.Sample` now records all three, so they
 are reachable, and the note is kept rather than deleted because the interval is
 the evidence that the rule is applied rather than quoted.
 
+### The rule applied to this file — 2026-08-27
+
+The audit found the rule quoted here and not applied to 010 itself. **Fifty of
+the corpus's seventy-two kernels are reachable from a `tensor/` operator and
+twenty-two are not**, and four of those carry rows that read as done:
+
+| Kernel | Why it has no operator |
+| --- | --- |
+| `ReduceSum` | an internal building block and [008](008-numerics.md)'s tree-reduction proof; its row already says so, which is why it is the least wrong of the four |
+| `ElemBias` | added for a broadcast gap rather than a feature, and no operator records it |
+| `AtomicOpsI32` | the signed-atomic differential, a device-layer proof |
+| `AtomicAddF32` | the float-atomic capability proof, including its refusal on a device that lacks it |
+
+**All four are device-layer proofs rather than tensor capabilities**, and that
+is a legitimate reason to exist — [002](002-compute-model.md) and
+[020](020-cooperative-atomics.md) need them and neither is a tensor operator. So
+the fix is not to give them operators. It is that this file's tables did not
+distinguish "an operator reaches it" from "a spec below the tensor layer needs
+it", and a reader counting capabilities from these tables would have counted
+four things a caller cannot use.
+
+The remaining eighteen are graphics stages and cooperative-lowering fixtures,
+outside this file's inventory and correctly not listed here.
+
 | Kernel | Obligation met |
 | --- | --- |
 | `PenaltyCount` | counts each token id in the history ring, bounded by how much of the ring is filled rather than by its capacity — the unwritten tail is zeros and zero is a real token id |
