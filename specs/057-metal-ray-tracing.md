@@ -60,11 +60,14 @@ one, not a new lifetime rule.
 pipeline creation** rather than assumed — a device predating it must be refused
 by name, and the profile must report the bit honestly.
 
-That last clause is not decoration. [005](005-graphics.md) reports
-`RasterizerOrderedAccess: true` on the CPU profile while nothing emulates it —
-a capability advertised and not delivered, recorded in
-[STATUS.md](STATUS.md). This spec is written knowing that, and the Done list
-below asserts the bit against a device that actually traverses.
+That last clause is not decoration. [005](005-graphics.md)'s
+`RasterizerOrderedAccess` is reported on the CPU profile and is *unreachable* —
+the ordering holds, and nothing can observe it because no fragment stage binds a
+written slice ([STATUS.md](STATUS.md)). A bit nobody can act on is a weaker
+failure than a false one, and still the wrong shape: a caller reads it and plans
+around a thing they cannot use. So the Done list below asserts this capability
+against a device that actually traverses, rather than against the profile that
+claims it.
 
 The emitter grows one case: [055](055-ray-queries.md)'s two intrinsics lower to
 an `intersection_query` with the corresponding acceptance mode, and the hit

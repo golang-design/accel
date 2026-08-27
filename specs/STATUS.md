@@ -881,8 +881,17 @@ path, the top-left fill rule, perspective-correct interpolation.
 - "**Rasterizer-ordered access**: the CPU rasterizer must emulate the same order
   before it can report ROA support." The CPU profile reports
   `RasterizerOrderedAccess: true` and nothing consumes it — no stage
-  requirement, no ordering in the rasterizer, no build-time gate. **A capability
-  advertised and not emulated.**
+  requirement, no build-time gate.
+
+  **Corrected 2026-08-27, and the first version of this entry was too strong.**
+  It said "a capability advertised and not emulated". The ordering *is*
+  provided: `internal/raster` contains no goroutine and processes primitives
+  sequentially, so primitive-ordered access holds by construction and the bit is
+  honest. What is true is narrower — the capability is **unreachable**, because
+  no fragment stage can bind a written slice, so nothing can observe the
+  ordering it promises. `TestTheCPUReportsOrderedAccessOnlyWhileItRasterizesInOrder`
+  now ties the bit to the nearest observable, so parallelising the rasterizer
+  fails a test instead of quietly making the bit false.
 - "The CPU rasterizer: triangles, lines, and points" — triangles only.
 - "The four child specs exist as of 2026-08-23" — there are five.
 
@@ -914,13 +923,16 @@ that struct grows a field**, and it will grow one silently.
 
 | | Spec | The gap |
 | --- | --- | --- |
-| 4 | [005](005-graphics.md) | the CPU profile reports `RasterizerOrderedAccess: true` and nothing emulates it — no stage requirement, no ordering, no build-time gate |
+| 4 | [005](005-graphics.md) | `RasterizerOrderedAccess` is reported and **unreachable**: the ordering holds (the rasterizer is sequential) and nothing can observe it, because no fragment stage binds a written slice |
 | 5 | [030](030-paged-kv.md) | `BlockPool` is presented as caller-facing and lives in `tensor/internal/pagetable`, imported only by its own test |
 | 6 | [014](014-kernel-uniforms.md) §2 | no generated decoder, no generated bindings struct, no uniform-size validation against the device limit |
 | 7 | [003](003-command-graph.md) | the whole error taxonomy — `BuildError`, `NodeError`, thirteen sentinels, and the `file:line:col` format |
 
-4 is the one to take first: a capability bit is a promise a caller *plans*
-around, and this one is false. Either emulate the ordering or stop reporting it.
+4 is the one to take first, and taking it revised it — see 005's entry above.
+The bit is not false; it is unreachable, which is a different problem with a
+different fix. That is worth recording as a method note: **the audit's framing
+was checked against the code before it was acted on, and it changed.** An audit
+finding is a lead, not a verdict.
 
 ### 3. Conservative, not wrong — correct today and slower or narrower than specified
 

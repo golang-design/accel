@@ -41,15 +41,13 @@ func blendPipeline(t *testing.T, d *accel.Device, blend accel.BlendState) *accel
 // two produces a different colour, and a builder that reordered would produce
 // the other one. A test using opaque draws could not tell — the last one wins
 // either way, and "last" is what a reorder changes.
-func TestBlendedDrawsRunInRecordedOrder(t *testing.T) {
+// blendedOverResult draws two half-transparent triangles in the order given and
+// returns the pixel. Package-level so the capability test below drives the same
+// path rather than a second copy of it.
+func blendedOverResult(t *testing.T, first, second [4]float32) [4]float32 {
+	t.Helper()
 	const w, h = 8, 8
-	// Half-transparent red over half-transparent blue, and the reverse. The
-	// "over" operator gives src + dst*(1-srcAlpha) with premultiplied-style
-	// weights, so the second draw dominates and the two orders differ.
-	red := [4]float32{1, 0, 0, 0.5}
-	blue := [4]float32{0, 0, 1, 0.5}
-
-	result := func(t *testing.T, first, second [4]float32) [4]float32 {
+	{
 		d := openDevice(t)
 		q := d.Queue()
 		pipe := blendPipeline(t, d, accel.AlphaBlend())
@@ -88,9 +86,17 @@ func TestBlendedDrawsRunInRecordedOrder(t *testing.T) {
 		got := readTarget(t, d, target)
 		return [4]float32{got[0], got[1], got[2], got[3]}
 	}
+}
 
-	redFirst := result(t, red, blue)
-	blueFirst := result(t, blue, red)
+func TestBlendedDrawsRunInRecordedOrder(t *testing.T) {
+	// Half-transparent red over half-transparent blue, and the reverse. The
+	// "over" operator gives src + dst*(1-srcAlpha) with premultiplied-style
+	// weights, so the second draw dominates and the two orders differ.
+	red := [4]float32{1, 0, 0, 0.5}
+	blue := [4]float32{0, 0, 1, 0.5}
+
+	redFirst := blendedOverResult(t, red, blue)
+	blueFirst := blendedOverResult(t, blue, red)
 
 	if redFirst == blueFirst {
 		t.Fatalf("both orders produced %v, so the result does not depend on the order "+
@@ -230,5 +236,38 @@ func TestTheZeroBlendStateReplaces(t *testing.T) {
 	if px != tint {
 		t.Errorf("pixel (0,0) is %v, want exactly the fragment's %v; the zero BlendState "+
 			"combined with the clear instead of replacing it", px, tint)
+	}
+}
+
+// The CPU device reports rasterizer-ordered access, and this is what licenses
+// it until a fragment stage can write storage.
+//
+// specs/005-graphics.md's ROA paragraph, and a correction to how it was
+// recorded. specs/STATUS.md first called this "a capability advertised and not
+// emulated". That was too strong: the CPU rasterizer processes primitives
+// sequentially, so primitive-ordered access holds by construction, and the bit
+// is honest. What is true is narrower — the capability is **unreachable**,
+// because no fragment stage can bind a written slice, so nothing can observe
+// the ordering the bit promises.
+//
+// So the claim is tied to the nearest thing that *is* observable: blended draws
+// landing in recorded order, which is the same sequential execution ROA would
+// rest on. If the rasterizer ever grows parallelism across primitives, that
+// assertion fails here and the bit must be re-examined rather than quietly
+// becoming false.
+func TestTheCPUReportsOrderedAccessOnlyWhileItRasterizesInOrder(t *testing.T) {
+	if !openDevice(t).Capabilities().RasterizerOrderedAccess {
+		t.Skip("the CPU device no longer reports rasterizer-ordered access; if " +
+			"that is deliberate, this test and specs/005's paragraph go together")
+	}
+
+	// The observable half, driven through the same path
+	// TestBlendedDrawsRunInRecordedOrder uses so the two cannot drift apart.
+	red := [4]float32{1, 0, 0, 0.5}
+	blue := [4]float32{0, 0, 1, 0.5}
+	if blendedOverResult(t, red, blue) == blendedOverResult(t, blue, red) {
+		t.Fatal("the device reports rasterizer-ordered access and swapping two " +
+			"overlapping draws changes nothing, so primitive order is not " +
+			"preserved and the capability is false")
 	}
 }
