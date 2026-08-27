@@ -451,11 +451,20 @@ func TestAllocationIsConstantTime(t *testing.T) {
 	// two phases run at *different moments*, so they are not measuring the same
 	// machine. Interleaving them removes that — each round times both sizes
 	// back to back, so a load spike lands on both and cancels in the ratio,
-	// which is the only number this test reads. The minimum is kept per size,
-	// since it is still the least perturbed sample of each.
+	// which is the only number this test reads.
 	//
 	// A mean would not do either job. It moves with the interference, which is
 	// precisely the variable that must not reach the ratio.
+	//
+	// **What interleaving still did not fix.** Taking the minimum *per size*
+	// across rounds and dividing the two throws the pairing away again: the
+	// small figure comes from the machine's quietest moment and the large one
+	// from its own, which need not be the same moment. That is how this
+	// reported 179ns against 628ns — a ratio of 3.5 — during a full
+	// `go test ./...` on a machine at a load average above 200, on an allocator
+	// whose ratio is near 1.1 when measured alone. The ratio is therefore
+	// formed *within* a round and minimised across rounds, so the two numbers
+	// in it always describe the same machine.
 	//
 	// Confirmed the way every check in this repository is confirmed: by
 	// reinstating the fault. A deliberate scan over the live population,
@@ -484,40 +493,74 @@ func TestAllocationIsConstantTime(t *testing.T) {
 	const (
 		factor = 10
 		rounds = 7
+		// How far apart two measurements of the *same* size may land before the
+		// round is discarded. They have no reason to differ at all, so whatever
+		// they do differ by is this round's noise floor, and a floor as wide as
+		// the effect being measured cannot report on it. This is the guard the
+		// previous version lacked: it had no way to tell a slow allocator from
+		// an unmeasurable machine, so a busy one looked like the former.
+		quiet = 1.5
 	)
 	var small, large time.Duration
+	var best float64
+	measured := 0
 	for range rounds {
-		s, l := batch(1000), batch(1000*factor)
-		if small == 0 || s < small {
-			small = s
-		}
-		if large == 0 || l < large {
-			large = l
-		}
-	}
-	t.Logf("%v per allocation at 1,000 live, %v at %d live, over %d interleaved rounds",
-		small, large, 1000*factor, rounds)
+		// The same size either side of the large one. The pair brackets the
+		// measurement being trusted, so a spike anywhere inside the round has
+		// to move at least one of them.
+		before, l, after := batch(1000), batch(1000*factor), batch(1000)
 
-	// The guard the first version of this test did not have. A zero baseline is
-	// a clock too coarse to measure with, not an infinitely fast allocator, and
-	// dividing by it reports a ratio in the millions.
-	if small <= 0 {
-		t.Fatalf("the baseline measured as %v: the clock is too coarse to compare against", small)
+		// A zero is a clock too coarse to measure with, not an infinitely fast
+		// allocator, and dividing by it reports a ratio in the millions.
+		if before <= 0 || after <= 0 || l <= 0 {
+			continue
+		}
+		if float64(max(before, after))/float64(min(before, after)) > quiet {
+			continue
+		}
+		s := min(before, after)
+		r := float64(l) / float64(s)
+
+		// The same guard pointed the other way, and it is needed because the
+		// minimum below selects for whatever noise flattered the allocator. Ten
+		// times the live blocks cannot make placement meaningfully *cheaper*, so
+		// a round that says it did was timing the machine: one such round read
+		// 9.6µs at 1,000 live against 777ns at 10,000, passed the bracket
+		// because both small batches were slowed together, and would have won
+		// the minimum with a ratio of 0.08. Without this, a real regression can
+		// be masked by a single lucky round.
+		if r < 1/quiet {
+			continue
+		}
+		if measured == 0 || r < best {
+			best, small, large = r, s, l
+		}
+		measured++
 	}
+
+	if measured == 0 {
+		t.Skipf("no round out of %d held still enough to measure: either two timings of "+
+			"the same 1,000 allocations disagreed by more than %.1fx, or %d live blocks "+
+			"timed as cheaper per allocation than 1,000 did, every time. This machine "+
+			"cannot say anything about the allocator", rounds, quiet, 1000*factor)
+	}
+	t.Logf("%d of %d rounds were measurable; the closest reads %v per allocation at "+
+		"1,000 live against %v at %d live", measured, rounds, small, large, 1000*factor)
 
 	// Ten times the live allocations for no more than three times the
 	// per-allocation cost. A quadratic allocator lands near ten; the generous
-	// bound keeps a loaded CI machine from failing a correct implementation.
+	// bound leaves room for the larger pool's worse cache behaviour, which is
+	// real and is not placement cost.
 	//
 	// Go 1.27's size-specialized malloc is also disabled under -race, -asan, and
 	// -msan, so the absolute numbers under any of those are not representative
 	// of a normal build either. That one is harmless because it is a constant
 	// factor; the race detector's is not, which is why this test skips there
 	// rather than widening its bound.
-	if ratio := float64(large) / float64(small); ratio > 3 {
+	if best > 3 {
 		t.Errorf("placement costs %v per allocation at %d live against %v at 1,000, "+
 			"a ratio of %.1f: cost grows with the pool's population, so this is not O(1)",
-			large, 1000*factor, small, ratio)
+			large, 1000*factor, small, best)
 	}
 }
 
