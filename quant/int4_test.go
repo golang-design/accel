@@ -166,9 +166,17 @@ func TestInt4PackingRoundTripsAtAnOddLength(t *testing.T) {
 	}
 	// The last weight is the one the partly-filled word holds, and it is the
 	// one an off-by-one in the packing loses.
+	//
+	// The bound is derived rather than chosen: specs/048-int4.md §3 states a
+	// group's error as its range over 30, and the last weight is alone in its
+	// own group, so its range is zero and it reconstructs *exactly*. A tuned
+	// 0.2 stood here and was three orders of magnitude looser than the truth —
+	// it would have passed a packing that lost the weight entirely and
+	// substituted a neighbour.
 	last := len(w) - 1
-	if math.Abs(float64(w[last]-got[last])) > 0.2 {
-		t.Fatalf("the last weight of an odd-length run is %v and reconstructed as %v",
+	if got[last] != w[last] {
+		t.Fatalf("the last weight of an odd-length run is %v and reconstructed as %v; "+
+			"alone in its group its range is zero, so it is exact",
 			w[last], got[last])
 	}
 }

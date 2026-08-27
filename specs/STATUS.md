@@ -959,7 +959,7 @@ one of these is unbuilt.
 | | Spec | The gap |
 | --- | --- | --- |
 | 11 | [011](011-conformance-harness.md) §2 | "every test receives a profile explicitly" is enforced nowhere: one file imports the conformance device package, 26 call `accel.OpenCPU` directly |
-| 12 | [011](011-conformance-harness.md) §4 | the static check that rejects ad hoc comparison helpers and tolerance arguments — the thing that would keep [008](008-numerics.md)'s no-tolerances rule true |
+| 12 | [011](011-conformance-harness.md) §4 | ~~the static check that rejects ad hoc comparison helpers and tolerance arguments~~ — **built 2026-08-27 as a ratchet**: 75 existing sites are pinned and a new one fails. Converting the rest is per-site work, and the first conversion found a tolerance three orders of magnitude looser than the derived bound |
 | 13 | [010](010-kernel-corpus.md) | ~~010's own rule, unapplied to 010~~ — **closed 2026-08-27**: the unreached set is enumerated in 010 with the spec that needs each, and pinned by a test so a new one cannot join silently |
 | 14 | [000](000-decisions.md) | layering rule 3, "no backend-specific type appears in a public signature", violated by `OpenCPU`, `CPUOptions` and `CPUMode`. **Rules 1, 2 and 4 are now tested** (2026-08-27); rule 3 is left untested on purpose, because asserting a rule the tree breaks means weakening it, and a weakened rule reads as enforced. It needs a decision: change the surface or amend the rule |
 

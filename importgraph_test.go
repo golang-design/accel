@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -235,5 +236,92 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 			t.Errorf("%s is listed as unreachable and an operator now reaches it, or it "+
 				"no longer exists; remove it from the list", n)
 		}
+	}
+}
+
+// No new ad hoc float comparison enters the tree.
+//
+// specs/011-conformance-harness.md §4: "the static conformance check scans
+// comparison call sites and rejects known ad hoc helpers or numeric tolerance
+// parameters." The 2026-08-27 audit found it had no code, and
+// specs/008-numerics.md §9's rule — that a tolerance is derived and never tuned
+// — had nothing holding it up.
+//
+// # Why this is a ratchet and not a refusal
+//
+// The tree does not satisfy the rule yet: there are dozens of
+// `math.Abs(got-want) > 1e-5` sites, written before anything checked. Turning
+// the rule on as a hard refusal would mean rewriting all of them in one change,
+// and every rewrite risks altering what a test asserts — which is the one thing
+// a conformance change must not do quietly. So the count is pinned. Existing
+// sites stay and are visible; a new one fails.
+//
+// Lowering the number as sites move to numeq is the intended direction, and the
+// constant is meant to be edited downward.
+//
+// # What this check cannot see
+//
+// A derived bound and a tuned tolerance are syntactically identical. `> 1e-5`
+// might be somebody's guess or might be 008 §7's reduction bound written out.
+// This counts the shape, not the reasoning, which is why §4's rule cannot be
+// fully mechanical and why the number below is a budget rather than a verdict on
+// any one site.
+func TestNoNewAdHocFloatComparisons(t *testing.T) {
+	// The count when the ratchet was installed. Lower it, never raise it.
+	const budget = 74
+
+	var files []string
+	for _, pat := range []string{"*_test.go", "*/*_test.go", "*/*/*_test.go"} {
+		m, err := filepath.Glob(pat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, m...)
+	}
+	if len(files) < 20 {
+		t.Fatalf("found %d test files, too few to be scanning the tree", len(files))
+	}
+
+	// math.Abs(...) compared against a bare numeric literal: a threshold chosen
+	// rather than computed. A bound held in a variable is excluded, since that
+	// is the shape a derived one takes.
+	adHoc := regexp.MustCompile(`math\.Abs\(.*\)\s*[<>]=?\s*[0-9]`)
+
+	found := 0
+	perFile := map[string]int{}
+	for _, f := range files {
+		if strings.Contains(f, "worktrees") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(src), "\n") {
+			if adHoc.MatchString(line) {
+				found++
+				perFile[f]++
+			}
+		}
+	}
+
+	if found > budget {
+		worst := ""
+		for f, n := range perFile {
+			if n > perFile[worst] {
+				worst = f
+			}
+		}
+		t.Errorf("%d ad hoc float comparisons, and the budget is %d.\n"+
+			"  A threshold written as a literal is a tolerance chosen rather than "+
+			"derived, which specs/008-numerics.md §9 rejects and "+
+			"specs/011-conformance-harness.md §4 exists to catch.\n"+
+			"  Use internal/conformance/numeq, or compute the bound from 008's table "+
+			"and hold it in a named variable so a reader can see where it came from.\n"+
+			"  Most sites today: %s (%d).", found, budget, worst, perFile[worst])
+	}
+	if found < budget {
+		t.Logf("%d ad hoc comparisons, under the budget of %d — lower the constant "+
+			"in this test to hold the ground", found, budget)
 	}
 }

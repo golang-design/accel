@@ -152,6 +152,32 @@ The static conformance check scans comparison call sites and rejects known ad ho
 helpers or numeric tolerance parameters. It permits literals used as inputs,
 mathematically exact expected values, and committed bit-pattern corpora.
 
+#### Built as a ratchet — 2026-08-27
+
+`TestNoNewAdHocFloatComparisons` counts `math.Abs(...)` compared against a bare
+numeric literal — a threshold chosen rather than computed — and fails when the
+count rises. **It is a ratchet rather than a refusal, and that is a decision
+about how to land a rule the tree does not yet satisfy.**
+
+There were 75 such sites when it was installed, written before anything checked.
+Turning the rule on as a refusal would have meant rewriting all of them in one
+change, and every rewrite risks altering what a test asserts — the one thing a
+conformance change must not do quietly. Pinning the count makes the existing
+debt visible, stops it growing, and leaves each site to be converted on its own
+evidence. The constant is meant to be edited downward.
+
+**What it cannot see, stated because it bounds the claim.** A derived bound and a
+tuned tolerance are syntactically identical: `> 1e-5` might be somebody's guess
+or might be [008](008-numerics.md) §7's reduction bound written out. This counts
+the shape, not the reasoning. So §4's rule cannot be fully mechanical, and the
+number is a budget rather than a verdict on any one site.
+
+**The first conversion is the argument for the rest.** `quant`'s odd-length
+packing test compared to within `0.2`. The last weight of that run is alone in
+its group, so by [048](048-int4.md) §3 its range is zero and it reconstructs
+*exactly* — the tuned bound was three orders of magnitude loose and would have
+passed a packing that lost the weight and substituted a neighbour.
+
 ## 5. Oracle sources
 
 Integer, indexing, layout, graph, and conversion references are independent Go
