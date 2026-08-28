@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 6
+const ABIVersion = 7
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -420,6 +420,18 @@ var table = map[key]*Intrinsic{
 	// plainly exists.
 	{kernelPkg, "Thread", "Barrier"}: {
 		Authored: "accel.Thread.Barrier", Op: ir.OpBarrier, Stage: Cooperative,
+		Uniformity: PerWorkgroup, Result: ir.Invalid,
+	},
+
+	// The masked barriers, specs/050-barrier-scopes.md §2. Cooperative for the
+	// same reason Barrier is -- they rendezvous -- and no capability, because
+	// a narrower memory scope is available wherever the wider one is.
+	{kernelPkg, "Thread", "BarrierShared"}: {
+		Authored: "accel.Thread.BarrierShared", Op: ir.OpBarrierShared, Stage: Cooperative,
+		Uniformity: PerWorkgroup, Result: ir.Invalid,
+	},
+	{kernelPkg, "Thread", "BarrierStorage"}: {
+		Authored: "accel.Thread.BarrierStorage", Op: ir.OpBarrierStorage, Stage: Cooperative,
 		Uniformity: PerWorkgroup, Result: ir.Invalid,
 	},
 }

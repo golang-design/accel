@@ -1128,6 +1128,19 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.printf("threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)")
 		return
 
+	// The masked variants, specs/050-barrier-scopes.md §2. §2.5's lowering
+	// table gives each target's text, so these are transcribed from it rather
+	// than derived -- which is what makes the assertion about them an
+	// assertion about the *emitted text*: a kernel whose data fits in one
+	// threadgroup gets the right answer at any of the three scopes, so a
+	// result cannot tell them apart.
+	case ir.OpBarrierShared:
+		m.printf("threadgroup_barrier(mem_flags::mem_threadgroup)")
+		return
+	case ir.OpBarrierStorage:
+		m.printf("threadgroup_barrier(mem_flags::mem_device)")
+		return
+
 	case ir.OpSubgroupSize:
 		m.printf("_sgsize")
 		return

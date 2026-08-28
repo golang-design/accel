@@ -407,7 +407,7 @@ func isBarrier(s ir.Stmt) bool {
 		return false
 	}
 	c, ok := e.X.(*ir.IntrinsicCall)
-	return ok && c.Op == ir.OpBarrier
+	return ok && c.Op.IsWorkgroupBarrier()
 }
 
 // subgroupRendezvous reports a statement that is a subgroup operation whose

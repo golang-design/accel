@@ -120,7 +120,7 @@ func (c *acceptor) stmt(s ir.Stmt, ctrl Level, escapes []escape) []escape {
 		}
 
 	case *ir.ExprStmt:
-		if call, ok := n.X.(*ir.IntrinsicCall); ok && call.Op == ir.OpBarrier {
+		if call, ok := n.X.(*ir.IntrinsicCall); ok && call.Op.IsWorkgroupBarrier() {
 			c.barrier(call, ctrl, escapes)
 		}
 	}

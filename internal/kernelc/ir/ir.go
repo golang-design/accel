@@ -99,6 +99,18 @@ func (o Opcode) IsSubgroupRendezvous() bool {
 	return o >= OpSubgroupAddF32 && o <= opLastSubgroup
 }
 
+// IsWorkgroupBarrier reports whether an opcode is a workgroup barrier of any
+// storage-class mask.
+//
+// A predicate rather than three case labels in each of the four places that
+// ask. The scopes differ in what they make *visible* and agree exactly on
+// execution -- every invocation rendezvouses -- so the cooperative lowering,
+// the uniformity acceptor and the suspension counter want the whole family and
+// would each have to be found and edited when one is added. specs/050.
+func (o Opcode) IsWorkgroupBarrier() bool {
+	return o == OpBarrier || o == OpBarrierShared || o == OpBarrierStorage
+}
+
 // IsSubgroup reports whether an opcode is any subgroup operation, rendezvous or
 // accessor. It is what capability inference and the uniformity requirement key
 // on.
@@ -545,6 +557,12 @@ const (
 	// with a position, rather than failing as an unknown call. See
 	// specs/012-kernel-pipeline.md.
 	OpBarrier
+	// The masked barriers, specs/050-barrier-scopes.md. Separate opcodes
+	// rather than an argument on OpBarrier: the scope is fixed at the call
+	// site and every backend spells it as a different token, so an opcode is
+	// what the emitters already switch on.
+	OpBarrierShared
+	OpBarrierStorage
 )
 
 // opLastSubgroup ends the subgroup range the predicates above bound.
@@ -589,6 +607,8 @@ var opcodeNames = [...]string{
 	OpF32ToF16:                 "ToFloat16",
 	OpF32ToBF16:                "ToBFloat16",
 	OpBarrier:                  "Barrier",
+	OpBarrierShared:            "BarrierShared",
+	OpBarrierStorage:           "BarrierStorage",
 	OpAtomicAddU32:             "AtomicAddU32",
 	OpAtomicAddI32:             "AtomicAddI32",
 	OpAtomicSubU32:             "AtomicSubU32",

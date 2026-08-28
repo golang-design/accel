@@ -169,6 +169,42 @@ func (t Thread) Barrier() {
 	}
 }
 
+// BarrierShared synchronises a workgroup and makes **shared** writes visible.
+//
+// specs/002-compute-model.md §2.5. It is the cheaper half of [Thread.Barrier]:
+// a storage memory barrier costs materially more than a shared one on tiled
+// mobile hardware, and a tiled GEMM runs two barriers per k-tile in its
+// innermost structure.
+//
+// # It is not a faster Barrier
+//
+// §2.4's first consequence: a barrier orders the class it names and nothing
+// more. This between a storage write and a peer's storage read is a **data
+// race**, and it is a race that works on every desktop GPU because their caches
+// are coherent enough to hide it. Reach for [Thread.Barrier] unless the shared
+// array is the only thing being published.
+//
+// Its execution half is identical, so the rendezvous is the same one: what
+// differs is which memory the backend is told to make visible, which on the CPU
+// is nothing (one address space, and the scheduler's epochs order everything)
+// and on Metal is a narrower mem_flags mask.
+func (t Thread) BarrierShared() {
+	if t.rendezvous != nil {
+		t.rendezvous()
+	}
+}
+
+// BarrierStorage synchronises a workgroup and makes **storage** writes visible.
+//
+// specs/002-compute-model.md §2.5. The counterpart to [Thread.BarrierShared]:
+// a lane publishes through a buffer and its peers read what it wrote. Shared
+// writes are not ordered by it.
+func (t Thread) BarrierStorage() {
+	if t.rendezvous != nil {
+		t.rendezvous()
+	}
+}
+
 // linear is an extent's invocation count.
 func linear(e ID3) uint32 { return max(e.X, 1) * max(e.Y, 1) * max(e.Z, 1) }
 
