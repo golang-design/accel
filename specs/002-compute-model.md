@@ -24,10 +24,16 @@ implementation-defined — so what an emulation would have to model is an active
 set no two backends agree on. The operations built are the ones §5.1 says are
 portable. §5.2's reduction row is also narrower than it reads: `Add`, `Min` and
 `Max` over f32 are built, and the integer reductions, `Mul`, and the bitwise
-family are not. `Ballot` is callable from the CPU scheduler and has no
-intrinsic, so a kernel cannot spell it.
+family are not.
 
-This spec is therefore *in progress* rather than implemented, and those rows are
+`Ballot` **is** spellable since 2026-08-28 — [058](058-ballot.md) — along with
+the three barrier scopes ([050](050-barrier-scopes.md)), the dispatch-shape
+accessors ([052](052-dispatch-shape.md)) and the saturating float-to-integer
+conversions ([051](051-float-to-int.md)). Four of the five successors this
+spec was split into are built; the reduction row above is the fifth and is what
+remains.
+
+This spec is therefore *in progress* rather than implemented, and that row is
 what remains.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 4. This spec exists because
