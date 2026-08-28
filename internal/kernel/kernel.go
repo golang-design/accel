@@ -554,6 +554,17 @@ type Frame struct {
 	SubBool bool
 	SubMask Mask
 
+	// SubI32 and SubU32 carry an integer reduction's contribution and result,
+	// specs/059-subgroup-reductions.md §2.
+	//
+	// A field per type rather than one word reinterpreted. The saving would be
+	// four bytes on a struct that already spends sixteen on SubMask, and the
+	// cost is a carrier whose meaning depends on which operation last wrote it
+	// -- a reduction reading the wrong interpretation returns a plausible
+	// number, which is the failure this whole project is arranged to avoid.
+	SubI32 int32
+	SubU32 uint32
+
 	// SubLane is the second operand of a lane-addressed read: which lane to
 	// read for a broadcast or a shuffle, the mask for a butterfly shuffle, the
 	// delta for a shuffle up or down.

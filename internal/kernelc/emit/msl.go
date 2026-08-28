@@ -1353,9 +1353,19 @@ var mslSubgroupNullary = map[ir.Opcode]string{
 // return type rather than of inactive lanes, which is why the shuffles below
 // are here and it is not.
 var mslSubgroup = map[ir.Opcode]string{
-	ir.OpSubgroupAddF32:    "simd_sum",
-	ir.OpSubgroupMinF32:    "simd_min",
-	ir.OpSubgroupMaxF32:    "simd_max",
+	ir.OpSubgroupAddF32: "simd_sum",
+	ir.OpSubgroupMinF32: "simd_min",
+	ir.OpSubgroupMaxF32: "simd_max",
+
+	// The integer minima and maxima, specs/059-subgroup-reductions.md §5.
+	// simd_min and simd_max are overloaded on the argument type in MSL, so
+	// these share a spelling with the f32 pair and differ only in what the
+	// emitter passes them -- which is why the table has four rows naming two
+	// functions rather than four functions.
+	ir.OpSubgroupMinI32:    "simd_min",
+	ir.OpSubgroupMaxI32:    "simd_max",
+	ir.OpSubgroupMinU32:    "simd_min",
+	ir.OpSubgroupMaxU32:    "simd_max",
 	ir.OpBroadcastFirstF32: "simd_broadcast_first",
 	ir.OpSubgroupAny:       "simd_any",
 	ir.OpSubgroupAll:       "simd_all",

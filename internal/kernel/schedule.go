@@ -357,6 +357,53 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 			frames[i].SubBool = all
 		}
 
+	// The integer minima and maxima, specs/059-subgroup-reductions.md. Each
+	// seeds from the first active lane rather than from a sentinel, for the
+	// reason SubAddF32 seeds from the first lane's value: a reduction over one
+	// active lane is that lane's value, and a sentinel would make the identity
+	// and the absent case indistinguishable -- 002 §5.2's rule that an
+	// inactive lane contributes nothing, not an identity element.
+	// Written out per operation rather than sharing a comparison. The compact
+	// form is `if (op == SubMinI32) == (v < acc)`, which is correct and is the
+	// shape specs/059-subgroup-reductions.md §7 exists to catch: in a family of
+	// near-identical cases, a comparison a reader has to evaluate is one a
+	// reader skims.
+	case SubMinI32:
+		acc := frames[lanes[0]].SubI32
+		for _, i := range lanes[1:] {
+			acc = min(acc, frames[i].SubI32)
+		}
+		for _, i := range lanes {
+			frames[i].SubI32 = acc
+		}
+
+	case SubMaxI32:
+		acc := frames[lanes[0]].SubI32
+		for _, i := range lanes[1:] {
+			acc = max(acc, frames[i].SubI32)
+		}
+		for _, i := range lanes {
+			frames[i].SubI32 = acc
+		}
+
+	case SubMinU32:
+		acc := frames[lanes[0]].SubU32
+		for _, i := range lanes[1:] {
+			acc = min(acc, frames[i].SubU32)
+		}
+		for _, i := range lanes {
+			frames[i].SubU32 = acc
+		}
+
+	case SubMaxU32:
+		acc := frames[lanes[0]].SubU32
+		for _, i := range lanes[1:] {
+			acc = max(acc, frames[i].SubU32)
+		}
+		for _, i := range lanes {
+			frames[i].SubU32 = acc
+		}
+
 	case SubBallot:
 		var m Mask
 		for _, i := range lanes {

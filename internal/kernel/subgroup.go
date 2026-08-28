@@ -45,6 +45,14 @@ const (
 	SubAddF32
 	SubMinF32
 	SubMaxF32
+
+	// The integer reductions, specs/059-subgroup-reductions.md. Exact for
+	// every type -- a minimum and a maximum select an input rather than
+	// computing one -- so the two backends must agree bit for bit.
+	SubMinI32
+	SubMaxI32
+	SubMinU32
+	SubMaxU32
 	SubBroadcastFirstF32
 	SubElect
 	SubAny
@@ -90,6 +98,14 @@ func (o SubgroupOp) String() string {
 		return "SubgroupMinF32"
 	case SubMaxF32:
 		return "SubgroupMaxF32"
+	case SubMinI32:
+		return "SubgroupMinI32"
+	case SubMaxI32:
+		return "SubgroupMaxI32"
+	case SubMinU32:
+		return "SubgroupMinU32"
+	case SubMaxU32:
+		return "SubgroupMaxU32"
 	case SubBroadcastFirstF32:
 		return "BroadcastFirstF32"
 	case SubElect:
@@ -246,6 +262,14 @@ func (t Thread) SubgroupAddF32(v float32) float32 { return v }
 // SubgroupMinF32 and SubgroupMaxF32 are the same over the minimum and maximum.
 func (t Thread) SubgroupMinF32(v float32) float32 { return v }
 func (t Thread) SubgroupMaxF32(v float32) float32 { return v }
+
+// The integer minima and maxima, specs/059-subgroup-reductions.md §6's first
+// slice. Exact for every type, because they select an input rather than
+// computing one -- which is why they need no numeric bound where a sum does.
+func (t Thread) SubgroupMinI32(v int32) int32   { return v }
+func (t Thread) SubgroupMaxI32(v int32) int32   { return v }
+func (t Thread) SubgroupMinU32(v uint32) uint32 { return v }
+func (t Thread) SubgroupMaxU32(v uint32) uint32 { return v }
 
 // BroadcastFirstF32 gives every active lane the lowest-numbered active lane's
 // v. It is the safe broadcast: unlike a broadcast from a chosen lane, it is

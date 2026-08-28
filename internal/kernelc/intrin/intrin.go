@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 9
+const ABIVersion = 10
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -376,6 +376,26 @@ var table = map[key]*Intrinsic{
 		Authored: "accel.Thread.SubgroupAddF32", Op: ir.OpSubgroupAddF32, Params: 1,
 		Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
 	},
+	// The integer minima and maxima, specs/059-subgroup-reductions.md. Exact
+	// rather than bounded: they select an input rather than computing one, so
+	// the two backends must agree bit for bit and there is no bound to derive.
+	{kernelPkg, "Thread", "SubgroupMinI32"}: {
+		Authored: "accel.Thread.SubgroupMinI32", Op: ir.OpSubgroupMinI32, Params: 1,
+		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMaxI32"}: {
+		Authored: "accel.Thread.SubgroupMaxI32", Op: ir.OpSubgroupMaxI32, Params: 1,
+		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMinU32"}: {
+		Authored: "accel.Thread.SubgroupMinU32", Op: ir.OpSubgroupMinU32, Params: 1,
+		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMaxU32"}: {
+		Authored: "accel.Thread.SubgroupMaxU32", Op: ir.OpSubgroupMaxU32, Params: 1,
+		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+
 	{kernelPkg, "Thread", "SubgroupMinF32"}: {
 		Authored: "accel.Thread.SubgroupMinF32", Op: ir.OpSubgroupMinF32, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,

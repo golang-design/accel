@@ -604,6 +604,14 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 				e.value(seg.subCall.Args[0])
 				e.printf("\n")
 			}
+		case carrierI32:
+			e.printf("%sframe.SubI32 = ", pad)
+			e.value(seg.subCall.Args[0])
+			e.printf("\n")
+		case carrierU32:
+			e.printf("%sframe.SubU32 = ", pad)
+			e.value(seg.subCall.Args[0])
+			e.printf("\n")
 		default:
 			e.fail("subgroup operation %v carries no value between a lane and the "+
 				"scheduler, so its result would be whatever the frame last held", seg.sub)
@@ -621,6 +629,10 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 			// a mask, which is why this is its own carrier rather than
 			// carrierBool with a wider frame field.
 			e.printf("%s%s = frame.SubMask\n", pad, e.local(seg.subLocal))
+		case carrierI32:
+			e.printf("%s%s = frame.SubI32\n", pad, e.local(seg.subLocal))
+		case carrierU32:
+			e.printf("%s%s = frame.SubU32\n", pad, e.local(seg.subLocal))
 		}
 	}
 
@@ -658,6 +670,13 @@ const (
 	// carrierMask carries a predicate out and a mask back, which is Ballot and
 	// nothing else. specs/058-ballot.md §2.
 	carrierMask
+
+	// carrierI32 and carrierU32 are the integer reductions,
+	// specs/059-subgroup-reductions.md §2. A carrier per type rather than one
+	// word reinterpreted: a reduction reading the wrong interpretation returns
+	// a plausible number.
+	carrierI32
+	carrierU32
 )
 
 func subCarrier(op ir.Opcode) carrier {
@@ -671,6 +690,10 @@ func subCarrier(op ir.Opcode) carrier {
 		// A predicate in and a mask out, which is the one operation whose two
 		// directions carry different types. specs/058-ballot.md §2.
 		return carrierMask
+	case ir.OpSubgroupMinI32, ir.OpSubgroupMaxI32:
+		return carrierI32
+	case ir.OpSubgroupMinU32, ir.OpSubgroupMaxU32:
+		return carrierU32
 	}
 	if op.IsSubgroupLaneRead() {
 		return carrierF32Lane
@@ -716,6 +739,14 @@ func subOpName(op ir.Opcode) (string, bool) {
 		return "kernelabi.SubExclusiveAddF32", true
 	case ir.OpBallot:
 		return "kernelabi.SubBallot", true
+	case ir.OpSubgroupMinI32:
+		return "kernelabi.SubMinI32", true
+	case ir.OpSubgroupMaxI32:
+		return "kernelabi.SubMaxI32", true
+	case ir.OpSubgroupMinU32:
+		return "kernelabi.SubMinU32", true
+	case ir.OpSubgroupMaxU32:
+		return "kernelabi.SubMaxU32", true
 	}
 	return "", false
 }

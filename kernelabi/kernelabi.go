@@ -107,10 +107,16 @@ const (
 
 // The subgroup rendezvous a generated lowering names.
 const (
-	SubNone              = kernel.SubNone
-	SubAddF32            = kernel.SubAddF32
-	SubMinF32            = kernel.SubMinF32
-	SubMaxF32            = kernel.SubMaxF32
+	SubNone   = kernel.SubNone
+	SubAddF32 = kernel.SubAddF32
+	SubMinF32 = kernel.SubMinF32
+	SubMaxF32 = kernel.SubMaxF32
+
+	// The integer reductions, specs/059-subgroup-reductions.md.
+	SubMinI32            = kernel.SubMinI32
+	SubMaxI32            = kernel.SubMaxI32
+	SubMinU32            = kernel.SubMinU32
+	SubMaxU32            = kernel.SubMaxU32
 	SubBroadcastFirstF32 = kernel.SubBroadcastFirstF32
 	SubElect             = kernel.SubElect
 	SubAny               = kernel.SubAny

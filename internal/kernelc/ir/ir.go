@@ -532,6 +532,14 @@ const (
 	OpSubgroupAddF32
 	OpSubgroupMinF32
 	OpSubgroupMaxF32
+
+	// The integer minima and maxima, specs/059-subgroup-reductions.md §6's
+	// first slice. Inside the rendezvous range, because they combine across
+	// lanes exactly as the f32 ones do.
+	OpSubgroupMinI32
+	OpSubgroupMaxI32
+	OpSubgroupMinU32
+	OpSubgroupMaxU32
 	OpBroadcastFirstF32
 	OpElect
 	OpSubgroupAny
@@ -673,6 +681,10 @@ var opcodeNames = [...]string{
 	OpSubgroupAddF32:           "SubgroupAddF32",
 	OpSubgroupMinF32:           "SubgroupMinF32",
 	OpSubgroupMaxF32:           "SubgroupMaxF32",
+	OpSubgroupMinI32:           "SubgroupMinI32",
+	OpSubgroupMaxI32:           "SubgroupMaxI32",
+	OpSubgroupMinU32:           "SubgroupMinU32",
+	OpSubgroupMaxU32:           "SubgroupMaxU32",
 	OpBroadcastFirstF32:        "BroadcastFirstF32",
 	OpElect:                    "Elect",
 	OpSubgroupAny:              "SubgroupAny",
