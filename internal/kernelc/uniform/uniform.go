@@ -293,12 +293,41 @@ func (in *Info) intrinsic(n *ir.IntrinsicCall) Level {
 
 	switch n.Op {
 	// Workgroup-uniform: the same for every invocation of one workgroup.
-	case ir.OpGroupID, ir.OpGroupIndex:
+	//
+	// The dispatch shape is here because it is uniform across more than the
+	// workgroup and the lattice has no level above it: specs/052.
+	case ir.OpGroupID, ir.OpGroupIndex,
+		ir.OpWorkgroupSize, ir.OpNumGroups, ir.OpGlobalSize,
+		ir.OpSubgroupSize:
 		return Workgroup
+
+	// Subgroup-uniform: equal within a subgroup and differing between them.
+	//
+	// The only seed at this level, and until it existed nothing produced one at
+	// all -- the lattice had three levels and the analysis could reach two, so
+	// every subgroup-scope rule was vacuous. specs/002-compute-model.md §3.3's
+	// seed table is where these rows come from.
+	case ir.OpSubgroupID:
+		return Subgroup
 
 	// Non-uniform: these are what distinguish one invocation from another, and
 	// a kernel with no non-uniform seed computes the same thing everywhere.
-	case ir.OpGlobalID, ir.OpLocalID, ir.OpGlobalIndex, ir.OpLocalIndex:
+	//
+	// SubgroupInvocationID is here rather than at Subgroup because it is the
+	// lane's own index: it differs *within* a subgroup, which is exactly what
+	// the level below means.
+	case ir.OpGlobalID, ir.OpLocalID, ir.OpGlobalIndex, ir.OpLocalIndex,
+		ir.OpSubgroupInvocationID:
+		return Non
+	}
+
+	// A subgroup operation's result is non-uniform, and §3.3 says so with the
+	// reason: conservative even when the operation broadcasts. A reduction does
+	// return the same value to every active lane, and the *active set* is not
+	// portable (§5.1), so a value that is uniform on one device is not on
+	// another. This is checked after the switch because the range predicate
+	// covers a family rather than a list.
+	if n.Op.IsSubgroupRendezvous() {
 		return Non
 	}
 

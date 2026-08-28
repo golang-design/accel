@@ -5,6 +5,7 @@
 package uniform_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -66,6 +67,112 @@ func TestBarriersInUniformControlFlowAreAccepted(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := accept(t, c.body); len(got) != 0 {
 				t.Errorf("rejected a uniform barrier: %v", got)
+			}
+		})
+	}
+}
+
+// A subgroup barrier's scope is one subgroup, so subgroup-uniform control
+// around it is legal where the same control around a workgroup barrier is not.
+//
+// specs/002-compute-model.md §12 names this exact pair as a test: "a
+// SubgroupBarrier controlled by SubgroupID is accepted while the same control
+// around a workgroup barrier is rejected. A predicate involving
+// SubgroupInvocationID rejects both."
+//
+// The three rows are one body each, so the difference between them is only
+// which barrier or which predicate -- which is what makes the comparison
+// evidence rather than three unrelated results.
+func TestASubgroupBarrierIsCheckedAtSubgroupScope(t *testing.T) {
+	const underSubgroupIndex = `
+	if t.SubgroupIndex() < 2 {
+		%s
+	}`
+	const underLane = `
+	if t.SubgroupLane() < 2 {
+		%s
+	}`
+
+	for _, c := range []struct {
+		name    string
+		body    string
+		reject  bool
+		mention string
+	}{
+		// The pair 002 §12 names. Same predicate, different barrier.
+		{
+			name: "subgroup barrier under SubgroupIndex",
+			body: fmt.Sprintf(underSubgroupIndex, "t.SubgroupBarrier()"),
+		},
+		{
+			name:    "workgroup barrier under SubgroupIndex",
+			body:    fmt.Sprintf(underSubgroupIndex, "t.Barrier()"),
+			reject:  true,
+			mention: "workgroup-uniform",
+		},
+		// A per-lane predicate is below subgroup scope, so it rejects both.
+		{
+			name:    "subgroup barrier under SubgroupLane",
+			body:    fmt.Sprintf(underLane, "t.SubgroupBarrier()"),
+			reject:  true,
+			mention: "subgroup-uniform",
+		},
+		{
+			name:    "workgroup barrier under SubgroupLane",
+			body:    fmt.Sprintf(underLane, "t.Barrier()"),
+			reject:  true,
+			mention: "workgroup-uniform",
+		},
+		// Straight-line, so the accepted row above is not passing against a
+		// rule that accepts every subgroup barrier for the wrong reason.
+		{
+			name: "subgroup barrier in straight-line code",
+			body: "\tt.SubgroupBarrier()",
+		},
+
+		// Clause 3 at subgroup scope: a uniform loop that some *lanes* leave
+		// early. The trip count is uniform and the break is not, so the lanes
+		// that took it never arrive -- the same reasoning as the workgroup
+		// clause, one level down the lattice.
+		{
+			name: "subgroup barrier after a per-lane break",
+			body: `
+	for i := uint32(0); i < 8; i++ {
+		if t.SubgroupLane() > 2 {
+			break
+		}
+		t.SubgroupBarrier()
+	}`,
+			reject:  true,
+			mention: "never arrive",
+		},
+		// And the same escape at subgroup scope is *not* an escape for a
+		// subgroup barrier: every lane of a subgroup takes the break together.
+		// This is the row that says the clause reads the escape's level rather
+		// than rejecting every escape.
+		{
+			name: "subgroup barrier after a per-subgroup break",
+			body: `
+	for i := uint32(0); i < 8; i++ {
+		if t.SubgroupIndex() > 2 {
+			break
+		}
+		t.SubgroupBarrier()
+	}`,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := accept(t, c.body)
+			switch {
+			case c.reject && len(got) == 0:
+				t.Fatalf("accepted, and this shape must be rejected:\n%s", c.body)
+			case !c.reject && len(got) != 0:
+				t.Fatalf("rejected a legal shape: %v\n%s", got, c.body)
+			case !c.reject:
+				return
+			}
+			if !strings.Contains(got[0].Msg, c.mention) {
+				t.Errorf("the message should say %q, got: %v", c.mention, got[0].Msg)
 			}
 		})
 	}

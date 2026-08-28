@@ -120,11 +120,58 @@ func (c *acceptor) stmt(s ir.Stmt, ctrl Level, escapes []escape) []escape {
 		}
 
 	case *ir.ExprStmt:
-		if call, ok := n.X.(*ir.IntrinsicCall); ok && call.Op.IsWorkgroupBarrier() {
+		call, ok := n.X.(*ir.IntrinsicCall)
+		if !ok {
+			break
+		}
+		switch {
+		case call.Op.IsWorkgroupBarrier():
 			c.barrier(call, ctrl, escapes)
+		case call.Op == ir.OpSubgroupBarrier:
+			c.subgroupBarrier(call, ctrl, escapes)
 		}
 	}
 	return escapes
+}
+
+// subgroupBarrier checks a subgroup barrier, which obeys the same three clauses
+// at **subgroup** scope.
+//
+// specs/002-compute-model.md §5.3: it is a barrier, so §3.1 applies, and the
+// scope it applies at is one subgroup. That is the whole difference and it is
+// the reason the call exists. Control predicated on SubgroupIndex is
+// subgroup-uniform, so every lane of each subgroup still reaches this, and 002
+// §12's testing section names exactly this pair: "a SubgroupBarrier controlled
+// by SubgroupID is accepted while the same control around a workgroup barrier
+// is rejected. A predicate involving SubgroupInvocationID rejects both."
+//
+// The lattice is what makes this one comparison rather than a second analysis:
+// Workgroup < Subgroup < Non already means "uniform across a subgroup", so the
+// clause is the same clause with a different threshold.
+func (c *acceptor) subgroupBarrier(call *ir.IntrinsicCall, ctrl Level, escapes []escape) {
+	if ctrl > Subgroup {
+		c.out = append(c.out, Rejection{
+			Pos: call.Pos(), Because: call.Pos(),
+			Msg: fmt.Sprintf("a subgroup barrier must sit in subgroup-uniform control flow "+
+				"and this one is reached under %v control: every lane of the subgroup has "+
+				"to reach the same barrier, and here some may not "+
+				"(specs/002-compute-model.md section 5.3)", ctrl),
+		})
+		return
+	}
+	for _, e := range escapes {
+		if e.level <= Subgroup {
+			continue
+		}
+		c.out = append(c.out, Rejection{
+			Pos: call.Pos(), Because: e.pos,
+			Msg: fmt.Sprintf("a subgroup barrier must sit in subgroup-uniform control flow, "+
+				"and a %s under %v control can skip this one even though the enclosing "+
+				"loop's trip count is uniform: the lanes that took it never arrive "+
+				"(specs/002-compute-model.md section 5.3)", e.what, e.level),
+		})
+		return
+	}
 }
 
 // barrier checks one barrier against the three clauses.
