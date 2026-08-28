@@ -178,6 +178,46 @@ func TestASubgroupBarrierIsCheckedAtSubgroupScope(t *testing.T) {
 	}
 }
 
+// A barrier under a mask method is rejected, because a mask is not uniform.
+//
+// specs/058-ballot.md. The five methods lower to ordinary calls rather than
+// rendezvous, so `IsSubgroupRendezvous` does not reach them, and `Count`,
+// `LowestSet` and `Any` take **no arguments** -- the join over zero operands is
+// workgroup-uniform, so a barrier under `if m.Count() > 1` was accepted. It is
+// not: a ballot's result is subgroup-uniform at best, and different subgroups
+// can take different branches.
+//
+// Two of the five were rejected before the fix and for the wrong reason: `Bit`
+// and `CountLower` take a lane operand, and the test passes `SubgroupLane`,
+// which is non-uniform on its own. So a test written with only those two would
+// have reported the analysis correct. All five are here, and the three nullary
+// ones are the ones that matter.
+func TestABarrierUnderAMaskMethodIsRejected(t *testing.T) {
+	const ballot = "\n\tm := t.SubgroupBallot(t.SubgroupLane() < 3)"
+	for _, c := range []struct{ name, cond string }{
+		// No arguments: nothing but the receiver can carry the level.
+		{"Count", "m.Count() > 1"},
+		{"Any", "m.Any()"},
+		{"LowestSet", "m.LowestSet() > 1"},
+		// A lane operand as well, so these would reject either way -- kept so
+		// the set is the whole method table rather than the interesting half.
+		{"Bit", "m.Bit(t.SubgroupLane())"},
+		{"CountLower", "m.CountLower(t.SubgroupLane()) > 1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := ballot + "\n\tif " + c.cond + " {\n\t\tt.Barrier()\n\t}"
+			got := accept(t, body)
+			if len(got) == 0 {
+				t.Fatalf("a workgroup barrier under %s was accepted, and a mask is "+
+					"subgroup-uniform at best:\n%s", c.cond, body)
+			}
+			if !strings.Contains(got[0].Msg, "workgroup-uniform") {
+				t.Errorf("the message should say workgroup-uniform, got: %v", got[0].Msg)
+			}
+		})
+	}
+}
+
 // The three clauses of spec 002 section 3.3's rule, each with a case that fails
 // only it.
 func TestBarriersInNonUniformControlFlowAreRejected(t *testing.T) {

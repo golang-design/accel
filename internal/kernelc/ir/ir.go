@@ -118,6 +118,16 @@ func (o Opcode) IsWorkgroupBarrier() bool {
 	return o == OpBarrier || o == OpBarrierShared || o == OpBarrierStorage
 }
 
+// IsMaskMethod reports whether an opcode is one of the ballot mask's methods.
+//
+// A predicate rather than a range check, because the five sit outside every
+// other subgroup range and a reader asking "is this a subgroup thing" gets a
+// no from all of them. What they are is *derived from* a subgroup value, which
+// the uniformity analysis needs to know. specs/058-ballot.md.
+func (o Opcode) IsMaskMethod() bool {
+	return o >= OpMaskCount && o <= OpMaskAny
+}
+
 // IsSubgroup reports whether an opcode is any subgroup operation, rendezvous or
 // accessor. It is what capability inference and the uniformity requirement key
 // on.

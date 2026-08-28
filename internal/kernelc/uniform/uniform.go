@@ -331,6 +331,22 @@ func (in *Info) intrinsic(n *ir.IntrinsicCall) Level {
 		return Non
 	}
 
+	// A mask method's result carries the mask's own uniformity, which is the
+	// join of its arguments below -- and the mask came from a Ballot, so that
+	// join is already Non and the answer is right by construction.
+	//
+	// It is spelled out because it was **wrong** and passed: the methods lower
+	// to ordinary calls rather than rendezvous, so `IsSubgroupRendezvous` does
+	// not cover them, and `m.Count()` is a *nullary* method whose join over
+	// zero arguments is Workgroup. A workgroup barrier under `if m.Count() > 1`
+	// was accepted, and different subgroups can take different branches of it.
+	//
+	// The receiver is what carries the level, and `in.value(n.Recv)` above
+	// computes it without folding it in. specs/058-ballot.md.
+	if n.Op.IsMaskMethod() && n.Recv != nil {
+		return max(args, in.value(n.Recv))
+	}
+
 	// Everything else is arithmetic on its arguments: sqrt of a uniform value
 	// is uniform. Barriers have no result and their level is never read.
 	return args
