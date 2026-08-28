@@ -214,6 +214,36 @@ func diffCases() []diffCase {
 			why: "and, or and xor are associative and commutative, so this is exact",
 		},
 		{
+			// The products, specs/059-subgroup-reductions.md §6's third slice.
+			// The f32 one is the only reduction here that is *not* exact:
+			// specs/008-numerics.md §7.1 bounds it relatively, and Metal
+			// combines in whatever order the hardware scans in.
+			//
+			// The seed is near one at every lane, which is §7.1's domain
+			// rather than a convenience: a 64-lane product of magnitude-4
+			// values reaches 2^128 and overflows f32 while every term is
+			// ordinary. The two integer outputs stay exact.
+			kernel: &testkernels.MulReduceKernel,
+			counts: []int{64, 64, 64, 64, 64},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 0:
+					if i%2 == 0 {
+						return 1 + float32(1+i%4)/64
+					}
+					return 1 - float32(1+i%4)/64
+				case 1:
+					return float32(3 + 2*(i%5))
+				}
+				return 0
+			},
+			// A product of 64 terms each within a few percent of one: §7.1's
+			// gamma(63) is about 3.8e-6 relative, and the outputs are near one.
+			ulp: 64,
+			why: "a product of 64 near-unit terms, per section 7.1's relative bound",
+		},
+		{
 			// Subgroups genuinely out of step: the loop's trip count is
 			// SubgroupIndex, so at any moment they are at different barriers.
 			// Metal executes simdgroup_barrier a different number of times per

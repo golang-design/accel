@@ -90,3 +90,41 @@ func BitReduce(t accel.Thread, in []int32, andI []int32, orI []int32,
 	orU[i] = ou
 	xorU[i] = xu
 }
+
+// MulReduce writes each subgroup's product, over all three types.
+//
+// specs/059-subgroup-reductions.md §6's third slice. It is the one slice that
+// needed numeric work first: a product's error is relative where a sum's is
+// absolute, and specs/008-numerics.md §7.1 derives the bound.
+//
+// # Why the f32 input is near one
+//
+// §7.1's other half is a domain rather than a bound. A product of K terms is
+// the largest raised to the Kth, so a subgroup of 64 lanes holding values of
+// magnitude 4 reaches 2^128 and overflows f32 while every term and the true
+// result are ordinary. Values near one keep the product inside the range at
+// every width, which is what makes the comparison a statement about rounding
+// rather than about overflow.
+//
+// The integer inputs are small and odd for the mirror reason: they wrap rather
+// than overflowing, and a fixture whose product wrapped would compare two
+// wrapped values and say nothing about the multiplication.
+//
+//accel:kernel workgroup=64
+//accel:requires subgroup_arithmetic
+func MulReduce(t accel.Thread, inF []float32, inI []int32,
+	outF []float32, outI []int32, outU []uint32) {
+
+	i := t.LocalID().X
+	f := inF[i]
+	v := inI[i]
+	u := uint32(v)
+
+	pf := t.SubgroupMulF32(f)
+	pi := t.SubgroupMulI32(v)
+	pu := t.SubgroupMulU32(u)
+
+	outF[i] = pf
+	outI[i] = pi
+	outU[i] = pu
+}

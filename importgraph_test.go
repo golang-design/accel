@@ -177,6 +177,7 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 		"Ballot":                     "058's ballot and its five mask methods",
 		"IntReduce":                  "059's integer minima and maxima",
 		"BitReduce":                  "059's bitwise reductions",
+		"MulReduce":                  "059's product reductions",
 		"CountAbove":                 "011's harness fixture",
 		"SegmentSum":                 "046's prefix-sum proof",
 		"Normalize":                  "028's sampling primitive",

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"golang.design/x/accel/internal/kernel"
 	"golang.design/x/accel/internal/testkernels"
 	"golang.design/x/accel/kernelabi"
@@ -355,5 +356,161 @@ func TestTheAuthoredBitwiseReductionsMatchTheirLoweringAtOneLane(t *testing.T) {
 	// this is what says the comparison ran rather than agreeing on zeros.
 	if aA[0] != in[0] {
 		t.Fatalf("And at a subgroup of one is %#x and lane 0 holds %#x", aA[0], in[0])
+	}
+}
+
+// mulReduceInputs keeps every product inside f32's range at every width.
+//
+// specs/008-numerics.md §7.1's domain: a product of K terms is the largest
+// raised to the Kth, so values near one are what keep a 64-lane product finite.
+// They alternate above and below one so the product does not drift monotonically
+// toward zero or infinity, and none is exactly one -- a fixture of ones makes
+// every reduction the identity and says nothing.
+//
+// The integers are small and odd, so a 64-lane product is large but the
+// comparison is against the same wrapping arithmetic rather than against an
+// overflow.
+func mulReduceInputs(n int) ([]float32, []int32) {
+	f := make([]float32, n)
+	v := make([]int32, n)
+	for i := range f {
+		// 1 ± a small power of two, so each term is exact in f32 and the
+		// product stays within a factor of a few of one.
+		if i%2 == 0 {
+			f[i] = 1 + float32(1+i%4)/64
+		} else {
+			f[i] = 1 - float32(1+i%4)/64
+		}
+		v[i] = int32(3 + 2*(i%5))
+	}
+	return f, v
+}
+
+// Each product equals a scalar loop, within §7.1's budget for f32 and exactly
+// for the integers.
+//
+// specs/059-subgroup-reductions.md §7. The f32 comparison uses numeq.Product
+// rather than a tolerance: the budget is derived from the depth and the exact
+// product, and a bound that shrinks with the subgroup width is what says the
+// error is the arithmetic's rather than the fixture's.
+func TestTheProductReductionsMatchAScalarLoop(t *testing.T) {
+	width := int(testkernels.MulReduceKernel.WorkgroupSize.X)
+	inF, inI := mulReduceInputs(width)
+
+	for _, size := range []uint32{1, 4, 32, 64} {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
+			outF := make([]float32, width)
+			outI := make([]int32, width)
+			outU := make([]uint32, width)
+
+			err := kernel.DispatchCooperativeWith(&testkernels.MulReduceKernel,
+				accel.ID3{X: 1},
+				kernelabi.Args{Slices: []any{inF, inI, outF, outI, outU}},
+				kernel.Options{Diagnostics: true, SubgroupSize: size})
+			if err != nil {
+				t.Fatalf("dispatch at subgroup size %d: %v", size, err)
+			}
+
+			for i := range width {
+				base := i - i%int(size)
+				end := min(base+int(size), width)
+				terms := inF[base:end]
+
+				// The f32 product, against §7.1's derived budget. The depth is
+				// the number of multiplications on the longest path, which for
+				// this sequential combine is one fewer than the term count.
+				if r := numeq.Product(outF[i], terms, len(terms)-1); !r.OK() {
+					t.Fatalf("lane %d: MulF32 %v", i, r)
+				}
+
+				// The integers are exact, wrapping like 002 §4.3's atomics.
+				wi, wu := inI[base], uint32(inI[base])
+				for l := base + 1; l < end; l++ {
+					wi *= inI[l]
+					wu *= uint32(inI[l])
+				}
+				if outI[i] != wi {
+					t.Fatalf("lane %d: MulI32 is %d, want %d", i, outI[i], wi)
+				}
+				if outU[i] != wu {
+					t.Fatalf("lane %d: MulU32 is %d, want %d", i, outU[i], wu)
+				}
+			}
+		})
+	}
+}
+
+// The product is not the identity, and not a sum.
+//
+// A reduction that returned its own lane's value passes at a subgroup of one
+// and is caught above at every other width -- but only if the product actually
+// differs from the inputs. And a Mul wired to the Add case would agree with a
+// reference on a fixture of ones, which is why the inputs are not ones.
+func TestTheProductIsNeitherTheIdentityNorASum(t *testing.T) {
+	width := int(testkernels.MulReduceKernel.WorkgroupSize.X)
+	inF, inI := mulReduceInputs(width)
+
+	outF := make([]float32, width)
+	outI := make([]int32, width)
+	outU := make([]uint32, width)
+	err := kernel.DispatchCooperativeWith(&testkernels.MulReduceKernel,
+		accel.ID3{X: 1},
+		kernelabi.Args{Slices: []any{inF, inI, outF, outI, outU}},
+		kernel.Options{Diagnostics: true, SubgroupSize: 16})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if outI[0] == inI[0] {
+		t.Errorf("MulI32 is %d and lane 0 holds %d: a reduction returning its own "+
+			"lane's value would look like this", outI[0], inI[0])
+	}
+	// A sum of the same terms, which is what a Mul wired to the Add case gives.
+	sum := inI[0]
+	for l := 1; l < 16; l++ {
+		sum += inI[l]
+	}
+	if outI[0] == sum {
+		t.Errorf("MulI32 is %d, which is the *sum* of the same terms", outI[0])
+	}
+}
+
+// The authored products and the generated lowering agree, at one lane.
+//
+// specs/010-kernel-corpus.md §6, at a subgroup of one for the reason every
+// authored subgroup collective is run there. Exact rather than budgeted even
+// for the f32 case: over one lane the product is that lane's value with no
+// multiplication at all, so there is nothing to round.
+func TestTheAuthoredProductsMatchTheirLoweringAtOneLane(t *testing.T) {
+	width := int(testkernels.MulReduceKernel.WorkgroupSize.X)
+	inF, inI := mulReduceInputs(width)
+
+	aF := make([]float32, width)
+	aI := make([]int32, width)
+	aU := make([]uint32, width)
+	kernel.RunAuthored(&testkernels.MulReduceKernel, kernel.ID3{}, kernel.ID3{X: 1}, 1,
+		func(th kernel.Thread) {
+			testkernels.MulReduce(th, inF, inI, aF, aI, aU)
+		})
+
+	gF := make([]float32, width)
+	gI := make([]int32, width)
+	gU := make([]uint32, width)
+	err := kernel.DispatchCooperativeWith(&testkernels.MulReduceKernel,
+		accel.ID3{X: 1},
+		kernelabi.Args{Slices: []any{inF, inI, gF, gI, gU}},
+		kernel.Options{Diagnostics: true, SubgroupSize: 1})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	for i := range width {
+		if aF[i] != gF[i] || aI[i] != gI[i] || aU[i] != gU[i] {
+			t.Fatalf("lane %d: authored (%v %d %d), generated (%v %d %d)",
+				i, aF[i], aI[i], aU[i], gF[i], gI[i], gU[i])
+		}
+	}
+	if aF[0] != inF[0] {
+		t.Fatalf("MulF32 at a subgroup of one is %v and lane 0 holds %v", aF[0], inF[0])
 	}
 }
