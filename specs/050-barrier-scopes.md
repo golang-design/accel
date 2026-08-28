@@ -176,3 +176,22 @@ way: it fell through to the Go emitter's "no lowering for intrinsic
 SubgroupAddF32", which names no position, no kernel and no way forward, and
 reads as an unimplemented operation rather than an unplaceable one. It now says
 which it is, cites §5.3 for the legality, and gives the shape that works.
+
+### 4.4 The authored form's rendezvous, and a mutation that stayed green
+
+`RunAuthored` runs each invocation in a goroutine behind a cyclic barrier, and
+`Thread.SubgroupBarrier` called the **workgroup's** one — releasing every lane
+where the generated lowering releases one subgroup's. It now has its own.
+
+**No test distinguishes the two**, which was measured rather than assumed:
+routing the call back to the workgroup barrier leaves every test green,
+including `SubgroupStagger`. The reason is that a finished lane retires from a
+cyclic barrier, so subgroups running different numbers of barriers cascade
+instead of deadlocking, and no corpus kernel's *value* depends on which lanes
+were released together.
+
+A witness would need a kernel whose result depends on the release grouping —
+which for same-subgroup data is exactly what the barrier orders, and for
+cross-subgroup data is a race. There may be no legal witness. The model is still
+the right one and the comment beside it now says what the mutation showed rather
+than what it was expected to show.
