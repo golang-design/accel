@@ -1,6 +1,6 @@
 ---
 title: "Dispatch-shape accessors, and their place in the uniformity seeds"
-status: drafted
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -61,3 +61,32 @@ and does not depend on the analysis existing.
   barrier in that loop**, which is the property that makes the accessor worth
   having over a uniform field.
 - **CPU and Metal agree**, exactly: these are integers.
+
+## 4. Built — 2026-08-28
+
+All four assertions, as `DispatchShape` and `ShapeBoundedSum` in the corpus and
+a case each in the Metal differential. Two notes worth keeping.
+
+**The compile-time-uniform bound was checked by generating, not by asserting.**
+`ShapeBoundedSum` puts a barrier inside `for i := 0; i < t.WorkgroupSize().X`,
+and `go generate` lowering it at all is most of §3's third assertion: a bound the
+barrier analysis could not prove uniform fails generation rather than a test.
+What the test adds is that the loop runs the right number of times, since a
+kernel that compiles and sums the wrong slice satisfies the first half.
+
+**A latent MSL refusal, found by being the first to write the obvious thing.**
+The emitter decided "this is a vector lane, not a struct field" by matching the
+*intrinsic call*, so `t.GroupID().X` lowered correctly and
+`g := t.GroupID(); g.X` emitted `.X`, which Metal rejects as an illegal vector
+component. No corpus kernel had ever bound an id to a local. The property
+belongs to the **type** — an `ID3` is a `uint3` wherever it came from — and is
+now read from it.
+
+### The correction this spec's own framing needed
+
+§1 called this "convenience, not correctness", and that was right about the
+hazard and wrong about the leverage. The accessor is the only way to write a
+barrier inside a loop whose trip count is the workgroup width: the uniform field
+every corpus kernel carries is not uniform *to the compiler*, so the same loop
+spelled with `d.Width` is refused. That is a capability rather than a
+convenience, and it is why §3's third assertion exists.

@@ -133,7 +133,7 @@ numbered in.
 | [046-segmented-extents.md](046-segmented-extents.md) | In progress | A count per row, the offsets it implies, and the ragged query extent that closes accel issue 16. Written as a primitive because issue 18's grouped GEMM is its second caller |
 | [050-barrier-scopes.md](050-barrier-scopes.md) | In progress | 002's first successor: `BarrierShared`/`BarrierStorage`/`SubgroupBarrier`, and making Metal order storage memory as §2.5 already promises |
 | [051-float-to-int.md](051-float-to-int.md) | Implemented | 002's second successor: saturating float-to-integer intrinsics with NaN to zero, and refusing the bare conversion Go does not define |
-| [052-dispatch-shape.md](052-dispatch-shape.md) | Drafted | 002's third successor: `WorkgroupSize`/`NumGroups`/`GlobalSize` on the thread, and their entries in §3.3's uniformity seeds |
+| [052-dispatch-shape.md](052-dispatch-shape.md) | Implemented | 002's third successor: `WorkgroupSize`/`NumGroups`/`GlobalSize` on the thread, which is what lets a barrier sit inside a loop bounded by the workgroup width |
 | [053-ray-tracing.md](053-ray-tracing.md) | Drafted | The normative parent of [054](054-acceleration-structures.md) through [057](057-metal-ray-tracing.md): ray queries rather than pipelines, and why the CPU oracle decides that |
 | [054-acceleration-structures.md](054-acceleration-structures.md) | Drafted | 053's first child: two levels as resources, build and refit as graph nodes, and the refit hazard no host check can catch |
 | [055-ray-queries.md](055-ray-queries.md) | Drafted | 053's second child: traversal as a call in a compute kernel, the hit record, exclusive `TMin`, and the order rule |

@@ -339,6 +339,21 @@ four things a caller cannot use.
 The remaining eighteen are graphics stages and cooperative-lowering fixtures,
 outside this file's inventory and correctly not listed here.
 
+**Two more device-layer proofs, 2026-08-28.** `DispatchShape` and
+`ShapeBoundedSum` joined the corpus with [052](052-dispatch-shape.md) and are
+unreachable in the same legitimate way: they prove `WorkgroupSize`, `NumGroups`
+and `GlobalSize` return the recorded dispatch and that a barrier may sit inside
+a loop bounded by the workgroup width. No tensor operator wants either, and the
+guard that pins this list is what made naming them a step rather than an
+oversight.
+
+The same guard also had one row **mislabelled**: `CountWorkgroups` was recorded
+as "002's dispatch-shape proof" and is [003](003-command-graph.md)'s
+indirect-clamp proof — it increments a counter once per workgroup so the number
+that ran is observable, and asks a `Thread` for no shape at all. A pinned list
+stops a kernel joining silently; it does not check that the reason given is the
+right one, and this is the first instance of that being wrong.
+
 | Kernel | Obligation met |
 | --- | --- |
 | `PenaltyCount` | counts each token id in the history ring, bounded by how much of the ring is filled rather than by its capacity — the unwritten tail is zeros and zero is a real token id |
