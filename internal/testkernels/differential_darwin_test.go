@@ -170,6 +170,29 @@ func diffCases() []diffCase {
 			why:    "each lane copies one shared f32, so this is exact",
 		},
 		{
+			// The integer minima and maxima,
+			// specs/059-subgroup-reductions.md. Exact: a minimum selects an
+			// input rather than computing one, so the two backends must agree
+			// bit for bit and no ULP budget applies.
+			//
+			// This case is also what verifies §5's unverified claim that MSL's
+			// simd_min and simd_max carry integer overloads. They do -- the
+			// kernel lowers -- and this is what says the overload picked is the
+			// right one rather than a silent conversion through float.
+			kernel: &testkernels.IntReduceKernel,
+			counts: []int{64, 64, 64, 64, 64},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 0 {
+					// The kernel's own shuffled input, spanning both signs so
+					// the signed and unsigned answers differ.
+					return float32((i*37)%64 - 21)
+				}
+				return 0
+			},
+			why: "a minimum and a maximum select an input, so this is exact",
+		},
+		{
 			// Subgroups genuinely out of step: the loop's trip count is
 			// SubgroupIndex, so at any moment they are at different barriers.
 			// Metal executes simdgroup_barrier a different number of times per
