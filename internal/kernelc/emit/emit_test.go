@@ -417,6 +417,57 @@ func TestABarrierInsideAConditionalIsRefused(t *testing.T) {
 	}
 }
 
+// A subgroup operation inside a conditional is refused as this lowering's
+// limitation rather than as an unknown intrinsic.
+//
+// The distinction is the point. A barrier there is refused because it is
+// illegal anyway -- 002 section 3.1 requires workgroup-uniform control flow --
+// so "hoist it out" is always available and always correct. A subgroup
+// operation there is **legal**: 002 section 5.3 says so explicitly and defines
+// its semantics over the lanes that reach it. Refusing it is this transform's
+// gap, and a message that did not say so would read as a compiler that has not
+// implemented the operation.
+//
+// It did read that way. Before this check the statement fell through to the Go
+// emitter's "no lowering for intrinsic SubgroupAddF32", which names no
+// position, no kernel and no way forward -- found by writing the kernel 5.3
+// says is legal and seeing what came back.
+func TestASubgroupOperationInsideAConditionalIsRefusedAsALimitation(t *testing.T) {
+	f32 := &ir.Type{Kind: ir.F32}
+	v := ir.NewLocal(0, f32, 0, "v", nil)
+	body := ir.NewBlock(0,
+		ir.NewDeclare(0, v, ir.NewConst(0, f32, constant.MakeFloat64(0))),
+		ir.NewIf(0,
+			ir.NewConst(0, &ir.Type{Kind: ir.Bool}, constant.MakeBool(true)),
+			ir.NewBlock(0, ir.NewAssign(0, v,
+				ir.NewIntrinsic(0, f32, ir.OpSubgroupAddF32, nil, []ir.Value{v}))),
+			nil))
+	k := &ir.Func{Name: "Diverged", Stage: ir.StageCompute, Cooperative: true, Body: body}
+
+	_, err := emit.Generate(emit.Package{Name: "k", Kernels: []*ir.Func{k}})
+	if err == nil {
+		t.Fatal("a subgroup operation inside a conditional should be refused")
+	}
+	for _, want := range []string{
+		"Diverged",
+		"SubgroupAddF32",
+		// That it is legal, and where that is written down. Without these the
+		// message is indistinguishable from the barrier's.
+		"legal in divergent control flow",
+		"section 5.3",
+		// The way forward, which is what the old message lacked entirely.
+		"assign it to a local at the top level",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message should say %q, got:\n%v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "no lowering for intrinsic") {
+		t.Errorf("it fell through to the unknown-intrinsic message, which says the "+
+			"operation is not implemented rather than that it cannot be placed here:\n%v", err)
+	}
+}
+
 // A fractional float constant is emitted as the value it is, not as the
 // fraction go/constant prints.
 //

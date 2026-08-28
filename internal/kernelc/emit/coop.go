@@ -324,13 +324,24 @@ func hasLoopBarrier(s ir.Stmt) bool {
 	return ok && blockHasBarrier(loop.Body)
 }
 
-// checkBarrierPlacement refuses a barrier this transform cannot express.
+// checkBarrierPlacement refuses a rendezvous this transform cannot express.
 //
 // A barrier inside a conditional is legal by specs/002-compute-model.md and is
 // still refused: the state machine would have to resume inside the branch, and
 // unlike a loop the branch has no back edge to hang a state on. It is refused
 // by position rather than mis-lowered, because a barrier lowered as a no-op is
 // a different program that compiles.
+//
+// # Why a subgroup operation is checked here too
+//
+// It is the same structural limit and a *different* legality. 002 §5.3 is
+// explicit that a subgroup operation in divergent control flow is legal and its
+// semantics are defined over the active set, so refusing one is this
+// transform's limitation rather than the model's, and the message has to say
+// so. Without this it fell through to the Go emitter's "no lowering for
+// intrinsic SubgroupAddF32" — which names no position, no reason, and no way
+// forward, and reads as a compiler that does not implement the operation at
+// all rather than one that cannot place it here.
 func checkBarrierPlacement(b *ir.Block, top bool) error {
 	if b == nil {
 		return nil
@@ -342,6 +353,18 @@ func checkBarrierPlacement(b *ir.Block, top bool) error {
 					"resume inside that branch, which this split does not express; a barrier " +
 					"must sit in workgroup-uniform control flow anyway, so hoist it out of " +
 					"the conditional (specs/018-cooperative-lowering.md)")
+			}
+			continue
+		}
+		if isSubgroupStmt(s) {
+			if !top {
+				_, call, _ := subgroupRendezvous(s)
+				return fmt.Errorf("%v inside a conditional needs the state machine to resume "+
+					"inside that branch, which this split does not express. Unlike a barrier "+
+					"this is legal in divergent control flow (specs/002-compute-model.md "+
+					"section 5.3) and combines over the lanes that reach it, so the "+
+					"limitation is this lowering's: assign it to a local at the top level "+
+					"and select on the result (specs/018-cooperative-lowering.md)", call.Op)
 			}
 			continue
 		}
