@@ -246,6 +246,41 @@ Atomic f32 addition uses the sequential `gamma(K-1)` bound because its order is
 unknown. It is excluded from same-backend determinism tests. Integer atomics
 remain exact.
 
+### 7.1 Products, which are not sums — 2026-08-28
+
+Everything above bounds a **sum**, and [059](059-subgroup-reductions.md) §3 asked
+for a product's. It is the same $\gamma$ and a different thing to multiply it
+by, because a product's error is *relative* where a sum's is absolute.
+
+For $K$ finite terms, each product rounding once,
+
+$$
+\left|\hat{p} - p\right| \le \gamma(K-1)\,\left|p\right|,
+\qquad p = \prod_{i=1}^{K} x_i
+$$
+
+with the same $\gamma(n) = nu/(1-nu)$ and the same requirement $(K-1)u < 1$. A
+balanced tree of depth $d$ again uses $\gamma(d)$.
+
+**Why the bound is on $|p|$ and not on a sum of magnitudes.** Each rounding
+scales the running product by $(1+\delta)$ with $|\delta| \le u$, so the errors
+*compose* rather than accumulate: the result is $p\prod(1+\delta_i)$, and the
+deviation from $p$ is bounded by $\gamma(K-1)|p|$ directly. A sum has no such
+factorisation, which is why its budget carries $\sum|x_i|$ — a term that can be
+arbitrarily larger than the sum it bounds.
+
+**Overflow is the real constraint, and it is not a rounding question.** A sum of
+$K$ bounded terms is bounded by $K$ times the largest; a product is the largest
+raised to the $K$th. At a subgroup width of 64, values of magnitude 4 reach
+$2^{128}$, which is past f32's range — so a product reduction can overflow to
+infinity on inputs where every term and the true result are ordinary.
+
+That is a **domain restriction rather than a widened bound**, in the direction
+§3 of this spec already permits: a product reduction's inputs must satisfy
+$\prod|x_i| < 2^{127}$, and a test that does not state its domain is testing
+whichever inputs it happened to pick. The same restriction is what makes the
+bound above meaningful, since it assumes no intermediate overflows.
+
 ## 8. Composed operator budgets
 
 Primitive bounds compose by forward absolute-error propagation. For a computed

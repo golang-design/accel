@@ -128,3 +128,96 @@ func TreeDepth(n int) int {
 	}
 	return d
 }
+
+// ProductBudget is the absolute error budget for multiplying terms.
+//
+// # Why it takes the product and SumBudget takes a sum of magnitudes
+//
+// A product's error is *relative* and a sum's is not, which is the whole
+// difference and is specs/008-numerics.md §7.1. Each rounding scales the
+// running product by (1+δ), so the errors compose: the computed value is
+// p·∏(1+δᵢ) and its deviation from p is bounded by γ(depth)·|p| directly. A sum
+// admits no such factorisation, so its budget carries Σ|xᵢ| — a quantity that
+// can be arbitrarily larger than the sum it bounds, which is exactly the
+// cancellation case.
+//
+// product is the exact product, not the computed one. Passing the f32 result
+// would make the budget scale with the error it is bounding.
+func ProductBudget(depth int, product float64) (float64, bool) {
+	g, ok := Gamma(depth)
+	if !ok {
+		return 0, false
+	}
+	return g * math.Abs(product), true
+}
+
+// Product compares a computed f32 product against a higher-precision reference
+// of the same terms.
+//
+// Like [Sum], the reference is computed here rather than taken as a parameter,
+// so a caller cannot supply one computed at f32 and make the comparison a
+// tautology.
+//
+// # The domain, which is not a bound
+//
+// §7.1: a product of K bounded terms is the largest raised to the Kth, so a
+// subgroup of 64 lanes holding values of magnitude 4 reaches 2^128 and
+// overflows f32 while every term and the true result are ordinary. This reports
+// `Defined: false` when the exact product leaves f32's range, because the bound
+// above assumes no intermediate overflow — a caller whose inputs do that is
+// outside the domain rather than failing the comparison.
+func Product(got float32, terms []float32, depth int) ProductReport {
+	exact := 1.0
+	for _, t := range terms {
+		exact *= float64(t)
+	}
+	r := ProductReport{
+		Got: float64(got), Want: exact, Depth: depth, Product: exact,
+		Error: math.Abs(float64(got) - exact),
+	}
+	if math.Abs(exact) > math.MaxFloat32 {
+		return r
+	}
+	r.Budget, r.Defined = ProductBudget(depth, exact)
+	return r
+}
+
+// ProductReport is how a computed product compared against its reference.
+type ProductReport struct {
+	Got, Want float64
+
+	// Error is |got - want| and Budget is what §7.1 allows it to be.
+	Error, Budget float64
+
+	// Depth is the maximum number of multiplications on any path, and Product
+	// is the exact product the budget scales. Both are reported so a failure
+	// says why the budget is the size it is.
+	Depth   int
+	Product float64
+
+	// Defined is false when no bound exists: either the depth is past what
+	// γ admits, or the exact product leaves f32's range.
+	Defined bool
+}
+
+func (r ProductReport) OK() bool { return r.Defined && r.Error <= r.Budget }
+
+func (r ProductReport) String() string {
+	if !r.Defined && math.Abs(r.Product) > math.MaxFloat32 {
+		return fmt.Sprintf("the exact product is %g, which is outside f32's range: "+
+			"specs/008-numerics.md §7.1's bound assumes no intermediate overflow, so "+
+			"these inputs are outside the domain rather than failing", r.Product)
+	}
+	if !r.Defined {
+		return fmt.Sprintf("no f32 error bound exists for a multiplication depth of %d: "+
+			"depth times the unit roundoff reaches 1, so the classical bound's "+
+			"denominator vanishes", r.Depth)
+	}
+	if r.OK() {
+		return fmt.Sprintf("got %v, want %v, error %g within the %g budget "+
+			"(depth %d, product %g)", r.Got, r.Want, r.Error, r.Budget, r.Depth, r.Product)
+	}
+	return fmt.Sprintf("got %v, want %v: the error %g exceeds the %g budget for a "+
+		"multiplication depth of %d over a product of %g",
+		r.Got, r.Want, r.Error, r.Budget, r.Depth, r.Product)
+}
