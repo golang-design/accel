@@ -131,7 +131,7 @@ numbered in.
 | [048-int4.md](048-int4.md) | Implemented | An asymmetric grouped 4-bit weight representation and its derived bound, which decides whether a 27B-class model fits one device (accel issue 22) |
 | [047-linear-attention.md](047-linear-attention.md) | In progress | A matrix state per sequence and a scan over 046's segmented extent, so hybrid models whose three-in-four layers are not softmax attention become expressible |
 | [046-segmented-extents.md](046-segmented-extents.md) | In progress | A count per row, the offsets it implies, and the ragged query extent that closes accel issue 16. Written as a primitive because issue 18's grouped GEMM is its second caller |
-| [050-barrier-scopes.md](050-barrier-scopes.md) | In progress | 002's first successor: `BarrierShared`/`BarrierStorage`/`SubgroupBarrier`, and making Metal order storage memory as §2.5 already promises |
+| [050-barrier-scopes.md](050-barrier-scopes.md) | Implemented | 002's first successor: `BarrierShared`/`BarrierStorage`/`SubgroupBarrier`, and the uniformity level a subgroup barrier is checked at |
 | [051-float-to-int.md](051-float-to-int.md) | Implemented | 002's second successor: saturating float-to-integer intrinsics with NaN to zero, and refusing the bare conversion Go does not define |
 | [052-dispatch-shape.md](052-dispatch-shape.md) | Implemented | 002's third successor: `WorkgroupSize`/`NumGroups`/`GlobalSize` on the thread, which is what lets a barrier sit inside a loop bounded by the workgroup width |
 | [053-ray-tracing.md](053-ray-tracing.md) | Drafted | The normative parent of [054](054-acceleration-structures.md) through [057](057-metal-ray-tracing.md): ray queries rather than pipelines, and why the CPU oracle decides that |
