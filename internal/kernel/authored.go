@@ -54,6 +54,39 @@ func RunAuthored(k *Kernel, group, count ID3, subgroup uint32, body func(t Threa
 	}
 	b := newCyclicBarrier(n)
 
+	// One rendezvous per subgroup, beside the workgroup's, because that is what
+	// a subgroup barrier is: it releases its own lanes and no others
+	// (specs/002-compute-model.md §5.3).
+	//
+	// **No test distinguishes this from reusing the workgroup's barrier**, and
+	// that was measured rather than assumed: routing SubgroupBarrier back to
+	// the workgroup rendezvous leaves every test green. The reason is `leave`
+	// below — a lane that finishes retires from the barrier, so subgroups
+	// running different numbers of barriers cascade instead of deadlocking, and
+	// no corpus kernel's *value* depends on which lanes were released together.
+	//
+	// It is still the right model, and the wrong one is a reference that
+	// happens to agree. A witness would need a kernel whose result depends on
+	// the release grouping, which for same-subgroup data is exactly what the
+	// barrier orders and for cross-subgroup data is a race — so there may be no
+	// legal witness, and that is worth knowing rather than papering over.
+	//
+	// Zero means one subgroup spanning the workgroup, which is what
+	// [Thread.SubgroupSize] reports for it, so the arithmetic below needs no
+	// special case.
+	lanes := subgroup
+	if lanes == 0 {
+		lanes = uint32(n)
+	}
+	subs := make([]*cyclicBarrier, (uint32(n)+lanes-1)/lanes)
+	for i := range subs {
+		size := int(lanes)
+		if rest := n - i*int(lanes); rest < size {
+			size = rest
+		}
+		subs[i] = newCyclicBarrier(size)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(n)
 	i := 0
@@ -69,12 +102,15 @@ func RunAuthored(k *Kernel, group, count ID3, subgroup uint32, body func(t Threa
 					ID3{X: lx, Y: ly, Z: lz}, group, size, count, subgroup,
 				)
 				t.rendezvous = b.wait
+				sub := subs[uint32(i)/lanes]
+				t.subRendezvous = sub.wait
 				go func(t Thread) {
 					defer wg.Done()
 					// An invocation that returns without reaching a barrier its
 					// peers are waiting at would deadlock them, so it retires
-					// from the barrier on the way out.
+					// from both barriers on the way out.
 					defer b.leave()
+					defer sub.leave()
 					body(t)
 				}(t)
 				i++

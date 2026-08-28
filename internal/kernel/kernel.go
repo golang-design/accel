@@ -67,6 +67,15 @@ type Thread struct {
 	// *authored* function is run directly as a reference, which needs a real
 	// rendezvous: see [RunAuthored].
 	rendezvous func()
+
+	// subRendezvous is what [Thread.SubgroupBarrier] calls, and it is a
+	// separate one because it releases a different set of lanes.
+	//
+	// A subgroup barrier that reused the workgroup's rendezvous would release
+	// the wrong set of lanes. See [RunAuthored] for what that does and does
+	// not change: with retirement on exit it does not deadlock, and no test
+	// distinguishes the two — which is recorded there rather than assumed away.
+	subRendezvous func()
 }
 
 // NewThread builds one invocation's [Thread]. It is for the backend and the
@@ -224,8 +233,8 @@ func (t Thread) BarrierStorage() {
 // size equal to the workgroup — the CPU backend's degenerate default, which is
 // exactly why [Options.SubgroupSize] exists to sweep it.
 func (t Thread) SubgroupBarrier() {
-	if t.rendezvous != nil {
-		t.rendezvous()
+	if t.subRendezvous != nil {
+		t.subRendezvous()
 	}
 }
 
