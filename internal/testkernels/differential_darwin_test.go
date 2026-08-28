@@ -133,6 +133,30 @@ func diffCases() []diffCase {
 			ulp:    8,
 			why:    "a sum of 8 terms, per section 7's reduction bound",
 		},
+
+		// The masked barriers, specs/050-barrier-scopes.md. Both backends must
+		// agree on the *result*, which is what says the two schedulers
+		// implement one memory model -- the CPU's epochs and Metal's
+		// threadgroup_barrier at a narrower mem_flags mask. Exact: these are
+		// u32 payloads, and any difference is a divergence.
+		//
+		// The scopes themselves are asserted on the emitted text, in
+		// TestEachBarrierScopeLowersToItsOwnMask, because a workgroup's data
+		// fits in one threadgroup and a result cannot tell three scopes apart.
+		{
+			kernel: &testkernels.PublishStorageKernel,
+			counts: []int{3, 96},
+			groups: accel.WorkgroupCount{X: 3},
+			seed:   func(b, i int) float32 { return 0 },
+			why:    "u32 payloads through a storage buffer, so this is exact",
+		},
+		{
+			kernel: &testkernels.PublishSharedKernel,
+			counts: []int{64},
+			groups: accel.WorkgroupCount{X: 2},
+			seed:   func(b, i int) float32 { return 0 },
+			why:    "u32 payloads through a shared array, so this is exact",
+		},
 		{kernel: &testkernels.ElemAddKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.ElemMulKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.ScaleKernel, counts: []int{256, 256}, groups: accel.WorkgroupCount{X: 4}},

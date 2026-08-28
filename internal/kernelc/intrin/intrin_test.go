@@ -234,6 +234,8 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel.SubI32",
 		"accel.SubU32",
 		"accel.Thread.Barrier",
+		"accel.Thread.BarrierShared",
+		"accel.Thread.BarrierStorage",
 		"accel.Thread.GlobalID",
 		"accel.Thread.GlobalIndex",
 		"accel.Thread.GlobalSize",
