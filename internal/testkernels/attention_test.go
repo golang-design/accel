@@ -251,12 +251,11 @@ func TestAuthoredAttentionDecode(t *testing.T) {
 	v := ramp32(kvLen*kvHeads*headDim, 1.3)
 
 	authored := make([]float32, qHeads*headDim)
-	size := kernel.ID3{X: 128, Y: 1, Z: 1}
 	for h := range uint32(qHeads) {
 		var scores, red [128]float32
 		kernelabi.Poison(scores[:])
 		kernelabi.Poison(red[:])
-		kernel.RunAuthored(size, kernel.ID3{X: h}, kernel.ID3{X: qHeads}, 128,
+		kernel.RunAuthored(&testkernels.AttentionDecodeKernel, kernel.ID3{X: h}, kernel.ID3{X: qHeads}, 128,
 			func(th kernel.Thread) {
 				testkernels.AttentionDecode(th, d, q, k, v, lengths, authored, &scores, &red)
 			})

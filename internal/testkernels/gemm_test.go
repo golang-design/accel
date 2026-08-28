@@ -227,7 +227,6 @@ func TestAuthoredTiledGEMM(t *testing.T) {
 	}
 
 	dims := testkernels.GEMMDims{M: m, N: n, K: k}
-	size := kernel.ID3{X: testkernels.TileN, Y: testkernels.TileM, Z: 1}
 	groups := kernel.ID3{
 		X: (n + testkernels.TileN - 1) / testkernels.TileN,
 		Y: (m + testkernels.TileM - 1) / testkernels.TileM,
@@ -239,7 +238,7 @@ func TestAuthoredTiledGEMM(t *testing.T) {
 		for gx := range groups.X {
 			var tileA [128]accel.Float16
 			var tileB [256]accel.Float16
-			kernel.RunAuthored(size, kernel.ID3{X: gx, Y: gy}, groups, 128,
+			kernel.RunAuthored(&testkernels.MatMulTiledKernel, kernel.ID3{X: gx, Y: gy}, groups, 128,
 				func(th kernel.Thread) {
 					testkernels.MatMulTiled(th, dims, a, b, authored, &tileA, &tileB)
 				})

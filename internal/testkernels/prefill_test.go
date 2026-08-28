@@ -465,8 +465,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]uint32, 1)
 		var best [128]float32
 		var at [128]uint32
-		size := kernel.ID3{X: 128, Y: 1, Z: 1}
-		kernel.RunAuthored(size, kernel.ID3{}, kernel.ID3{X: 1, Y: 1, Z: 1}, 128,
+		kernel.RunAuthored(&testkernels.SampleArgmaxKernel, kernel.ID3{}, kernel.ID3{X: 1, Y: 1, Z: 1}, 128,
 			func(th kernel.Thread) {
 				testkernels.SampleArgmax(th, d, logits, authored, &best, &at)
 			})
@@ -492,7 +491,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, len(w))
 		var best [128]float32
 		var at [128]uint32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{},
+		kernel.RunAuthored(&testkernels.TopKMaskKernel, kernel.ID3{},
 			kernel.ID3{X: 1, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 				testkernels.TopKMask(th, d, w, authored, &best, &at)
 			})
@@ -525,7 +524,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, len(w))
 		var best [128]float32
 		var at [128]uint32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{},
+		kernel.RunAuthored(&testkernels.TopPMaskKernel, kernel.ID3{},
 			kernel.ID3{X: 1, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 				testkernels.TopPMask(th, d, w, authored, &best, &at)
 			})
@@ -564,7 +563,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, batch*qHeads*headDim)
 		for g := range uint32(batch * qHeads) {
 			var scores, red [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			kernel.RunAuthored(&testkernels.AttentionDecodeBatchedKernel, kernel.ID3{X: g},
 				kernel.ID3{X: batch * qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.AttentionDecodeBatched(th, d, q, pk, pv, pages, lengths,
 						authored, &scores, &red)
@@ -609,7 +608,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, qHeads*headDim)
 		for g := range uint32(qHeads) {
 			var scores, red [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			kernel.RunAuthored(&testkernels.AttentionDecodePagedKernel, kernel.ID3{X: g},
 				kernel.ID3{X: qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.AttentionDecodePaged(th, d, q, pk, pv, pages, lengths,
 						authored, &scores, &red)
@@ -652,10 +651,9 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		lengths := []uint32{qSeq}
 		authored := make([]float32, len(q))
 		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
-		size := kernel.ID3{X: 128, Y: 1, Z: 1}
 		for g := range groups.X {
 			var scores, red [128]float32
-			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
+			kernel.RunAuthored(&testkernels.AttentionPrefillKernel, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionPrefill(th, dims, q, k, v, lengths, authored,
 					&scores, &red)
 			})
@@ -702,7 +700,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
 		for g := range groups.X {
 			var scores, red [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			kernel.RunAuthored(&testkernels.AttentionPrefillPagedKernel, kernel.ID3{X: g},
 				groups, 128, func(th kernel.Thread) {
 					testkernels.AttentionPrefillPaged(th, dims, q, pk, pv, pages,
 						lengths, authored, &scores, &red)
@@ -786,7 +784,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		groups := kernel.ID3{X: qSeq * qHeads, Y: 1, Z: 1}
 		for g := range groups.X {
 			var scores, red [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			kernel.RunAuthored(&testkernels.AttentionPrefillF16Kernel, kernel.ID3{X: g},
 				groups, 128, func(th kernel.Thread) {
 					testkernels.AttentionPrefillF16(th, dims, q, k, v, lengths, authored,
 						&scores, &red)
@@ -839,7 +837,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, qHeads*headDim)
 		for g := range uint32(qHeads) {
 			var scores, red [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+			kernel.RunAuthored(&testkernels.AttentionDecodePagedF16Kernel, kernel.ID3{X: g},
 				kernel.ID3{X: qHeads, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.AttentionDecodePagedF16(th, d, q, pk, pv, pages, lengths,
 						authored, &scores, &red)
@@ -910,7 +908,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, n)
 		for col := range uint32(n) {
 			var sh [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: col},
+			kernel.RunAuthored(&testkernels.QuantMatVecKernel, kernel.ID3{X: col},
 				kernel.ID3{X: n, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.QuantMatVec(th, d, a, bq, bs, authored, &sh)
 				})
@@ -949,7 +947,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, n)
 		for col := range uint32(n) {
 			var sh [128]float32
-			kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: col},
+			kernel.RunAuthored(&testkernels.QuantMatVecF32Kernel, kernel.ID3{X: col},
 				kernel.ID3{X: n, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					testkernels.QuantMatVecF32(th, d, a, bq, bs, authored, &sh)
 				})
@@ -987,15 +985,14 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 			Y: uint32((m + testkernels.TileM - 1) / testkernels.TileM),
 			Z: 1,
 		}
-		size := kernel.ID3{X: testkernels.TileN, Y: testkernels.TileM, Z: 1}
 
 		authored := make([]float32, m*n)
 		for gy := range groups.Y {
 			for gx := range groups.X {
 				var tileA [128]float32
 				var tileB [256]accel.Float16
-				kernel.RunAuthored(size, kernel.ID3{X: gx, Y: gy}, groups,
-					size.X*size.Y, func(th kernel.Thread) {
+				kernel.RunAuthored(&testkernels.MatMulTiledF32F16Kernel, kernel.ID3{X: gx, Y: gy}, groups,
+					testkernels.TileN*testkernels.TileM, func(th kernel.Thread) {
 						testkernels.MatMulTiledF32F16(th, d, a, b, authored, &tileA, &tileB)
 					})
 			}

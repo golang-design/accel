@@ -194,12 +194,13 @@ func TestRMSNormHandlesAZeroRow(t *testing.T) {
 // exactly that and passed by luck. See [kernel.RunAuthored].
 func TestAuthoredRowKernels(t *testing.T) {
 	const width = 100 // not a multiple of the workgroup, so the tail is folded
-	size := kernel.ID3{X: testkernels.RowWidth, Y: 1, Z: 1}
 
-	drive := func(run func(th kernel.Thread, sh *[128]float32)) {
+	// The kernel is a parameter because the workgroup extent now comes from it,
+	// and the two kernels driven here declare it independently.
+	drive := func(k *accel.Kernel, run func(th kernel.Thread, sh *[128]float32)) {
 		var sh [128]float32
 		kernelabi.Poison(sh[:])
-		kernel.RunAuthored(size, kernel.ID3{}, kernel.ID3{X: 1}, testkernels.RowWidth,
+		kernel.RunAuthored(k, kernel.ID3{}, kernel.ID3{X: 1}, testkernels.RowWidth,
 			func(th kernel.Thread) { run(th, &sh) })
 	}
 
@@ -212,7 +213,7 @@ func TestAuthoredRowKernels(t *testing.T) {
 			w[i] = 1
 		}
 		authored := make([]float32, width)
-		drive(func(th kernel.Thread, sh *[128]float32) {
+		drive(&testkernels.RMSNormKernel, func(th kernel.Thread, sh *[128]float32) {
 			testkernels.RMSNorm(th, d, x, w, authored, sh)
 		})
 
@@ -233,7 +234,7 @@ func TestAuthoredRowKernels(t *testing.T) {
 			x[i] = float32(i%13) - 6
 		}
 		authored := make([]float32, width)
-		drive(func(th kernel.Thread, sh *[128]float32) {
+		drive(&testkernels.SoftmaxKernel, func(th kernel.Thread, sh *[128]float32) {
 			testkernels.Softmax(th, d, x, authored, sh)
 		})
 

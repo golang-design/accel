@@ -158,7 +158,7 @@ func TestTheAuthoredInt4KernelMatchesItsLowering(t *testing.T) {
 	groups := kernel.ID3{X: N, Y: 1, Z: 1}
 	for g := range groups.X {
 		var sh [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.QuantMatVecInt4Kernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.QuantMatVecInt4(th, dims, a, packed, scales, zeros,
 					authored, &sh)
@@ -283,7 +283,7 @@ func TestTheAuthoredTiledInt4KernelMatchesItsLowering(t *testing.T) {
 		for gx := range groups.X {
 			var tileA [128]float32
 			var tileB [256]float32
-			kernel.RunAuthored(kernel.ID3{X: 16, Y: 8, Z: 1},
+			kernel.RunAuthored(&testkernels.QuantMatMulInt4Kernel,
 				kernel.ID3{X: gx, Y: gy}, groups, 128, func(th kernel.Thread) {
 					testkernels.QuantMatMulInt4(th, d, a, packed, scales, zeros,
 						authored, &tileA, &tileB)

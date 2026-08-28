@@ -163,7 +163,7 @@ func TestTheAuthoredGroupedKernelMatchesItsLowering(t *testing.T) {
 	groups := kernel.ID3{X: tokens * d.N, Y: 1, Z: 1}
 	for g := range groups.X {
 		var sh [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.GroupedMatVecKernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.GroupedMatVec(th, d, x, w, offsets, authored, &sh)
 			})
@@ -232,7 +232,7 @@ func TestAGroupedTokenPastTheLastExpertIsPadding(t *testing.T) {
 	groups := kernel.ID3{X: rows * d.N, Y: 1, Z: 1}
 	for g := range groups.X {
 		var sh [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.GroupedMatVecKernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.GroupedMatVec(th, d, x, w, short, authored, &sh)
 			})
@@ -351,7 +351,7 @@ func TestTheAuthoredTiledGroupedKernelMatchesItsLowering(t *testing.T) {
 		for gx := range groups.X {
 			var tileA [128]float32
 			var tileB [256]float32
-			kernel.RunAuthored(kernel.ID3{X: 16, Y: 8, Z: 1},
+			kernel.RunAuthored(&testkernels.GroupedMatMulKernel,
 				kernel.ID3{X: gx, Y: gy}, groups, 128, func(th kernel.Thread) {
 					testkernels.GroupedMatMul(th, d, x, w, offsets, authored,
 						&tileA, &tileB)

@@ -425,7 +425,7 @@ func TestTheAuthoredLinearKernelMatchesItsLowering(t *testing.T) {
 			authored := make([]float32, total*d.Heads*d.ValueDim)
 			groups := kernel.ID3{X: d.Batch * d.Heads, Y: 1, Z: 1}
 			for g := range groups.X {
-				kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+				kernel.RunAuthored(&testkernels.LinearAttentionKernel, kernel.ID3{X: g},
 					groups, 128, func(th kernel.Thread) {
 						testkernels.LinearAttention(th, d, q, k, v, alpha, beta, offsets,
 							authoredState, authored)

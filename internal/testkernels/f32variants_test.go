@@ -515,15 +515,14 @@ func TestTheNewVariantsMatchTheirAuthoredForms(t *testing.T) {
 			Y: uint32((m + testkernels.TileM - 1) / testkernels.TileM),
 			Z: 1,
 		}
-		size := kernel.ID3{X: testkernels.TileN, Y: testkernels.TileM, Z: 1}
 
 		authored := make([]float32, m*n)
 		for gy := range groups.Y {
 			for gx := range groups.X {
 				var tileA [128]float32
 				var tileB [256]float32
-				kernel.RunAuthored(size, kernel.ID3{X: gx, Y: gy}, groups,
-					size.X*size.Y, func(th kernel.Thread) {
+				kernel.RunAuthored(&testkernels.MatMulTiledF32Kernel, kernel.ID3{X: gx, Y: gy}, groups,
+					testkernels.TileN*testkernels.TileM, func(th kernel.Thread) {
 						testkernels.MatMulTiledF32(th, d, a, b, authored, &tileA, &tileB)
 					})
 			}
@@ -563,11 +562,10 @@ func TestTheNewVariantsMatchTheirAuthoredForms(t *testing.T) {
 		}
 
 		authored := make([]float32, qHeads*headDim)
-		size := kernel.ID3{X: 128, Y: 1, Z: 1}
 		groups := kernel.ID3{X: qHeads, Y: 1, Z: 1}
 		for g := range groups.X {
 			var scores, red [128]float32
-			kernel.RunAuthored(size, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
+			kernel.RunAuthored(&testkernels.AttentionDecodeF16Kernel, kernel.ID3{X: g}, groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionDecodeF16(th, d, q, k16, v16, lengths, authored,
 					&scores, &red)
 			})

@@ -29,9 +29,25 @@ import "sync"
 // runtime: the two arrive at the same answer by different means, which is what
 // makes the comparison worth making.
 //
+// # Why it takes the kernel rather than a workgroup extent
+//
+// The extent used to be an argument, and the caller wrote a literal beside a
+// comparison against `k`'s generated form. Two numbers that must agree
+// eventually disagree, and here the disagreement is silent: a differential that
+// runs the authored function at one width and its lowering at another compares
+// two different programs and reports them equal whenever the shape happens not
+// to matter.
+//
+// It matters more since specs/052-dispatch-shape.md. `Thread.WorkgroupSize()`
+// lowers to a **compile-time literal** on Metal, taken from the kernel's
+// `accel:kernel` directive, and to `t.groupSize` in the authored form. Those
+// two are the same number only because this function reads the declaration
+// rather than being told one.
+//
 // It is for testing. A kernel run this way has no diagnostics, no definition
 // tracking, and no arrival checking.
-func RunAuthored(size, group, count ID3, subgroup uint32, body func(t Thread)) {
+func RunAuthored(k *Kernel, group, count ID3, subgroup uint32, body func(t Thread)) {
+	size := k.WorkgroupSize
 	n := int(linear(size))
 	if n == 0 {
 		return

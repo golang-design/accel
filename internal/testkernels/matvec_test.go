@@ -192,11 +192,10 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 		dims := testkernels.GEMMDims{M: 1, N: n, K: k}
 
 		authored := make([]float32, n)
-		size := kernel.ID3{X: testkernels.RowWidth, Y: 1, Z: 1}
 		for col := range uint32(n) {
 			var sh [128]float32
 			kernelabi.Poison(sh[:])
-			kernel.RunAuthored(size, kernel.ID3{X: col}, kernel.ID3{X: n},
+			kernel.RunAuthored(&testkernels.MatVecKernel, kernel.ID3{X: col}, kernel.ID3{X: n},
 				testkernels.RowWidth, func(th kernel.Thread) {
 					testkernels.MatVec(th, dims, a, b, authored, &sh)
 				})
@@ -229,13 +228,12 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 			bias[i] = float32(i) * 0.5
 		}
 		dims := testkernels.GEMMDims{M: m, N: n, K: k}
-		size := kernel.ID3{X: testkernels.TileN, Y: testkernels.TileM, Z: 1}
 		groups := kernel.ID3{X: 1, Y: 1, Z: 1}
 
 		authored := make([]float32, m*n)
 		var tileA [128]accel.Float16
 		var tileB [256]accel.Float16
-		kernel.RunAuthored(size, kernel.ID3{}, groups, 128, func(th kernel.Thread) {
+		kernel.RunAuthored(&testkernels.LinearTiledKernel, kernel.ID3{}, groups, 128, func(th kernel.Thread) {
 			testkernels.LinearTiled(th, dims, a, b, bias, authored, &tileA, &tileB)
 		})
 

@@ -300,7 +300,7 @@ func TestTheAuthoredRaggedKernelMatchesItsLowering(t *testing.T) {
 	authored := make([]float32, total*d.QHeads*d.HeadDim)
 	for g := range groups.X {
 		var scores, red [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.AttentionRaggedKernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionRagged(th, d, q, k, v, pages, lengths,
 					offsets, authored, &scores, &red)
@@ -331,7 +331,7 @@ func TestTheAuthoredSegmentOffsetsMatchesItsLowering(t *testing.T) {
 	dims := testkernels.SegmentDims{Rows: uint32(len(counts))}
 
 	authored := make([]uint32, len(counts)+1)
-	kernel.RunAuthored(kernel.ID3{X: 1, Y: 1, Z: 1}, kernel.ID3{X: 0},
+	kernel.RunAuthored(&testkernels.SegmentOffsetsKernel, kernel.ID3{X: 0},
 		kernel.ID3{X: 1, Y: 1, Z: 1}, 1, func(th kernel.Thread) {
 			testkernels.SegmentOffsets(th, dims, counts, authored)
 		})
@@ -430,7 +430,7 @@ func TestTheAuthoredF16RaggedKernelMatchesItsLowering(t *testing.T) {
 	authored := make([]float32, total*d.QHeads*d.HeadDim)
 	for g := range groups.X {
 		var scores, red [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.AttentionRaggedF16Kernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionRaggedF16(th, d, q, narrowK, narrowV, pages,
 					lengths, offsets, authored, &scores, &red)
@@ -529,7 +529,7 @@ func TestARaggedTokenPastTheLastSegmentIsPadding(t *testing.T) {
 	groups := kernel.ID3{X: rows * d.QHeads, Y: 1, Z: 1}
 	for g := range groups.X {
 		var scores, red [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.AttentionRaggedKernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionRagged(th, d, q, k, v, pages, lengths,
 					short, authored, &scores, &red)
@@ -594,7 +594,7 @@ func TestAnF16RaggedTokenPastTheLastSegmentIsPadding(t *testing.T) {
 	groups := kernel.ID3{X: rows * d.QHeads, Y: 1, Z: 1}
 	for g := range groups.X {
 		var scores, red [128]float32
-		kernel.RunAuthored(kernel.ID3{X: 128, Y: 1, Z: 1}, kernel.ID3{X: g},
+		kernel.RunAuthored(&testkernels.AttentionRaggedF16Kernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				testkernels.AttentionRaggedF16(th, d, q, k16, v16, pages, lengths,
 					short, authored, &scores, &red)
