@@ -1369,12 +1369,18 @@ var mslSubgroup = map[ir.Opcode]string{
 
 	// The bitwise family, specs/059-subgroup-reductions.md §6's second slice.
 	// Overloaded on the argument type as the minima are.
-	ir.OpSubgroupAndI32:    "simd_and",
-	ir.OpSubgroupOrI32:     "simd_or",
-	ir.OpSubgroupXorI32:    "simd_xor",
-	ir.OpSubgroupAndU32:    "simd_and",
-	ir.OpSubgroupOrU32:     "simd_or",
-	ir.OpSubgroupXorU32:    "simd_xor",
+	ir.OpSubgroupAndI32: "simd_and",
+	ir.OpSubgroupOrI32:  "simd_or",
+	ir.OpSubgroupXorI32: "simd_xor",
+	ir.OpSubgroupAndU32: "simd_and",
+	ir.OpSubgroupOrU32:  "simd_or",
+	ir.OpSubgroupXorU32: "simd_xor",
+
+	// The products, specs/059-subgroup-reductions.md §6's third slice.
+	// simd_product is overloaded on the argument type as simd_min is.
+	ir.OpSubgroupMulF32:    "simd_product",
+	ir.OpSubgroupMulI32:    "simd_product",
+	ir.OpSubgroupMulU32:    "simd_product",
 	ir.OpBroadcastFirstF32: "simd_broadcast_first",
 	ir.OpSubgroupAny:       "simd_any",
 	ir.OpSubgroupAll:       "simd_all",

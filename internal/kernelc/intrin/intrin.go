@@ -422,6 +422,22 @@ var table = map[key]*Intrinsic{
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 
+	// The products, specs/059-subgroup-reductions.md §6's third slice. The f32
+	// one is Bounded rather than Exact -- specs/008-numerics.md §7.1 derives
+	// its budget -- and the integer ones are Exact because they wrap.
+	{kernelPkg, "Thread", "SubgroupMulF32"}: {
+		Authored: "accel.Thread.SubgroupMulF32", Op: ir.OpSubgroupMulF32, Params: 1,
+		Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMulI32"}: {
+		Authored: "accel.Thread.SubgroupMulI32", Op: ir.OpSubgroupMulI32, Params: 1,
+		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupMulU32"}: {
+		Authored: "accel.Thread.SubgroupMulU32", Op: ir.OpSubgroupMulU32, Params: 1,
+		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+
 	{kernelPkg, "Thread", "SubgroupMinF32"}: {
 		Authored: "accel.Thread.SubgroupMinF32", Op: ir.OpSubgroupMinF32, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,

@@ -123,6 +123,9 @@ const (
 	SubAndU32            = kernel.SubAndU32
 	SubOrU32             = kernel.SubOrU32
 	SubXorU32            = kernel.SubXorU32
+	SubMulF32            = kernel.SubMulF32
+	SubMulI32            = kernel.SubMulI32
+	SubMulU32            = kernel.SubMulU32
 	SubBroadcastFirstF32 = kernel.SubBroadcastFirstF32
 	SubElect             = kernel.SubElect
 	SubAny               = kernel.SubAny

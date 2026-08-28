@@ -548,6 +548,11 @@ const (
 	OpSubgroupAndU32
 	OpSubgroupOrU32
 	OpSubgroupXorU32
+
+	// The products, specs/059-subgroup-reductions.md §6's third slice.
+	OpSubgroupMulF32
+	OpSubgroupMulI32
+	OpSubgroupMulU32
 	OpBroadcastFirstF32
 	OpElect
 	OpSubgroupAny
@@ -699,6 +704,9 @@ var opcodeNames = [...]string{
 	OpSubgroupAndU32:           "SubgroupAndU32",
 	OpSubgroupOrU32:            "SubgroupOrU32",
 	OpSubgroupXorU32:           "SubgroupXorU32",
+	OpSubgroupMulF32:           "SubgroupMulF32",
+	OpSubgroupMulI32:           "SubgroupMulI32",
+	OpSubgroupMulU32:           "SubgroupMulU32",
 	OpBroadcastFirstF32:        "BroadcastFirstF32",
 	OpElect:                    "Elect",
 	OpSubgroupAny:              "SubgroupAny",

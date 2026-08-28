@@ -463,6 +463,38 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 			frames[i].SubU32 = acc
 		}
 
+	// The products, specs/059-subgroup-reductions.md §6's third slice. Seeded
+	// from the first active lane like every reduction here: over one active
+	// lane the answer is that lane's value, and seeding with 1 would make
+	// "absent" and "identity" the same -- which for a lane holding 0 is a
+	// different answer rather than a rounding.
+	case SubMulF32:
+		acc := frames[lanes[0]].SubF32
+		for _, i := range lanes[1:] {
+			acc *= frames[i].SubF32
+		}
+		for _, i := range lanes {
+			frames[i].SubF32 = acc
+		}
+
+	case SubMulI32:
+		acc := frames[lanes[0]].SubI32
+		for _, i := range lanes[1:] {
+			acc *= frames[i].SubI32
+		}
+		for _, i := range lanes {
+			frames[i].SubI32 = acc
+		}
+
+	case SubMulU32:
+		acc := frames[lanes[0]].SubU32
+		for _, i := range lanes[1:] {
+			acc *= frames[i].SubU32
+		}
+		for _, i := range lanes {
+			frames[i].SubU32 = acc
+		}
+
 	case SubBallot:
 		var m Mask
 		for _, i := range lanes {

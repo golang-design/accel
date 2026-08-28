@@ -64,6 +64,14 @@ const (
 	SubAndU32
 	SubOrU32
 	SubXorU32
+
+	// The products, specs/059-subgroup-reductions.md §6's third slice. The
+	// integer ones wrap, matching 002 §4.3's atomics; the f32 one is bounded
+	// by specs/008-numerics.md §7.1, which is the derivation this slice waited
+	// on.
+	SubMulF32
+	SubMulI32
+	SubMulU32
 	SubBroadcastFirstF32
 	SubElect
 	SubAny
@@ -129,6 +137,12 @@ func (o SubgroupOp) String() string {
 		return "SubgroupOrU32"
 	case SubXorU32:
 		return "SubgroupXorU32"
+	case SubMulF32:
+		return "SubgroupMulF32"
+	case SubMulI32:
+		return "SubgroupMulI32"
+	case SubMulU32:
+		return "SubgroupMulU32"
 	case SubBroadcastFirstF32:
 		return "BroadcastFirstF32"
 	case SubElect:
@@ -301,6 +315,11 @@ func (t Thread) SubgroupXorI32(v int32) int32   { return v }
 func (t Thread) SubgroupAndU32(v uint32) uint32 { return v }
 func (t Thread) SubgroupOrU32(v uint32) uint32  { return v }
 func (t Thread) SubgroupXorU32(v uint32) uint32 { return v }
+
+// The products, specs/059-subgroup-reductions.md §6's third slice.
+func (t Thread) SubgroupMulF32(v float32) float32 { return v }
+func (t Thread) SubgroupMulI32(v int32) int32     { return v }
+func (t Thread) SubgroupMulU32(v uint32) uint32   { return v }
 
 // BroadcastFirstF32 gives every active lane the lowest-numbered active lane's
 // v. It is the safe broadcast: unlike a broadcast from a chosen lane, it is

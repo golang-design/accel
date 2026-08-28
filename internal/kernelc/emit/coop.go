@@ -681,7 +681,8 @@ const (
 
 func subCarrier(op ir.Opcode) carrier {
 	switch op {
-	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32, ir.OpBroadcastFirstF32,
+	case ir.OpSubgroupAddF32, ir.OpSubgroupMinF32, ir.OpSubgroupMaxF32,
+		ir.OpSubgroupMulF32, ir.OpBroadcastFirstF32,
 		ir.OpSubgroupInclusiveAddF32, ir.OpSubgroupExclusiveAddF32:
 		return carrierF32
 	case ir.OpElect, ir.OpSubgroupAny, ir.OpSubgroupAll:
@@ -690,10 +691,10 @@ func subCarrier(op ir.Opcode) carrier {
 		// A predicate in and a mask out, which is the one operation whose two
 		// directions carry different types. specs/058-ballot.md §2.
 		return carrierMask
-	case ir.OpSubgroupMinI32, ir.OpSubgroupMaxI32,
+	case ir.OpSubgroupMinI32, ir.OpSubgroupMaxI32, ir.OpSubgroupMulI32,
 		ir.OpSubgroupAndI32, ir.OpSubgroupOrI32, ir.OpSubgroupXorI32:
 		return carrierI32
-	case ir.OpSubgroupMinU32, ir.OpSubgroupMaxU32,
+	case ir.OpSubgroupMinU32, ir.OpSubgroupMaxU32, ir.OpSubgroupMulU32,
 		ir.OpSubgroupAndU32, ir.OpSubgroupOrU32, ir.OpSubgroupXorU32:
 		return carrierU32
 	}
@@ -761,6 +762,12 @@ func subOpName(op ir.Opcode) (string, bool) {
 		return "kernelabi.SubOrU32", true
 	case ir.OpSubgroupXorU32:
 		return "kernelabi.SubXorU32", true
+	case ir.OpSubgroupMulF32:
+		return "kernelabi.SubMulF32", true
+	case ir.OpSubgroupMulI32:
+		return "kernelabi.SubMulI32", true
+	case ir.OpSubgroupMulU32:
+		return "kernelabi.SubMulU32", true
 	}
 	return "", false
 }
