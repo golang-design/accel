@@ -67,7 +67,7 @@ inventory and [011](011-conformance-harness.md) is the shared proof machinery.
 | --- | --- |
 | Done | M0 through M7, and five of M8's seven items: quantization, sampling, the plan cache, paged KV with batching, and shared transients |
 | In progress | The CPU reference rasterizer ([035](035-cpu-rasterizer.md)), the render API that drives it ([033](033-render-api.md)), the stage-ABI compiler work both need ([032](032-stage-abi.md)), and the headless half of surface/present ([034](034-surface-present.md)) |
-| Written, unbuilt | [037](037-vulkan-bringup.md) Vulkan, [038](038-spirv-target.md) SPIR-V, [040](040-batch-scheduler.md) the scheduler, [041](041-msaa.md) MSAA |
+| Written, unbuilt | [037](037-vulkan-bringup.md) Vulkan, [038](038-spirv-target.md) SPIR-V, [060](060-cuda-bringup.md) CUDA, [061](061-ptx-target.md) PTX, [040](040-batch-scheduler.md) the scheduler, [041](041-msaa.md) MSAA |
 | Not blocked, unscheduled | Vulkan — see 009's correction; it is verifiable in CI on lavapipe today |
 
 [009](009-sequencing.md) has the milestone list, what done means for each, and
@@ -94,6 +94,8 @@ numbered in.
 | [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | In progress | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
 | [037-vulkan-bringup.md](037-vulkan-bringup.md) | Drafted | The cgo-free Vulkan backend through purego: loader, device, memory, descriptors, submission and device loss |
 | [038-spirv-target.md](038-spirv-target.md) | Drafted | Emitting SPIR-V from the shared IR, and how a binary target with no source level is verified |
+| [060-cuda-bringup.md](060-cuda-bringup.md) | Drafted | The cgo-free CUDA backend through purego: the loader, the context's thread affinity and the pool of locked threads it forces, a unified pool that is not a budget, and one dispatch from a hand-written `.ptx` |
+| [061-ptx-target.md](061-ptx-target.md) | Drafted | Emitting PTX from the shared IR: a text target that keeps every check SPIR-V lost, an active-set warp mask, and contraction expressed as a rounding modifier |
 | [041-msaa.md](041-msaa.md) | Drafted | 005's fifth child: sample positions, resolve, and what the CPU oracle can still prove once a sample pattern exists |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |

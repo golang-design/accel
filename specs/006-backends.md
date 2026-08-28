@@ -317,10 +317,40 @@ to graphics. Deferred past v0 until the pending-operation child spec is
 validated; the synchronous API does not claim browser support in the meantime,
 and the graph model must not foreclose the batched-crossing trick.
 
-### 2.7 Not in the set
+### 2.7 CUDA — corrected 2026-08-29
 
-CUDA, per [`000-decisions.md`](000-decisions.md): reachable without cgo in principle,
-not in the first milestone, and the largest single gap for training workloads.
+This section said CUDA was *not in the set*, per
+[`000-decisions.md`](000-decisions.md): reachable without cgo in principle, not
+in the first milestone, and the largest single gap for training workloads. The
+first two clauses stand and the heading did not: it is out of **v0**, not out of
+the set, and [060](060-cuda-bringup.md) and [061](061-ptx-target.md) now specify
+it as the seventh backend.
+
+**Reached cgo-free**: `purego` against `libcuda.so.1`. Measured rather than
+argued — [060](060-cuda-bringup.md) §1 resolves nineteen driver entry points and
+drives init → context → JIT → allocate → launch → read back with no CUDA toolkit
+present.
+
+**Can**: more of the compute model than any other GPU backend. It is the only one
+where §3's *atomic float add* row is `yes` rather than `cap`, in both storage and
+shared, and native f16 arithmetic needs no capability query.
+
+**Cannot**: indirect dispatch. There is no device-side grid source for an
+ordinary launch, so the answer is dynamic parallelism or a host graph update, and
+[060](060-cuda-bringup.md) §5 reports the capability absent rather than emulating
+it. It also cannot be a CI oracle: there is no CUDA software rasterizer, so
+unlike Vulkan's lavapipe every device claim is tier 4 on real hardware.
+
+**Difficulty**: moderate, and lower than Vulkan's. The loader is nineteen symbols
+rather than forty marshalled structs, and PTX is *text*, so
+[061](061-ptx-target.md) keeps every review and testing affordance
+[038](038-spirv-target.md) had to replace. The sharp edge is not the API: a CUDA
+context is current per OS thread and a goroutine is not, which
+[060](060-cuda-bringup.md) §4 measures failing on 2 of 5 runs in the shape a
+backend reaches for first.
+
+### 2.8 Not in the set
+
 Metal on iOS, OpenCL, and WebGL are not planned.
 
 ---

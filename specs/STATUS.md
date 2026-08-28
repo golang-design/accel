@@ -48,6 +48,8 @@ the first pass failed on them and appear in their own sections at the end.
 - [038-spirv-target.md](038-spirv-target.md) — 10 sections specified, none built
 - [040-batch-scheduler.md](040-batch-scheduler.md) — 8 sections specified, none built
 - [041-msaa.md](041-msaa.md) — 12 sections specified, none built
+- [060-cuda-bringup.md](060-cuda-bringup.md) — 15 sections specified, none built
+- [061-ptx-target.md](061-ptx-target.md) — 10 sections specified, none built
 
 ## In progress — what is outstanding in each
 
