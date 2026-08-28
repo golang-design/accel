@@ -246,6 +246,7 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel.Thread.NumGroups",
 		"accel.Thread.SubgroupAddF32",
 		"accel.Thread.SubgroupAll",
+		"accel.Thread.SubgroupBarrier",
 		"accel.Thread.SubgroupAny",
 		"accel.Thread.SubgroupBroadcastF32",
 		"accel.Thread.SubgroupBroadcastFirstF32",

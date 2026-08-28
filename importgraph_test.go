@@ -172,6 +172,8 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 		"ShapeBoundedSum":            "052's compile-time-uniform loop bound",
 		"PublishStorage":             "050's storage-scope barrier",
 		"PublishShared":              "050's shared-scope barrier",
+		"SubgroupPublish":            "050's subgroup-scope barrier",
+		"SubgroupStagger":            "050's per-subgroup arrival check",
 		"CountAbove":                 "011's harness fixture",
 		"SegmentSum":                 "046's prefix-sum proof",
 		"Normalize":                  "028's sampling primitive",

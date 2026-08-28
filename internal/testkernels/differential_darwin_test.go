@@ -157,6 +157,30 @@ func diffCases() []diffCase {
 			seed:   func(b, i int) float32 { return 0 },
 			why:    "u32 payloads through a shared array, so this is exact",
 		},
+		{
+			// Subgroup scope. The two backends narrow the rendezvous by
+			// different means -- the CPU checks arrival per subgroup, Metal
+			// emits simdgroup_barrier -- and both run at the device's real lane
+			// count here rather than the emulated sweep, which is the point of
+			// comparing them at all.
+			kernel: &testkernels.SubgroupPublishKernel,
+			counts: []int{64},
+			groups: accel.WorkgroupCount{X: 1},
+			seed:   func(b, i int) float32 { return 0 },
+			why:    "each lane copies one shared f32, so this is exact",
+		},
+		{
+			// Subgroups genuinely out of step: the loop's trip count is
+			// SubgroupIndex, so at any moment they are at different barriers.
+			// Metal executes simdgroup_barrier a different number of times per
+			// simdgroup and the CPU checks arrival per subgroup; agreeing here
+			// is what says the two implement one rule rather than two.
+			kernel: &testkernels.SubgroupStaggerKernel,
+			counts: []int{64},
+			groups: accel.WorkgroupCount{X: 1},
+			seed:   func(b, i int) float32 { return 0 },
+			why:    "each lane copies one shared f32, so this is exact",
+		},
 		{kernel: &testkernels.ElemAddKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.ElemMulKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.ScaleKernel, counts: []int{256, 256}, groups: accel.WorkgroupCount{X: 4}},

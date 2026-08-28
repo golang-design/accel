@@ -5,6 +5,7 @@
 package testkernels_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -144,5 +145,101 @@ func TestAMaskedBarrierIsASuspensionPoint(t *testing.T) {
 			t.Errorf("%s has %d suspension points, want %d: a masked barrier "+
 				"rendezvouses exactly as Barrier does", c.kernel.Name, got, c.want)
 		}
+	}
+}
+
+// A subgroup barrier rendezvouses one subgroup, at every emulated size.
+//
+// specs/050-barrier-scopes.md §3's fourth assertion and 002 §5.3. The sweep is
+// what makes it meaningful: at size 1 every lane is its own subgroup and reads
+// what it wrote, at 64 there is a single subgroup spanning the workgroup, and
+// the answer is the same only if the indexing is right. 002 §5.4 gives the
+// sweep's sizes and the reason -- an emulated size is a test instrument rather
+// than a model of hardware.
+func TestASubgroupBarrierPublishesWithinItsSubgroup(t *testing.T) {
+	width := int(testkernels.SubgroupPublishKernel.WorkgroupSize.X)
+
+	for _, size := range []uint32{1, 4, 32, 64} {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
+			out := make([]float32, width)
+			err := kernel.DispatchCooperativeWith(&testkernels.SubgroupPublishKernel,
+				accel.ID3{X: 1}, kernelabi.Args{Slices: []any{out}},
+				kernel.Options{Diagnostics: true, SubgroupSize: size})
+			if err != nil {
+				t.Fatalf("dispatch at subgroup size %d: %v", size, err)
+			}
+			for lane := range width {
+				// Lane l is in subgroup l/size, and that subgroup's lowest lane
+				// wrote its index plus one.
+				want := float32(uint32(lane)/size) + 1
+				if got := out[lane]; got != want {
+					t.Fatalf("at subgroup size %d, lane %d read %v, want %v: it did not "+
+						"see its own subgroup's write", size, lane, got, want)
+				}
+			}
+		})
+	}
+}
+
+// A subgroup barrier lowers to simdgroup_barrier, not to a workgroup one.
+//
+// The scope is the set of *lanes*, and the memory mask stays wide: 002 §2.5's
+// table gives this call shared and storage visibility, so what narrows is who
+// rendezvouses. A lowering that emitted threadgroup_barrier would be correct on
+// every result a test can produce -- a wider rendezvous includes the narrower
+// one -- and wrong about what the caller asked for, which is why this is
+// asserted on the text.
+func TestASubgroupBarrierLowersToSubgroupScope(t *testing.T) {
+	src := testkernels.SubgroupPublishKernel.MSL
+	if src == "" {
+		t.Fatal("SubgroupPublish carries no MSL, so this asserts nothing")
+	}
+	const want = "simdgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)"
+	if !strings.Contains(src, want) {
+		t.Errorf("SubgroupPublish does not emit %q", want)
+	}
+	if strings.Contains(src, "threadgroup_barrier(") {
+		t.Error("SubgroupPublish emits a threadgroup_barrier, which rendezvouses the " +
+			"whole workgroup rather than one subgroup")
+	}
+}
+
+// Subgroups may sit at different subgroup barriers, and the dispatch completes.
+//
+// This is what the per-subgroup arrival check is *for*, and the case
+// SubgroupPublish cannot reach: its barrier is at the top level, so every lane
+// is at it and a workgroup-wide check passes anyway. Here the loop's trip count
+// is SubgroupIndex, so at any epoch the subgroups are at different states --
+// legal by 002 §5.3, and reported as a non-uniform arrival by a check that
+// compares every invocation against one expected barrier.
+//
+// Diagnostics are on, which is what makes the assertion an assertion: the check
+// being exercised lives in the CPU backend's developer mode
+// (specs/006-backends.md §5), so running without it would pass whatever the
+// scheduler did.
+func TestSubgroupsMaySitAtDifferentSubgroupBarriers(t *testing.T) {
+	width := int(testkernels.SubgroupStaggerKernel.WorkgroupSize.X)
+
+	// Size 4 gives 16 subgroups over the workgroup, so the trip counts range
+	// from 0 to 15 and most epochs have subgroups genuinely out of step. Size
+	// 64 is the degenerate single subgroup, kept so the sweep says the shape
+	// works when there is nothing to stagger.
+	for _, size := range []uint32{4, 16, 64} {
+		t.Run(fmt.Sprintf("size=%d", size), func(t *testing.T) {
+			out := make([]float32, width)
+			err := kernel.DispatchCooperativeWith(&testkernels.SubgroupStaggerKernel,
+				accel.ID3{X: 1}, kernelabi.Args{Slices: []any{out}},
+				kernel.Options{Diagnostics: true, SubgroupSize: size})
+			if err != nil {
+				t.Fatalf("at subgroup size %d the dispatch failed, and every lane of each "+
+					"subgroup reaches its own barriers: %v", size, err)
+			}
+			for lane := range width {
+				want := float32(uint32(lane)/size) + 1
+				if got := out[lane]; got != want {
+					t.Fatalf("at subgroup size %d, lane %d is %v, want %v", size, lane, got, want)
+				}
+			}
+		})
 	}
 }
