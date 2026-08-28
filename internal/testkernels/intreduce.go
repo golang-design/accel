@@ -52,3 +52,41 @@ func IntReduce(t accel.Thread, in []int32, minI []int32, maxI []int32,
 	minU[i] = loU
 	maxU[i] = hiU
 }
+
+// BitReduce writes each subgroup's And, Or and Xor, per lane, over both integer
+// types.
+//
+// specs/059-subgroup-reductions.md §6's second slice. Six operations in one
+// kernel for the reason [IntReduce] holds four: they share a shape and differ
+// in the two ways a transposition confuses.
+//
+// # Why the input is a bit pattern rather than a counter
+//
+// And over a run of consecutive integers is almost always zero and Or is almost
+// always all-ones, so both are satisfied by a kernel that ignores its input.
+// The pattern below gives each lane a different sparse set of bits, so the
+// three answers differ from each other and from any constant.
+//
+//accel:kernel workgroup=64
+//accel:requires subgroup_arithmetic
+func BitReduce(t accel.Thread, in []int32, andI []int32, orI []int32,
+	xorI []int32, andU []uint32, orU []uint32, xorU []uint32) {
+
+	i := t.LocalID().X
+	v := in[i]
+	u := uint32(v)
+
+	a := t.SubgroupAndI32(v)
+	o := t.SubgroupOrI32(v)
+	x := t.SubgroupXorI32(v)
+	au := t.SubgroupAndU32(u)
+	ou := t.SubgroupOrU32(u)
+	xu := t.SubgroupXorU32(u)
+
+	andI[i] = a
+	orI[i] = o
+	xorI[i] = x
+	andU[i] = au
+	orU[i] = ou
+	xorU[i] = xu
+}

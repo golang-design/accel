@@ -193,6 +193,27 @@ func diffCases() []diffCase {
 			why: "a minimum and a maximum select an input, so this is exact",
 		},
 		{
+			// The bitwise family, specs/059-subgroup-reductions.md §6's second
+			// slice. Exact for a sharper reason than the minima: each is
+			// associative *and* commutative over its whole domain, so no
+			// ordering of the lanes can produce a different answer.
+			//
+			// The seed reproduces the kernel's own pattern -- a shared mask
+			// every lane carries plus one private bit -- because a
+			// pseudorandom input makes And zero and Or all-ones over any wide
+			// subgroup, which a lowering ignoring its input also produces.
+			kernel: &testkernels.BitReduceKernel,
+			counts: []int{64, 64, 64, 64, 64, 64, 64},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 0 {
+					return float32(int32(0x00F0F00F) | int32(1)<<(uint(i)%8+20))
+				}
+				return 0
+			},
+			why: "and, or and xor are associative and commutative, so this is exact",
+		},
+		{
 			// Subgroups genuinely out of step: the loop's trip count is
 			// SubgroupIndex, so at any moment they are at different barriers.
 			// Metal executes simdgroup_barrier a different number of times per

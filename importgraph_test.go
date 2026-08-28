@@ -176,6 +176,7 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 		"SubgroupStagger":            "050's per-subgroup arrival check",
 		"Ballot":                     "058's ballot and its five mask methods",
 		"IntReduce":                  "059's integer minima and maxima",
+		"BitReduce":                  "059's bitwise reductions",
 		"CountAbove":                 "011's harness fixture",
 		"SegmentSum":                 "046's prefix-sum proof",
 		"Normalize":                  "028's sampling primitive",
