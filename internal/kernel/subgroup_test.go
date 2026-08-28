@@ -103,6 +103,80 @@ func TestABallotMaskReportsEachLane(t *testing.T) {
 	}
 }
 
+// An inactive lane's bit is zero, so Ballot(true) is not all ones.
+//
+// specs/002-compute-model.md §5.1's rule 2, which that section says is the one
+// everyone gets wrong: a lane that does not reach the ballot contributes
+// nothing -- it is not zero, not the identity, not present -- so
+// `Ballot(true).Count()` is the *active* count and not the subgroup size.
+//
+// # Why this is here and not in the corpus
+//
+// The only way to make a lane inactive is to put the ballot inside a
+// conditional, and specs/018-cooperative-lowering.md's split cannot resume
+// inside a branch, so that kernel is refused by the compiler
+// (specs/058-ballot.md §6.4). This drives the scheduler directly, which is the
+// same seam the mask's other rules are checked through above, and it is the
+// only place the rule has a witness at all today.
+//
+// The predicate is a constant true so the question is what an *absent* lane
+// contributes rather than what a false vote does: every lane that reaches the
+// ballot sets its bit, so Count is exactly how many reached it.
+func TestAnInactiveLaneContributesNoBit(t *testing.T) {
+	const width, voting = 8, 3
+	k := &kernel.Kernel{
+		Name: "BallotInactive", WorkgroupSize: kernel.ID3{X: width, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, Suspensions: 1,
+		Bindings: []kernel.Binding{{Name: "out", DType: kernel.U32, Access: kernel.Write}},
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			out := a.Slices[0].([]uint32)
+			lane := th.SubgroupLane()
+			switch f.Pass {
+			case 0:
+				f.Pass = 1
+				// The lanes above the threshold never suspend at the ballot,
+				// which is exactly what an inactive lane is. The sentinel says
+				// they took this path rather than voting false.
+				if lane >= voting {
+					out[lane] = 999
+					return false
+				}
+				f.Sub = kernel.SubBallot
+				f.SubBool = true
+				f.Barrier = kernel.BarrierID{Index: 0}
+				return true
+			default:
+				out[lane] = uint32(f.SubMask.Count())
+				// And the absent lanes' bits are clear, read from a voting
+				// lane's copy of the mask.
+				for l := uint32(voting); l < width; l++ {
+					if f.SubMask.Bit(l) {
+						t.Errorf("lane %d did not reach the ballot and its bit is set", l)
+					}
+				}
+				return false
+			}
+		},
+	}
+	out := make([]uint32, width)
+	if err := kernel.DispatchCooperative(k, kernel.ID3{X: 1},
+		kernel.Args{Slices: []any{out}}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for lane := range voting {
+		if out[lane] != voting {
+			t.Errorf("lane %d saw %d set bits and %d lanes voted: an inactive lane was "+
+				"counted", lane, out[lane], voting)
+		}
+	}
+	for lane := voting; lane < width; lane++ {
+		if out[lane] != 999 {
+			t.Errorf("lane %d wrote %d, and it should not have reached the ballot",
+				lane, out[lane])
+		}
+	}
+}
+
 // An empty mask reports nothing set, and LowestSet says so rather than naming
 // lane zero.
 func TestAnEmptyMaskNamesNoLane(t *testing.T) {

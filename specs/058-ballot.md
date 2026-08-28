@@ -197,3 +197,34 @@ runs at real widths and every lane must see the whole subgroup's vote.
 §4.1 has the reasoning. The name ships prefixed, consistent with its fifteen
 siblings, and 002 §5.2's table is what should change — an edit to a normative
 document about ten shipped methods, left for a decision rather than taken here.
+
+### 6.4 Two gaps found after it was called built
+
+Both were found by asking what a *caller* can write that this does not handle,
+rather than by reading the code again.
+
+**A workgroup barrier under a mask method was accepted.** `Count`, `Any` and
+`LowestSet` take no arguments, and the analysis computed an intrinsic's level as
+the join over its *arguments* — a join over zero operands is workgroup-uniform.
+So `if m.Count() > 1 { t.Barrier() }` compiled, and different subgroups can take
+different branches of it. The methods lower to ordinary calls rather than
+rendezvous, so `IsSubgroupRendezvous` did not reach them either.
+
+The receiver is what carries the level, and it is now folded in. Two of the five
+methods were rejected before the fix **for the wrong reason** — `Bit` and
+`CountLower` take a lane operand, and the obvious test passes `SubgroupLane` —
+so a test written with only those two would have reported the analysis correct.
+The three nullary ones are the ones that matter, which is why all five are rows.
+
+**§5's inactive-lane assertion is not reachable from the corpus.** The only way
+to make a lane inactive is to put the ballot inside a conditional, and
+[018](018-cooperative-lowering.md)'s split cannot resume inside a branch — the
+same limitation §4.3 records for the subgroup barrier. So the kernel that would
+witness 002 §5.1's rule 2 is refused by the compiler.
+
+It is checked at the **scheduler seam** instead, where a hand-written cooperative
+kernel suspends at a ballot from inside a branch, which is what the mask's other
+rules already use. That is a smaller claim than §5 made and it is the true one:
+the rule holds of the runtime, and no kernel a caller can write today exercises
+it. The honest fix is 018's, and this is recorded rather than quietly satisfied
+by a test that does not reach the case.
