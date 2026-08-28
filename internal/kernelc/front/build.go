@@ -1125,6 +1125,12 @@ func (c *checker) irType(t types.Type) (*ir.Type, error) {
 	if isThread(t) {
 		return &ir.Type{Kind: ir.Struct, Name: "Thread"}, nil
 	}
+	if isKernelType(t, "Mask") {
+		// specs/058-ballot.md §2. Its own kind rather than a struct, because
+		// no target shares a spelling for it and the value is opaque -- what a
+		// kernel does with one is call the five methods.
+		return &ir.Type{Kind: ir.MaskKind}, nil
+	}
 	if isKernelType(t, "Float16") {
 		return &ir.Type{Kind: ir.F16}, nil
 	}

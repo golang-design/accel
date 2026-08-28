@@ -598,7 +598,7 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 			e.printf("%sframe.SubLane = ", pad)
 			e.value(seg.subCall.Args[1])
 			e.printf("\n")
-		case carrierBool:
+		case carrierBool, carrierMask:
 			if len(seg.subCall.Args) == 1 {
 				e.printf("%sframe.SubBool = ", pad)
 				e.value(seg.subCall.Args[0])
@@ -616,6 +616,11 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 			e.printf("%s%s = frame.SubF32\n", pad, e.local(seg.subLocal))
 		case carrierBool:
 			e.printf("%s%s = frame.SubBool\n", pad, e.local(seg.subLocal))
+		case carrierMask:
+			// The contribution went out as a bool and the result comes back as
+			// a mask, which is why this is its own carrier rather than
+			// carrierBool with a wider frame field.
+			e.printf("%s%s = frame.SubMask\n", pad, e.local(seg.subLocal))
 		}
 	}
 
@@ -649,6 +654,10 @@ const (
 	// carrierF32Lane is a lane-addressed read: a value, and the lane operand
 	// naming which lane to take it from.
 	carrierF32Lane
+
+	// carrierMask carries a predicate out and a mask back, which is Ballot and
+	// nothing else. specs/058-ballot.md §2.
+	carrierMask
 )
 
 func subCarrier(op ir.Opcode) carrier {
@@ -658,6 +667,10 @@ func subCarrier(op ir.Opcode) carrier {
 		return carrierF32
 	case ir.OpElect, ir.OpSubgroupAny, ir.OpSubgroupAll:
 		return carrierBool
+	case ir.OpBallot:
+		// A predicate in and a mask out, which is the one operation whose two
+		// directions carry different types. specs/058-ballot.md §2.
+		return carrierMask
 	}
 	if op.IsSubgroupLaneRead() {
 		return carrierF32Lane
@@ -701,6 +714,8 @@ func subOpName(op ir.Opcode) (string, bool) {
 		return "kernelabi.SubInclusiveAddF32", true
 	case ir.OpSubgroupExclusiveAddF32:
 		return "kernelabi.SubExclusiveAddF32", true
+	case ir.OpBallot:
+		return "kernelabi.SubBallot", true
 	}
 	return "", false
 }

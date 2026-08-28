@@ -92,6 +92,18 @@ type ID3 = kernel.ID3
 // than two that have to be converted. See specs/012-kernel-pipeline.md.
 type Thread = kernel.Thread
 
+// KernelMask is a subgroup ballot: one bit per lane, as an opaque value with
+// methods rather than an integer.
+//
+// specs/002-compute-model.md §5.2. The dtype set has no 64-bit integer and
+// Vulkan's ballot is 128 bits wide, so exposing the representation would
+// foreclose a real device; the method set is complete enough that nobody needs
+// the bits, and if it turns out not to be, the fix is more methods.
+//
+// Aliased rather than redeclared, exactly as [Thread] and [ID3] are: the CPU
+// backend constructs these and cannot import accel.
+type KernelMask = kernel.Mask
+
 // SubgroupOpSet reports which subgroup operations a device provides. Vulkan
 // exposes these independently, so presence of one does not imply the others.
 //

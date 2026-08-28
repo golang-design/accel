@@ -64,6 +64,12 @@ const (
 	// ID3Kind is the three-component id struct, which is a distinct kind rather
 	// than an ordinary struct because every target has a native spelling for it.
 	ID3Kind
+	// MaskKind is a subgroup ballot: an opaque value with methods, 128 bits
+	// wide. A distinct kind for the opposite reason ID3Kind is one -- no target
+	// has a spelling every other target shares, since Vulkan's is a 4-vector,
+	// Metal's is a simd_vote that is not an integer at all, and the dtype set
+	// has no 64-bit integer to fall back on. specs/058-ballot.md §2.
+	MaskKind
 	Struct
 	// Array is a fixed-extent workgroup-shared array, whose extent go/types
 	// reads off the type so the IR never invents const generics.
@@ -80,7 +86,8 @@ const (
 
 var kindNames = [...]string{
 	Invalid: "invalid", Bool: "bool", I32: "i32", U32: "u32", F32: "f32",
-	I8: "i8", U8: "u8", F16: "f16", BF16: "bf16", ID3Kind: "ID3", Struct: "struct", Array: "array", Slice: "slice",
+	I8: "i8", U8: "u8", F16: "f16", BF16: "bf16", ID3Kind: "ID3", MaskKind: "mask",
+	Struct: "struct", Array: "array", Slice: "slice",
 	Texture2D: "texture2d",
 }
 
@@ -539,6 +546,22 @@ const (
 	OpSubgroupInclusiveAddF32
 	OpSubgroupExclusiveAddF32
 
+	// The mask's methods, specs/058-ballot.md §2. Each is an intrinsic in its
+	// own right because a kernel writes `t.Ballot(p).Count()` and Count is a
+	// call the compiler has to lower -- the alternative is exposing the bits,
+	// which 002 §5.2 rejects.
+	//
+	// **After the subgroup range on purpose**, for the reason the graphics
+	// built-ins below give: IsSubgroupRendezvous is a bounds check, and a mask
+	// method inside it would be lowered as a suspension that combines nothing.
+	// They need no capability of their own -- the Ballot that produced the mask
+	// carries it, and a mask cannot exist without one.
+	OpMaskCount
+	OpMaskBit
+	OpMaskLowestSet
+	OpMaskCountLower
+	OpMaskAny
+
 	// The graphics stage built-ins of specs/032-stage-abi.md. They sit after the
 	// subgroup range on purpose: IsSubgroup is a bounds check over that range,
 	// and inserting into it would silently make a vertex index a subgroup
@@ -645,6 +668,11 @@ var opcodeNames = [...]string{
 	OpSubgroupAny:              "SubgroupAny",
 	OpSubgroupAll:              "SubgroupAll",
 	OpBallot:                   "Ballot",
+	OpMaskCount:                "Mask.Count",
+	OpMaskBit:                  "Mask.Bit",
+	OpMaskLowestSet:            "Mask.LowestSet",
+	OpMaskCountLower:           "Mask.CountLower",
+	OpMaskAny:                  "Mask.Any",
 	OpBroadcastF32:             "BroadcastF32",
 	OpShuffleF32:               "ShuffleF32",
 	OpShuffleXorF32:            "ShuffleXorF32",

@@ -1148,6 +1148,19 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.printf("simdgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)")
 		return
 
+	// Ballot, specs/058-ballot.md §3. Refused rather than approximated:
+	// simd_ballot returns a simd_vote, which is not an integer and has no
+	// conversion to one in the subset (specs/022-msl-target.md §5). This is
+	// the first kernel-visible capability the first backend does not have, so
+	// the refusal names what is missing rather than reading as a compiler gap.
+	case ir.OpBallot, ir.OpMaskCount, ir.OpMaskBit, ir.OpMaskLowestSet,
+		ir.OpMaskCountLower, ir.OpMaskAny:
+		m.fail("%v needs a subgroup ballot, and MSL's simd_ballot returns a simd_vote "+
+			"rather than an integer this subset can hold (specs/022-msl-target.md "+
+			"section 5). The capability is subgroup_ballot and this device does not "+
+			"have it; kernel %s, position %v", v.Op, m.fn.Name, v.Pos())
+		return
+
 	case ir.OpSubgroupSize:
 		m.printf("_sgsize")
 		return

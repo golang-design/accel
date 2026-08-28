@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 8
+const ABIVersion = 9
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -315,6 +315,39 @@ var table = map[key]*Intrinsic{
 
 	{accelPkg, "", "CompareExchangeU32"}: {Authored: "accel.CompareExchangeU32", Op: ir.OpAtomicCompareExchangeU32, Result: ir.U32, Params: 4, Class: ClassExact},
 	{accelPkg, "", "CompareExchangeI32"}: {Authored: "accel.CompareExchangeI32", Op: ir.OpAtomicCompareExchangeI32, Result: ir.I32, Params: 4, Class: ClassExact},
+
+	// Ballot, specs/058-ballot.md. Its result is a mask rather than a scalar,
+	// which is the one new kind the kernel subset gains for it, and the five
+	// methods below are what a kernel asks the mask. They are keyed on the
+	// Mask receiver, so a same-named method on a user type is simply not this
+	// intrinsic.
+	//
+	// No capability on the methods: a mask cannot exist without the Ballot
+	// that produced it, and that carries CapSubgroupBallot.
+	{kernelPkg, "Thread", "SubgroupBallot"}: {
+		Authored: "accel.Thread.SubgroupBallot", Op: ir.OpBallot, Params: 1,
+		Result: ir.MaskKind, Class: ClassExact, Cap: CapSubgroupBallot,
+	},
+	{kernelPkg, "Mask", "Count"}: {
+		Authored: "accel.KernelMask.Count", Op: ir.OpMaskCount,
+		Result: ir.I32, Class: ClassExact,
+	},
+	{kernelPkg, "Mask", "Bit"}: {
+		Authored: "accel.KernelMask.Bit", Op: ir.OpMaskBit, Params: 1,
+		Result: ir.Bool, Class: ClassExact,
+	},
+	{kernelPkg, "Mask", "LowestSet"}: {
+		Authored: "accel.KernelMask.LowestSet", Op: ir.OpMaskLowestSet,
+		Result: ir.U32, Class: ClassExact,
+	},
+	{kernelPkg, "Mask", "CountLower"}: {
+		Authored: "accel.KernelMask.CountLower", Op: ir.OpMaskCountLower, Params: 1,
+		Result: ir.I32, Class: ClassExact,
+	},
+	{kernelPkg, "Mask", "Any"}: {
+		Authored: "accel.KernelMask.Any", Op: ir.OpMaskAny,
+		Result: ir.Bool, Class: ClassExact,
+	},
 
 	// A capability rather than a baseline: several targets lack it, so a kernel
 	// using it is refused on a device that does rather than lowered to

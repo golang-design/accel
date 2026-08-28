@@ -83,7 +83,7 @@ func TestABallotMaskReportsEachLane(t *testing.T) {
 					if got := f.SubMask.CountLower(5); got != 2 {
 						t.Errorf("CountLower(5) is %d, want 2", got)
 					}
-					if !f.SubMask.NotEmpty() {
+					if !f.SubMask.Any() {
 						t.Error("Any is false for a mask with bits set")
 					}
 				}
@@ -107,7 +107,7 @@ func TestABallotMaskReportsEachLane(t *testing.T) {
 // lane zero.
 func TestAnEmptyMaskNamesNoLane(t *testing.T) {
 	var m kernel.Mask
-	if m.NotEmpty() {
+	if m.Any() {
 		t.Error("an empty mask reports Any")
 	}
 	if m.Count() != 0 {

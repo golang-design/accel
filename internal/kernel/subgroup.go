@@ -177,7 +177,12 @@ func (m Mask) CountLower(lane uint32) int {
 }
 
 // Any reports whether any lane set its predicate.
-func (m Mask) NotEmpty() bool { return m.bits[0] != 0 || m.bits[1] != 0 }
+//
+// Named for specs/002-compute-model.md §5.2's table rather than for what the
+// implementation does: a caller reading that table writes m.Any(), and this
+// method was NotEmpty until specs/058-ballot.md noticed the two disagreed. The
+// spec's name wins, because the table is what a caller reads.
+func (m Mask) Any() bool { return m.bits[0] != 0 || m.bits[1] != 0 }
 
 func (m Mask) String() string { return fmt.Sprintf("mask{%016x %016x}", m.bits[1], m.bits[0]) }
 

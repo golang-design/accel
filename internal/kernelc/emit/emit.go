@@ -1287,6 +1287,17 @@ var intrinsicMethod = map[ir.Opcode]string{
 	ir.OpLocalIndex:  "LocalIndex",
 	ir.OpGroupIndex:  "GroupIndex",
 
+	// Ballot and the mask's methods, specs/058-ballot.md. The Go lowering is
+	// the runtime's own Mask methods called directly, which is the whole
+	// implementation: the type is the design and the arithmetic is already
+	// written where the scheduler needs it.
+	ir.OpBallot:         "SubgroupBallot",
+	ir.OpMaskCount:      "Count",
+	ir.OpMaskBit:        "Bit",
+	ir.OpMaskLowestSet:  "LowestSet",
+	ir.OpMaskCountLower: "CountLower",
+	ir.OpMaskAny:        "Any",
+
 	// The dispatch shape. The Go lowering reads all three from the Thread,
 	// including WorkgroupSize -- which the MSL lowering emits as a literal.
 	// Both are the accel:kernel directive's value, since that is what the
@@ -1375,6 +1386,11 @@ func (e *emitter) goType(t *ir.Type) string {
 		return "accel.BFloat16"
 	case ir.ID3Kind:
 		return "accel.ID3"
+	case ir.MaskKind:
+		// The alias, not internal/kernel.Mask: a generated file lives in the
+		// caller's package and cannot import the internal one.
+		// specs/058-ballot.md §4.
+		return "accel.KernelMask"
 	case ir.Struct:
 		// The three receivers are accel's, and a generated file is in the
 		// caller's package, so they need qualifying. Everything else named here
