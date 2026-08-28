@@ -82,11 +82,13 @@ func TestEverySubgroupRendezvousIsRegistered(t *testing.T) {
 		t.Fatal("no rendezvous opcodes were walked, so this gate checks nothing: the " +
 			"IsSubgroupRendezvous range has moved")
 	}
-	// Ballot is the one unreachable rendezvous, and it is listed here so that a
-	// second one is noticed rather than silently exempted along with it.
-	if unreachable != 1 {
-		t.Errorf("%d rendezvous opcodes are unreachable from a kernel, want the one "+
-			"(Ballot): each is an operation the IR names and nobody can call", unreachable)
+	// Every rendezvous is reachable since specs/058-ballot.md gave Ballot its
+	// intrinsic entry. This was `want the one (Ballot)` and is now zero, which
+	// is the direction that needs no exemption: an opcode the IR names and
+	// nobody can call is a capability that reads as built.
+	if unreachable != 0 {
+		t.Errorf("%d rendezvous opcodes are unreachable from a kernel: each is an "+
+			"operation the IR names and nobody can call", unreachable)
 	}
 }
 

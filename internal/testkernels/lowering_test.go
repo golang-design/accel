@@ -17,6 +17,13 @@ import (
 // on a GPU, and writing its name down is how someone decides whether that is
 // acceptable rather than discovering it later.
 var unlowered = map[string]string{
+	"Ballot": "MSL's simd_ballot returns a simd_vote rather than an integer " +
+		"(specs/022-msl-target.md section 5), so there is nothing in the " +
+		"subset to hold the mask. This is the first kernel-visible capability " +
+		"the first backend does not have -- subgroup_ballot -- and " +
+		"specs/058-ballot.md section 3 is why it was built anyway: it is the " +
+		"case that proves the capability system does anything at all. The " +
+		"refusal a caller meets names simd_vote and the capability",
 	"AtomicAddF32": "the float atomic is a capability rather than a guarantee " +
 		"(accel.CapAtomicFloatAddStorage) and Metal reports it false, so the " +
 		"emitter declines to spell an operation the target cannot run. The " +
