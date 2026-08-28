@@ -82,14 +82,21 @@ the first pass failed on them and appear in their own sections at the end.
 
 ### [002-compute-model.md](002-compute-model.md)  · **too large, see the split plan**
 
-> **Four of its five successors are built — 2026-08-28.** [050](050-barrier-scopes.md),
-> [051](051-float-to-int.md), [052](052-dispatch-shape.md) and
-> [058](058-ballot.md) closed the five rows struck through below, plus the
-> uniformity-lattice gap none of them predicted. What remains of the split is
-> the subgroup reductions beyond Add/Min/Max over f32, which are more of what
-> already works. **The rows below were written on 2026-08-27 and are kept with
-> their original evidence**, struck through rather than deleted: what a row said
-> when it was true is how a reader judges whether the audit was reading the code
+> **All five successors are built — 2026-08-28.** [050](050-barrier-scopes.md),
+> [051](051-float-to-int.md), [052](052-dispatch-shape.md),
+> [058](058-ballot.md) and [059](059-subgroup-reductions.md), plus the
+> uniformity-lattice gap none of them predicted and the product bound
+> [008](008-numerics.md) §7.1 had to gain first.
+>
+> **002 is still `in progress`, and what it owns now is two things neither
+> large nor code.** §7.2's worked listing names `accel.F16` and `accel.ToF16`
+> where the API spells them `Float16` and `ToFloat16` — a spec edit. And the
+> GLSL barrier-ordering assertion has no emitter to run against, so it belongs
+> with [006](006-backends.md) §2.5's unbuilt GL backend rather than here.
+>
+> **The rows below were written on 2026-08-27 and are kept with their original
+> evidence**, struck through rather than deleted: what a row said when it was
+> true is how a reader judges whether the audit was reading the code
 > correctly.
 
 **Unbuilt:**
@@ -104,9 +111,9 @@ the first pass failed on them and appear in their own sections at the end.
 
 - Header: "§§1–5 are implemented on the CPU backend and on Metal: the execution hierarchy and built-in ids, workgroup-shared memory, barriers ... This spec is the — The "what remains" list omits at least five things §§1-5 own: BarrierShared, BarrierStorage and SubgroupBarrier (no code at all), t.WorkgroupSize/NumGroups/GlobalSize (no code at all), and the Metal B
 - ~~§2.5's lowering table~~ — **closed 2026-08-27.** When this row was written, internal/kernelc/emit/msl.go:1042 emitted `threadgroup_barrier(mem_flags::mem_threadgroup)` for every barrier; `mem_device` is absent from the whole repository. A kernel that writes a storage buffer, ca
-- §6.2: "**the kernel subset forbids a bare conversion from a float type to an integer type**, and provides `accel.ToI32(x float32) int32`, `accel.ToU32`, `accel. — No code and no test. The four intrinsics are absent from internal/kernelc/intrin/intrin.go. internal/kernelc/front/build.go:1023-1039 builds any explicit conversion into ir.NewConvert with no source-k
-- §7.2's worked GEMM listing — `func GEMMf16(t accel.Thread, d Dims, a []accel.F16, ..., tileA *[256]float32)` calling `t.BarrierShared()` and `accel.ToF16(acc0)` — Three of the names in the spec's own proof-of-sufficiency kernel do not exist: accel.F16 is spelled accel.Float16 (kernelabi.go:67), accel.ToF16 is spelled accel.ToFloat16 (intrin.go:266), and t.Barri
-- Testing: "Generated GLSL places `memoryBarrierShared` and `memoryBarrierBuffer` before `barrier`; a golden lowering test rejects the reversed sequence." — no code, no test. internal/kernelc/emit contains msl.go and mslstage.go only — there is no GLSL emitter, and 000's v0 section says SPIR-V and the other targets are post-v0. This obligation cannot be m
+- ~~§6.2~~ — **closed 2026-08-27 by [051](051-float-to-int.md)**, as `kmath.ToI32`/`ToU32`; 051 §2.1 records why two rather than four and why `kmath`. When this row was written: "**the kernel subset forbids a bare conversion from a float type to an integer type**, and provides `accel.ToI32(x float32) int32`, `accel.ToU32`, `accel. — No code and no test. The four intrinsics are absent from internal/kernelc/intrin/intrin.go. internal/kernelc/front/build.go:1023-1039 builds any explicit conversion into ir.NewConvert with no source-k
+- §7.2's worked GEMM listing — **`t.BarrierShared()` exists since [050](050-barrier-scopes.md), 2026-08-28**; what remains of this row is the two *names*, `accel.F16` for `accel.Float16` and `accel.ToF16` for `accel.ToFloat16`, which is a spec edit rather than code. Originally: `func GEMMf16(t accel.Thread, d Dims, a []accel.F16, ..., tileA *[256]float32)` calling `t.BarrierShared()` and `accel.ToF16(acc0)` — Three of the names in the spec's own proof-of-sufficiency kernel do not exist: accel.F16 is spelled accel.Float16 (kernelabi.go:67), accel.ToF16 is spelled accel.ToFloat16 (intrin.go:266), and t.Barri
+- Testing, **and it needs a backend rather than a test** — there is no GLSL emitter, so this assertion has nothing to run against; it belongs with [006](006-backends.md) §2.5's unbuilt GL backend. Originally: "Generated GLSL places `memoryBarrierShared` and `memoryBarrierBuffer` before `barrier`; a golden lowering test rejects the reversed sequence." — no code, no test. internal/kernelc/emit contains msl.go and mslstage.go only — there is no GLSL emitter, and 000's v0 section says SPIR-V and the other targets are post-v0. This obligation cannot be m
 - ~~§2.3 and §5.3: `t.SubgroupBarrier()`~~ — **closed 2026-08-28 by [050](050-barrier-scopes.md)**, including the part this row identified as the deeper problem: the SubgroupUniform lattice level gated nothing because **nothing seeded it**, which 050 §4.1 records. When this row was written there was no code. SubgroupBarrier is not a Thread method, not an IR op, and not in intrin.go. The uniformity analysis's SubgroupUniform lattice level therefore gates nothing that can be spelled. The Testing se
 
 ### [006-backends.md](006-backends.md)  · **too large, see the split plan**
@@ -596,7 +603,7 @@ It is in progress and owns at least five independent unbuilt chunks, each with i
 - ~~**Saturating float-to-integer conversion intrinsics**~~ — **written as [051](051-float-to-int.md) and built 2026-08-27**, as `kmath.ToI32`/`ToU32` rather than the four named below; 051 §2.1 records why two and why `kmath`. §6.2's last three rows and the API requirement it adds. Add accel.ToI32, ToU32, ToI8, ToU8 with toward-zero saturating, NaN-to-zero semantics in the IR, the CPU lowering and MSL; make front/build.go:1024 reject a bare float-source conversion with a message naming the intrinsic. T
 - ~~**Dispatch-shape accessors as uniformity seeds**~~ — **written as [052](052-dispatch-shape.md) and built 2026-08-28.** §1.3's WorkgroupSize/NumGroups/GlobalSize rows and their §3.3 workgroup-uniform seed entries. Add the three Thread methods, the three IR ops and their intrinsic entries, seed them WorkgroupUniform, and lower them on both backends. Also rename §1.3's SubgroupID/SubgroupInvocationI
 - ~~**A ballot a kernel can spell**~~ — **written as [058](058-ballot.md) and built 2026-08-28.** §5.2's Ballot row and its KernelMask value type. Add the Ballot intrinsic and IR op, export the mask as accel.KernelMask with the full Count/Bit/LowestSet/CountLower/Any method set, and lower it where the backend can (Metal cannot, per 022 §5, so this is also the first case where
-- **The remaining subgroup reductions** — **written as [059](059-subgroup-reductions.md) and ten of seventeen built 2026-08-28**; what remains is `Mul` over three types and the integer scans, which wait on §3's derived bound for a product.  Originally: it is seventeen operations at ten edits each, and two frame carriers that do not exist. §5.2's reduction row beyond Add/Min/Max over f32: Mul, the i32 and u32 reductions, and the And/Or/Xor family, plus the inclusive and exclusive scans for the types they gain. Tests: each against its no-subgroup fallback, exact for integers and within §5.5's tolerance for f32, swep
+- ~~**The remaining subgroup reductions**~~ — **written as [059](059-subgroup-reductions.md) and built 2026-08-28**, seventeen of seventeen; the derived bound a product needed is [008](008-numerics.md) §7.1. Originally: it is seventeen operations at ten edits each, and two frame carriers that do not exist. §5.2's reduction row beyond Add/Min/Max over f32: Mul, the i32 and u32 reductions, and the And/Or/Xor family, plus the inclusive and exclusive scans for the types they gain. Tests: each against its no-subgroup fallback, exact for integers and within §5.5's tolerance for f32, swep
 
 ### [006-backends.md](006-backends.md) → 4 successors
 

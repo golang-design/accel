@@ -22,19 +22,18 @@ conditional is refused by the cooperative lowering, which has nowhere to resume
 inside a branch, and §5.1 says whether lanes reconverge after divergence is
 implementation-defined — so what an emulation would have to model is an active
 set no two backends agree on. The operations built are the ones §5.1 says are
-portable. §5.2's reduction row is also narrower than it reads: `Add`, `Min` and
-`Max` over f32 are built, and the integer reductions, `Mul`, and the bitwise
-family are not.
+portable.
 
-`Ballot` **is** spellable since 2026-08-28 — [058](058-ballot.md) — along with
-the three barrier scopes ([050](050-barrier-scopes.md)), the dispatch-shape
-accessors ([052](052-dispatch-shape.md)) and the saturating float-to-integer
-conversions ([051](051-float-to-int.md)). Four of the five successors this
-spec was split into are built; the reduction row above is the fifth and is what
-remains.
+**All five successors are built — 2026-08-28.** The three barrier scopes
+([050](050-barrier-scopes.md)), the saturating float-to-integer conversions
+([051](051-float-to-int.md)), the dispatch-shape accessors
+([052](052-dispatch-shape.md)), `Ballot` and its mask
+([058](058-ballot.md)), and §5.2's seventeen reductions
+([059](059-subgroup-reductions.md)).
 
-This spec is therefore *in progress* rather than implemented, and that row is
-what remains.
+What is still outstanding is not this spec's compute model but the *backends*
+that would exercise the rest of it, and §5.1's divergence rule above, which is a
+statement about what no two backends agree on rather than a gap.
 
 Implements [`000-decisions.md`](000-decisions.md) decision 4. This spec exists because
 its subject was the predecessor project's central mistake, and the mistake is

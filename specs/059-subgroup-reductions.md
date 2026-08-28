@@ -1,6 +1,6 @@
 ---
 title: "The remaining subgroup reductions, and the cost of one opcode per type"
-status: in progress
+status: implemented
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -196,3 +196,42 @@ private bit per lane that does not.
 **A fixture chosen for realism can be degenerate for the property under test**,
 and nothing about the reference comparison would have said so — it agreed,
 correctly, on the wrong thing.
+
+## 9. Slice 3 built, and 059 is complete — 2026-08-28
+
+Seventeen of seventeen. `Mul` over the three types landed once
+[008](008-numerics.md) §7.1 existed, which is what §3 said it was waiting on and
+is the only part of this spec that was not mechanical.
+
+**§7.1's bound is tight, not a tolerance.** At a subgroup of four the budget is
+1.7e-7 over a product near one, and a drift of 1e-4 per term fails it. A
+tolerance chosen to make the test pass would have been orders of magnitude
+looser and would have caught nothing.
+
+**§7.1's domain is the half that matters more.** A fixture of magnitude-4 values
+over 64 lanes reaches 2^128 and overflows f32 while every term and the true
+result are ordinary, so a test that did not state its domain would be measuring
+overflow and reporting it as rounding. `numeq.Product` reports *undefined*
+rather than *failed* there, because outside the domain is a different answer
+from wrong.
+
+**All three of §5's Metal claims hold.** `simd_min`/`simd_max`,
+`simd_and`/`simd_or`/`simd_xor` and `simd_product` carry integer overloads, and
+each is compared on a device rather than trusted from documentation — which is
+why they were flagged: [058](058-ballot.md) had just shown that a plausible
+spelling can be absent.
+
+### 9.1 Two guards caught what review did not
+
+**The MSL row for `simd_product` silently failed to apply**, and
+`TestEverySubgroupRendezvousIsRegistered` failed: every rendezvous opcode must
+be spelled by Metal or refused by name. A guard written for a *forgotten* opcode
+caught a *failed edit*, which is the same defect arriving by a different route.
+
+**The f16 oracle timed out the race gate.** Unrelated to this spec and surfaced
+by it: `TestToFloat16IsNearestAgainstAnOracle` swept 4.3 billion comparisons,
+which took 127 seconds ordinarily and exceeded the 10-minute limit under
+`-race`, panicking the whole package. A half's magnitude is monotone in its low
+15 bits, so the answer is one of two neighbours; the candidate set and the tie
+rule are unchanged. 127s to 0.33s, and it still catches the bug it was written
+for.
