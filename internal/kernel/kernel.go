@@ -113,6 +113,36 @@ func (t Thread) GroupIndex() uint32 {
 	return t.group.X + t.groupCount.X*(t.group.Y+t.groupCount.Y*t.group.Z)
 }
 
+// WorkgroupSize is the declared workgroup extent, per axis.
+//
+// It is the `accel:kernel workgroup=` directive's value, so it is a
+// compile-time constant rather than a read: a backend lowers it to a literal,
+// and a loop bounded by it stays compile-time uniform. That is what makes it
+// worth having over the uniform field a kernel would otherwise carry, because a
+// uniform's value is not uniform to the *compiler* and a barrier inside a loop
+// bounded by one cannot be proved to be reached by every invocation.
+//
+// specs/052-dispatch-shape.md.
+func (t Thread) WorkgroupSize() ID3 { return t.groupSize }
+
+// NumGroups is how many workgroups this dispatch has, per axis.
+//
+// The grid the recorder set, which is a dispatch parameter rather than a
+// compile-time one: two dispatches of one pipeline differ here.
+func (t Thread) NumGroups() ID3 { return t.groupCount }
+
+// GlobalSize is [Thread.WorkgroupSize] times [Thread.NumGroups], per axis.
+//
+// Derived rather than passed. Two numbers that must agree eventually disagree,
+// and the multiplication is free.
+func (t Thread) GlobalSize() ID3 {
+	return ID3{
+		X: t.groupSize.X * t.groupCount.X,
+		Y: t.groupSize.Y * t.groupCount.Y,
+		Z: t.groupSize.Z * t.groupCount.Z,
+	}
+}
+
 // Barrier synchronises a workgroup.
 //
 // # Why its body does nothing

@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 5
+const ABIVersion = 6
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -233,6 +233,24 @@ var table = map[key]*Intrinsic{
 	{kernelPkg, "Thread", "GroupIndex"}: {
 		Authored: "accel.Thread.GroupIndex", Op: ir.OpGroupIndex,
 		Uniformity: PerWorkgroup, Result: ir.U32,
+	},
+
+	// The dispatch shape, specs/052-dispatch-shape.md. All three are
+	// PerWorkgroup -- in fact they are uniform across the whole dispatch, and
+	// the lattice has no level above the workgroup because nothing needs one:
+	// what a barrier's control flow requires is workgroup uniformity, and a
+	// value uniform across more than that is uniform across it too.
+	{kernelPkg, "Thread", "WorkgroupSize"}: {
+		Authored: "accel.Thread.WorkgroupSize", Op: ir.OpWorkgroupSize,
+		Uniformity: PerWorkgroup, Result: ir.ID3Kind,
+	},
+	{kernelPkg, "Thread", "NumGroups"}: {
+		Authored: "accel.Thread.NumGroups", Op: ir.OpNumGroups,
+		Uniformity: PerWorkgroup, Result: ir.ID3Kind,
+	},
+	{kernelPkg, "Thread", "GlobalSize"}: {
+		Authored: "accel.Thread.GlobalSize", Op: ir.OpGlobalSize,
+		Uniformity: PerWorkgroup, Result: ir.ID3Kind,
 	},
 
 	// accel/kmath, the bounded scalar math. Free functions rather than methods,

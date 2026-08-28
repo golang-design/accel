@@ -1287,6 +1287,15 @@ var intrinsicMethod = map[ir.Opcode]string{
 	ir.OpLocalIndex:  "LocalIndex",
 	ir.OpGroupIndex:  "GroupIndex",
 
+	// The dispatch shape. The Go lowering reads all three from the Thread,
+	// including WorkgroupSize -- which the MSL lowering emits as a literal.
+	// Both are the accel:kernel directive's value, since that is what the
+	// backend built the Thread from and what the generator wrote into the
+	// MSL, so the two agree by construction rather than by coincidence.
+	ir.OpWorkgroupSize: "WorkgroupSize",
+	ir.OpNumGroups:     "NumGroups",
+	ir.OpGlobalSize:    "GlobalSize",
+
 	// The graphics stage built-ins. They are methods on accel.Vertex and
 	// accel.Fragment exactly as the compute ones are on accel.Thread, so the
 	// generated lowering calls them the same way.

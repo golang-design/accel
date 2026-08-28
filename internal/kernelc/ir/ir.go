@@ -425,6 +425,13 @@ const (
 	OpLocalIndex
 	OpGroupIndex
 
+	// Dispatch shape, specs/052-dispatch-shape.md. WorkgroupSize is a
+	// compile-time constant and the other two are dispatch parameters, which
+	// is a distinction the emitters keep rather than the IR.
+	OpWorkgroupSize
+	OpNumGroups
+	OpGlobalSize
+
 	// Bounded scalar math from accel/kmath. Each has a normative per-operation
 	// domain and error ceiling in spec 008 section 6; an operation with no bound
 	// is not admitted rather than admitted with a tuned tolerance.
@@ -562,6 +569,9 @@ var opcodeNames = [...]string{
 	OpGlobalIndex:              "GlobalIndex",
 	OpLocalIndex:               "LocalIndex",
 	OpGroupIndex:               "GroupIndex",
+	OpWorkgroupSize:            "WorkgroupSize",
+	OpNumGroups:                "NumGroups",
+	OpGlobalSize:               "GlobalSize",
 	OpSqrt:                     "Sqrt",
 	OpRSqrt:                    "RSqrt",
 	OpExp:                      "Exp",
