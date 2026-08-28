@@ -6,6 +6,7 @@ package kernel_test
 
 import (
 	"math"
+	"sort"
 	"testing"
 
 	"golang.design/x/accel/internal/kernel"
@@ -38,20 +39,54 @@ func TestToFloat16IsNearestAgainstAnOracle(t *testing.T) {
 	negative := func(x float32) bool {
 		return math.Signbit(float64(x))
 	}
-	nearest := func(x float32) uint16 {
-		var best uint16
-		bestErr := math.Inf(1)
-		found := false
-		for bits := range 1 << 16 {
+	// The finite halves of each sign, ascending by magnitude. Built once
+	// rather than rescanned per input: the oracle used to be a linear sweep of
+	// all 65536 bit patterns inside a loop over ~66000 inputs, which is 4.3
+	// billion comparisons -- 127 seconds ordinarily and past the 10-minute
+	// test timeout under -race, where it failed the whole package.
+	//
+	// **The candidate set is what makes this a change of cost and not of
+	// meaning.** The magnitude of a half is monotone in its low 15 bits, so
+	// the same candidates in the same order are searched either way; only the
+	// search is. The result is compared against the same tie rule.
+	byMagnitude := func(neg bool) []uint16 {
+		var out []uint16
+		for bits := range 1 << 15 {
 			b := uint16(bits)
-			if (b&0x8000 != 0) != negative(x) {
-				continue
+			if neg {
+				b |= 0x8000
 			}
 			v := float64(kernel.Float16FromBits(b).F32())
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				continue
 			}
-			e := math.Abs(v - float64(x))
+			out = append(out, b)
+		}
+		return out
+	}
+	pos, neg := byMagnitude(false), byMagnitude(true)
+
+	nearest := func(x float32) uint16 {
+		cand := pos
+		if negative(x) {
+			cand = neg
+		}
+		target := math.Abs(float64(x))
+		mag := func(b uint16) float64 {
+			return math.Abs(float64(kernel.Float16FromBits(b).F32()))
+		}
+		// The first candidate whose magnitude is at least the target. Its
+		// neighbour below is the only other possibility, so the answer is one
+		// of two rather than one of 32768.
+		i := sort.Search(len(cand), func(i int) bool { return mag(cand[i]) >= target })
+
+		best, bestErr, found := uint16(0), math.Inf(1), false
+		for _, j := range []int{i - 1, i} {
+			if j < 0 || j >= len(cand) {
+				continue
+			}
+			b := cand[j]
+			e := math.Abs(mag(b) - target)
 			// Ties to even, which is what IEEE round-to-nearest does and what
 			// makes the answer unique.
 			if !found || e < bestErr || (e == bestErr && b&1 == 0) {
