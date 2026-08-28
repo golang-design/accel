@@ -205,6 +205,30 @@ func (t Thread) BarrierStorage() {
 	}
 }
 
+// SubgroupBarrier synchronises one **subgroup**, and makes shared and storage
+// writes visible across it.
+//
+// specs/002-compute-model.md §2.5 and §5.3, capability-gated on
+// `subgroup_basic`. It is a barrier, so §3.1 applies at subgroup scope: every
+// lane of the subgroup must reach it. That is a weaker requirement than
+// [Thread.Barrier]'s, and it is the whole reason the call exists — control flow
+// predicated on `SubgroupIndex` is legal around this and illegal around a
+// workgroup barrier.
+//
+// # It is not a cheap Barrier
+//
+// The lanes of *one* subgroup rendezvous, not the workgroup. A kernel that
+// wrote a shared array from every lane and read it back across this one is
+// reading what its own subgroup wrote and whatever the other subgroups happened
+// to have done, which on hardware is a race that looks correct at a subgroup
+// size equal to the workgroup — the CPU backend's degenerate default, which is
+// exactly why [Options.SubgroupSize] exists to sweep it.
+func (t Thread) SubgroupBarrier() {
+	if t.rendezvous != nil {
+		t.rendezvous()
+	}
+}
+
 // linear is an extent's invocation count.
 func linear(e ID3) uint32 { return max(e.X, 1) * max(e.Y, 1) * max(e.Z, 1) }
 
@@ -551,6 +575,17 @@ type Frame struct {
 type BarrierID struct {
 	Index int
 	Pos   string
+
+	// Subgroup marks a barrier whose scope is one subgroup rather than the
+	// workgroup, specs/002-compute-model.md §5.3.
+	//
+	// It changes who has to arrive. The arrival check compares every active
+	// invocation against one expected barrier, which is right for a workgroup
+	// barrier and wrong here: lanes of *different* subgroups are under no
+	// obligation to be at the same subgroup barrier, and control predicated on
+	// SubgroupIndex -- which the acceptor allows around this and refuses
+	// around a workgroup barrier -- puts them at different ones on purpose.
+	Subgroup bool
 }
 
 // Bind checks a whole argument set against the declared bindings, once.

@@ -504,6 +504,14 @@ const (
 	OpSubgroupSize
 	OpSubgroupID
 	OpSubgroupInvocationID
+
+	// OpSubgroupBarrier is a barrier at subgroup scope, specs/050 and 002
+	// §5.3. It sits before the rendezvous range on purpose: it combines
+	// nothing and returns nothing, so IsSubgroupRendezvous -- which selects the
+	// two-state contribute/result split -- must not cover it, while IsSubgroup
+	// must, because it is capability-gated like the rest.
+	OpSubgroupBarrier
+
 	OpSubgroupAddF32
 	OpSubgroupMinF32
 	OpSubgroupMaxF32
@@ -609,6 +617,7 @@ var opcodeNames = [...]string{
 	OpBarrier:                  "Barrier",
 	OpBarrierShared:            "BarrierShared",
 	OpBarrierStorage:           "BarrierStorage",
+	OpSubgroupBarrier:          "SubgroupBarrier",
 	OpAtomicAddU32:             "AtomicAddU32",
 	OpAtomicAddI32:             "AtomicAddI32",
 	OpAtomicSubU32:             "AtomicSubU32",

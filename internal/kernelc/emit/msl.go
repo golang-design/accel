@@ -1141,6 +1141,13 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.printf("threadgroup_barrier(mem_flags::mem_device)")
 		return
 
+	// Subgroup scope. 002 §2.5's table gives simdgroup_barrier, and the mask is
+	// the wide one because §2.5 says this call makes shared *and* storage
+	// visible -- what narrows here is the set of lanes, not the memory.
+	case ir.OpSubgroupBarrier:
+		m.printf("simdgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)")
+		return
+
 	case ir.OpSubgroupSize:
 		m.printf("_sgsize")
 		return

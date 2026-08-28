@@ -539,6 +539,14 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 
 	// The expected barrier is the first active invocation's, in invocation
 	// order, so the report names the same pair every run.
+	//
+	// Per subgroup when that barrier's scope is one, which is the whole
+	// difference specs/002-compute-model.md §5.3 draws: lanes of different
+	// subgroups are under no obligation to be at the same subgroup barrier,
+	// and control predicated on SubgroupIndex -- which the compiler accepts
+	// around this and refuses around a workgroup barrier -- puts them at
+	// different ones deliberately. Comparing them all against one would report
+	// the legal kernel as a non-uniform arrival.
 	expect := BarrierID{Index: -1}
 	var expectBy ID3
 	found := false
@@ -551,6 +559,9 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 	}
 	if !found {
 		return nil
+	}
+	if expect.Subgroup {
+		return checkSubgroupArrival(k, threads, frames)
 	}
 
 	for i := range frames {
@@ -575,6 +586,74 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 			})
 		}
 	}
+	if len(ds) == 0 {
+		return nil
+	}
+	ds.sortStable()
+	return ds
+}
+
+// checkSubgroupArrival is [checkArrival] with the scope narrowed to one
+// subgroup.
+//
+// Every lane of a subgroup must be at the same barrier as its peers in that
+// subgroup, and lanes of other subgroups are compared against their own. A lane
+// that finished while its subgroup waits is still an error, for the reason it
+// is at workgroup scope: it can never arrive.
+//
+// A workgroup barrier reached by only some subgroups is *not* this function's
+// case and is caught by the caller: the first active invocation's barrier is
+// then a workgroup one, so every invocation is compared against it.
+func checkSubgroupArrival(k *Kernel, threads []Thread, frames []Frame) error {
+	type expectation struct {
+		id BarrierID
+		by ID3
+	}
+	expect := map[uint32]expectation{}
+	var ds Diagnostics
+
+	for i := range frames {
+		if frames[i].Done {
+			continue
+		}
+		sg := threads[i].SubgroupIndex()
+		e, seen := expect[sg]
+		if !seen {
+			expect[sg] = expectation{id: frames[i].Barrier, by: threads[i].LocalID()}
+			continue
+		}
+		if frames[i].Barrier != e.id {
+			ds = append(ds, Diagnostic{
+				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+				Invocation: threads[i].LocalID(), Other: e.by, HasOther: true,
+				Element: -1,
+				Detail: "it suspended at " + frames[i].Barrier.Describe() +
+					" while a lane of its own subgroup waits at " + e.id.Describe(),
+			})
+		}
+	}
+
+	// A lane that returned while its subgroup waits. Separate from the loop
+	// above because a finished lane carries no barrier to compare, and the
+	// expectation for its subgroup may be discovered after it.
+	for i := range frames {
+		if !frames[i].Done {
+			continue
+		}
+		sg := threads[i].SubgroupIndex()
+		e, waiting := expect[sg]
+		if !waiting {
+			continue
+		}
+		ds = append(ds, Diagnostic{
+			Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+			Invocation: threads[i].LocalID(), Other: e.by, HasOther: true,
+			Element: -1,
+			Detail: "it returned while a lane of its own subgroup waits at " +
+				e.id.Describe() + ", so that barrier can never be reached by every lane",
+		})
+	}
+
 	if len(ds) == 0 {
 		return nil
 	}

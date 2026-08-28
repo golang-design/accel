@@ -143,6 +143,13 @@ type segment struct {
 	suspend bool
 	pos     string
 
+	// subgroupScope marks a suspension at a subgroup barrier, which the
+	// scheduler's arrival check narrows to one subgroup rather than the
+	// workgroup: specs/002-compute-model.md §5.3. Without it, the legal kernel
+	// §12 names -- a subgroup barrier under SubgroupIndex control -- is
+	// accepted by the compiler and then reported as a non-uniform arrival.
+	subgroupScope bool
+
 	// loop, when non-nil, makes this state a loop check: evaluate the condition
 	// and enter body or exit accordingly.
 	loop     *ir.For
@@ -240,7 +247,10 @@ func (c *splitter) emit(list []ir.Stmt, after int) int {
 			flush()
 			// The suspension is its own state boundary: everything before it
 			// runs, then the machine returns and resumes at what follows.
-			next = c.add(segment{next: next, suspend: true, pos: c.position(s)})
+			next = c.add(segment{
+				next: next, suspend: true, pos: c.position(s),
+				subgroupScope: isSubgroupBarrier(s),
+			})
 
 		case isSubgroupStmt(s):
 			flush()
@@ -424,13 +434,31 @@ func blockHasBarrier(b *ir.Block) bool {
 	return false
 }
 
+// isBarrier reports a statement that is a barrier of any scope.
+//
+// Subgroup scope included, and that is what stops it being a no-op: a subgroup
+// barrier combines nothing, so IsSubgroupRendezvous excludes it and the
+// rendezvous case below does not match. Without it here the statement falls
+// through to the ordinary run of statements and the generated lowering
+// contains no suspension at all -- a different program that compiles, which is
+// the failure this whole transform is arranged to avoid.
+// isSubgroupBarrier reports a barrier whose scope is one subgroup.
+func isSubgroupBarrier(s ir.Stmt) bool {
+	e, ok := s.(*ir.ExprStmt)
+	if !ok {
+		return false
+	}
+	c, ok := e.X.(*ir.IntrinsicCall)
+	return ok && c.Op == ir.OpSubgroupBarrier
+}
+
 func isBarrier(s ir.Stmt) bool {
 	e, ok := s.(*ir.ExprStmt)
 	if !ok {
 		return false
 	}
 	c, ok := e.X.(*ir.IntrinsicCall)
-	return ok && c.Op.IsWorkgroupBarrier()
+	return ok && (c.Op.IsWorkgroupBarrier() || c.Op == ir.OpSubgroupBarrier)
 }
 
 // subgroupRendezvous reports a statement that is a subgroup operation whose
@@ -593,8 +621,13 @@ func (e *emitter) coopSegment(seg segment, k *ir.Func, locals []*ir.Local, index
 
 	if seg.suspend {
 		e.printf("%sf.pc = %d\n", pad, seg.next)
-		e.printf("%sframe.Barrier = kernelabi.BarrierID{Index: %d, Pos: %q}\n",
-			pad, index, seg.pos)
+		if seg.subgroupScope {
+			e.printf("%sframe.Barrier = kernelabi.BarrierID{Index: %d, Pos: %q, Subgroup: true}\n",
+				pad, index, seg.pos)
+		} else {
+			e.printf("%sframe.Barrier = kernelabi.BarrierID{Index: %d, Pos: %q}\n",
+				pad, index, seg.pos)
+		}
 		e.printf("%sreturn true\n", pad)
 		return
 	}

@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 7
+const ABIVersion = 8
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -433,6 +433,16 @@ var table = map[key]*Intrinsic{
 	{kernelPkg, "Thread", "BarrierStorage"}: {
 		Authored: "accel.Thread.BarrierStorage", Op: ir.OpBarrierStorage, Stage: Cooperative,
 		Uniformity: PerWorkgroup, Result: ir.Invalid,
+	},
+
+	// A barrier at subgroup scope, specs/050-barrier-scopes.md §2 and
+	// 002 §5.3. Capability-gated, unlike the workgroup barriers: GLES 3.1 has
+	// no subgroup concept at all, so a kernel using this is refused on a device
+	// that lacks it rather than lowered to a workgroup barrier that happens to
+	// work.
+	{kernelPkg, "Thread", "SubgroupBarrier"}: {
+		Authored: "accel.Thread.SubgroupBarrier", Op: ir.OpSubgroupBarrier, Stage: Cooperative,
+		Uniformity: PerWorkgroup, Result: ir.Invalid, Cap: CapSubgroupBasic,
 	},
 }
 
