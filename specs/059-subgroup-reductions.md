@@ -1,6 +1,6 @@
 ---
 title: "The remaining subgroup reductions, and the cost of one opcode per type"
-status: drafted
+status: in progress
 layer: device
 depends_on:
   - 002-compute-model.md
@@ -161,3 +161,38 @@ Each assertion names the mutation it catches.
 - **Each new carrier moves the value it names.** A reduction whose result read
   the wrong frame field would return a plausible number, which is what the
   bit-cast carrier §2 rejects would make routine.
+
+## 8. Slices 1 and 2 built — 2026-08-28
+
+Ten of the seventeen: the integer minima and maxima, and the bitwise family over
+both types. Slice 3 — `Mul` over three types and the integer scans — is
+outstanding, and §3's derived bound is what it waits on.
+
+**§2's carrier decision paid immediately.** Routing the u32 reductions through
+the i32 carrier is caught by the *compiler*, not by a wrong number, which is
+the difference between a field per type and one word reinterpreted. The
+transposition it does not catch — a `Min` that computes a maximum — is caught by
+value, reporting 4294967285 where 16 was wanted.
+
+**§5's Metal claim is verified.** `simd_min`, `simd_max`, `simd_and`, `simd_or`
+and `simd_xor` do carry integer overloads, and the differential compares them
+exactly on a device rather than trusting the documentation. That was flagged as
+unverified precisely because [058](058-ballot.md) had just shown a plausible
+spelling can be absent.
+
+### 8.1 The discriminating check found a degenerate fixture, not a bug
+
+§7's second assertion — that the reductions in a family are distinguishable on
+the test's input — was written for a transposed operation. What it caught was
+the **test's own input**: the first `BitReduce` fixture was a hash per lane,
+which makes `And` zero and `Or` all-ones over any subgroup wider than a handful
+of lanes, because a random bit is clear in *some* lane and set in *some* lane.
+
+Both are exactly what a kernel ignoring its input produces, so the comparison
+against a scalar loop was three agreements about two constants. The input is now
+constructed rather than scrambled: a shared mask that survives `And`, plus one
+private bit per lane that does not.
+
+**A fixture chosen for realism can be degenerate for the property under test**,
+and nothing about the reference comparison would have said so — it agreed,
+correctly, on the wrong thing.
