@@ -153,16 +153,23 @@ func TestTheLayeringRulesHold(t *testing.T) {
 func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 	// Kernels no tensor operator reaches, and the spec that needs each.
 	proofs := map[string]string{
-		"ReduceSum":                  "008's tree-reduction proof",
-		"ReduceLoop":                 "018's lowering shapes",
-		"ReduceUnrolled":             "018's lowering shapes",
-		"ElemBias":                   "a broadcast gap recorded in 010",
-		"AtomicOps":                  "020's unsigned atomics",
-		"AtomicOpsI32":               "020's signed atomics",
-		"AtomicAddF32":               "020's float-atomic capability",
-		"Exchange":                   "020's exchange family",
-		"Histogram":                  "020's contention case",
-		"CountWorkgroups":            "002's dispatch-shape proof",
+		"ReduceSum":      "008's tree-reduction proof",
+		"ReduceLoop":     "018's lowering shapes",
+		"ReduceUnrolled": "018's lowering shapes",
+		"ElemBias":       "a broadcast gap recorded in 010",
+		"AtomicOps":      "020's unsigned atomics",
+		"AtomicOpsI32":   "020's signed atomics",
+		"AtomicAddF32":   "020's float-atomic capability",
+		"Exchange":       "020's exchange family",
+		"Histogram":      "020's contention case",
+		// Not the dispatch shape, which is what this row used to say. It
+		// counts workgroups *atomically* so 003's indirect clamp is
+		// observable, and the two are only adjacent in subject: nothing in it
+		// asks a Thread for a shape. The accessors' proof is DispatchShape
+		// below, added when 052 built them.
+		"CountWorkgroups":            "003's indirect-clamp proof",
+		"DispatchShape":              "052's three accessors",
+		"ShapeBoundedSum":            "052's compile-time-uniform loop bound",
 		"CountAbove":                 "011's harness fixture",
 		"SegmentSum":                 "046's prefix-sum proof",
 		"Normalize":                  "028's sampling primitive",

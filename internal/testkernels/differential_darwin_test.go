@@ -104,6 +104,35 @@ func diffCases() []diffCase {
 
 	return []diffCase{
 		{kernel: &testkernels.AddKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
+
+		// The dispatch shape, specs/052-dispatch-shape.md. This is the case
+		// that matters most for the accessors, because the two backends read
+		// them from genuinely different places: the CPU asks the Thread the
+		// runtime built, and MSL takes NumGroups from a [[threadgroups_per_grid]]
+		// attribute while WorkgroupSize is a literal the generator wrote in
+		// from the accel:kernel directive. The grid's three axes differ so a
+		// transposed attribute lands on a slot this compares.
+		//
+		// Exact: these are integers, so §3's last assertion is equality and no
+		// ULP budget applies.
+		{
+			kernel:   &testkernels.DispatchShapeKernel,
+			counts:   []int{9},
+			uniforms: []any{testkernels.ShapeDims{Stride: 3}},
+			groups:   accel.WorkgroupCount{X: 5, Y: 3, Z: 2},
+			seed:     func(b, i int) float32 { return 0 },
+			why:      "the dispatch shape is three integers per accessor, so this is exact",
+		},
+		{
+			// The workgroup-bounded loop with a barrier in it, which on Metal
+			// is a real barrier inside a loop whose bound is a literal, and on
+			// the CPU is the resumable state machine.
+			kernel: &testkernels.ShapeBoundedSumKernel,
+			counts: []int{24, 24},
+			groups: accel.WorkgroupCount{X: 3},
+			ulp:    8,
+			why:    "a sum of 8 terms, per section 7's reduction bound",
+		},
 		{kernel: &testkernels.ElemAddKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.ElemMulKernel, counts: []int{256, 256, 256}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.ScaleKernel, counts: []int{256, 256}, groups: accel.WorkgroupCount{X: 4}},

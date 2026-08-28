@@ -54,6 +54,24 @@ func (BatchedDimsCodec) Encode(dst []byte, value BatchedDims) error {
 	return w.Err()
 }
 
+// ShapeDimsCodec is the generated std140 codec for ShapeDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type ShapeDimsCodec struct{}
+
+// ShapeDimsBlockSize is the encoded size of a ShapeDims block, in bytes.
+const ShapeDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (ShapeDimsCodec) EncodedSize() int { return ShapeDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (ShapeDimsCodec) Encode(dst []byte, value ShapeDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Stride)
+	return w.Err()
+}
+
 // ScaleParamsCodec is the generated std140 codec for ScaleParams.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -566,7 +584,7 @@ var AddKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "dd9b1250957645f0d5e18a5a9bcc617d",
+	Digest:           "52f0c9070aa474012c1d61ebc577d7a5",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -581,6 +599,7 @@ kernel void Add(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -624,7 +643,7 @@ var HistogramKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "4e948dfd86c55dceefea156ca7f00c0b",
+	Digest:    "7412b4f4065eec4e616e97f92d26fab3",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -637,6 +656,7 @@ kernel void Histogram(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -688,7 +708,7 @@ var AtomicOpsKernel = kernelabi.Kernel{
 		{Name: "state", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 		{Name: "prev", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "672f843779a1254b5037f68bc55d154b",
+	Digest:    "c3fa85a79d4d9e9b5cd9986070a4b6fd",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -711,6 +731,7 @@ kernel void AtomicOps(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -749,7 +770,7 @@ var CountWorkgroupsKernel = kernelabi.Kernel{
 	Bindings: []kernelabi.Binding{
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "fe237de7ee2417daa4b3bf5e0aef83e8",
+	Digest:    "93bd022cecfc28a0c2fefa9f9b400c3a",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -761,6 +782,7 @@ kernel void CountWorkgroups(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -797,7 +819,7 @@ var AtomicOpsI32Kernel = kernelabi.Kernel{
 		{Name: "state", DType: kernelabi.I32, Access: kernelabi.Read | kernelabi.Write},
 		{Name: "prev", DType: kernelabi.I32, Access: kernelabi.Write},
 	},
-	Digest:    "6ccd7c8d4c7b8a98e5500d250aa7b8c9",
+	Digest:    "99d93e4cad8320787cd8f6caca4093f7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -820,6 +842,7 @@ kernel void AtomicOpsI32(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -855,7 +878,7 @@ var AtomicAddF32Kernel = kernelabi.Kernel{
 		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
 		{Name: "prev", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "c33f523508b2b972ef67d7f35f76933e",
+	Digest:    "d25ad8c0e08ca32e553f5fc9ec30e7b0",
 	Generator: kernelabi.Version,
 	Caps:      128,
 	Flat: func(t accel.Thread, a kernelabi.Args) {
@@ -1078,7 +1101,7 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "9d1fdfdfca6cc8cef4c04d33bea56282",
+	Digest:    "b02fbf307b41cd7dba34ccaa44e97542",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1102,6 +1125,7 @@ kernel void AttentionDecode(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -1411,7 +1435,7 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ddd18f30672f184b47346efc3e8da830",
+	Digest:    "95d6ca68ff7222b35785133fce5c7288",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1435,6 +1459,7 @@ kernel void AttentionDecodeF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -1753,7 +1778,7 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "bd3c958138a5138da9b311f5bde9cdec",
+	Digest:    "f92cb69e49337bff768195baae191fc5",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1782,6 +1807,7 @@ kernel void AttentionDecodeBatched(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -1903,7 +1929,7 @@ var CastF32ToF16Kernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F16, Access: kernelabi.Write},
 	},
-	Digest:           "0ec97003e90d066dfd145c1fe7a28634",
+	Digest:           "e1a96f32e6046ad11d31f8f3c157522b",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -1917,6 +1943,7 @@ kernel void CastF32ToF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -1951,7 +1978,7 @@ var CastF16ToF32Kernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "1031dd5670d9c5a5be49910db7ce629e",
+	Digest:           "bda82a3efadf598dd91691aa86e3f88d",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -1965,6 +1992,7 @@ kernel void CastF16ToF32(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -1999,7 +2027,7 @@ var CastBF16ToF32Kernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.BF16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "1403aaba943a5e167667b36ad964449b",
+	Digest:           "6e17991959d2fa500432a0462cd624a0",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2013,6 +2041,7 @@ kernel void CastBF16ToF32(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2049,7 +2078,7 @@ var SaturatingConvertKernel = kernelabi.Kernel{
 		{Name: "outI", DType: kernelabi.I32, Access: kernelabi.Write},
 		{Name: "outU", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:           "c1e68695281806e755171afc6385a013",
+	Digest:           "6cfffaa21661ee396ce290fc699b9a2e",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2078,6 +2107,7 @@ kernel void SaturatingConvert(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2147,7 +2177,7 @@ var ExchangeKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "55f1ab11b5456220e0bce231e945014f",
+	Digest:    "4a20f0d8507874c8d90a965c4982ba7d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2160,6 +2190,7 @@ kernel void Exchange(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2272,7 +2303,7 @@ var ReduceLoopKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "296ac71ac5863e9ed04428edbae6e52f",
+	Digest:    "d021f7032df05151c2c3a7359f486f91",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2285,6 +2316,7 @@ kernel void ReduceLoop(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2438,7 +2470,7 @@ var ReduceUnrolledKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "d10f14cedc287239c643e2f9be562268",
+	Digest:    "a7bb41a36ed9d6596e3aa08e730b925c",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2451,6 +2483,7 @@ kernel void ReduceUnrolled(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2507,6 +2540,213 @@ kernel void ReduceUnrolled(
 	},
 }
 
+// dispatchShapeFlat is the generated flat lowering of DispatchShape.
+//
+// It is what the CPU backend runs. The authored DispatchShape is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func dispatchShapeFlat(t accel.Thread, d ShapeDims, out []uint32) {
+	var g accel.ID3 = t.GlobalID()
+	if ((g.X != uint32(0)) || (g.Y != uint32(0))) || (g.Z != uint32(0)) {
+		return
+	}
+	var ws accel.ID3 = t.WorkgroupSize()
+	var ng accel.ID3 = t.NumGroups()
+	var gs accel.ID3 = t.GlobalSize()
+	out[((uint32(0) * d.Stride) + uint32(0))] = ws.X
+	out[((uint32(0) * d.Stride) + uint32(1))] = ws.Y
+	out[((uint32(0) * d.Stride) + uint32(2))] = ws.Z
+	out[((uint32(1) * d.Stride) + uint32(0))] = ng.X
+	out[((uint32(1) * d.Stride) + uint32(1))] = ng.Y
+	out[((uint32(1) * d.Stride) + uint32(2))] = ng.Z
+	out[((uint32(2) * d.Stride) + uint32(0))] = gs.X
+	out[((uint32(2) * d.Stride) + uint32(1))] = gs.Y
+	out[((uint32(2) * d.Stride) + uint32(2))] = gs.Z
+}
+
+// DispatchShapeKernel is the compiled form of DispatchShape.
+var DispatchShapeKernel = kernelabi.Kernel{
+	Name:          "DispatchShape",
+	WorkgroupSize: accel.ID3{X: 4, Y: 2, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
+	},
+	Digest:           "150f3fc17735fdea66b24654e8d0ae7f",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct ShapeDims {
+    uint Stride;
+    char _tail[12];
+};
+
+kernel void DispatchShape(
+    device uint *out [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    constant ShapeDims &d [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint3 g = _gid;
+    if ((((g.x != uint(0)) || (g.y != uint(0))) || (g.z != uint(0)))) {
+        return;
+    }
+    uint3 ws = uint3(4, 2, 1);
+    uint3 ng = _ngroups;
+    uint3 gs = (uint3(4, 2, 1) * _ngroups);
+    out[((uint(0) * d.Stride) + uint(0))] = ws.x;
+    out[((uint(0) * d.Stride) + uint(1))] = ws.y;
+    out[((uint(0) * d.Stride) + uint(2))] = ws.z;
+    out[((uint(1) * d.Stride) + uint(0))] = ng.x;
+    out[((uint(1) * d.Stride) + uint(1))] = ng.y;
+    out[((uint(1) * d.Stride) + uint(2))] = ng.z;
+    out[((uint(2) * d.Stride) + uint(0))] = gs.x;
+    out[((uint(2) * d.Stride) + uint(1))] = gs.y;
+    out[((uint(2) * d.Stride) + uint(2))] = gs.z;
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "ShapeDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, ShapeDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		dispatchShapeFlat(t, kernelabi.UniformValue[ShapeDims](a, 0), kernelabi.Slice[uint32](a, 0))
+	},
+}
+
+// shapeBoundedSumFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type shapeBoundedSumFrame struct {
+	pc     int
+	lane0  uint32
+	base1  uint32
+	total2 float32
+	i3     uint32
+}
+
+// shapeBoundedSumCoop runs one invocation of ShapeBoundedSum to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func shapeBoundedSumCoop(t accel.Thread, in []float32, out []float32, sh *[8]float32, f *shapeBoundedSumFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lane0 = t.LocalID().X
+			f.base1 = (t.GroupID().X * t.WorkgroupSize().X)
+			f.total2 = float32(0)
+			f.pc = 1
+			continue
+		case 1:
+			f.i3 = uint32(0)
+			f.pc = 7
+			continue
+		case 2:
+			tr.Write(0, int(f.lane0))
+			sh[f.lane0] = in[(f.base1 + f.lane0)]
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "dispatchshape.go:76:3"}
+			return true
+		case 4:
+			f.total2 = float32(f.total2 + sh[tr.ReadAt(0, int(f.i3))])
+			f.pc = 5
+			continue
+		case 5:
+			f.pc = 6
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "dispatchshape.go:78:3"}
+			return true
+		case 6:
+			f.i3 = (f.i3 + uint32(1))
+			f.pc = 7
+			continue
+		case 7:
+			if f.i3 < t.WorkgroupSize().X {
+				f.pc = 2
+				continue
+			}
+			f.pc = 8
+			continue
+		case 8:
+			out[(f.base1 + f.lane0)] = f.total2
+			return false
+		}
+		return false
+	}
+}
+
+// ShapeBoundedSumKernel is the compiled form of ShapeBoundedSum.
+var ShapeBoundedSumKernel = kernelabi.Kernel{
+	Name:          "ShapeBoundedSum",
+	WorkgroupSize: accel.ID3{X: 8, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "dd639c5b1411fcc1558af2cdd06766c5",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void ShapeBoundedSum(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float sh[8];
+    uint lane = _lid.x;
+    uint base = (_wid.x * uint3(8, 1, 1).x);
+    float total = float(0);
+    for (uint i = uint(0); (i < uint3(8, 1, 1).x); i = (i + uint(1))) {
+        sh[lane] = in[(base + lane)];
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        total = (total + sh[i]);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    }
+    out[(base + lane)] = total;
+}
+`,
+	OrderIndependent: true,
+	Suspensions:      2,
+	SharedSizes:      []int{8},
+	SharedBytes:      32,
+	NewShared: func() []any {
+		var s0 [8]float32
+		kernelabi.Poison(s0[:])
+		return []any{&s0}
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*shapeBoundedSumFrame)
+		if f == nil {
+			f = &shapeBoundedSumFrame{}
+			slot.State = f
+		}
+		return shapeBoundedSumCoop(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Shared[[8]float32](a, 0), f, slot, slot.Shared)
+	},
+}
+
 // elemAddFlat is the generated flat lowering of ElemAdd.
 //
 // It is what the CPU backend runs. The authored ElemAdd is never registered as
@@ -2528,7 +2768,7 @@ var ElemAddKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "8699227b9cf20ea5bdd246c5364dbdb4",
+	Digest:           "fc31a76969d85fa4029e53c57ca57d51",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2543,6 +2783,7 @@ kernel void ElemAdd(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2578,7 +2819,7 @@ var ElemMulKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "589ea2e8e4259ee7e46ab1322a06eb64",
+	Digest:           "bfc5f037e28c21b6972ef12c720c7b0e",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2593,6 +2834,7 @@ kernel void ElemMul(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2627,7 +2869,7 @@ var ElemScaleKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "332289f042bb1249aeb29e2fad93b6a7",
+	Digest:           "9e4efa334e1b664b83a835b8d7381b91",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2647,6 +2889,7 @@ kernel void ElemScale(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2687,7 +2930,7 @@ var SiLUKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "f346dcd0beebfae2858d500df06e832d",
+	Digest:           "44e24654ea3b0f89b3f94aaaf3008765",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2701,6 +2944,7 @@ kernel void SiLU(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2738,7 +2982,7 @@ var SwiGLUKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "4a2ee5bd866d1e12d9e6bd3e81271374",
+	Digest:           "a2c4ae8668deeaa8160e030d0668d6cb",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2753,6 +2997,7 @@ kernel void SwiGLU(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2796,7 +3041,7 @@ var GatherRowsKernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "dfbd08ca377f65e8964894b52ddb4bf0",
+	Digest:           "0e5ec34e34a3921d778b745a27e429f8",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2819,6 +3064,7 @@ kernel void GatherRows(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2873,7 +3119,7 @@ var GatherRowsF16Kernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "bec9a8e546bae60b077d2b74c73001ad",
+	Digest:           "1bccccd52d07ecd2a0c012a19e73a44a",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2896,6 +3142,7 @@ kernel void GatherRowsF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -2948,7 +3195,7 @@ var ScatterRowsKernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "4be92f0719baaa10eb9031f638ef8254",
+	Digest:           "d52fea122e76dd666aaf5f3ee51a2145",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -2971,6 +3218,7 @@ kernel void ScatterRows(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3021,7 +3269,7 @@ var ScatterRowsF16Kernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "state", DType: kernelabi.F16, Access: kernelabi.Write},
 	},
-	Digest:           "b026a7ce808d452881ac7e35b05c1058",
+	Digest:           "77aa2235d61b79a64b7edcaa52536f68",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -3044,6 +3292,7 @@ kernel void ScatterRowsF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3102,7 +3351,7 @@ var RoPEKernel = kernelabi.Kernel{
 		{Name: "positions", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "inout", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:           "dda262025813b541d8f96f19689528f3",
+	Digest:           "42e1b9bc2824e60ddccc033784fcb89d",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -3124,6 +3373,7 @@ kernel void RoPE(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3181,7 +3431,7 @@ var ElemBiasKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.I32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.I32, Access: kernelabi.Write},
 	},
-	Digest:           "5ca06654b99f7b00ddf55b41626605df",
+	Digest:           "39bd583ae171402df1e08ea5acd8e059",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -3201,6 +3451,7 @@ kernel void ElemBias(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3346,7 +3597,7 @@ var MatMulTiledKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "815ff375bda44de107a2fba90acddfab",
+	Digest:    "13f7a414d91779fa0a6e7588b61d325d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3368,6 +3619,7 @@ kernel void MatMulTiled(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3560,7 +3812,7 @@ var MatMulTiledF32Kernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "da136d81116a2cb4b6f26417b8fe9a04",
+	Digest:    "6a1531ae0428198adacd3244369dcdc8",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3582,6 +3834,7 @@ kernel void MatMulTiledF32(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3776,7 +4029,7 @@ var MatMulTiledF32F16Kernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "a8df8dde1b6591f2cd4b84f97e52a843",
+	Digest:    "f935c4fcc2d5b14772dc1faa3939f256",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -3798,6 +4051,7 @@ kernel void MatMulTiledF32F16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -3979,7 +4233,7 @@ var GroupedMatVecKernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "6bb2c6f8eeab50e2f8302ad800d5d988",
+	Digest:    "060bdb1b60cd929a07315969054f8e4f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4002,6 +4256,7 @@ kernel void GroupedMatVec(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -4213,7 +4468,7 @@ var GroupedMatMulKernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "8c80b4ebaf18ccb1d1120b204ee901b1",
+	Digest:    "dac2a7609de1d31118081d08ca481643",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4236,6 +4491,7 @@ kernel void GroupedMatMul(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -4413,7 +4669,7 @@ var QuantMatVecInt4Kernel = kernelabi.Kernel{
 		{Name: "bz", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "f4d5dcbf3dbb1af1651b6bc801c955fe",
+	Digest:    "b26bb21eada80bde70f5097fa7259a72",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4437,6 +4693,7 @@ kernel void QuantMatVecInt4(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -4627,7 +4884,7 @@ var QuantMatMulInt4Kernel = kernelabi.Kernel{
 		{Name: "bz", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "32f656eebc98bc5ca79a15a012b23032",
+	Digest:    "1b572a3ce0a1041d4e40f4bca42781e5",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4651,6 +4908,7 @@ kernel void QuantMatMulInt4(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -4793,7 +5051,7 @@ var LinearAttentionKernel = kernelabi.Kernel{
 		{Name: "state", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.Write},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "a538a60d4f3efb91b673f6261a31ff1a",
+	Digest:           "512361d1d420a6e9fe5a13e9a514932c",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -4823,6 +5081,7 @@ kernel void LinearAttention(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -4958,7 +5217,7 @@ var MatVecKernel = kernelabi.Kernel{
 		{Name: "b", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "48cd43b16286bd2f3465c045d0d27ed8",
+	Digest:    "7546604246315b7fbafbb7c90d37de69",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -4980,6 +5239,7 @@ kernel void MatVec(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -5124,7 +5384,7 @@ var QuantMatVecKernel = kernelabi.Kernel{
 		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "9ea2f0db66e35b1662cd53dbed3d9eee",
+	Digest:    "8c6c1fa88b1c6bb95e8e85d5925a3a45",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5147,6 +5407,7 @@ kernel void QuantMatVec(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -5294,7 +5555,7 @@ var QuantMatVecF32Kernel = kernelabi.Kernel{
 		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "765f19e9a912d72414f7bca107640cf5",
+	Digest:    "08a26b329d97922805c29ac6183ddcb7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5317,6 +5578,7 @@ kernel void QuantMatVecF32(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -5492,7 +5754,7 @@ var LinearTiledKernel = kernelabi.Kernel{
 		{Name: "bias", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b745976c435c5123f04bb2f4cd7df015",
+	Digest:    "2e00957af86734237bc3f7160f1d2985",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5515,6 +5777,7 @@ kernel void LinearTiled(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -5683,7 +5946,7 @@ var RMSNormKernel = kernelabi.Kernel{
 		{Name: "w", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "9f6c8cb821dc41269ed37c94e2870d21",
+	Digest:    "bfb2a5be2e81651f7f33bea4c78035a1",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5705,6 +5968,7 @@ kernel void RMSNorm(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -5905,7 +6169,7 @@ var SoftmaxKernel = kernelabi.Kernel{
 		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b9399dcf03fa63dfbc0df89257943ad6",
+	Digest:    "1628ba134404a9ed327726c7cb807089",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5926,6 +6190,7 @@ kernel void Softmax(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -6026,7 +6291,7 @@ var PackKernel = kernelabi.Kernel{
 		{Name: "src", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "dst", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "d0f4c65bc383d05a4769c05bf1f96f78",
+	Digest:           "06c3fe9d3cdfc862fd2bc576c0c08936",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -6050,6 +6315,7 @@ kernel void Pack(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -6300,7 +6566,7 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "4c892c45305440c228ce9b5fbb052712",
+	Digest:    "c9d129d35b686b2d39cb17d83972ef8f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -6327,6 +6593,7 @@ kernel void AttentionDecodePaged(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -6643,7 +6910,7 @@ var AttentionDecodePagedF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "65f0d723e9b7efb61eae06d5178c0fb2",
+	Digest:    "ceb1da693f424c4254906e5e54ba7f61",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -6670,6 +6937,7 @@ kernel void AttentionDecodePagedF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -7001,7 +7269,7 @@ var AttentionPrefillPagedF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "50897e97fd5c014c9d3fe231dff61dbb",
+	Digest:    "21c353b1753f38323c2070be5159782e",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -7030,6 +7298,7 @@ kernel void AttentionPrefillPagedF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -7161,7 +7430,7 @@ var PenaltyCountKernel = kernelabi.Kernel{
 		{Name: "history", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
 	},
-	Digest:    "498d3cdb40b027c41262b7b39f0c6d6b",
+	Digest:    "e583bc66e09352ea6276b9007107b8a3",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -7185,6 +7454,7 @@ kernel void PenaltyCount(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -7243,7 +7513,7 @@ var PenaltyApplyKernel = kernelabi.Kernel{
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "b4dc4ff64033c5f8d8f2e68e58f004aa",
+	Digest:           "58caffa7baf40ba0d1794351c18690bf",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -7269,6 +7539,7 @@ kernel void PenaltyApply(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -7321,7 +7592,7 @@ var PenaltyClearKernel = kernelabi.Kernel{
 	Bindings: []kernelabi.Binding{
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:           "dc85bddcffee2fa36a8de32d960565e4",
+	Digest:           "f600173e31a0cf4e649a8ad3ebc51257",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -7345,6 +7616,7 @@ kernel void PenaltyClear(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -7592,7 +7864,7 @@ var AttentionPrefillKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "a9a9d805e4e39a5169a1a456a73b01e3",
+	Digest:    "113ff4b4568889941f6ba16414e124ac",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -7619,6 +7891,7 @@ kernel void AttentionPrefill(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -7952,7 +8225,7 @@ var AttentionPrefillF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "952bf62adffa29b44c5fa853966bc5e9",
+	Digest:    "212776fbd3c1c5ca43bb50ab2fbf9c99",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -7979,6 +8252,7 @@ kernel void AttentionPrefillF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -8317,7 +8591,7 @@ var AttentionPrefillPagedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "d73ddc9e6217570e91fae7b6341ac54f",
+	Digest:    "1a1d4033a394a7d6e5937dac211c3824",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8346,6 +8620,7 @@ kernel void AttentionPrefillPaged(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -8487,7 +8762,7 @@ var QuantMatMulKernel = kernelabi.Kernel{
 		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "579c68e1507d0cce3303594f8882637d",
+	Digest:           "3a5df183d227bc87568a0d789d5908fe",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -8511,6 +8786,7 @@ kernel void QuantMatMul(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -8569,7 +8845,7 @@ var QuantRowsKernel = kernelabi.Kernel{
 		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "5a229aacd229587562c348726b759feb",
+	Digest:           "fee41e525a1a2aa05f3ad189a3dc5f07",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -8593,6 +8869,7 @@ kernel void QuantRows(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -8654,7 +8931,7 @@ var QuantMatMulF32Kernel = kernelabi.Kernel{
 		{Name: "bs", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "cc9934c072ebfbdb5f0169b3cd7926b9",
+	Digest:           "9c09e781ba35fe7f016d54e4aae49533",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -8678,6 +8955,7 @@ kernel void QuantMatMulF32(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -8961,7 +9239,7 @@ var AttentionRaggedKernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "a7bafad60942ee20c5d6eb5617978e74",
+	Digest:    "ee12af692d6549b4b10ea52dd0916dfa",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8991,6 +9269,7 @@ kernel void AttentionRagged(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -9367,7 +9646,7 @@ var AttentionRaggedF16Kernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ad8dc2a9320296404999b66cac0003da",
+	Digest:    "6ab5552abb2d685b08b304dc53f4616d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -9397,6 +9676,7 @@ kernel void AttentionRaggedF16(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -9543,7 +9823,7 @@ var SegmentSumKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "daeaf5670853aeaf2d6124384ca49ede",
+	Digest:           "f99dca4a20032573bfa12749c261a027",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -9575,6 +9855,7 @@ kernel void SegmentSum(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -9636,7 +9917,7 @@ var CountAboveKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.I32, Access: kernelabi.Write},
 	},
-	Digest:           "d4780bc2d204819d5c0372e036ebc6b1",
+	Digest:           "64807a7b0c7cc4b21e60116b0b7add20",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -9650,6 +9931,7 @@ kernel void CountAbove(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -9708,7 +9990,7 @@ var NormalizeKernel = kernelabi.Kernel{
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "scratch", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "5253fbe21ba927ead514706c693a9d49",
+	Digest:           "68a855959fd41a7aa4dc841718852965",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -9723,6 +10005,7 @@ kernel void Normalize(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -9826,7 +10109,7 @@ var ReduceSumKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "794bf97795e823c2ab5bccbf90bb89b0",
+	Digest:    "bdf8f39195f6207c3867c82edce59bc7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -9839,6 +10122,7 @@ kernel void ReduceSum(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -9988,7 +10272,7 @@ var SampleArgmaxKernel = kernelabi.Kernel{
 		{Name: "logits", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:    "773b9c5fe1493fb4a5f67f5b999858df",
+	Digest:    "fb1ecb2b956526d629f5a541eee23c2b",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -10008,6 +10292,7 @@ kernel void SampleArgmax(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -10124,7 +10409,7 @@ var SampleCategoricalKernel = kernelabi.Kernel{
 		{Name: "draws", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:           "5e6267fa460b2b92fb593d7c2f37cedb",
+	Digest:           "527daf9984cbda9121847216e10cc5f1",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -10146,6 +10431,7 @@ kernel void SampleCategorical(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -10209,7 +10495,7 @@ var ScaleKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "4dcc5872ff29d4d0abd2b531e3595a80",
+	Digest:           "35db51344532b27b4e0e9f5152836eb4",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -10223,6 +10509,7 @@ kernel void Scale(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -10265,7 +10552,7 @@ var TransformKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "bc799b356b219d454822f51b9d5a9d44",
+	Digest:           "c3a0457ab763e04f3319de4a91b70a1f",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -10288,6 +10575,7 @@ kernel void Transform(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -10337,7 +10625,7 @@ var SegmentOffsetsKernel = kernelabi.Kernel{
 		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Write},
 	},
-	Digest:           "d74ada94ae47b08413c4c87bd76167f2",
+	Digest:           "218057f099ba488e04561af5e6b1427b",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -10357,6 +10645,7 @@ kernel void SegmentOffsets(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -10440,7 +10729,7 @@ vertex GeometryVS_out GeometryVS(
     return _out;
 }
 `,
-	Digest:    "c31197c2dcc1135cc6572fb0398067ef",
+	Digest:    "8407614870db276958634652b4518948",
 	Generator: kernelabi.Version,
 }
 
@@ -10496,7 +10785,7 @@ vertex FullScreenVS_out FullScreenVS(
     return _out;
 }
 `,
-	Digest:    "86445810115b0561d158166724a1f9b2",
+	Digest:    "2b1e3a0a886532a4f6162176211a434d",
 	Generator: kernelabi.Version,
 }
 
@@ -10548,7 +10837,7 @@ fragment ShadeFS_out ShadeFS(
     return _out;
 }
 `,
-	Digest:    "0c45473ffa530ad4ebb9e256bbaecb4a",
+	Digest:    "c5850f7fee9510b04ac34bff4367c7df",
 	Generator: kernelabi.Version,
 }
 
@@ -10602,7 +10891,7 @@ vertex HalfTriangleVS_out HalfTriangleVS(
     return _out;
 }
 `,
-	Digest:    "7caa0748523a8779174dc70f427dd1cb",
+	Digest:    "c0e8c2d53f4d1bcb09ec0a2ae9edf9aa",
 	Generator: kernelabi.Version,
 }
 
@@ -10647,7 +10936,7 @@ fragment SolidFS_out SolidFS(
     return _out;
 }
 `,
-	Digest:    "bb1b8eb0f681347de69fa62de4a4db91",
+	Digest:    "942e620d4d2b1f4edb993ba6d4ab614f",
 	Generator: kernelabi.Version,
 }
 
@@ -10699,7 +10988,7 @@ vertex AttributeVS_out AttributeVS(
     return _out;
 }
 `,
-	Digest:    "2e5ff90128c916b456e64cd9cc637516",
+	Digest:    "a2f2b5d58fdf1b5b38e496ad4abe1f20",
 	Generator: kernelabi.Version,
 }
 
@@ -10745,7 +11034,7 @@ fragment TintFS_out TintFS(
     return _out;
 }
 `,
-	Digest:    "e69c642468c363c6cc0d0a9b3a04593c",
+	Digest:    "a6b4f81960dc844608b4d21045dbee43",
 	Generator: kernelabi.Version,
 }
 
@@ -10804,7 +11093,7 @@ vertex ScaledVS_out ScaledVS(
     return _out;
 }
 `,
-	Digest:    "dceddc8ab6b520b095e41e04bcefd9e3",
+	Digest:    "9f810157f85a3e24d3057b0e0e5742a6",
 	Generator: kernelabi.Version,
 }
 
@@ -10859,7 +11148,7 @@ fragment TintedFS_out TintedFS(
     return _out;
 }
 `,
-	Digest:    "66a650752b49350885e2c7032d5f8951",
+	Digest:    "84390902901487cee5ae49559f5074b4",
 	Generator: kernelabi.Version,
 }
 
@@ -10930,7 +11219,7 @@ fragment SampledFS_out SampledFS(
     return _out;
 }
 `,
-	Digest:    "adff5b675fb144120cb3f14ed6f23396",
+	Digest:    "374d16c4b552f7466ffa396b72bc692a",
 	Generator: kernelabi.Version,
 }
 
@@ -10984,7 +11273,7 @@ vertex DisplacedVS_out DisplacedVS(
     return _out;
 }
 `,
-	Digest:    "f854478f8d5f7ee1ba5c708139963c03",
+	Digest:    "26449bf98d605798d98f5deb5d2e4c23",
 	Generator: kernelabi.Version,
 }
 
@@ -11048,7 +11337,7 @@ fragment BlitFS_out BlitFS(
     return _out;
 }
 `,
-	Digest:    "46adde03d263d0555b325867b85a3cdf",
+	Digest:    "ef3fa4f1c6be71d247ba94a0cac647a2",
 	Generator: kernelabi.Version,
 }
 
@@ -11123,7 +11412,7 @@ var SubgroupReduceKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "afa24384384322ab4291eade57d1155d",
+	Digest:    "98c714282bc63d70eb0a8d251cdc990e",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -11136,6 +11425,7 @@ kernel void SubgroupReduce(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -11204,7 +11494,7 @@ var SubgroupReduceFallbackKernel = kernelabi.Kernel{
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "width", DType: kernelabi.U32, Access: kernelabi.Read},
 	},
-	Digest:           "8f796ec22a2e5dae5b5c37b4eb6008b4",
+	Digest:           "6627f3ce9014eb74edaec3c0844a0ac0",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -11219,6 +11509,7 @@ kernel void SubgroupReduceFallback(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -11367,7 +11658,7 @@ var SubgroupShuffleMixKernel = kernelabi.Kernel{
 		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "d3ce294ec04b8967ecf760e443217788",
+	Digest:    "a6af3238a3be54e1a5354a7d97b1a8df",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -11380,6 +11671,7 @@ kernel void SubgroupShuffleMix(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -11469,7 +11761,7 @@ var SubgroupShuffleMixFallbackKernel = kernelabi.Kernel{
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "width", DType: kernelabi.U32, Access: kernelabi.Read},
 	},
-	Digest:           "7a704e79e9d6b6e1b862b69610a8a9fc",
+	Digest:           "472c1d8a498c57358c23147cd8a405c9",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -11484,6 +11776,7 @@ kernel void SubgroupShuffleMixFallback(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -11595,7 +11888,7 @@ var SubgroupScanKernel = kernelabi.Kernel{
 		{Name: "incl", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "excl", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "fa26845f708273456fcc3816c35111d7",
+	Digest:    "8f1b310e18a90208d17fc5100baa9616",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -11609,6 +11902,7 @@ kernel void SubgroupScan(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -11700,7 +11994,7 @@ var SubgroupScanFallbackKernel = kernelabi.Kernel{
 		{Name: "excl", DType: kernelabi.F32, Access: kernelabi.Write},
 		{Name: "width", DType: kernelabi.U32, Access: kernelabi.Read},
 	},
-	Digest:           "5bcaf4ca5479ddd796c32277da914139",
+	Digest:           "707306124a5a430b5171fd3048f26634",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>
@@ -11716,6 +12010,7 @@ kernel void SubgroupScanFallback(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -11931,7 +12226,7 @@ var TopKMaskKernel = kernelabi.Kernel{
 		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "2a093b70946c03db148f505d792d398a",
+	Digest:    "1458e8d39906cd781f22fa34a0e80495",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -11952,6 +12247,7 @@ kernel void TopKMask(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -12269,7 +12565,7 @@ var TopPMaskKernel = kernelabi.Kernel{
 		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "d7158d5cf7a5d1a134d1ee11aa6ecd2b",
+	Digest:    "58386f65df02024987600fadad85673c",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -12290,6 +12586,7 @@ kernel void TopPMask(
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
     uint _sgsize [[threads_per_simdgroup]],
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
@@ -12491,6 +12788,8 @@ var Kernels = []*kernelabi.Kernel{
 	&ExchangeKernel,
 	&ReduceLoopKernel,
 	&ReduceUnrolledKernel,
+	&DispatchShapeKernel,
+	&ShapeBoundedSumKernel,
 	&ElemAddKernel,
 	&ElemMulKernel,
 	&ElemScaleKernel,
