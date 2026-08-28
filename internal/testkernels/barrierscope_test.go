@@ -243,3 +243,117 @@ func TestSubgroupsMaySitAtDifferentSubgroupBarriers(t *testing.T) {
 		})
 	}
 }
+
+// The authored barrier-scope kernels and their generated lowerings agree.
+//
+// specs/010-kernel-corpus.md §6's obligation, and the one whose absence CI
+// catches as a coverage number rather than as a name: every other test here
+// runs the generated form, so nothing calls the authored function, and on Linux
+// the Metal differential is not there to cover the lowering either.
+//
+// RunAuthored gives each invocation a goroutine behind a cyclic barrier, which
+// is what a workgroup is. That rendezvous is workgroup-wide, so the two
+// subgroup kernels are run one subgroup at a time -- a subgroup barrier
+// rendezvouses its own lanes and this is how the authored form expresses that.
+func TestTheAuthoredBarrierScopeKernelsMatchTheirLowerings(t *testing.T) {
+	t.Run("PublishStorage", func(t *testing.T) {
+		const groups = 3
+		width := int(testkernels.PublishStorageKernel.WorkgroupSize.X)
+
+		authored := make([]uint32, groups*width)
+		scratch := make([]uint32, groups)
+		for g := range uint32(groups) {
+			kernel.RunAuthored(&testkernels.PublishStorageKernel, kernel.ID3{X: g},
+				kernel.ID3{X: groups}, 128, func(th kernel.Thread) {
+					testkernels.PublishStorage(th, scratch, authored)
+				})
+		}
+
+		generated := make([]uint32, groups*width)
+		if err := kernel.DispatchCooperative(&testkernels.PublishStorageKernel,
+			accel.ID3{X: groups},
+			kernelabi.Args{Slices: []any{make([]uint32, groups), generated}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range authored {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %d, generated %d", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	t.Run("PublishShared", func(t *testing.T) {
+		const groups = 2
+		width := int(testkernels.PublishSharedKernel.WorkgroupSize.X)
+
+		authored := make([]uint32, groups*width)
+		for g := range uint32(groups) {
+			var sh [32]uint32
+			kernelabi.Poison(sh[:])
+			kernel.RunAuthored(&testkernels.PublishSharedKernel, kernel.ID3{X: g},
+				kernel.ID3{X: groups}, 128, func(th kernel.Thread) {
+					testkernels.PublishShared(th, authored, &sh)
+				})
+		}
+
+		generated := make([]uint32, groups*width)
+		if err := kernel.DispatchCooperative(&testkernels.PublishSharedKernel,
+			accel.ID3{X: groups},
+			kernelabi.Args{Slices: []any{generated}}); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		for i := range authored {
+			if authored[i] != generated[i] {
+				t.Fatalf("element %d: authored %d, generated %d", i, authored[i], generated[i])
+			}
+		}
+	})
+
+	// The two subgroup kernels, at an emulated size that gives more than one
+	// subgroup per workgroup. At the degenerate single subgroup a subgroup
+	// rendezvous and a workgroup one release the same lanes, so the comparison
+	// would say nothing about the scope at all.
+	for _, c := range []struct {
+		name string
+		k    *accel.Kernel
+		run  func(th kernel.Thread, out []float32, sh *[64]float32)
+	}{
+		{"SubgroupPublish", &testkernels.SubgroupPublishKernel,
+			func(th kernel.Thread, out []float32, sh *[64]float32) {
+				testkernels.SubgroupPublish(th, out, sh)
+			}},
+		{"SubgroupStagger", &testkernels.SubgroupStaggerKernel,
+			func(th kernel.Thread, out []float32, sh *[64]float32) {
+				testkernels.SubgroupStagger(th, out, sh)
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			const size = 16
+			width := int(c.k.WorkgroupSize.X)
+
+			// One subgroup at a time. RunAuthored's rendezvous spans everything
+			// it launches, so launching the workgroup would make a subgroup
+			// barrier wait for lanes of other subgroups -- which is what
+			// SubgroupStagger deliberately does not do, and would deadlock.
+			authored := make([]float32, width)
+			var sh [64]float32
+			kernelabi.Poison(sh[:])
+			kernel.RunAuthored(c.k, kernel.ID3{}, kernel.ID3{X: 1}, size,
+				func(th kernel.Thread) { c.run(th, authored, &sh) })
+
+			generated := make([]float32, width)
+			err := kernel.DispatchCooperativeWith(c.k, accel.ID3{X: 1},
+				kernelabi.Args{Slices: []any{generated}},
+				kernel.Options{Diagnostics: true, SubgroupSize: size})
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			for i := range authored {
+				if authored[i] != generated[i] {
+					t.Fatalf("element %d: authored %v, generated %v",
+						i, authored[i], generated[i])
+				}
+			}
+		})
+	}
+}

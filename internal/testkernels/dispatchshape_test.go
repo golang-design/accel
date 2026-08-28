@@ -173,3 +173,42 @@ func TestTheAuthoredDispatchShapeMatchesItsLowering(t *testing.T) {
 		t.Fatal("WorkgroupSize.X came back zero from both, so the comparison says nothing")
 	}
 }
+
+// The authored workgroup-bounded loop and its lowering agree.
+//
+// specs/010-kernel-corpus.md §6. The Go lowering reads t.WorkgroupSize() from
+// the Thread and the authored function reads the same one, so what this checks
+// is the *loop*: the generated form is a state machine whose back edge is a
+// program counter and the authored form is a real Go loop behind a real
+// rendezvous, and they must run the same number of times.
+func TestTheAuthoredShapeBoundedSumMatchesItsLowering(t *testing.T) {
+	const groups = 3
+	width := int(testkernels.ShapeBoundedSumKernel.WorkgroupSize.X)
+
+	in := make([]float32, groups*width)
+	for i := range in {
+		in[i] = float32(i) + 1
+	}
+
+	authored := make([]float32, len(in))
+	for g := range uint32(groups) {
+		var sh [8]float32
+		kernelabi.Poison(sh[:])
+		kernel.RunAuthored(&testkernels.ShapeBoundedSumKernel, kernel.ID3{X: g},
+			kernel.ID3{X: groups}, 128, func(th kernel.Thread) {
+				testkernels.ShapeBoundedSum(th, in, authored, &sh)
+			})
+	}
+
+	generated := make([]float32, len(in))
+	if err := kernel.DispatchCooperative(&testkernels.ShapeBoundedSumKernel,
+		accel.ID3{X: groups},
+		kernelabi.Args{Slices: []any{in, generated}}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for i := range authored {
+		if authored[i] != generated[i] {
+			t.Fatalf("element %d: authored %v, generated %v", i, authored[i], generated[i])
+		}
+	}
+}
