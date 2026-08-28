@@ -690,9 +690,11 @@ func subCarrier(op ir.Opcode) carrier {
 		// A predicate in and a mask out, which is the one operation whose two
 		// directions carry different types. specs/058-ballot.md §2.
 		return carrierMask
-	case ir.OpSubgroupMinI32, ir.OpSubgroupMaxI32:
+	case ir.OpSubgroupMinI32, ir.OpSubgroupMaxI32,
+		ir.OpSubgroupAndI32, ir.OpSubgroupOrI32, ir.OpSubgroupXorI32:
 		return carrierI32
-	case ir.OpSubgroupMinU32, ir.OpSubgroupMaxU32:
+	case ir.OpSubgroupMinU32, ir.OpSubgroupMaxU32,
+		ir.OpSubgroupAndU32, ir.OpSubgroupOrU32, ir.OpSubgroupXorU32:
 		return carrierU32
 	}
 	if op.IsSubgroupLaneRead() {
@@ -747,6 +749,18 @@ func subOpName(op ir.Opcode) (string, bool) {
 		return "kernelabi.SubMinU32", true
 	case ir.OpSubgroupMaxU32:
 		return "kernelabi.SubMaxU32", true
+	case ir.OpSubgroupAndI32:
+		return "kernelabi.SubAndI32", true
+	case ir.OpSubgroupOrI32:
+		return "kernelabi.SubOrI32", true
+	case ir.OpSubgroupXorI32:
+		return "kernelabi.SubXorI32", true
+	case ir.OpSubgroupAndU32:
+		return "kernelabi.SubAndU32", true
+	case ir.OpSubgroupOrU32:
+		return "kernelabi.SubOrU32", true
+	case ir.OpSubgroupXorU32:
+		return "kernelabi.SubXorU32", true
 	}
 	return "", false
 }

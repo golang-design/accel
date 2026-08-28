@@ -1362,10 +1362,19 @@ var mslSubgroup = map[ir.Opcode]string{
 	// these share a spelling with the f32 pair and differ only in what the
 	// emitter passes them -- which is why the table has four rows naming two
 	// functions rather than four functions.
-	ir.OpSubgroupMinI32:    "simd_min",
-	ir.OpSubgroupMaxI32:    "simd_max",
-	ir.OpSubgroupMinU32:    "simd_min",
-	ir.OpSubgroupMaxU32:    "simd_max",
+	ir.OpSubgroupMinI32: "simd_min",
+	ir.OpSubgroupMaxI32: "simd_max",
+	ir.OpSubgroupMinU32: "simd_min",
+	ir.OpSubgroupMaxU32: "simd_max",
+
+	// The bitwise family, specs/059-subgroup-reductions.md §6's second slice.
+	// Overloaded on the argument type as the minima are.
+	ir.OpSubgroupAndI32:    "simd_and",
+	ir.OpSubgroupOrI32:     "simd_or",
+	ir.OpSubgroupXorI32:    "simd_xor",
+	ir.OpSubgroupAndU32:    "simd_and",
+	ir.OpSubgroupOrU32:     "simd_or",
+	ir.OpSubgroupXorU32:    "simd_xor",
 	ir.OpBroadcastFirstF32: "simd_broadcast_first",
 	ir.OpSubgroupAny:       "simd_any",
 	ir.OpSubgroupAll:       "simd_all",

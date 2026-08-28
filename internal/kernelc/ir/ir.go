@@ -540,6 +540,14 @@ const (
 	OpSubgroupMaxI32
 	OpSubgroupMinU32
 	OpSubgroupMaxU32
+
+	// The bitwise family, specs/059-subgroup-reductions.md §6's second slice.
+	OpSubgroupAndI32
+	OpSubgroupOrI32
+	OpSubgroupXorI32
+	OpSubgroupAndU32
+	OpSubgroupOrU32
+	OpSubgroupXorU32
 	OpBroadcastFirstF32
 	OpElect
 	OpSubgroupAny
@@ -685,6 +693,12 @@ var opcodeNames = [...]string{
 	OpSubgroupMaxI32:           "SubgroupMaxI32",
 	OpSubgroupMinU32:           "SubgroupMinU32",
 	OpSubgroupMaxU32:           "SubgroupMaxU32",
+	OpSubgroupAndI32:           "SubgroupAndI32",
+	OpSubgroupOrI32:            "SubgroupOrI32",
+	OpSubgroupXorI32:           "SubgroupXorI32",
+	OpSubgroupAndU32:           "SubgroupAndU32",
+	OpSubgroupOrU32:            "SubgroupOrU32",
+	OpSubgroupXorU32:           "SubgroupXorU32",
 	OpBroadcastFirstF32:        "BroadcastFirstF32",
 	OpElect:                    "Elect",
 	OpSubgroupAny:              "SubgroupAny",

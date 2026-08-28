@@ -53,6 +53,17 @@ const (
 	SubMaxI32
 	SubMinU32
 	SubMaxU32
+
+	// The bitwise family. Exact like the minima, and for a sharper reason:
+	// every one of them is associative *and* commutative over its whole
+	// domain, so no ordering of the lanes can produce a different answer --
+	// which is what an f32 sum cannot say.
+	SubAndI32
+	SubOrI32
+	SubXorI32
+	SubAndU32
+	SubOrU32
+	SubXorU32
 	SubBroadcastFirstF32
 	SubElect
 	SubAny
@@ -106,6 +117,18 @@ func (o SubgroupOp) String() string {
 		return "SubgroupMinU32"
 	case SubMaxU32:
 		return "SubgroupMaxU32"
+	case SubAndI32:
+		return "SubgroupAndI32"
+	case SubOrI32:
+		return "SubgroupOrI32"
+	case SubXorI32:
+		return "SubgroupXorI32"
+	case SubAndU32:
+		return "SubgroupAndU32"
+	case SubOrU32:
+		return "SubgroupOrU32"
+	case SubXorU32:
+		return "SubgroupXorU32"
 	case SubBroadcastFirstF32:
 		return "BroadcastFirstF32"
 	case SubElect:
@@ -270,6 +293,14 @@ func (t Thread) SubgroupMinI32(v int32) int32   { return v }
 func (t Thread) SubgroupMaxI32(v int32) int32   { return v }
 func (t Thread) SubgroupMinU32(v uint32) uint32 { return v }
 func (t Thread) SubgroupMaxU32(v uint32) uint32 { return v }
+
+// The bitwise reductions, specs/059-subgroup-reductions.md §6's second slice.
+func (t Thread) SubgroupAndI32(v int32) int32   { return v }
+func (t Thread) SubgroupOrI32(v int32) int32    { return v }
+func (t Thread) SubgroupXorI32(v int32) int32   { return v }
+func (t Thread) SubgroupAndU32(v uint32) uint32 { return v }
+func (t Thread) SubgroupOrU32(v uint32) uint32  { return v }
+func (t Thread) SubgroupXorU32(v uint32) uint32 { return v }
 
 // BroadcastFirstF32 gives every active lane the lowest-numbered active lane's
 // v. It is the safe broadcast: unlike a broadcast from a chosen lane, it is

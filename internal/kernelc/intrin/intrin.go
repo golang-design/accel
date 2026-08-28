@@ -396,6 +396,32 @@ var table = map[key]*Intrinsic{
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 
+	// The bitwise family, specs/059-subgroup-reductions.md §6's second slice.
+	{kernelPkg, "Thread", "SubgroupAndI32"}: {
+		Authored: "accel.Thread.SubgroupAndI32", Op: ir.OpSubgroupAndI32, Params: 1,
+		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupOrI32"}: {
+		Authored: "accel.Thread.SubgroupOrI32", Op: ir.OpSubgroupOrI32, Params: 1,
+		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupXorI32"}: {
+		Authored: "accel.Thread.SubgroupXorI32", Op: ir.OpSubgroupXorI32, Params: 1,
+		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupAndU32"}: {
+		Authored: "accel.Thread.SubgroupAndU32", Op: ir.OpSubgroupAndU32, Params: 1,
+		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupOrU32"}: {
+		Authored: "accel.Thread.SubgroupOrU32", Op: ir.OpSubgroupOrU32, Params: 1,
+		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+	{kernelPkg, "Thread", "SubgroupXorU32"}: {
+		Authored: "accel.Thread.SubgroupXorU32", Op: ir.OpSubgroupXorU32, Params: 1,
+		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
+	},
+
 	{kernelPkg, "Thread", "SubgroupMinF32"}: {
 		Authored: "accel.Thread.SubgroupMinF32", Op: ir.OpSubgroupMinF32, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,

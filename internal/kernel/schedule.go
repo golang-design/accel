@@ -404,6 +404,65 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 			frames[i].SubU32 = acc
 		}
 
+	// The bitwise family, specs/059-subgroup-reductions.md §6's second slice.
+	// Each seeds from the first active lane for the reason every reduction
+	// here does: over one active lane the answer is that lane's value, and an
+	// identity seed would make "absent" and "identity" the same -- which for
+	// And over a lane holding 0 is a different answer, not a rounding.
+	case SubAndI32:
+		acc := frames[lanes[0]].SubI32
+		for _, i := range lanes[1:] {
+			acc &= frames[i].SubI32
+		}
+		for _, i := range lanes {
+			frames[i].SubI32 = acc
+		}
+
+	case SubOrI32:
+		acc := frames[lanes[0]].SubI32
+		for _, i := range lanes[1:] {
+			acc |= frames[i].SubI32
+		}
+		for _, i := range lanes {
+			frames[i].SubI32 = acc
+		}
+
+	case SubXorI32:
+		acc := frames[lanes[0]].SubI32
+		for _, i := range lanes[1:] {
+			acc ^= frames[i].SubI32
+		}
+		for _, i := range lanes {
+			frames[i].SubI32 = acc
+		}
+
+	case SubAndU32:
+		acc := frames[lanes[0]].SubU32
+		for _, i := range lanes[1:] {
+			acc &= frames[i].SubU32
+		}
+		for _, i := range lanes {
+			frames[i].SubU32 = acc
+		}
+
+	case SubOrU32:
+		acc := frames[lanes[0]].SubU32
+		for _, i := range lanes[1:] {
+			acc |= frames[i].SubU32
+		}
+		for _, i := range lanes {
+			frames[i].SubU32 = acc
+		}
+
+	case SubXorU32:
+		acc := frames[lanes[0]].SubU32
+		for _, i := range lanes[1:] {
+			acc ^= frames[i].SubU32
+		}
+		for _, i := range lanes {
+			frames[i].SubU32 = acc
+		}
+
 	case SubBallot:
 		var m Mask
 		for _, i := range lanes {
