@@ -51,7 +51,7 @@ What is *harder* than MSL is exactly one thing, and it is §7.
 
 | Directive | Value | Why |
 | --- | --- | --- |
-| `.version` | **6.0**, raised only by an instruction that needs more | The ISA version that introduced the `.sync` warp primitives. A newer driver accepts an older `.version`; the reverse is a JIT error, so the floor is what the corpus needs and never what the developer's driver has. |
+| `.version` | **6.2**, raised only by an instruction that needs more | Measured, not read off a table: at 6.0 and 6.1 the JIT rejects the baseline warp kernel with *"Feature 'activemask' requires PTX ISA .version 6.2 or later"*, and 6.2 through 8.0 all accept it. A newer driver accepts an older `.version`; the reverse is a JIT error, so the floor is what the corpus needs and never what the developer's driver has. |
 | `.target` | **`sm_70`**, derived, §6 | Independent thread scheduling, and therefore the point below which 002 §5.3's active-set semantics are not expressible. |
 | `.address_size` | **64** | `CUdeviceptr` is 64-bit and [060](060-cuda-bringup.md) §3 gates the backend to 64-bit hosts. |
 
@@ -68,10 +68,12 @@ every pipeline-creation error was nameless.
 
 `.reqntid <x>, <y>, <z>` is emitted from `ir.Func.Workgroup`, not `.maxntid`.
 `.maxntid` is a hint that lets `ptxas` size register allocation; `.reqntid` is
-the same hint plus a launch-time refusal of any other block shape. That refusal
-is [038](038-spirv-target.md)'s `LocalSize` failure caught by the hardware —
-004 cites the predecessor's own `polyred/gpu/shader/compile.go:652` for it — and
-it costs nothing. [060](060-cuda-bringup.md) §7 still checks at `Compile`,
+the same hint plus a launch-time refusal of any other block shape. **Measured**:
+a kernel declaring `.reqntid 64, 1, 1` launches at 64 threads and is refused at
+32 with `CUDA_ERROR_INVALID_VALUE`. That refusal is
+[038](038-spirv-target.md)'s `LocalSize` failure caught by the hardware — 004
+cites the predecessor's own `polyred/gpu/shader/compile.go:652` for it — and it
+costs nothing. [060](060-cuda-bringup.md) §7 still checks at `Compile`,
 because `cuFuncGetAttribute` reports the product and not the triple.
 
 ## 2. The emitter is single-pass
@@ -176,9 +178,20 @@ $$\texttt{len}_k = \left\lfloor \frac{\texttt{bindings}[k].\texttt{Len}}{\texttt
 
 **Uniform blocks reuse `internal/kernelc/std140` offsets even though `.param`
 space does not require them.** Natural packing would be tighter and would fork
-the host fill three ways; one layout owner is worth the padding. The padding is
-not free — it counts against the launch-parameter ceiling
-[060](060-cuda-bringup.md) §7 measures — and that is 060's open question 3.
+the host fill three ways; one layout owner is worth the padding.
+
+**The padding is not free, and the budget is smaller than either documented
+number.** Measured on this driver by bisection, the whole parameter space of an
+entry function is **4352 bytes** (`ptxas` reports `0x1100 max`), and it does not
+move with `.target` — sm_70, sm_80 and sm_90 all report the same ceiling. So the
+sum
+
+$$8n \;+\; 4n \;+\; \sum_i \texttt{std140size}(\texttt{uniform}_i) \;\le\; 4352$$
+
+is a real constraint the emitter checks, not a formality: *n* pointers, *n*
+lengths, and every uniform block with its std140 padding. Neither of the values
+the documentation offers — 4 KB below CUDA 12.1, 32,764 above it — is this
+number, which is why it is measured here and asserted in §10.
 
 ### Barriers
 
@@ -287,8 +300,8 @@ at all by the fast form.
 
 | Primitive | PTX | 008 §6 ceiling | Verdict |
 | --- | --- | --- | --- |
-| `Sqrt` | `sqrt.rn.f32`, correctly rounded | ≤ 1 representable step | **met by construction** |
-| division | `div.rn.f32`, correctly rounded | 2.5 ULP | **met by construction** |
+| `Sqrt` | `sqrt.rn.f32` | ≤ 1 representable step | **met — measured**, 0 of 1024 samples differ from `float32(math.Sqrt(float64(x)))` |
+| division | `div.rn.f32`, correctly rounded by the ISA | 2.5 ULP | met by construction; unmeasured |
 | `InverseSqrt` | `rsqrt.approx.f32` | 4 ULP | ? measure |
 | `Exp` | `ex2.approx.f32` composed with a scale | 4 ULP | ? measure — the scale adds error the instruction's own bound does not cover |
 | `Log` | `lg2.approx.f32` composed with a scale | 4 ULP | ? measure |
@@ -297,7 +310,8 @@ at all by the fast form.
 
 `sqrt` and division being correctly rounded is the one place where CUDA is
 *stricter* than the ceiling and Vulkan is looser (038 §7 has `sqrt` at ~3 ULP).
-Recorded because the natural instinct is to reuse 038's answer wholesale.
+Recorded because the natural instinct is to reuse 038's answer wholesale, and
+`sqrt` is measured rather than taken from the ISA document for the same reason.
 
 **`sin` and `cos` are generated, not called.** This is 038 §7's conclusion for
 the same reason: reduction alone fixes only the *range*, and the hardware
@@ -310,26 +324,42 @@ The other four rows take 038 §7's three-answer structure — generate, measure 
 record a profile, or refuse the primitive naming the measured ULP — and which
 answer applies to which primitive is decided *after* the probe, not now.
 
-### Contraction, which PTX expresses better than either sibling
+### Contraction, which this target does not have to fight
 
-MSL needs `precise::`; SPIR-V needs a `NoContraction` decoration per result id.
-PTX needs neither, because **an arithmetic instruction with an explicit rounding
-modifier cannot be contracted** — contraction would change the rounding the
-instruction names.
+MSL needs `precise::`; SPIR-V needs a `NoContraction` decoration per result id
+and a test that counts decorations against decorable results. **PTX needs
+neither, and the measurement is stronger than the argument that was written
+here first.**
 
-| IR | PTX | Contractable by `ptxas` |
+The argument was that an explicit rounding modifier forbids contraction, since
+fusing would change the rounding the instruction names. That is true and it is
+not what is doing the work. Measured, with `a = 1 + 2^{-12}` and
+`c = -(1 + 2^{-11})`, chosen so that a separately-rounded multiply-then-add is
+exactly 0 and a fused one is exactly $2^{-24}$:
+
+| Emitted | Result | Fused? |
 | --- | --- | --- |
-| separate multiply and add | `mul.rn.f32` then `add.rn.f32` | **no** |
-| a fused multiply-add the IR asked for | `fma.rn.f32` | already fused |
-| a bare `mul.f32` / `add.f32` | never emitted | yes, which is why |
+| `mul.rn.f32` then `add.rn.f32` | 0 | no |
+| **`mul.f32` then `add.f32`** | **0** | **no** |
+| `fma.rn.f32` | 5.9604645e-08 | yes |
 
-So 008 §3's contraction condition is met by a spelling rule and there is no
-decoration to forget. **The rule is verified by fault injection and not
-assumed**: `mul.f32`/`add.f32` are reinstated in a test kernel whose result
-differs under fusion, and the difference against the CPU oracle must appear.
-[060](060-cuda-bringup.md) open question 4 is the fallback — whether the driver
-JIT exposes an fmad control at all — and the point of the rounding-modifier rule
-is that the answer does not matter.
+**`ptxas` does not fuse a separate multiply and add in PTX at all**, with or
+without the modifier, at the JIT's default optimisation level. Contraction in
+the CUDA toolchain is a *front-end* decision — `nvcc`'s `--fmad`, applied while
+generating PTX — and for this target accel's emitter **is** the front end. So
+008 §3's contraction condition is met because the IR decides, one instruction at
+a time, and there is nothing downstream to override it.
+
+The rounding modifiers stay, as the guard rather than the mechanism: they cost
+nothing and they are what makes the property hold on a future `ptxas` that does
+contract. But **the fault injection that would prove it does not exist**:
+reinstating `mul.f32`/`add.f32` produces no difference to catch. The honest test
+is the positive one — that `fma.rn.f32` appears exactly where the IR fuses and
+nowhere else, asserted on the text, and a Tier 4 differential on an expression
+where fusion is observable.
+
+This retires [060](060-cuda-bringup.md)'s question about reaching an fmad
+control through the driver JIT. There is no contraction to disable.
 
 **Denormals are expressed declaratively.** `.ftz` flushes to zero and is
 *omitted*, so f32 denormals are preserved by construction, which is 008 §3's
@@ -379,7 +409,7 @@ golden catches the same rows.
 | storage atomic emitted without `.gpu` scope | **yes** | no | passes on one GPU, loses counts on another |
 | warp op with a literal `0xffffffff` mask | **yes** | no | passes until control flow diverges |
 | a `.shared` array given an initialiser | **yes** | no | **passes**, and hides a missing barrier |
-| `mul.f32` instead of `mul.rn.f32` | **yes** | no | differs from the oracle only where fusion changes the result |
+| `mul.f32` instead of `mul.rn.f32` | **yes** | no | **nothing** — measured; `ptxas` does not fuse either spelling, §7 |
 | missing `cvta.to.global` | **yes** | maybe | undefined; usually correct |
 | a local read before its initialiser | maybe | no | garbage |
 | an instruction above the emitted `.target` | no | **yes** | JIT error |
@@ -418,20 +448,27 @@ because both are correct-looking everywhere else.
 6. **Every `.shared` declaration is uninitialised and every scalar local is
    initialised**, asserted on the text — 002 §2.2 in both directions, and the
    fault that passes.
-7. **Every f32 multiply and add outside an intended `fma` carries `.rn`**,
-   asserted on the text as a count against the count of decorable arithmetic
-   results — 038 §7's argument that a per-expression test only catches what a
-   corpus happens to reach.
+7. **`fma.rn.f32` appears exactly where the IR fuses and nowhere else, and
+   every other f32 multiply and add carries `.rn`** — asserted on the text as
+   counts against the IR's own counts, per 038 §7's argument that a
+   per-expression test only catches what a corpus happens to reach. The positive
+   half is the one that can fail: §7 measured that the negative half has no
+   fault to inject.
 8. **`continue` targets the post block**, asserted on the CFG the emitter built,
    plus a device test with a timeout.
 9. **A kernel using every subgroup family produces the same result as the CPU
    oracle under divergent control flow**, at Tier 4 — item 4's real check.
 10. **A contraction-sensitive expression matches the CPU oracle**, at Tier 4 —
-    §7's rounding-modifier rule, verified by reinstating the bare spelling.
+    an expression where fusion is observable, which is what item 7's positive
+    half is checked against.
 11. **`sin` and `cos` meet 2⁻²⁰ absolute over |x| ≤ 2¹⁶** against a high-precision
     reference, at Tier 4 — the generated reduction and polynomial.
 12. **A deliberately corrupted artifact is rejected with the JIT's own log
     reaching the caller** — [060](060-cuda-bringup.md) §14 item 9 from this side.
+13. **A kernel whose pointers, lengths and std140 uniforms exceed 4352 bytes is
+    refused by the emitter, naming the total and the ceiling** — §5's budget,
+    which `ptxas` otherwise reports against generated line numbers the author
+    cannot read.
 
 ## What this target does not build
 
@@ -453,11 +490,13 @@ because both are correct-looking everywhere else.
 
 1. **Which of §7's four `.approx` rows are met, generated, or refused.** The
    probe decides, and the probe needs the lab box.
-2. **The `.version` floor.** 6.0 is the version that introduced the `.sync`
-   primitives; whether every instruction this emitter reaches is available at 6.0
-   is a transcription exercise nobody has done, and getting it wrong fails the
-   JIT on old drivers only.
-3. **Whether std140 offsets in `.param` space cost more than the launch-parameter
-   ceiling can afford** for the widest kernel in
-   [010](010-kernel-corpus.md), which is [060](060-cuda-bringup.md)'s open
-   question 3 seen from the emitter.
+2. **The rest of the `.version` floor.** 6.2 is measured as the floor for
+   `activemask`, which is the baseline's binding constraint today. Every *other*
+   instruction the emitter reaches has its own introducing version, and the JIT
+   names it precisely when it is wrong — so this is a transcription exercise the
+   corpus completes, not a risk. It fails on old drivers only.
+3. **Whether §5's 4352-byte parameter space fits the widest kernel in**
+   [010](010-kernel-corpus.md). The ceiling is now measured and the arithmetic is
+   in §5; what is unknown is the widest kernel. If it does not fit, the fallback
+   is a uniform *buffer* for the kernels that overflow, which forks the host fill
+   exactly where §5 said one layout owner was worth avoiding.

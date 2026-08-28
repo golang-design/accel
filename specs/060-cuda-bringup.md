@@ -385,13 +385,18 @@ two consequences it has:
   descriptor range, and CUDA has no descriptor range to disagree with. The
   numbering is what has to be shared, and it is.
 
-The parameter block has a ceiling — 4 KB before CUDA 12.1 and 32,764 bytes
-after — so `MaxBindingsPerKind` and `MaxUniformBlockBytes` are derived from it
-jointly, and a kernel that exceeds it is refused at `Compile`, naming the total
-and the ceiling. A kernel whose uniforms alone exceed it is 061's problem to
-lower differently and this child's to refuse clearly. **The exact ceiling on this
-driver is measured, not assumed**, because the two values differ by 8x and the
-wrong one is either a refusal that should not happen or a launch that corrupts.
+**The parameter block has a ceiling, and it is neither number the
+documentation offers.** Measured by bisection on this driver: **4352 bytes**
+for the whole entry function, which `ptxas` reports as `0x1100 max`, unchanged
+across `.target` sm_70, sm_80 and sm_90. The documented values are 4 KB below
+CUDA 12.1 and 32,764 above it, and 4352 is neither — which is the reason a spec
+measures a limit it could have transcribed.
+
+`MaxBindingsPerKind` and `MaxUniformBlockBytes` are therefore derived from one
+shared budget rather than declared independently, [061](061-ptx-target.md) §5
+carries the arithmetic, and a kernel that exceeds it is refused at `Compile`
+naming the total and the ceiling. A kernel whose uniforms alone exceed it is
+061's problem to lower differently and this child's to refuse clearly.
 
 **`Compile` checks the workgroup size against the module**, as
 [037](037-vulkan-bringup.md) §7: `cuLaunchKernel` takes block dimensions from
@@ -623,9 +628,7 @@ Each is a checkable assertion, and each names what it catches.
    moves underneath. Either the limit is re-sampled and the contract says a limit
    may shrink, or it is a reservation the adapter actually takes at open. The
    first weakens `Limits`, the second makes opening a device an allocation.
-3. **The launch-parameter ceiling**, 4 KB or 32,764 bytes, and therefore whether
-   §7's by-value uniforms hold for every kernel in
-   [010](010-kernel-corpus.md) or need a buffer fallback for the large ones.
-4. **Whether ptxas' FMA contraction is reachable through the driver JIT**, which
-   decides whether [061](061-ptx-target.md) §7's rounding-modifier strategy is
-   sufficient or needs a JIT option that may not exist.
+3. **Whether §7's 4352-byte parameter budget holds for every kernel in**
+   [010](010-kernel-corpus.md), now that the ceiling is measured and only the
+   widest kernel is unknown. The fallback is a uniform buffer for the kernels
+   that overflow, at the cost [061](061-ptx-target.md) §5 names.
