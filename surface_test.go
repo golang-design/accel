@@ -709,16 +709,32 @@ func TestPresentRefusals(t *testing.T) {
 		if _, err := s.Acquire(time.Second); err != nil {
 			t.Fatalf("acquire: %v", err)
 		}
-		start := time.Now()
-		_, err := s.Acquire(10 * time.Millisecond)
-		if !errors.Is(err, accel.ErrAcquireTimeout) {
-			t.Fatalf("the second acquire gave %v, want ErrAcquireTimeout", err)
-		}
 		// It reports rather than waits out the timeout: with every image held
 		// by the caller there is nothing to wait for, and sleeping would be a
 		// stall with no possible outcome.
-		if elapsed := time.Since(start); elapsed > 5*time.Millisecond {
-			t.Errorf("it waited %v for an image only the caller could return", elapsed)
+		//
+		// # Why the timeout is a second and the bound is not a wall clock
+		//
+		// The property is "it did not wait for the timeout", and the first
+		// version asserted it as "under 5ms" against a 10ms timeout -- a 2x
+		// margin, on a machine that also runs the rest of this suite. It failed
+		// on a loaded one while the property held, which is the measurement
+		// being wrong rather than the code.
+		//
+		// A one-second timeout against a 100ms bound is a 10x margin for the
+		// same property, and a scheduler delay that eats 100ms would break far
+		// more than this test. The wall clock cannot be removed entirely --
+		// "returned early" is a claim about elapsed time -- so the fix is a
+		// margin wide enough that only a real regression closes it.
+		const timeout = time.Second
+		start := time.Now()
+		_, err := s.Acquire(timeout)
+		if !errors.Is(err, accel.ErrAcquireTimeout) {
+			t.Fatalf("the second acquire gave %v, want ErrAcquireTimeout", err)
+		}
+		if elapsed := time.Since(start); elapsed > timeout/10 {
+			t.Errorf("it waited %v of a %v timeout for an image only the caller "+
+				"could return", elapsed, timeout)
 		}
 	})
 
