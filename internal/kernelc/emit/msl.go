@@ -280,12 +280,17 @@ func (m *msl) body(k *ir.Func) {
 	for i, u := range k.Uniforms {
 		m.printf("\n    constant %s &%s [[buffer(%d)]],", u.TypeName, u.Name, MSLUniformIndex(nb, i))
 	}
-	// The three ids are always declared. MSL does not object to an unused
-	// parameter, and declaring them unconditionally keeps the signature a
-	// function of the binding layout alone.
+	// The three ids and the grid size are always declared. MSL does not object
+	// to an unused parameter, and declaring them unconditionally keeps the
+	// signature a function of the binding layout alone.
+	//
+	// The workgroup extent is *not* here: it is a compile-time constant from
+	// the accel:kernel directive, so specs/052-dispatch-shape.md §2 lowers it
+	// to a literal at each use rather than to a fifth attribute.
 	m.printf("\n    uint3 _gid [[thread_position_in_grid]],")
 	m.printf("\n    uint3 _lid [[thread_position_in_threadgroup]],")
 	m.printf("\n    uint3 _wid [[threadgroup_position_in_grid]],")
+	m.printf("\n    uint3 _ngroups [[threadgroups_per_grid]],")
 	// The subgroup attributes are always declared for the same reason the ids
 	// are: the signature stays a function of the binding layout alone, and MSL
 	// does not object to a parameter nothing reads.
@@ -710,6 +715,12 @@ func (m *msl) dtype(t *ir.Type) string {
 		return "char"
 	case ir.U8:
 		return "uchar"
+	case ir.ID3Kind:
+		// uint3, which is what the id attributes already are: a kernel that
+		// binds one to a local -- `ws := t.WorkgroupSize()` -- needs the type
+		// spelled, and the lanes it then selects are the same lanes isID
+		// selects on the intrinsic call itself.
+		return "uint3"
 	case ir.Array:
 		// A short array of one scalar is a vector, which is what a graphics
 		// stage exchanges: accel.Vec4 is [4]float32 and MSL spells it float4.
@@ -948,18 +959,23 @@ func (m *msl) value(v ir.Value) {
 	}
 }
 
-// isID reports whether a value is a thread-id vector, whose components are
-// lanes rather than named fields.
+// isID reports whether a value is an ID3, whose components are vector lanes in
+// MSL and named struct fields in Go.
+//
+// # Why it asks the type and not the expression
+//
+// It used to match the *intrinsic call*, which is right for `t.GroupID().X`
+// and wrong for `g := t.GroupID(); g.X` -- the second is a FieldSel on a local,
+// so the lane went out as `.X` and Metal refused it as an illegal vector
+// component. No kernel in the corpus bound an id to a local until
+// specs/052-dispatch-shape.md added one, so a latent refusal sat here behind a
+// spelling nothing used.
+//
+// The type is what the property belongs to: an ID3 is uint3 in MSL wherever it
+// came from.
 func isID(v ir.Value) bool {
-	c, ok := v.(*ir.IntrinsicCall)
-	if !ok {
-		return false
-	}
-	switch c.Op {
-	case ir.OpGlobalID, ir.OpLocalID, ir.OpGroupID:
-		return true
-	}
-	return false
+	t := v.Type()
+	return t != nil && t.Kind == ir.ID3Kind
 }
 
 func (m *msl) binary(v *ir.Binary) {
@@ -1056,6 +1072,27 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		return
 	case ir.OpGroupID:
 		m.printf("_wid")
+		return
+
+	// The dispatch shape, specs/052-dispatch-shape.md §2.
+	//
+	// WorkgroupSize is a **literal**, not a read: it is the accel:kernel
+	// directive's value, which the front end put in ir.Func.Workgroup and which
+	// the host also uses to size the threadgroup. That is what §2 means by
+	// keeping a loop bounded by it compile-time uniform -- MSL sees a constant,
+	// so a barrier inside such a loop is reached by every invocation for a
+	// reason the compiler can see.
+	case ir.OpWorkgroupSize:
+		w := m.fn.Workgroup
+		m.printf("uint3(%d, %d, %d)", w[0], w[1], w[2])
+		return
+	case ir.OpNumGroups:
+		m.printf("_ngroups")
+		return
+	// Derived rather than a fourth attribute, so the two cannot disagree.
+	case ir.OpGlobalSize:
+		w := m.fn.Workgroup
+		m.printf("(uint3(%d, %d, %d) * _ngroups)", w[0], w[1], w[2])
 		return
 
 	case ir.OpToI32:
