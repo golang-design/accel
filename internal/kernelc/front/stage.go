@@ -8,6 +8,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"reflect"
 	"strings"
 
 	"golang.design/x/accel/internal/kernelc/ir"
@@ -140,6 +141,7 @@ func (c *checker) stageSignature(fn *ast.FuncDecl, k *ir.Func, what string) bool
 		}
 		k.Varyings = c.namedStructType(vt)
 		c.checkVaryingSlots(params[1].id.Pos(), k.Name, k.Varyings)
+		c.checkVaryingInterpolation(params[1].id.Pos(), k.Name, k.Varyings)
 		k.Params = append(k.Params, ir.NewParam(params[1].id.Pos(), k.Varyings, 1,
 			params[1].id.Name, c.info.Defs[params[1].id]))
 		next = 2
@@ -214,6 +216,7 @@ func (c *checker) stageResults(fn *ast.FuncDecl, k *ir.Func, what string) bool {
 		}
 		k.Varyings = c.namedStructType(vt)
 		c.checkVaryingSlots(flat[1].Pos(), k.Name, k.Varyings)
+		c.checkVaryingInterpolation(flat[1].Pos(), k.Name, k.Varyings)
 		return true
 	}
 
@@ -262,6 +265,59 @@ func isVec4(t types.Type) bool {
 	}
 	b, ok := arr.Elem().Underlying().(*types.Basic)
 	return ok && b.Kind() == types.Float32
+}
+
+// hasFlatTag reports whether a varyings field carries `accel:"flat"`.
+//
+// A struct tag rather than a wrapper type or a naming convention: it is the one
+// place Go lets an author annotate a field without changing what the field *is*,
+// so the same Vec2 is a Vec2 whether it interpolates or not, and the generated
+// lowering and the authored source read the identical declaration.
+func hasFlatTag(tag string) bool {
+	return reflect.StructTag(tag).Get("accel") == "flat"
+}
+
+// interpolable reports whether a varyings field can be interpolated at all.
+//
+// Floats and arrays of floats can; nothing else can, and specs/032-stage-abi.md
+// section 3.1 is explicit that this is the hardware's rule rather than accel's.
+func interpolable(t *ir.Type) bool {
+	if t == nil {
+		return false
+	}
+	if t.Kind == ir.Array {
+		return t.Elem != nil && t.Elem.Kind == ir.F32
+	}
+	return t.Kind == ir.F32
+}
+
+// checkVaryingInterpolation refuses a varyings field that no backend can
+// interpolate and that the author did not tag flat.
+//
+// It names the field, the rule and the tag to add, rather than emitting
+// something a driver reinterprets -- and rather than emitting a packer that
+// appends an int32 to a []float32, which is what happened before this check
+// existed: the refusal a caller got was a Go type error inside generated code.
+func (c *checker) checkVaryingInterpolation(pos token.Pos, name string, t *ir.Type) {
+	for _, f := range t.Fields {
+		if f.Flat || interpolable(f.Type) {
+			continue
+		}
+		c.errorf(pos, "stage %s varyings %s.%s is %s, which no backend interpolates: "+
+			"tag the field accel:\"flat\" to take the provoking vertex's value "+
+			"(specs/032-stage-abi.md section 3.1)", name, t.Name, f.Name, kindName(f.Type))
+	}
+}
+
+// kindName spells a varyings field's type for a diagnostic.
+func kindName(t *ir.Type) string {
+	if t == nil {
+		return "an unsupported type"
+	}
+	if t.Kind == ir.Array && t.Elem != nil {
+		return "an array of " + t.Elem.Kind.String()
+	}
+	return t.Kind.String()
 }
 
 // varyingSlots is how many four-component interpolation slots a varyings struct
@@ -328,7 +384,9 @@ func (c *checker) namedStructType(t types.Type) *ir.Type {
 				ft = &ir.Type{Kind: ir.Array, Len: int(arr.Len()), Elem: &ir.Type{Kind: ek}}
 			}
 		}
-		out.Fields = append(out.Fields, ir.Field{Name: f.Name(), Type: ft})
+		out.Fields = append(out.Fields, ir.Field{
+			Name: f.Name(), Type: ft, Flat: hasFlatTag(st.Tag(i)),
+		})
 	}
 	return out
 }

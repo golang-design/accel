@@ -172,6 +172,16 @@ type Type struct {
 type Field struct {
 	Name string
 	Type *Type
+
+	// Flat marks a varyings field that takes the provoking vertex's value
+	// rather than being interpolated, from an `accel:"flat"` struct tag.
+	//
+	// specs/032-stage-abi.md section 3.1 makes it mandatory for an integer
+	// field and optional for a float one, and that is not an accel choice: no
+	// target backend interpolates an integer. It is on the field rather than on
+	// the type because two structs may carry the same type with different
+	// interpolation, and because a tag is what the author wrote.
+	Flat bool
 }
 
 // Bytes is a scalar kind's size in memory.

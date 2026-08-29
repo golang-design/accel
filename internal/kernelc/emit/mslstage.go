@@ -61,7 +61,16 @@ func (m *msl) varyingsStruct(k *ir.Func, name string, withPosition bool) {
 		m.printf("    float4 _pos [[position]];\n")
 	}
 	for i, f := range k.Varyings.Fields {
-		m.printf("    %s %s [[user(v%d)]];\n", m.stageType(f.Type), f.Name, i)
+		// [[flat]] is an interpolation qualifier on the member, and it has to
+		// appear on *both* structs: MSL matches a vertex output to a fragment
+		// input by attribute, and a mismatched qualifier is a pipeline the
+		// driver rejects. Emitting it here rather than at each call site is
+		// what makes that automatic.
+		interp := ""
+		if f.Flat {
+			interp = " [[flat]]"
+		}
+		m.printf("    %s %s [[user(v%d)]]%s;\n", m.stageType(f.Type), f.Name, i, interp)
 	}
 	m.printf("};\n\n")
 }
@@ -328,16 +337,48 @@ func (m *msl) stageType(t *ir.Type) string {
 		m.fail("a stage member with no type")
 		return "float"
 	}
-	if t.Kind != ir.Array || t.Elem == nil || t.Elem.Kind != ir.F32 {
-		m.fail("a stage member is %v, and a stage exchanges float32 vectors", t)
+	if t.Kind != ir.Array {
+		if scalar := mslScalar(t.Kind); scalar != "" {
+			return scalar
+		}
+		m.fail("a stage member is %v, and a stage exchanges floats and integers", t)
+		return "float"
+	}
+	if t.Elem == nil {
+		m.fail("a stage member is %v, and an array member needs an element type", t)
+		return "float"
+	}
+	scalar := mslScalar(t.Elem.Kind)
+	if scalar == "" {
+		m.fail("a stage member is %v, and a stage exchanges floats and integers", t)
 		return "float"
 	}
 	switch t.Len {
 	case 1:
-		return "float"
+		return scalar
 	case 2, 3, 4:
-		return fmt.Sprintf("float%d", t.Len)
+		return fmt.Sprintf("%s%d", scalar, t.Len)
 	}
 	m.fail("a stage member is %v, and MSL has no vector of that width", t)
 	return "float"
+}
+
+// mslScalar is MSL's spelling of a scalar a stage may exchange, or "" for one
+// it may not.
+//
+// Integers are here because specs/032-stage-abi.md section 3.1 admits an
+// integer varying, tagged flat. They are *not* interpolated, and the tag on the
+// member is what says so -- an integer member without one is a pipeline the
+// driver rejects, which is why the front end refuses it before this is reached
+// rather than leaving it to a driver's error text.
+func mslScalar(k ir.Kind) string {
+	switch k {
+	case ir.F32:
+		return "float"
+	case ir.I32:
+		return "int"
+	case ir.U32:
+		return "uint"
+	}
+	return ""
 }

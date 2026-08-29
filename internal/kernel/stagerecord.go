@@ -59,6 +59,15 @@ type Stage struct {
 	// See specs/032-stage-abi.md section 5.
 	Textures []StageTexture
 
+	// FlatVaryings marks, per float of the flat varyings form, the ones that
+	// take the provoking vertex's value rather than being interpolated.
+	//
+	// Per float rather than per field because that is what a rasterizer indexes:
+	// specs/032-stage-abi.md section 3.1 tags a *field*, and a tagged Vec4
+	// contributes four flat floats. Nil means every varying interpolates, which
+	// is the default and what a stage with no tagged field carries.
+	FlatVaryings []bool
+
 	// Discards reports that the body reaches a discard, so a backend does not
 	// promise an early depth test this stage cannot have.
 	Discards bool

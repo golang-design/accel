@@ -190,6 +190,17 @@ func V(v accel.Vertex) accel.Clip { return accel.Clip{} }`,
 			line: 2, want: "a vertex stage returns a clip position and a varyings struct",
 		},
 		{
+			name: "integer varying without the flat tag",
+			body: `type Ided struct {
+	Tint accel.Vec4
+	ID   int32
+}
+
+//accel:vertex
+func V(v accel.Vertex) (accel.Clip, Ided) { return accel.Clip{}, Ided{} }`,
+			line: 7, want: `is i32, which no backend interpolates: tag the field accel:"flat"`,
+		},
+		{
 			// Sixteen Vec4 fields is sixteen slots, one over. Sixteen rather
 			// than a hundred, because the boundary is where an off-by-one in
 			// the ceiling division shows and a wildly oversized struct would
@@ -909,6 +920,19 @@ func TestAccepts(t *testing.T) {
 		read  []string
 		write []string
 	}{
+		{
+			// The accepting half of the rule above, in the same corpus: a
+			// refusal whose accepting case is untestable is a withdrawal
+			// waiting to happen.
+			name: "integer varying with the flat tag",
+			body: `type Ided struct {
+	Tint accel.Vec4
+	ID   int32 ` + "`" + `accel:"flat"` + "`" + `
+}
+
+//accel:vertex
+func V(v accel.Vertex) (accel.Clip, Ided) { return accel.Clip{}, Ided{} }`,
+		},
 		{
 			// Exactly at the limit, so an off-by-one in the comparison shows
 			// up as a legal struct being refused rather than as nothing.

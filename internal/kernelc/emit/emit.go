@@ -309,6 +309,16 @@ func (e *emitter) stage(k *ir.Func) {
 		}
 		e.printf("\t},\n")
 	}
+	if m := varyingFlatMask(k.Varyings); len(m) > 0 {
+		e.printf("\tFlatVaryings: []bool{")
+		for i, f := range m {
+			if i > 0 {
+				e.printf(", ")
+			}
+			e.printf("%t", f)
+		}
+		e.printf("},\n")
+	}
 	if k.Discards {
 		e.printf("\tDiscards: true,\n")
 	}
@@ -420,11 +430,13 @@ func (e *emitter) stageFlatten(k *ir.Func) {
 		for _, f := range k.Varyings.Fields {
 			if f.Type != nil && f.Type.Kind == ir.Array {
 				for i := range f.Type.Len {
-					e.printf("\tout = append(out, v.%s[%d])\n", f.Name, i)
+					e.printf("\tout = append(out, %s)\n",
+						e.packVarying(f.Type.Elem, fmt.Sprintf("v.%s[%d]", f.Name, i)))
 				}
 				continue
 			}
-			e.printf("\tout = append(out, v.%s)\n", f.Name)
+			e.printf("\tout = append(out, %s)\n",
+				e.packVarying(f.Type, "v."+f.Name))
 		}
 		e.printf("\treturn out\n}\n\n")
 
@@ -435,16 +447,79 @@ func (e *emitter) stageFlatten(k *ir.Func) {
 		for _, f := range k.Varyings.Fields {
 			if f.Type != nil && f.Type.Kind == ir.Array {
 				for i := range f.Type.Len {
-					e.printf("\tv.%s[%d] = f[%d]\n", f.Name, i, at)
+					e.printf("\tv.%s[%d] = %s\n", f.Name, i,
+						e.unpackVarying(f.Type.Elem, fmt.Sprintf("f[%d]", at)))
 					at++
 				}
 				continue
 			}
-			e.printf("\tv.%s = f[%d]\n", f.Name, at)
+			e.printf("\tv.%s = %s\n", f.Name,
+				e.unpackVarying(f.Type, fmt.Sprintf("f[%d]", at)))
 			at++
 		}
 		e.printf("\treturn v\n}\n\n")
 	})
+}
+
+// packVarying and unpackVarying move one varying between its own type and the
+// float the flat form carries.
+//
+// A float passes through. Anything else moves by *bits*, not by value, and that
+// is the whole of it: specs/032-stage-abi.md section 3.1 makes a non-float
+// varying flat-only, flat means no arithmetic happens to it between the two
+// stages, so the bit pattern arrives exactly. A value conversion would lose
+// every integer above 2^24 and would lose it silently, which is a wrong index
+// rather than an error.
+//
+// Before this existed the packer appended the field straight into a
+// []float32, so an authored integer varying produced generated Go that did not
+// compile -- a Go type error inside machine-written code, in place of the
+// positioned refusal section 3.1 specifies.
+func (e *emitter) packVarying(t *ir.Type, expr string) string {
+	switch {
+	case t == nil || t.Kind == ir.F32:
+		return expr
+	case t.Kind == ir.U32:
+		return "math.Float32frombits(" + expr + ")"
+	default:
+		return "math.Float32frombits(uint32(" + expr + "))"
+	}
+}
+
+func (e *emitter) unpackVarying(t *ir.Type, expr string) string {
+	switch {
+	case t == nil || t.Kind == ir.F32:
+		return expr
+	case t.Kind == ir.U32:
+		return "math.Float32bits(" + expr + ")"
+	default:
+		return e.goType(t) + "(math.Float32bits(" + expr + "))"
+	}
+}
+
+// varyingFlatMask is one bool per float of the flat form, marking the floats a
+// rasterizer must not interpolate.
+//
+// Nil when nothing is tagged, so the common stage carries no slice and
+// raster.State's "a nil or short slice leaves the remaining slots smooth"
+// covers it without a special case here.
+func varyingFlatMask(t *ir.Type) []bool {
+	out := make([]bool, 0, varyingFloats(t))
+	any := false
+	for _, f := range t.Fields {
+		n := 1
+		if f.Type != nil && f.Type.Kind == ir.Array {
+			n = f.Type.Len
+		}
+		for range n {
+			out = append(out, f.Flat)
+		}
+		any = any || f.Flat
+	}
+	if !any {
+		return nil
+	}
+	return out
 }
 
 // varyingFloats is how many floats a varyings struct flattens to.

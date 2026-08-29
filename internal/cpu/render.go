@@ -169,6 +169,12 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 			Viewport: raster.Viewport{W: rp.Width, H: rp.Height, MinDepth: 0, MaxDepth: 1},
 			Front:    raster.FrontFace(d.FrontFace),
 			Cull:     raster.Cull(d.Cull),
+			// Which varyings take the provoking vertex's value rather than
+			// being interpolated. From the vertex stage, which is the one that
+			// produces them; the fragment stage carries the identical mask
+			// because specs/032-stage-abi.md section 3.3 makes the two share
+			// one varyings type.
+			Flat: d.Vertex.FlatVaryings,
 		},
 		Depth: raster.DepthState{
 			Test: d.DepthTest, Write: d.DepthWrite,
