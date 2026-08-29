@@ -1590,3 +1590,64 @@ func keysOf(m map[float32]int) []float32 {
 	}
 	return out
 }
+
+// The two interpolation qualifiers agree with the oracle on Metal.
+//
+// specs/032-stage-abi.md section 3.1. Both channels at once: red is
+// perspective-correct and green is screen-linear over the same value, so a
+// backend that applied [[center_no_perspective]] to the wrong member, to both,
+// or to neither disagrees with the oracle in a channel this reads.
+//
+// Within a derived bound rather than exactly, for the reason the plain triangle
+// differential gives: the two rasterizers are free to compute barycentric
+// weights differently, and section 8 puts interpolated values in the bounded
+// half of its split.
+func TestTheInterpolationQualifiersAgreeOnBothBackends(t *testing.T) {
+	const w, h = 32, 32
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	onCPU := perspectiveImage(t, cpu, w, h)
+	onMetal := perspectiveImage(t, metal, w, h)
+
+	// The largest interpolated value here is 2, and a weighted sum of three
+	// terms takes two roundings, so this is 4u. Nothing is tuned.
+	const bound = 4 * 1.1920929e-7
+
+	var covered, differing, qualified int
+	for i := 0; i < len(onCPU); i += 4 {
+		if onCPU[i+2] == 0 {
+			continue
+		}
+		covered++
+		if onCPU[i] != onCPU[i+1] {
+			qualified++
+		}
+		for c := range 3 {
+			if d := math.Abs(float64(onCPU[i+c] - onMetal[i+c])); d > bound {
+				differing++
+				if differing < 4 {
+					px := i / 4
+					t.Errorf("pixel (%d,%d) channel %d is %v on the oracle and %v on "+
+						"Metal, %v apart and the derived bound is %v",
+						px%w, px/w, c, onCPU[i+c], onMetal[i+c], d, bound)
+				}
+			}
+		}
+	}
+	if covered == 0 {
+		t.Fatal("the oracle covered nothing, so the comparison is vacuous")
+	}
+	// Without this the two backends could agree by both ignoring the qualifier.
+	if qualified == 0 {
+		t.Fatal("the two qualifiers produced the same value at every covered pixel on " +
+			"the oracle, so agreeing with Metal says nothing about either")
+	}
+	if differing > 0 {
+		t.Errorf("%d channel values differ by more than %v", differing, bound)
+	}
+}

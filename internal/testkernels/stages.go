@@ -277,3 +277,43 @@ func IndexedVS(v accel.Vertex) (accel.Clip, IndexedVaryings) {
 func IndexedFS(f accel.Fragment, in IndexedVaryings) Solid {
 	return Solid{Colour: accel.Vec4{float32(in.ID), in.Tint[1], in.Tint[2], 1}}
 }
+
+// PerspectiveVaryings carries one value twice, interpolated two ways.
+//
+// The same source in both fields is the point: a pixel where the two disagree
+// is proof the qualifiers are different operations, and it needs no second
+// implementation of either formula to say so. Where w is constant they agree
+// exactly, which is why the triangle this pairs with does not have constant w.
+type PerspectiveVaryings struct {
+	Smooth accel.Vec2
+	Linear accel.Vec2 `accel:"noperspective"`
+}
+
+// PerspectiveVS covers the lower-left half from a triangle whose vertices have
+// different w.
+//
+// Different w is the whole fixture. Perspective-correct interpolation divides
+// by the interpolated 1/w and screen-linear does not, so the two coincide
+// exactly when every w is equal -- and a stage drawn at w = 1 everywhere would
+// compare a qualifier against itself.
+//
+//accel:vertex
+func PerspectiveVS(v accel.Vertex) (accel.Clip, PerspectiveVaryings) {
+	i := v.VertexIndex()
+	pos := accel.Clip{-1, -1, 0, 1}
+	if i == 1 {
+		pos = accel.Clip{2, -2, 0, 2}
+	}
+	if i == 2 {
+		pos = accel.Clip{-2, 2, 0, 2}
+	}
+	t := accel.Vec2{float32(i), 1}
+	return pos, PerspectiveVaryings{Smooth: t, Linear: t}
+}
+
+// PerspectiveFS writes both interpolations of the same value side by side.
+//
+//accel:fragment
+func PerspectiveFS(f accel.Fragment, in PerspectiveVaryings) Solid {
+	return Solid{Colour: accel.Vec4{in.Smooth[0], in.Linear[0], in.Smooth[1], 1}}
+}

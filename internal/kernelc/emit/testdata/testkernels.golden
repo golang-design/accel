@@ -12425,6 +12425,115 @@ fragment IndexedFS_out IndexedFS(
 	Generator: kernelabi.Version,
 }
 
+// perspectiveVSFlat is the generated lowering of the vertex stage PerspectiveVS.
+//
+// specs/032-stage-abi.md. The authored PerspectiveVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func perspectiveVSFlat(v accel.Vertex) (accel.Clip, PerspectiveVaryings) {
+	var i uint32 = v.VertexIndex()
+	var pos [4]float32 = [4]float32{float32(-1), float32(-1), float32(0), float32(1)}
+	if i == uint32(1) {
+		pos = [4]float32{float32(2), float32(-2), float32(0), float32(2)}
+	}
+	if i == uint32(2) {
+		pos = [4]float32{float32(-2), float32(2), float32(0), float32(2)}
+	}
+	var t [2]float32 = [2]float32{float32(i), float32(1)}
+	return pos, PerspectiveVaryings{t, t}
+}
+
+// PerspectiveVSStage is the compiled form of PerspectiveVS.
+var PerspectiveVSStage = accel.Stage{
+	Name:           "PerspectiveVS",
+	Kind:           accel.StageVertex,
+	Varyings:       "PerspectiveVaryings",
+	LinearVaryings: []bool{false, false, true, true},
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
+		pos, vary := perspectiveVSFlat(v)
+		return pos, flattenPerspectiveVaryings(vary)
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PerspectiveVS_out {
+    float4 _pos [[position]];
+    float2 Smooth [[user(v0)]];
+    float2 Linear [[user(v1)]] [[center_no_perspective]];
+};
+
+vertex PerspectiveVS_out PerspectiveVS(
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    PerspectiveVS_out _out;
+    uint i = _vid;
+    float4 pos = float4(float(-1), float(-1), float(0), float(1));
+    if ((i == uint(1))) {
+        pos = float4(float(2), float(-2), float(0), float(2));
+    }
+    if ((i == uint(2))) {
+        pos = float4(float(-2), float(2), float(0), float(2));
+    }
+    float2 t = float2(float(i), float(1));
+    _out._pos = pos;
+    _out.Smooth = t;
+    _out.Linear = t;
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
+    return _out;
+}
+`,
+	Digest:    "5f636b97ce81310f40c1461c9b7540cd",
+	Generator: kernelabi.Version,
+}
+
+// perspectiveFSFlat is the generated lowering of the fragment stage PerspectiveFS.
+//
+// specs/032-stage-abi.md. The authored PerspectiveFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func perspectiveFSFlat(f accel.Fragment, in PerspectiveVaryings) Solid {
+	return Solid{[4]float32{in.Smooth[int32(0)], in.Linear[int32(0)], in.Smooth[int32(1)], float32(1)}}
+}
+
+// PerspectiveFSStage is the compiled form of PerspectiveFS.
+var PerspectiveFSStage = accel.Stage{
+	Name:     "PerspectiveFS",
+	Kind:     accel.StageFragment,
+	Varyings: "PerspectiveVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	LinearVaryings: []bool{false, false, true, true},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
+		out := perspectiveFSFlat(f, unflattenPerspectiveVaryings(vv))
+		return [][4]float32{out.Colour}
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct PerspectiveFS_in {
+    float4 _pos [[position]];
+    float2 Smooth [[user(v0)]];
+    float2 Linear [[user(v1)]] [[center_no_perspective]];
+};
+
+struct PerspectiveFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment PerspectiveFS_out PerspectiveFS(
+    PerspectiveFS_in _in [[stage_in]],
+    bool _front [[front_facing]]) {
+    PerspectiveFS_in in = _in;
+    PerspectiveFS_out _out;
+    _out.Colour = float4(in.Smooth[int(0)], in.Linear[int(0)], in.Smooth[int(1)], float(1));
+    return _out;
+}
+`,
+	Digest:    "2e7495be84d50b86a6ba83a0e8ff9072",
+	Generator: kernelabi.Version,
+}
+
 // subgroupReduceFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -13873,6 +13982,26 @@ func unflattenIndexedVaryings(f []float32) IndexedVaryings {
 	return v
 }
 
+// flattenPerspectiveVaryings packs PerspectiveVaryings into the flat form a rasterizer interpolates.
+func flattenPerspectiveVaryings(v PerspectiveVaryings) []float32 {
+	out := make([]float32, 0, 4)
+	out = append(out, v.Smooth[0])
+	out = append(out, v.Smooth[1])
+	out = append(out, v.Linear[0])
+	out = append(out, v.Linear[1])
+	return out
+}
+
+// unflattenPerspectiveVaryings is flattenPerspectiveVaryings's inverse.
+func unflattenPerspectiveVaryings(f []float32) PerspectiveVaryings {
+	var v PerspectiveVaryings
+	v.Smooth[0] = f[0]
+	v.Smooth[1] = f[1]
+	v.Linear[0] = f[2]
+	v.Linear[1] = f[3]
+	return v
+}
+
 // Kernels is every kernel this package generated, in source order.
 //
 // Generated rather than written, so that a pass over the whole corpus cannot
@@ -13983,4 +14112,6 @@ var Stages = []*accel.Stage{
 	&DiscardFSStage,
 	&IndexedVSStage,
 	&IndexedFSStage,
+	&PerspectiveVSStage,
+	&PerspectiveFSStage,
 }

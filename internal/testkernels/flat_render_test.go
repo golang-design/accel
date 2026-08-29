@@ -128,3 +128,106 @@ func TestAFlatVaryingIsConstantAcrossThePrimitive(t *testing.T) {
 		}
 	}
 }
+
+// perspectiveImage renders PerspectiveVS/PerspectiveFS: red is the
+// perspective-correct interpolation of a value and green is the screen-linear
+// interpolation of the same value.
+func perspectiveImage(t *testing.T, d *accel.Device, w, h int) []float32 {
+	t.Helper()
+	q := d.Queue()
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.PerspectiveVSStage,
+		Fragment: &testkernels.PerspectiveFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "perspective",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryReadback, Label: "perspective",
+	})
+	if err != nil {
+		t.Fatalf("texture: %v", err)
+	}
+	defer tex.Close()
+	view, err := tex.Whole()
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: view, Load: accel.LoadClear}},
+		Width: w, Height: h, Label: "perspective",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := q.Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	raw := make([]byte, w*h*tex.Format().BytesPerPixel())
+	if err := q.ReadTexture(tex, raw); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
+			uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
+	}
+	return out
+}
+
+// noperspective is a different operation from the default, and the picture
+// proves it without a second implementation of either formula.
+//
+// specs/032-stage-abi.md section 3.1's second row. One value is carried in two
+// fields, one tagged and one not, over a triangle whose vertices have different
+// w. Perspective-correct interpolation divides by the interpolated 1/w and
+// screen-linear does not, so the two must disagree somewhere -- and where they
+// do not, nothing was applied.
+func TestNoPerspectiveInterpolatesDifferently(t *testing.T) {
+	const w, h = 32, 32
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer d.Close()
+
+	px := perspectiveImage(t, d, w, h)
+	var covered, differing int
+	var maxGap float64
+	for i := 0; i < len(px); i += 4 {
+		// Blue is the second component of the same varying, which is 1 at every
+		// vertex, so it is 1 wherever the triangle covered and 0 elsewhere --
+		// a coverage channel that does not depend on the values under test.
+		if px[i+2] == 0 {
+			continue
+		}
+		covered++
+		if gap := math.Abs(float64(px[i] - px[i+1])); gap > 0 {
+			differing++
+			maxGap = math.Max(maxGap, gap)
+		}
+	}
+	if covered == 0 {
+		t.Fatal("nothing was covered, so there is no interpolation to compare")
+	}
+	if differing == 0 {
+		t.Fatalf("the two interpolations of one value agree at all %d covered pixels: "+
+			"the noperspective qualifier reached nothing", covered)
+	}
+	t.Logf("%d of %d covered pixels differ, by at most %v", differing, covered, maxGap)
+}
