@@ -71,6 +71,8 @@ func codecFor(f driver.Format) (texelCodec, error) {
 		return texelCodec{f, 16, 4, decodeFloat(4), encodeFloat(4)}, nil
 	case driver.Depth32Float:
 		return texelCodec{f, 4, 1, decodeFloat(1), encodeFloat(1)}, nil
+	case driver.Depth32FloatStencil8:
+		return texelCodec{f, 8, 2, decodeDepthStencil, encodeDepthStencil}, nil
 	case driver.Depth24PlusStencil8:
 		return texelCodec{}, fmt.Errorf("%v has a device-defined layout -- \"24 plus\" "+
 			"means at least 24 bits of depth, and a backend may store it as 32 with 8 "+
@@ -254,6 +256,39 @@ func decodeFloat(n int) func([]byte) [4]float32 {
 		}
 		return v
 	}
+}
+
+// decodeDepthStencil and encodeDepthStencil are Depth32FloatStencil8: a float32
+// depth, a stencil byte, and three reserved bytes.
+//
+// The stencil aspect travels as a float because that is the only channel type
+// this codec has, and it is exact: every value a uint8 can hold is a float32
+// with no rounding, so the round trip is the identity rather than a conversion
+// with a domain. The reserved bytes are written zero rather than left alone,
+// because an attachment's bytes are compared against the oracle's and
+// uninitialised padding is a difference nobody caused.
+func decodeDepthStencil(src []byte) [4]float32 {
+	return [4]float32{
+		math.Float32frombits(binary.LittleEndian.Uint32(src)),
+		float32(src[4]), 0, 1,
+	}
+}
+
+func encodeDepthStencil(dst []byte, v [4]float32) {
+	binary.LittleEndian.PutUint32(dst, math.Float32bits(v[0]))
+	// Clamped rather than truncated: the stencil aspect is eight bits and a
+	// value outside them is a caller error the oracle must answer the same way
+	// every time, not a wrap that depends on the conversion's direction.
+	s := v[1]
+	switch {
+	case !(s > 0):
+		dst[4] = 0
+	case s >= 255:
+		dst[4] = 255
+	default:
+		dst[4] = uint8(s)
+	}
+	dst[5], dst[6], dst[7] = 0, 0, 0
 }
 
 func encodeFloat(n int) func([]byte, [4]float32) {

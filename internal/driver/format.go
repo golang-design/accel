@@ -45,23 +45,25 @@ const (
 	RGBA32Float
 	Depth32Float
 	Depth24PlusStencil8
+	Depth32FloatStencil8
 )
 
 // formatNames are the names accel spells these with. Equality of the two
 // spellings is what TestEveryFormatHasOnePlanSpelling asserts, so a name is
 // part of the contract rather than a diagnostic convenience.
 var formatNames = map[Format]string{
-	RGBA8Unorm:          "RGBA8Unorm",
-	RGBA8UnormSRGB:      "RGBA8UnormSRGB",
-	BGRA8Unorm:          "BGRA8Unorm",
-	R16Float:            "R16Float",
-	RG16Float:           "RG16Float",
-	RGBA16Float:         "RGBA16Float",
-	R32Float:            "R32Float",
-	RG32Float:           "RG32Float",
-	RGBA32Float:         "RGBA32Float",
-	Depth32Float:        "Depth32Float",
-	Depth24PlusStencil8: "Depth24PlusStencil8",
+	RGBA8Unorm:           "RGBA8Unorm",
+	RGBA8UnormSRGB:       "RGBA8UnormSRGB",
+	BGRA8Unorm:           "BGRA8Unorm",
+	R16Float:             "R16Float",
+	RG16Float:            "RG16Float",
+	RGBA16Float:          "RGBA16Float",
+	R32Float:             "R32Float",
+	RG32Float:            "RG32Float",
+	RGBA32Float:          "RGBA32Float",
+	Depth32Float:         "Depth32Float",
+	Depth24PlusStencil8:  "Depth24PlusStencil8",
+	Depth32FloatStencil8: "Depth32FloatStencil8",
 }
 
 func (f Format) String() string {
@@ -81,5 +83,5 @@ var Formats = []Format{
 	RGBA8Unorm, RGBA8UnormSRGB, BGRA8Unorm,
 	R16Float, RG16Float, RGBA16Float,
 	R32Float, RG32Float, RGBA32Float,
-	Depth32Float, Depth24PlusStencil8,
+	Depth32Float, Depth24PlusStencil8, Depth32FloatStencil8,
 }

@@ -44,6 +44,15 @@ const (
 	// that rather than the caller discovering it.
 	Depth32Float
 	Depth24PlusStencil8
+
+	// Depth32FloatStencil8 is the one depth format with a stencil aspect whose
+	// layout is not device-defined: 32-bit float depth, then one byte of
+	// stencil, then three reserved bytes that are written zero. It exists
+	// because specs/033-render-api.md section 2.1's stencil state needs a
+	// format that can carry it, and Depth24PlusStencil8 cannot -- that one is
+	// refused precisely because "24 plus" has two defensible encodings, and
+	// this is the answer to what the refusal left missing.
+	Depth32FloatStencil8
 )
 
 // TextureUsage declares how a texture will be used.

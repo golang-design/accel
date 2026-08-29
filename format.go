@@ -104,6 +104,15 @@ var formatTable = map[Format]formatEntry{
 		// says it does not know rather than guessing four.
 		renderable: true,
 	},
+	Depth32FloatStencil8: {
+		// Eight bytes rather than five. The stencil byte is followed by three
+		// reserved bytes so a texel starts on a four-byte boundary, which is
+		// what lets the depth aspect be read as a float32 without an unaligned
+		// load on any target -- and what keeps the row pitch arithmetic the
+		// same shape as every other format's.
+		name: "Depth32FloatStencil8", bpp: 8, channels: 2,
+		depth: true, stencil: true, renderable: true,
+	},
 }
 
 // BytesPerPixel returns the format's size, or zero when the layout is
@@ -168,6 +177,8 @@ func (f Format) plan() driver.Format {
 		return driver.Depth32Float
 	case Depth24PlusStencil8:
 		return driver.Depth24PlusStencil8
+	case Depth32FloatStencil8:
+		return driver.Depth32FloatStencil8
 	}
 	return driver.FormatInvalid
 }
