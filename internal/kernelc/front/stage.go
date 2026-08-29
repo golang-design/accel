@@ -6,9 +6,12 @@ package front
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
+	"strings"
 
 	"golang.design/x/accel/internal/kernelc/ir"
+	"golang.design/x/accel/internal/mslabi"
 )
 
 // The graphics stage signatures of specs/032-stage-abi.md.
@@ -136,6 +139,7 @@ func (c *checker) stageSignature(fn *ast.FuncDecl, k *ir.Func, what string) bool
 			return false
 		}
 		k.Varyings = c.namedStructType(vt)
+		c.checkVaryingSlots(params[1].id.Pos(), k.Name, k.Varyings)
 		k.Params = append(k.Params, ir.NewParam(params[1].id.Pos(), k.Varyings, 1,
 			params[1].id.Name, c.info.Defs[params[1].id]))
 		next = 2
@@ -209,6 +213,7 @@ func (c *checker) stageResults(fn *ast.FuncDecl, k *ir.Func, what string) bool {
 			return false
 		}
 		k.Varyings = c.namedStructType(vt)
+		c.checkVaryingSlots(flat[1].Pos(), k.Name, k.Varyings)
 		return true
 	}
 
@@ -257,6 +262,47 @@ func isVec4(t types.Type) bool {
 	}
 	b, ok := arr.Elem().Underlying().(*types.Basic)
 	return ok && b.Kind() == types.Float32
+}
+
+// varyingSlots is how many four-component interpolation slots a varyings struct
+// occupies, specs/032-stage-abi.md section 3.2's formula.
+//
+// Not varyingFloats. That counts the floats the flat form carries, which is 4
+// for a Vec4; this counts slots, which is 1. Reusing the other would refuse
+// every stage with four float vectors in it.
+func varyingSlots(t *ir.Type) int {
+	n := 0
+	for _, f := range t.Fields {
+		c := 1
+		if f.Type != nil && f.Type.Kind == ir.Array {
+			c = f.Type.Len
+		}
+		n += (c + 3) / 4
+	}
+	return n
+}
+
+// checkVaryingSlots refuses a varyings struct that exceeds the interpolation
+// budget, at generation and with the source position, which section 9 requires
+// of every stage error.
+//
+// The limit is the target profile's rather than the device's. Section 3.2 says
+// both, and section 9 and decision 6 settle it: an error that waits for
+// pipeline creation arrives without the position that makes it actionable, and
+// the generator has no device to ask.
+func (c *checker) checkVaryingSlots(pos token.Pos, name string, t *ir.Type) {
+	n := varyingSlots(t)
+	if n <= mslabi.StageVaryingSlotLimit {
+		return
+	}
+	fields := make([]string, 0, len(t.Fields))
+	for _, f := range t.Fields {
+		fields = append(fields, f.Name)
+	}
+	c.errorf(pos, "stage %s varyings %s occupy %d interpolation slots and the limit is %d: "+
+		"the count is the sum of ceil(components/4) over the fields %s, and it does not pack "+
+		"(specs/032-stage-abi.md section 3.2)",
+		name, t.Name, n, mslabi.StageVaryingSlotLimit, strings.Join(fields, ", "))
 }
 
 // namedStructType records a varyings struct in the IR, keeping the name so a

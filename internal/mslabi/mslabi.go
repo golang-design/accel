@@ -98,3 +98,21 @@ func StageTextureIndex(i int) int { return i }
 // Metal's smallest table is 31. A pipeline that fits here fits everywhere,
 // which is the property a portable ABI needs from a limit.
 const StageTextureLimit = 16
+
+// StageVaryingSlotLimit is how many four-component interpolation slots one
+// varyings struct may occupy.
+//
+// specs/032-stage-abi.md section 3.2. Four-component slots because that is the
+// unit every backend limits, and the count is the sum of ceil(components/4)
+// over the fields -- unpacked, so a caller can compute it by reading their own
+// struct rather than by modelling a packer.
+//
+// Fifteen, and the number is the floor rather than a round one. OpenGL ES 3.1
+// requires GL_MAX_VARYING_VECTORS to be at least 15, which is the smallest
+// guarantee among the targets specs/006-backends.md names; Vulkan's
+// maxVertexOutputComponents and maxFragmentInputComponents each have a required
+// minimum of 64, or 16 slots, and Metal's fragment input is 124 scalars. A
+// struct that fits here fits everywhere, which is what a portable ABI needs
+// from a limit -- and refusing at the *smallest* guarantee is what stops a
+// stage that compiles on the developer's Mac from failing on a phone.
+const StageVaryingSlotLimit = 15

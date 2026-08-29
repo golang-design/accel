@@ -190,6 +190,35 @@ func V(v accel.Vertex) accel.Clip { return accel.Clip{} }`,
 			line: 2, want: "a vertex stage returns a clip position and a varyings struct",
 		},
 		{
+			// Sixteen Vec4 fields is sixteen slots, one over. Sixteen rather
+			// than a hundred, because the boundary is where an off-by-one in
+			// the ceiling division shows and a wildly oversized struct would
+			// be refused by a wrong formula too.
+			name: "varyings over the interpolation slot limit",
+			body: `type Wide struct {
+	F0 accel.Vec4
+	F1 accel.Vec4
+	F2 accel.Vec4
+	F3 accel.Vec4
+	F4 accel.Vec4
+	F5 accel.Vec4
+	F6 accel.Vec4
+	F7 accel.Vec4
+	F8 accel.Vec4
+	F9 accel.Vec4
+	F10 accel.Vec4
+	F11 accel.Vec4
+	F12 accel.Vec4
+	F13 accel.Vec4
+	F14 accel.Vec4
+	F15 accel.Vec4
+}
+
+//accel:vertex
+func V(v accel.Vertex) (accel.Clip, Wide) { return accel.Clip{}, Wide{} }`,
+			line: 21, want: "occupy 16 interpolation slots and the limit is 15",
+		},
+		{
 			name: "fragment stage with no varyings parameter",
 			body: `//accel:fragment
 func F(f accel.Fragment) accel.Vec4 { return accel.Vec4{} }`,
@@ -880,6 +909,31 @@ func TestAccepts(t *testing.T) {
 		read  []string
 		write []string
 	}{
+		{
+			// Exactly at the limit, so an off-by-one in the comparison shows
+			// up as a legal struct being refused rather than as nothing.
+			name: "varyings exactly at the interpolation slot limit",
+			body: `type Wide struct {
+	F0 accel.Vec4
+	F1 accel.Vec4
+	F2 accel.Vec4
+	F3 accel.Vec4
+	F4 accel.Vec4
+	F5 accel.Vec4
+	F6 accel.Vec4
+	F7 accel.Vec4
+	F8 accel.Vec4
+	F9 accel.Vec4
+	F10 accel.Vec4
+	F11 accel.Vec4
+	F12 accel.Vec4
+	F13 accel.Vec4
+	F14 accel.Vec4
+}
+
+//accel:vertex
+func V(v accel.Vertex) (accel.Clip, Wide) { return accel.Clip{}, Wide{} }`,
+		},
 		{
 			name: "var declaration and else",
 			body: `//accel:kernel workgroup=64
