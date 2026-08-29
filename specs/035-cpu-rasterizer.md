@@ -370,3 +370,67 @@ produces is exactly what §2 says makes a coverage comparison meaningless.
 - **Conservative rasterization and sample positions.** Both are capabilities
   elsewhere and neither has a portable definition; out of scope until something
   needs one.
+
+## 11. §7.1's fixed-function gap, and what closing it found — 2026-08-29
+
+§7.1 requires **every pixel-producing corpus entry to run on the CPU backend and
+on Metal**, compared on its declared side. Four entries ran on the CPU only —
+the write mask, multiple render targets, per-attachment blend, and determinism —
+and the first of those was wrong on the GPU the whole time.
+
+### 11.1 The colour write mask reached the wrong channels
+
+`accel.ColorWriteMask` numbers its channels **red at bit 0**, as Vulkan and
+D3D12 do. `MTLColorWriteMask` numbers them **alpha at bit 0**, red at bit 3. The
+Metal backend passed the value through as `int(m)`, so every mask arrived
+mirrored:
+
+| the caller asked for | Metal wrote |
+| --- | --- |
+| red | alpha |
+| green | blue |
+| blue | green |
+| alpha | red |
+| **all** | **all** |
+| **red and alpha** | **red and alpha** |
+
+The last two rows are why it survived. `WriteAll` is `0xF` under either
+numbering, and it is the default and the only mask any test had used; a mask
+symmetric about the middle is likewise its own mirror, and one of the five cases
+written for this test passes even against the bug. **A partial fixture would
+have reported success.**
+
+It is now `metalWriteMask`, written out by name, which is the rule
+`metalLoadAction` already states — *"the two enumerations agree today, and a
+numeric conversion mistranslates silently the day either gains a value in the
+middle"*. Here they never agreed, and the conversion was wrong from the day it
+was written.
+
+### 11.2 The other three were correct, and are now compared
+
+MRT and per-attachment blend both already worked on Metal. That is the useful
+outcome of running the search rather than the disappointing one: the entries are
+now compared rather than assumed, and each was confirmed to discriminate by
+reinstating a fault in the backend — swapping the two attachments moves
+attachment 0's clear, and applying attachment zero's blend to both moves
+attachment 1 by 0.2.
+
+Determinism had no test at all. `TestPlansAreDeterministic` is about plan-cache
+identity, not pixels. One built graph is now submitted **twice** — a replay
+rather than two builds, because [003](003-command-graph.md)'s guarantee is about
+replay and rebuilding would also be re-planning — and compared bit for bit on
+both backends. Bit for bit, not within a bound: two runs of one program over one
+input have no licence to differ, and a bound would hide exactly what the entry
+is for.
+
+### 11.3 What generalizes
+
+**An enumeration crossing an ABI is a mapping, not a number, and the default
+value is the one that hides a wrong mapping.** Both of this session's live
+defects were found by asking which backends read what a call writes; this one
+adds that agreeing on the *common* value is not evidence, because the common
+value is what every existing test uses.
+
+§7.1's remaining CPU-only entry is stencil, which no caller can reach at all —
+[033](033-render-api.md) §2.1's state is unbuilt in the public API while
+`internal/raster` implements the whole of it.
