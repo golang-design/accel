@@ -394,6 +394,11 @@ was not asked for and a present slot does not set it.
 
 ### 8.4 What Metal does, and what it costs
 
+> **Overtaken.** Metal lowers an attachment at its declared format (§8.1) and,
+> since §8.6, a stage's texture too. The paragraph below is kept as the record
+> of what was true on 2026-08-24; the refusal it describes is no longer in the
+> tree, and the coverage argument it makes is the one §8.6 acts on.
+
 Only the CPU backend lowers a texture attachment. A Metal device refuses one at
 build, naming the pass, the attachment and this spec — decision 6, absence is
 reported rather than discovered. The alternative was worse than a refusal: the
@@ -422,8 +427,9 @@ one gate that would have argued for it does not run where anyone would notice.**
 
 Unchanged from §7, minus what §8.1 marks done:
 
-- a fragment stage fetching a texel from a texture a previous pass wrote, on
-  both backends, compared pixel for pixel;
+- ~~a fragment stage fetching a texel from a texture a previous pass wrote, on
+  both backends, compared pixel for pixel~~ — **done 2026-08-29, §8.6**, for a
+  vertex stage as well as a fragment one;
 - an overlapping subresource refused at build naming both views, and a disjoint
   one accepted and producing the expected pixels;
 - Metal's real `MTLRenderPassDescriptor` attachments, with the per-pass staging
@@ -431,6 +437,74 @@ Unchanged from §7, minus what §8.1 marks done:
   in a test;
 - `MipLevels` and `ArrayLayers`, once the allocation, the copy and the hazard
   range name a subresource.
+
+### 8.6 The Metal half of texel fetch — 2026-08-29
+
+§8.5's first bullet. A fragment stage and a vertex stage each fetch a texture a
+previous pass wrote, on both backends, and the pictures are compared.
+
+**What it closed was not an absence, it was a silent drop.** `RenderPass.SetTexture`
+is exported and was accepted on a Metal device: `build.go` resolved the binding,
+checked it against the slots the stage declares, and refused feedback, then
+filled `driver.RenderDraw.VertexTextures`/`FragmentTextures` — which only
+`internal/cpu` ever read. `internal/metal` read the field nowhere and refused
+nothing, so a caller got the right picture from the oracle and a black one from
+the GPU, with no error on either. Confirmed before the fix rather than inferred:
+240 of 240 floats differed, and Metal raised nothing.
+
+That makes it [042](042-surface-completion.md) §7's own thesis falsified —
+*"no exported declaration is reachable-and-unusable without a refusal naming
+what is missing"* — rather than the missing row §8.5 recorded it as. The MSL
+emitter had declared the argument and `_accel_fetch2d` since the stage half
+landed, so what was owed was three seams: a sampled texture, the two argument
+tables, and the copy that fills one.
+
+| Where | What |
+| --- | --- |
+| `internal/mtl` | `NewSampledTexture` (`MTLTextureUsageShaderRead`, private), `RenderEncoder.SetVertexTexture`/`SetFragmentTexture` |
+| `internal/metal` | `stageTextures` materializes one texture per binding per draw and blits the caller's bytes in *before* the render encoder opens, because a blit cannot be encoded inside one |
+
+**A separate constructor rather than a usage argument.** An attachment Metal may
+never sample and a fetched texture Metal may never render into; declaring both
+on every texture compiles and tells the driver less than it is told now.
+
+**The holes in a stage's texture list are preserved.** A stage may declare a
+texture it does not read, which leaves a gap the plan does not fill. Binding by
+position in a compacted list puts every texture after a gap one argument too
+low — a wrong picture, not an error — so the backend's slice is indexed the same
+as the plan's, `nil` included.
+
+#### 8.6.1 Two findings, both from making the test discriminate
+
+**The pitch is the number this backend computes rather than reads, and a small
+fixture hides it.** The copy into the staged texture takes the *buffer's* pitch,
+which the plan aligned to the device's 256 bytes, while the texture's rows are
+tight. 12 texels of `RGBA32Float` is 192 bytes and pads; 16 would not. Reinstated
+the tight pitch and 133 of 240 floats moved, every row after the first — the same
+trap §8.4's write-back names, in the other direction.
+
+**A gradient cannot place a triangle, and the reason generalizes.** The vertex
+case reads its three clip positions out of a lookup table, so the table has to
+hold three points that are not collinear. Painting it with one interpolated
+triangle cannot: a colour along one row is a convex combination of two vertex
+colours, so every texel in that row lies on a line, and three collinear positions
+cover exactly as many pixels as three zero ones — nothing. The first attempt
+covered nothing on the *oracle*, which is what caught it. The table is now
+painted a column at a time with a by-value colour, and `RGBA32Float` stores it
+unclamped, so a texel holds a real clip position rather than a value in $[0,1]$.
+
+**What each assertion catches, and both were confirmed by reinstating the fault:**
+
+- a fragment fetch reproduces its source texel **exactly**, asserted per device
+  rather than across the two, because the source pass interpolates and the fetch
+  does not — an unbound texture then fails as a black image against a gradient
+  rather than as a rounding;
+- the vertex fetch places a triangle whose **covered pixel count** is the same on
+  both, which is what discriminates `setVertexTexture:` from
+  `setFragmentTexture:`. Colour would not: `SampledFS` truncates an interpolated
+  varying to an integer, so one ulp of difference in a barycentric weight is a
+  different texel rather than a rounder colour, and no spec requires two
+  rasterizers to weight identically.
 
 
 ## 9. Feedback rejection, and the half of it that cannot be tested yet
