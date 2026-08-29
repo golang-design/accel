@@ -878,3 +878,67 @@ integer rule is built and unreachable, the same shape §13 found in `Discards`
 and [058](058-ballot.md) found in `Ballot`. What that changes is the size of the
 work rather than its shape: the compiler has to say which slots are flat, not
 the rasterizer.
+
+## 15. Flat varyings, and the integer rule — 2026-08-29
+
+§3.1's integer half, built with its accepting case in the same change: an
+untagged integer varying is refused naming the tag, **and** a tagged one arrives
+unchanged on both backends. 009's rule required that pairing — a rule whose
+accepting half is untestable is a withdrawal waiting to happen — and here the
+accepting half was the harder of the two.
+
+| Where | What |
+| --- | --- |
+| `ir.Field` | `Flat`, from the field's own struct tag |
+| `front` | `accel:"flat"` parsed, an uninterpolable untagged field refused with its position |
+| `emit` (Go) | the packers bitcast a non-float field, and the record carries `FlatVaryings` |
+| `emit` (MSL) | `[[flat]]` on the member, and `stageType` learned `int`/`uint` and scalars |
+| `internal/cpu` | fills `raster.State.Flat` from the vertex stage's record |
+
+**A struct tag, not a wrapper type.** It is the one place Go lets an author
+annotate a field without changing what the field *is*, so a `Vec2` is a `Vec2`
+whether it interpolates or not, and the authored source and the generated
+lowering read the identical declaration — which is what the differential
+between them needs.
+
+**A non-float varying travels by bits.** Flat means no arithmetic happens to it
+between the two stages, so the bit pattern arrives exactly:
+`math.Float32frombits(uint32(v.ID))` out and back. A value conversion would lose
+every id above $2^{24}$, and lose it as a plausible index rather than as an
+error. The round trip is asserted at $0$, $7$, $-1$, $2^{24}$, $2^{24}+1$ and
+both extremes of `int32`.
+
+**`raster.State.Flat` needed nothing.** It already carried the per-slot mask and
+`flatAt` already read it in the interpolation loop; nothing set it. §14 recorded
+that, and what this slice added on the CPU side is one field assignment. The
+sixth *built and unreachable*.
+
+### 15.1 What the MSL target could not spell
+
+`stageType` accepted **only** float vectors, so a scalar `float32` varying was
+refused as well as an integer one. No corpus stage had either, so the limit had
+never been reached. It now spells `float`/`int`/`uint` and their two-, three-
+and four-wide vectors, and refuses anything else by name.
+
+The qualifier goes on the member of **both** structs. MSL matches a vertex
+output to a fragment input by attribute, and a mismatched interpolation
+qualifier is a pipeline the driver rejects — emitting it from one place is what
+makes the two agree rather than making it a rule someone maintains.
+
+### 15.2 The assertion is convention-independent, and the differential is not
+
+The three vertices carry three *different* ids on purpose. Equal ids interpolate
+to themselves, so a backend that ignored the tag would produce the right answer
+everywhere and the test would pass while checking nothing. With distinct ids,
+an interpolated varying is a gradient and a flat one is a single value: the
+oracle's assertion is **exactly one distinct id over the covered pixels**, and
+it says nothing about *which*.
+
+Which one is the **provoking vertex**, and no spec here fixes it. That is left
+to the cross-backend test, which compares the id itself — a divergence there is
+a convention finding for `docs/conventions.md` rather than a bug in either
+backend. As built, the two agree.
+
+Coverage is decided by the green channel rather than the red one, because red
+*is* the value under test: an id of zero read as uncovered would quietly shrink
+the sample.
