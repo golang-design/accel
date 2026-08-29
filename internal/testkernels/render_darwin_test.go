@@ -1081,3 +1081,414 @@ func TestADepthAttachmentAgreesOnBothBackends(t *testing.T) {
 		t.Fatal("the oracle drew nothing, so the comparison is vacuous")
 	}
 }
+
+// A stage that fetches a texture must fetch what is bound to it, on Metal as on
+// the oracle.
+//
+// specs/045-texture-attachments.md section 4 owns the binding and
+// specs/032-stage-abi.md section 5 owns the fetch. The two halves met only on
+// the CPU: build.go filled driver.RenderDraw.VertexTextures/FragmentTextures,
+// internal/cpu read them, and internal/metal read them nowhere and refused
+// nothing -- so RenderPass.SetTexture was accepted, validated against the
+// stage's declared slots, checked for feedback, and dropped. A caller got the
+// right picture from the rasterizer and a black one from the GPU.
+//
+// # Why the assertion is per device rather than across the two
+//
+// The source pass interpolates, so its image is equal across backends only
+// within a bound. The fetch is not: BlitFS reads its own pixel's texel, so the
+// second pass must reproduce the first *exactly*, on whichever backend ran it.
+// That makes the discriminating comparison a same-device one, and an unbound
+// texture fails it as a black image against a gradient rather than as a
+// rounding.
+//
+// # Why 12 wide
+//
+// 12 texels of RGBA32Float is 192 bytes, and both backends align a copy's rows
+// to 256. A width whose tight pitch is already aligned passes at the wrong
+// pitch, because there is no padding to get wrong -- and the pitch is the one
+// number a buffer-shaped texture makes this backend compute rather than read.
+func TestAStageFetchAgreesOnBothBackends(t *testing.T) {
+	const w, h = 12, 5
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// A gradient rather than a solid colour: a fetch that lands on the wrong
+	// row, or that is dropped for zeros, is a different picture from this one,
+	// and is not from a constant.
+	verts := []float32{
+		-1, -1, 0, 1, 0, 0, 1,
+		3, -1, 0, 0, 1, 0, 1,
+		-1, 3, 0, 0, 0, 1, 1,
+	}
+
+	render := func(t *testing.T, d *accel.Device) (source, fetched []float32) {
+		t.Helper()
+		q := d.Queue()
+		tint, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &testkernels.AttributeVSStage,
+			Fragment: &testkernels.TintFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride: 28,
+				Attributes: []accel.VertexAttribute{
+					{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+					{Location: 1, Format: accel.AttrFloat32x4, Offset: 12},
+				},
+			}},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "source",
+		})
+		if err != nil {
+			t.Fatalf("source pipeline: %v", err)
+		}
+		defer tint.Close()
+
+		blit, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &testkernels.FullScreenVSStage,
+			Fragment: &testkernels.BlitFSStage,
+			Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:    "fetch",
+		})
+		if err != nil {
+			t.Fatalf("fetch pipeline: %v", err)
+		}
+		defer blit.Close()
+
+		usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+		vb, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(verts), Usage: usage, Label: "verts",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer vb.Close()
+		if err := q.WriteBuffer(vb, 0, verts); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		vv, err := vb.View(0, vb.Count())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+
+		first := sampledColourTexture(t, d, "first", w, h)
+		second := colourTexture(t, d, "second", w, h)
+
+		r := d.NewRecorder()
+		p1 := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{
+				View: wholeOf(t, first), Load: accel.LoadClear,
+			}},
+			Width: w, Height: h, Label: "source",
+		})
+		p1.SetPipeline(tint)
+		p1.SetVertexBuffer(0, vv)
+		p1.Draw(accel.Draw{VertexCount: 3})
+
+		p2 := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{
+				View: wholeOf(t, second), Load: accel.LoadClear,
+			}},
+			Width: w, Height: h, Label: "fetch",
+		})
+		p2.SetPipeline(blit)
+		p2.SetTexture(0, wholeOf(t, first))
+		p2.Draw(accel.Draw{VertexCount: 3})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readColourTexture(t, d, first), readColourTexture(t, d, second)
+	}
+
+	for _, c := range []struct {
+		name string
+		dev  *accel.Device
+	}{{"cpu", cpu}, {"metal", metal}} {
+		t.Run(c.name, func(t *testing.T) {
+			source, fetched := render(t, c.dev)
+			var nonZero, differing int
+			for i := range source {
+				if source[i] != 0 {
+					nonZero++
+				}
+				if fetched[i] != source[i] {
+					differing++
+					if differing < 4 {
+						px := i / 4
+						t.Errorf("pixel (%d,%d) channel %d is %v in the source pass and "+
+							"%v after the fetch; a fetch reproduces its texel exactly",
+							px%w, px/w, i%4, source[i], fetched[i])
+					}
+				}
+			}
+			if differing > 0 {
+				t.Errorf("%d of %d floats differ", differing, len(source))
+			}
+			// A blank source would make the comparison two black images, which
+			// agree perfectly and prove nothing about the binding.
+			if nonZero == 0 {
+				t.Fatal("the source pass drew nothing, so the fetch has nothing to prove")
+			}
+		})
+	}
+}
+
+// sampledColourTexture is colourTexture plus the usage a stage fetch needs.
+func sampledColourTexture(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
+	t.Helper()
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureSampled |
+			accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind: accel.MemoryReadback, Label: label,
+	})
+	if err != nil {
+		t.Fatalf("texture %s: %v", label, err)
+	}
+	t.Cleanup(func() { _ = tex.Close() })
+	return tex
+}
+
+// A vertex stage's texture is bound too, and it is a different argument table.
+//
+// specs/032-stage-abi.md section 5 gives each stage its own dense texture
+// order, and Metal has one argument table per stage: setVertexTexture: and
+// setFragmentTexture: are different calls, so a backend can bind one, drop the
+// other, or transpose them. DisplacedVS reads its three clip positions from a
+// texture, so an unbound vertex texture is three zero positions -- a degenerate
+// triangle covering nothing -- and that is a failure this can see.
+//
+// # Why the lookup table is painted a column at a time
+//
+// The obvious source, one gradient triangle, cannot work: an interpolated
+// colour along one row is a convex combination of two vertex colours, so every
+// texel in that row lies on a line, and three collinear positions are as
+// degenerate as three zero ones. Painting each column with a by-value colour
+// puts an arbitrary position in each texel instead, and RGBA32Float stores it
+// unclamped, so the table holds exactly the full-screen triangle wanted.
+//
+// # Why coverage rather than colour
+//
+// SampledFS truncates an interpolated varying to an integer and fetches at it,
+// so one ulp of difference in a barycentric weight is a *different texel*
+// rather than a rounder colour. Nothing requires two rasterizers to compute
+// those weights identically, so comparing colours would assert something no
+// spec promises. The covered pixel count is an integer both must agree on, and
+// it is what the vertex fetch decides.
+func TestAVertexStageFetchAgreesOnBothBackends(t *testing.T) {
+	const lutW, lutH = 3, 5
+	const w, h = 32, 32
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// A quad in the space ScaledVS maps: x is scaled to one column's width and
+	// y by the same factor, so the y extent is pre-divided to survive it.
+	quad := []float32{
+		-1, -3, 0, 1, -3, 0, 1, 3, 0,
+		-1, -3, 0, 1, 3, 0, -1, 3, 0,
+	}
+	// One column each, and the colour written is the clip position the vertex
+	// stage will read back out of that texel.
+	columns := []struct {
+		centre float32
+		pos    accel.Vec4
+	}{
+		{-2.0 / 3.0, accel.Vec4{-1, -1, 0, 1}},
+		{0, accel.Vec4{3, -1, 0, 1}},
+		{2.0 / 3.0, accel.Vec4{-1, 3, 0, 1}},
+	}
+
+	render := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		q := d.Queue()
+		paint, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &testkernels.ScaledVSStage,
+			Fragment: &testkernels.TintedFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride:     12,
+				Attributes: []accel.VertexAttribute{{Location: 0, Format: accel.AttrFloat32x3}},
+			}},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "paint",
+		})
+		if err != nil {
+			t.Fatalf("paint pipeline: %v", err)
+		}
+		defer paint.Close()
+
+		// Both stages fetch slot 0, which is what makes a transposed pair of
+		// setters visible: the vertex stage would read the fragment's table.
+		displaced, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &testkernels.DisplacedVSStage,
+			Fragment: &testkernels.SampledFSStage,
+			Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:    "displaced",
+		})
+		if err != nil {
+			t.Fatalf("displaced pipeline: %v", err)
+		}
+		defer displaced.Close()
+
+		usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+		vb, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(quad), Usage: usage, Label: "quad",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer vb.Close()
+		if err := q.WriteBuffer(vb, 0, quad); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		vv, err := vb.View(0, vb.Count())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+
+		lut := sampledColourTexture(t, d, "lut", lutW, lutH)
+		out := colourTexture(t, d, "out", w, h)
+
+		r := d.NewRecorder()
+		for i, c := range columns {
+			load := accel.LoadKeep
+			if i == 0 {
+				load = accel.LoadClear
+			}
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: wholeOf(t, lut), Load: load}},
+				Width: lutW, Height: lutH, Label: "paint",
+			})
+			p.SetPipeline(paint)
+			p.SetVertexBuffer(0, vv)
+			p.SetVertexUniform(0, testkernels.StageTransform{
+				Scale: 1.0 / 3.0, Offset: accel.Vec2{c.centre, 0},
+			})
+			p.SetFragmentUniform(0, testkernels.StageTint{Colour: c.pos})
+			p.Draw(accel.Draw{VertexCount: 6})
+		}
+
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{View: wholeOf(t, out), Load: accel.LoadClear}},
+			Width: w, Height: h, Label: "displaced",
+		})
+		p.SetPipeline(displaced)
+		p.SetTexture(0, wholeOf(t, lut))
+		p.Draw(accel.Draw{VertexCount: 3})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readColourTexture(t, d, out)
+	}
+
+	covered := func(px []float32) int {
+		n := 0
+		for i := 0; i < len(px); i += 4 {
+			if px[i] != 0 || px[i+1] != 0 || px[i+2] != 0 || px[i+3] != 0 {
+				n++
+			}
+		}
+		return n
+	}
+
+	onCPU := covered(render(t, cpu))
+	onMetal := covered(render(t, metal))
+	// The positions come from the texture, so nothing drawn means nothing was
+	// bound -- and two blank images agree with each other perfectly.
+	if onCPU == 0 {
+		t.Fatal("the CPU rasterizer covered nothing, so the vertex fetch placed no triangle")
+	}
+	if onMetal == 0 {
+		t.Fatal("Metal covered nothing: the vertex stage read no texture, so its three " +
+			"positions were zero and the triangle was degenerate")
+	}
+	if onCPU != onMetal {
+		t.Errorf("the triangle covers %d pixels on the CPU and %d on Metal, from the "+
+			"same three positions read out of the same texture", onCPU, onMetal)
+	}
+	t.Logf("%d of %d pixels covered on both", onCPU, w*h)
+}
+
+// A stage texture in a format this backend cannot spell is refused by name.
+//
+// The staged copy needs a Metal pixel format, and internal/metal maps five.
+// R32Float is a format accel offers and that map does not, so a caller who
+// binds one has to be told which format is missing rather than handed a
+// picture: the same rule metalPixelFormat was written for on the attachment
+// path, where hardcoding RGBA32Float had produced sixteen bytes per pixel for
+// a caller who asked for four.
+//
+// The texture is never rendered into, only fetched, because rendering into it
+// would be refused first and this is an assertion about the fetch.
+func TestAStageTextureFormatMetalCannotSpellIsRefused(t *testing.T) {
+	const w, h = 8, 8
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.FullScreenVSStage,
+		Fragment: &testkernels.BlitFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "unspellable",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	lut, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.R32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureSampled | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryReadback, Label: "lut",
+	})
+	if err != nil {
+		t.Fatalf("texture: %v", err)
+	}
+	defer lut.Close()
+	out := colourTexture(t, d, "out", w, h)
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: wholeOf(t, out), Load: accel.LoadClear}},
+		Width: w, Height: h, Label: "unspellable",
+	})
+	p.SetPipeline(pipe)
+	p.SetTexture(0, wholeOf(t, lut))
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	err = d.Queue().Submit(g).Wait()
+	if err == nil {
+		t.Fatal("a stage texture in R32Float was accepted; this backend has no pixel " +
+			"format for it, so the fetch would have read the wrong bytes")
+	}
+	// The format and the owning spec, so the next caller to want one is told
+	// what is missing rather than left to compare pictures.
+	for _, want := range []string{"R32Float", "045-texture-attachments.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
