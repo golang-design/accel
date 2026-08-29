@@ -523,3 +523,87 @@ narrowed**, which is what the first paragraph of §6 requires.
 - Ensure composed Softmax, RMSNorm, MatMul, Attention, and golden-model budget
   traces are stable and every injected primitive error is attributed.
 - Mechanically reject ad hoc tolerance APIs in the conformance corpus.
+
+## 12. §8's composition, built — 2026-08-29
+
+Forward absolute-error propagation with a trace, in
+`internal/conformance/numeq`. §7 bounds one operation; this composes them, which
+is the difference between a library that is correct per primitive and one whose
+*model* has a bound.
+
+### 12.1 The shape
+
+A `Value` is a float64 reference, an absolute error bound, whether it is
+defined, and the per-input contributions that produced the bound. Each operator
+applies §8's rule — `local + Σᵢ sensitivityᵢ · inputBudgetᵢ` — with the
+sensitivity taken conservatively over the input's own interval:
+
+| operator | sensitivity |
+| --- | --- |
+| `Add`, `Sub` | 1 and 1 |
+| `Mul` | the other factor at its interval's widest |
+| `Div` | $1/|y|$ and $|x|/y^2$, at the interval end nearest zero |
+| `Sqrt` | $1/(2\sqrt{x})$ at the interval's bottom |
+| `Exp` | $e^{x}$ at the interval's **top**, since the derivative is the function |
+| `Log` | $1/x$ at the interval's bottom |
+| `Tanh` | 1, since $1 - \tanh^2 \le 1$ everywhere |
+| `SumValues`, `Dot` | §7's $\gamma(\text{depth})$ over $\sum|x_i|$ |
+| `MaxValues` | exact selection, carrying the widest input error |
+
+`Dot` is one operator rather than `Mul` into `SumValues`, because composing it
+out of the pieces charges each product's rounding twice.
+
+**`Input` carries half an ulp, not zero.** A test feeding exact float64
+references into a budget and comparing against an f32 computation charges the
+computation for a rounding it did not perform, and under-budgets by exactly what
+the inputs were already wrong by.
+
+### 12.2 Refusal is a result, and it propagates
+
+Where a sensitivity has no finite bound the value is **undefined with a reason**
+rather than large: a divisor whose interval contains zero, a square root or
+logarithm reaching it, an exponential that overflows. §8 requires the test to
+narrow its domain or add a proved rule, and a budget of $10^{30}$ is a
+comparison that passes — the opposite of what a derived bound is for.
+
+The interval, not the reference, is what decides. `Div(1, Sub(x, x))` is refused
+even though the divisor's *reference* is exactly zero only by construction: its
+interval spans zero, which a check against `== 0` misses.
+
+One undefined value makes every expression over it undefined, so a refusal
+cannot be lost in the middle of a model.
+
+### 12.3 The trace is the point
+
+`Value.String()` prints the reference, the bound, and each input's
+contribution — sensitivity times budget — with the largest marked. That is §8's
+per-operator attribution, and it is what a composed budget has that a tolerance
+does not: a failure names the operator rather than the model.
+
+### 12.4 What it caught
+
+`RMSNorm`'s tensor-layer assertion used `1e-4`. The composed budget for the same
+computation is **8.8e-7**, two orders tighter, and the trace says the square
+root spent 64% of it:
+
+```
+rmsnorm: ref 1.3398111796191063 ± 8.784474328158075e-07
+  (rounding 1×7.99e-08, mul 0.708×3.39e-07=2.40e-07,
+   sqrt 0.948×5.90e-07=5.59e-07 <-)
+```
+
+A 1e-4 bound accepts a scale computed at the wrong width and a reduction at the
+wrong depth — the two ways that kernel goes wrong while still producing
+plausible numbers. This is [011](011-conformance-harness.md) §4's ratchet
+finding again, one operator further up: the first conversion there found a
+tolerance three orders loose, and this is the second.
+
+### 12.5 What is outstanding
+
+§8's list is six items and this builds the machinery plus three of them:
+elementwise analytic bounds, RMSNorm, Softmax, and MatMul/Linear through `Dot`.
+**Composed Attention and the golden model's DAG are not built**, and neither is
+the rule that a fused kernel must fit its semantic definition's budget. They are
+the same shape as `RMSNormValue` and `SoftmaxValue` — a composition over these
+operators — rather than new machinery, and the remaining per-site conversions
+across the tensor tests are the ratchet's work rather than this spec's.
