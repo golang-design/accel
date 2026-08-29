@@ -942,3 +942,57 @@ backend. As built, the two agree.
 Coverage is decided by the green channel rather than the red one, because red
 *is* the value under test: an id of zero read as uncovered would quietly shrink
 the sample.
+
+## 16. noperspective, and §3.1 is closed — 2026-08-29
+
+The last row of §3.1's table. `accel:"noperspective"` on a float varying
+interpolates it linearly in window space:
+
+$$
+a_{\text{smooth}}(x,y) = \frac{\sum_i \lambda_i a_i / w_i}{\sum_i \lambda_i / w_i}
+\qquad
+a_{\text{linear}}(x,y) = \sum_i \lambda_i a_i
+$$
+
+**The rasterizer's inner loop gained one branch and no second formula.** Flat
+wins over noperspective where both could apply, because a value that is not
+interpolated cannot be interpolated one way or the other.
+
+**Two refusals came with it, and both are about a tag that does nothing.** A
+misspelled qualifier is refused naming the two that exist, rather than being
+read as "smooth" — which would be a picture subtly wrong wherever the
+perspective is strongest, and right everywhere the author would look first. And
+`noperspective` on an integer field is refused, because the only qualifier a
+non-float varying takes is `flat`.
+
+Metal spells it `[[center_no_perspective]]`, not `[[no_perspective]]`: MSL puts
+the sampling position and the interpolation in one qualifier, and centre
+sampling is what the CPU rasterizer does — it samples the pixel centre, which is
+what makes the fill rule a statement about a point.
+
+### 16.1 The fixture carries one value twice
+
+`PerspectiveVaryings` has the same value in a tagged field and an untagged one,
+over a triangle whose three vertices have **different w**. That is the whole
+design, and it buys two things a separate reference implementation would not.
+
+A pixel where the two channels disagree is proof the qualifiers are different
+operations, established without writing either formula a second time — so the
+test cannot agree with the rasterizer by repeating its mistake. And where every
+$w$ is equal the two coincide exactly, which is why the triangle recedes: a
+fixture drawn at $w = 1$ would have compared a qualifier against itself and
+passed.
+
+All 496 covered pixels differ, by up to 0.34, which is four orders above the
+interpolation bound rather than near it.
+
+The cross-backend test asserts the same picture within $4u$ — the largest value
+is 2 and a weighted sum of three terms takes two roundings — and additionally
+that the oracle's two channels differ somewhere, because two backends that both
+ignored the qualifier would agree perfectly. Removing
+`[[center_no_perspective]]` from the emitter moves a channel by 0.058 against a
+bound of 4.8e-7.
+
+**§3.1 is now built in full**: perspective-correct by default, `noperspective`
+by tag, integers flat-only and refused untagged. What §3 still owes is §3.3's
+struct identity by resolved object, which `STATUS.md` carries as its own row.
