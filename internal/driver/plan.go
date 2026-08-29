@@ -687,6 +687,13 @@ type RenderDraw struct {
 	DepthWrite   bool
 	DepthCompare uint8
 
+	// Stencil is the compiled stencil state and StencilReference is the one
+	// dynamic value, recorded per pass. specs/033-render-api.md section 2.1
+	// splits them that way because every target backend does: the faces are a
+	// pipeline input and the reference is an encoder call.
+	Stencil          StencilState
+	StencilReference uint8
+
 	Masks []uint8
 
 	VertexCount   int
@@ -831,6 +838,51 @@ const (
 // its own, because it is a leaf that knows nothing about plans; internal/cpu
 // maps one onto the other, and the mapping is checked by a test that walks
 // every value rather than by the two lists happening to agree.
+// StencilOp is what a stencil test's outcome does to the buffer.
+type StencilOp uint8
+
+const (
+	StencilKeep StencilOp = iota
+	StencilZero
+	StencilReplace
+	StencilIncrementClamp
+	StencilDecrementClamp
+	StencilInvert
+	StencilIncrementWrap
+	StencilDecrementWrap
+)
+
+var stencilOpNames = [...]string{
+	"StencilKeep", "StencilZero", "StencilReplace",
+	"StencilIncrementClamp", "StencilDecrementClamp", "StencilInvert",
+	"StencilIncrementWrap", "StencilDecrementWrap",
+}
+
+func (op StencilOp) String() string {
+	if int(op) < len(stencilOpNames) {
+		return stencilOpNames[op]
+	}
+	return fmt.Sprintf("StencilOp(%d)", uint8(op))
+}
+
+// StencilFace is one face's stencil configuration.
+//
+// Per face because that is what every target backend offers and what two-sided
+// techniques need. The masks are separate: ReadMask selects the bits the
+// comparison sees and WriteMask the bits an operation may change, which is what
+// lets one stencil buffer carry two independent techniques.
+type StencilFace struct {
+	Compare               uint8
+	ReadMask, WriteMask   uint8
+	Fail, DepthFail, Pass StencilOp
+}
+
+// StencilState is both faces and whether the test runs at all.
+type StencilState struct {
+	Enabled     bool
+	Front, Back StencilFace
+}
+
 type BlendFactor uint8
 
 const (

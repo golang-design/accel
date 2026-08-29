@@ -111,6 +111,75 @@ type DepthStencilState struct {
 	Test    bool
 	Write   bool
 	Compare CompareFunc
+
+	// Stencil is compiled in, all of it except the reference value, which
+	// [RenderPass.SetStencilReference] supplies per pass.
+	//
+	// A pipeline whose stencil is enabled needs a Format with a stencil aspect,
+	// and creation refuses one that does not have it: a stencil state against
+	// Depth32Float would compile, draw, and change nothing, which is the
+	// silence specs/033-render-api.md section 2.2 exists to remove.
+	Stencil StencilState
+}
+
+// StencilOp is what one outcome of the stencil and depth tests does to the
+// stencil buffer.
+type StencilOp = driver.StencilOp
+
+const (
+	StencilKeep           = driver.StencilKeep
+	StencilZero           = driver.StencilZero
+	StencilReplace        = driver.StencilReplace
+	StencilIncrementClamp = driver.StencilIncrementClamp
+	StencilDecrementClamp = driver.StencilDecrementClamp
+	StencilInvert         = driver.StencilInvert
+	StencilIncrementWrap  = driver.StencilIncrementWrap
+	StencilDecrementWrap  = driver.StencilDecrementWrap
+)
+
+// StencilFace is one face's stencil configuration.
+//
+// Per face because two-sided stencil is what the technique needs -- a shadow
+// volume increments on front faces and decrements on back ones in a single
+// draw -- and because every target backend offers it. A single-face caller sets
+// both to the same value.
+//
+// The two masks do different jobs. ReadMask selects which bits the comparison
+// sees, and WriteMask which bits an operation may change, so one stencil buffer
+// carries two independent techniques in different bit ranges.
+type StencilFace struct {
+	Compare             CompareFunc
+	ReadMask, WriteMask uint8
+
+	// Fail, DepthFail and Pass are the three outcomes, and they are three
+	// rather than two because "the stencil test passed and the depth test did
+	// not" is the case every stencil technique is built on.
+	Fail, DepthFail, Pass StencilOp
+}
+
+// StencilState is the compiled half of stencil: both faces, and whether the
+// test runs at all.
+//
+// Enabled is a flag rather than being inferred from the faces, for
+// [BlendState.Enabled]'s reason: the zero StencilFace is a legal configuration
+// (compare never, keep everything), so there is no value of the faces that
+// means "off".
+type StencilState struct {
+	Enabled     bool
+	Front, Back StencilFace
+}
+
+func (f StencilFace) plan() driver.StencilFace {
+	return driver.StencilFace{
+		Compare: uint8(f.Compare), ReadMask: f.ReadMask, WriteMask: f.WriteMask,
+		Fail: f.Fail, DepthFail: f.DepthFail, Pass: f.Pass,
+	}
+}
+
+func (s StencilState) plan() driver.StencilState {
+	return driver.StencilState{
+		Enabled: s.Enabled, Front: s.Front.plan(), Back: s.Back.plan(),
+	}
 }
 
 // ColorTargetState is one colour attachment's compiled state.
@@ -319,6 +388,15 @@ func (d *Device) NewRenderPipeline(desc RenderPipelineDescriptor) (*RenderPipeli
 			return nil, fmt.Errorf("accel: NewRenderPipeline %q: the depth format is %v, "+
 				"which is not a depth format", label, ds.Format)
 		}
+		// specs/033-render-api.md section 2.2. Without this the pipeline
+		// compiles, the draw runs, and the stencil state changes nothing --
+		// which reads as the technique being wrong rather than as the format
+		// being.
+		if ds.Stencil.Enabled && !info.IsStencil {
+			return nil, fmt.Errorf("%w: NewRenderPipeline %q: the stencil test is enabled "+
+				"and the depth format %v has no stencil aspect; use a format that does, "+
+				"such as %v", ErrFormat, label, ds.Format, Depth32FloatStencil8)
+		}
 	}
 
 	// The varyings the two stages exchange must be the same type. Checked by
@@ -454,6 +532,12 @@ type RenderPass struct {
 
 	// vertexUniforms and fragmentUniforms are the by-value parameters set so
 	// far, one slice per stage because each stage indexes its own from zero.
+	// stencilRef is the dynamic stencil reference standing for draws recorded
+	// after it. Dynamic on every target backend, which is why it is a pass call
+	// rather than a pipeline field -- a technique that changes the reference
+	// between draws would otherwise recompile mid-frame.
+	stencilRef uint8
+
 	vertexUniforms   []any
 	fragmentUniforms []any
 
@@ -485,14 +569,15 @@ type RenderPass struct {
 
 // drawCall is one recorded draw.
 type drawCall struct {
-	pipeline  *RenderPipeline
-	vertices  int
-	instances int
-	first     int
-	firstInst int
-	vertexBuf []BufferView
-	vertexU   []any
-	fragmentU []any
+	pipeline   *RenderPipeline
+	vertices   int
+	instances  int
+	first      int
+	firstInst  int
+	vertexBuf  []BufferView
+	vertexU    []any
+	fragmentU  []any
+	stencilRef uint8
 
 	// indexed and its buffer are set for an indexed draw. baseVertex applies to
 	// the attribute fetch and not to the index the stage sees.
@@ -755,6 +840,19 @@ func (p *RenderPass) SetTexture(slot int, v TextureView) {
 // already knows, and a value shared by several draws is written once. A draw
 // captures whatever is set when it is recorded, so a later call does not reach
 // back and change an earlier draw.
+// SetStencilReference supplies the stencil reference value for every draw
+// recorded after the call.
+//
+// It is the one part of stencil that is not compiled in, and
+// specs/033-render-api.md section 2.1's split is why: every target backend
+// takes the faces as a pipeline input and the reference as an encoder call, so
+// a technique that varies the reference between draws -- which is most of
+// them -- costs nothing, while varying anything else would mean recompiling.
+//
+// It has no effect on a pipeline whose stencil is not enabled, and that is not
+// an error: a pass may draw with several pipelines and only some of them test.
+func (p *RenderPass) SetStencilReference(ref uint8) { p.stencilRef = ref }
+
 func (p *RenderPass) SetVertexUniform(index int, v any) {
 	p.setUniform(&p.vertexUniforms, "SetVertexUniform", index, v)
 }
@@ -966,6 +1064,7 @@ func (p *RenderPass) Draw(d Draw) {
 func (p *RenderPass) record(d drawCall) {
 	d.pipeline = p.pipeline
 	d.vertexBuf = append([]BufferView(nil), p.buffers...)
+	d.stencilRef = p.stencilRef
 	d.vertexU = append([]any(nil), p.vertexUniforms...)
 	d.fragmentU = append([]any(nil), p.fragmentUniforms...)
 	d.textures = append([]TextureView(nil), p.textures...)

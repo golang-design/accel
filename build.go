@@ -513,6 +513,8 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		if ds := pipe.desc.DepthStencil; ds != nil {
 			rd.DepthTest, rd.DepthWrite = ds.Test, ds.Write
 			rd.DepthCompare = uint8(ds.Compare)
+			rd.Stencil = ds.Stencil.plan()
+			rd.StencilReference = d.stencilRef
 		}
 		for _, t := range pipe.desc.Targets {
 			rd.Masks = append(rd.Masks, uint8(t.Mask.resolved()))

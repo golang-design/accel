@@ -352,6 +352,15 @@ func (e *executable) stageTexture(p *pass, rt driver.RenderTexture) (*mtl.Textur
 
 // encodeDraw encodes one draw.
 func (e *executable) encodeDraw(enc *mtl.RenderEncoder, rp *driver.RenderPass, d driver.RenderDraw, tx drawTextures) error {
+	// Stencil is not lowered here yet. Refused rather than dropped, per
+	// specs/006-backends.md decision 6: a draw whose stencil state was ignored
+	// would produce a picture, and the picture would be the one the caller gets
+	// when the technique they are building does nothing.
+	if d.Stencil.Enabled {
+		return fmt.Errorf("accel: this backend does not lower stencil state at " +
+			"specs/033-render-api.md section 2.1; the CPU backend does, and the " +
+			"comparison resumes when it lands here")
+	}
 	pipe, err := e.renderPipeline(rp, d)
 	if err != nil {
 		return err

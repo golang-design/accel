@@ -295,6 +295,12 @@ func NewDepthTarget(w, h int, z float32, s uint8) *DepthTarget {
 func (t *DepthTarget) Clear(z float32, s uint8) {
 	for i := range t.Z {
 		t.Z[i] = z
+	}
+	// A target whose format has no stencil aspect carries no stencil buffer,
+	// so there is nothing to clear. Nil rather than a zeroed array, because an
+	// array nothing can address is what made the stencil pipeline look
+	// reachable for as long as it did.
+	for i := range t.Stencil {
 		t.Stencil[i] = s
 	}
 }
@@ -375,7 +381,7 @@ func Draw(ps PassState, fb *Framebuffer, tri [3]Vertex, shade func(Fragment) Sha
 			face = ps.Stencil.Back
 		}
 		stencilPass := true
-		if ps.Stencil.Enabled && fb.Depth != nil {
+		if ps.Stencil.Enabled && fb.Depth != nil && fb.Depth.Stencil != nil {
 			cur := fb.Depth.Stencil[idx]
 			stencilPass = face.Compare.test(
 				float32(ps.Stencil.Reference&face.ReadMask), float32(cur&face.ReadMask))
@@ -386,7 +392,7 @@ func Draw(ps PassState, fb *Framebuffer, tri [3]Vertex, shade func(Fragment) Sha
 			depthPass = ps.Depth.Compare.test(f.Depth, fb.Depth.Z[idx])
 		}
 
-		if ps.Stencil.Enabled && fb.Depth != nil {
+		if ps.Stencil.Enabled && fb.Depth != nil && fb.Depth.Stencil != nil {
 			op := face.Pass
 			switch {
 			case !stencilPass:

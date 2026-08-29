@@ -89,14 +89,30 @@ func framebufferFor(n *resolvedNode) (*raster.Framebuffer, error) {
 	}
 	if n.depthAttach != nil {
 		c := n.depthCodec
-		z := make([]float32, rp.Width*rp.Height*c.components)
-		if err := c.decodeImage(z, n.depthAttach, rp.Width, rp.Height, rp.DepthPitch); err != nil {
+		px := rp.Width * rp.Height
+		raw := make([]float32, px*c.components)
+		if err := c.decodeImage(raw, n.depthAttach, rp.Width, rp.Height, rp.DepthPitch); err != nil {
 			return nil, fmt.Errorf("accel: render pass %q depth attachment: %w", rp.Label, err)
 		}
-		fb.Depth = &raster.DepthTarget{
-			W: rp.Width, H: rp.Height, Z: z,
-			Stencil: make([]uint8, rp.Width*rp.Height),
+		t := &raster.DepthTarget{W: rp.Width, H: rp.Height, Z: raw}
+		// A format with a stencil aspect arrives interleaved, depth then
+		// stencil per texel, and the rasterizer holds the two separately. The
+		// split happens here rather than in the codec because the codec's unit
+		// is a texel and the rasterizer's is an image.
+		//
+		// Without a stencil aspect there is no stencil buffer at all. Allocating
+		// one anyway is what this path used to do, and it made every
+		// Depth32Float pass carry an array nothing could address -- which is
+		// also what let the stencil pipeline look reachable.
+		if c.components == 2 {
+			t.Z = make([]float32, px)
+			t.Stencil = make([]uint8, px)
+			for i := range px {
+				t.Z[i] = raw[i*2]
+				t.Stencil[i] = uint8(raw[i*2+1])
+			}
 		}
+		fb.Depth = t
 	}
 	return fb, nil
 }
@@ -119,7 +135,20 @@ func storeAttachments(n *resolvedNode, fb *raster.Framebuffer) error {
 		}
 	}
 	if n.depthAttach != nil {
-		if err := n.depthCodec.encodeImage(n.depthAttach, fb.Depth.Z,
+		// Re-interleaved, the inverse of the split in newFramebuffer. The
+		// stencil aspect goes back into the attachment, which is what makes a
+		// stencil written in one pass readable by the next -- and is the whole
+		// difference between a stencil buffer and a scratch array.
+		src := fb.Depth.Z
+		if n.depthCodec.components == 2 {
+			px := rp.Width * rp.Height
+			src = make([]float32, px*2)
+			for i := range px {
+				src[i*2] = fb.Depth.Z[i]
+				src[i*2+1] = float32(fb.Depth.Stencil[i])
+			}
+		}
+		if err := n.depthCodec.encodeImage(n.depthAttach, src,
 			rp.Width, rp.Height, rp.DepthPitch); err != nil {
 			return fmt.Errorf("accel: render pass %q depth attachment: %w", rp.Label, err)
 		}
@@ -181,6 +210,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 			Test: d.DepthTest, Write: d.DepthWrite,
 			Compare: raster.Compare(d.DepthCompare),
 		},
+		Stencil: rasterStencil(d.Stencil, d.StencilReference),
 	}
 	for _, m := range d.Masks {
 		ps.Mask = append(ps.Mask, raster.WriteMask(m))
@@ -438,4 +468,51 @@ func readIndirectDraw(args []byte, d driver.RenderDraw) (count, instances, first
 	}
 	return read(0, d.VertexCount), read(1, d.InstanceCount),
 		read(2, d.FirstVertex), read(3, d.FirstInstance)
+}
+
+// rasterStencil maps a plan's stencil state onto the rasterizer's.
+//
+// Written out by name, not converted numerically, and this file has the reason
+// beside it: the same shortcut on the colour write mask shipped a mirrored mask
+// to Metal for as long as the mask existed, because the two enumerations happen
+// to agree on the only value anyone used. Two enumerations agreeing today is
+// not a property either side maintains.
+func rasterStencil(s driver.StencilState, ref uint8) raster.StencilState {
+	return raster.StencilState{
+		Enabled:   s.Enabled,
+		Front:     rasterStencilFace(s.Front),
+		Back:      rasterStencilFace(s.Back),
+		Reference: ref,
+	}
+}
+
+func rasterStencilFace(f driver.StencilFace) raster.StencilFace {
+	return raster.StencilFace{
+		Compare:   raster.Compare(f.Compare),
+		ReadMask:  f.ReadMask,
+		WriteMask: f.WriteMask,
+		Fail:      rasterStencilOp(f.Fail),
+		DepthFail: rasterStencilOp(f.DepthFail),
+		Pass:      rasterStencilOp(f.Pass),
+	}
+}
+
+func rasterStencilOp(op driver.StencilOp) raster.StencilOp {
+	switch op {
+	case driver.StencilZero:
+		return raster.StencilZero
+	case driver.StencilReplace:
+		return raster.StencilReplace
+	case driver.StencilIncrementClamp:
+		return raster.StencilIncrementClamp
+	case driver.StencilDecrementClamp:
+		return raster.StencilDecrementClamp
+	case driver.StencilInvert:
+		return raster.StencilInvert
+	case driver.StencilIncrementWrap:
+		return raster.StencilIncrementWrap
+	case driver.StencilDecrementWrap:
+		return raster.StencilDecrementWrap
+	}
+	return raster.StencilKeep
 }
