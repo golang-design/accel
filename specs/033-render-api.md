@@ -589,3 +589,81 @@ its attributes and its parameters.
 - **Per-draw scissor.** Section 3.4 excludes it. If a real caller needs
   atlas-style rendering in one pass rather than several, this is where it would
   go, and it would be capability-gated.
+
+## 10. Stencil, and the format it needed first — 2026-08-29
+
+§2.1's stencil state and §2.2's creation refusal, reachable from the public API
+at last. `internal/raster` had implemented the whole of it since the rasterizer
+landed — per-face compare, three outcome operations, read and write masks, the
+dynamic reference, all tested in `pipeline_test.go` — and `DepthStencilState`
+was `{Format, Test, Write, Compare}`, so no caller could reach a line.
+
+### 10.1 It was three problems, not one, and the format was the first
+
+The obvious framing was "expose the state and fix the per-pass buffer". Neither
+would have worked, because **no format could carry a stencil aspect.**
+`Depth24PlusStencil8` exists as a constant and is refused in the codec and at
+build for [045](045-texture-attachments.md) §8.2's reason: *"24 plus"* means at
+least 24 bits and a backend may store it as 32 with 8 unused or pack it with the
+stencil, so the oracle refuses a format with two defensible encodings rather
+than asserting one. Exposing stencil state against it would have shipped a
+refusal that fires on every stencil pipeline — the built-and-unreachable defect
+in a new coat.
+
+So `Depth32FloatStencil8`: a float32 depth, a stencil byte, and three reserved
+bytes written zero. **Eight bytes rather than five**, so a texel starts on a
+four-byte boundary and the depth aspect is a `float32` load on any target — and
+so the row-pitch arithmetic keeps the shape every other format has. It is the
+answer to what `Depth24PlusStencil8`'s refusal left missing, and that refusal
+stands: adding a format is not a reason to relax it.
+
+| | |
+| --- | --- |
+| the format | `format.go`'s table, `internal/driver`, the public enum, `metalPixelFormat`'s refusal |
+| the codec | `internal/cpu/texel.go`, two components, the stencil as an exact float |
+| the round trip | `newFramebuffer` splits the interleaved aspects and `storeAttachments` re-interleaves them |
+| the API | `StencilOp`, `StencilFace`, `StencilState`, `DepthStencilState.Stencil`, `RenderPass.SetStencilReference` |
+
+### 10.2 The per-pass buffer disappeared rather than being fixed
+
+`internal/cpu` allocated `make([]uint8, w*h)` inside the pass and never wrote it
+back, so a technique that marks in one pass and tests in the next — which is
+what stencil is *for* — could not have worked even once the state was
+reachable. Once the aspect comes from and returns to the attachment there is
+nothing to allocate, and the fix is the round trip rather than a lifetime
+change.
+
+**And a target whose format has no stencil aspect now carries no stencil buffer
+at all.** It used to carry a zeroed array unconditionally, which is a smaller
+version of the same waste — and part of why the stencil pipeline looked
+reachable for as long as it did.
+
+### 10.3 What the tests assert, and why not by readback
+
+`Queue.ReadTexture` refuses every depth format, because what a device stores for
+one is device-defined. So the stencil is observed through the pipeline that
+consumes it, the technique [032](032-stage-abi.md) §13.2 used for discard's
+depth half: pass 1 marks where it covers, pass 2 covers everything and keeps
+only what pass 1 marked, and pass 2's coverage *is* the stencil buffer made
+visible. Confirmed in both directions — not loading the aspect and not storing
+it each leave the second pass keeping nothing.
+
+The marking pass covers **half** the target rather than all of it, so a stencil
+test that always passed would not agree with it.
+
+### 10.4 The enum mapping is written out by name
+
+`internal/cpu`'s `rasterStencilOp` maps each operation by name rather than
+casting. The same shortcut on the colour write mask shipped a mirrored mask to
+Metal for as long as the mask existed — [035](035-cpu-rasterizer.md) §11.1 — and
+two enumerations agreeing today is not a property either side maintains.
+
+### 10.5 Metal refuses it, and says so
+
+`internal/metal` has no stencil attachment, no `setStencilReferenceValue:` and
+no front/back state on `MTLDepthStencilDescriptor`. A draw whose stencil is
+enabled is **refused by name** rather than drawn without it, per
+[006](006-backends.md) decision 6: a draw whose stencil state was ignored
+produces a picture, and it is exactly the picture a caller gets when the
+technique they are building does nothing. That is the next slice, and
+[035](035-cpu-rasterizer.md) §7.1's last CPU-only entry until it lands.
