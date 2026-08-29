@@ -31,7 +31,7 @@ principle, and §1 measures the parts that were assumptions.
 flowchart LR
     subgraph "this spec"
       LD["internal/cu<br/>loader + typed calls"]
-      TH["thread affinity<br/>context on locked Ms"]
+      TH["thread affinity<br/>which calls need a context"]
       EN["enumeration<br/>Info, caps, limits"]
       MEM["pools<br/>4 kinds, one budget"]
       DIS["one dispatch<br/>from a .ptx fixture"]
@@ -162,40 +162,112 @@ reach for first, it passes most of the time, and the window is between the
 `cuCtxSetCurrent` and the call it was meant to arm. A test suite that ran it
 twice would have shipped it.
 
-**But this backend is not [006](006-backends.md) §2.5's GLES shape.** That
-paragraph — *"the backend owns a `runtime.LockOSThread` goroutine holding the
-context and replays a recorded list onto it"* — serializes every submission
-through one thread, and it is not what CUDA needs. A context may be current on
-many threads at once. Measured, one primary context shared across locked
-goroutines:
+**But only some calls need one, and that is what decides the shape.** The
+obvious reading of the table above is [006](006-backends.md) §2.5's GLES answer —
+*"the backend owns a `runtime.LockOSThread` goroutine holding the context and
+replays a recorded list onto it"* — or a pool of such goroutines, one per
+submission slot. Both are wrong here, and a second probe says why. On a locked
+goroutine that clears its context with `cuCtxSetCurrent(0)`, so
+`cuCtxGetCurrent` returns none:
 
-| Locked goroutines | Cycles | Per cycle |
+| Call | With no current context | |
 | --- | --- | --- |
-| 1 (the GLES shape) | 1600 | 801 µs |
+| `cuLaunchKernel(…, stream)` | **OK**, and the result was correct | |
+| `cuMemcpyHtoDAsync(…, stream)` | **OK** | takes its context |
+| `cuMemcpyDtoHAsync(…, stream)` | **OK** | from the explicit |
+| `cuEventRecord(…, stream)` | **OK** | stream handle |
+| `cuStreamSynchronize`, `cuEventQuery`, `cuEventSynchronize` | **OK** | |
+| `cuMemAlloc` | `CUDA_ERROR_INVALID_CONTEXT` | |
+| `cuMemcpyHtoD`, `cuMemcpyDtoH` (synchronous) | `CUDA_ERROR_INVALID_CONTEXT` | no handle to |
+| `cuModuleLoadData` | `CUDA_ERROR_INVALID_CONTEXT` | carry one |
+| `cuStreamCreate` | `CUDA_ERROR_INVALID_CONTEXT` | |
+
+The launch was not merely accepted: it wrote 65536 of 65536 correct elements
+into the right context's memory. **A call that takes an explicit stream handle
+resolves its context from that handle**, so the entire submission path is
+free-threaded and only the setup calls need a thread with a context armed.
+
+This is the second reason §8 refuses the `NULL` stream, and the two arrived
+independently. §8 refuses it because it implicitly synchronizes with every other
+blocking stream; the table above needs an explicit handle to carry a context, and
+`NULL` has none to carry.
+
+The two probes also agree. Every failure in the flaky row above was at
+`cuMemAlloc`, a synchronous copy, or `cuCtxSynchronize` — all in the lower half
+of this table — and `cuLaunchKernel` never appears among them.
+
+### What Go actually offers
+
+`runtime.LockOSThread` is the whole mechanism. There is no soft affinity, no
+scheduler hint, and — the part that decides the design — **no way to target a
+specific thread**. A goroutine pins to whichever M it is already running on; it
+cannot ask to be scheduled onto the M that was armed earlier. So an armed thread
+cannot be borrowed later, which is exactly why a pool would have to own its
+threads for their whole lifetime, and why the arming call cannot be cached away.
+
+Measured, per operation:
+
+| Mechanism | Cost |
+| --- | --- |
+| `LockOSThread` + `UnlockOSThread` | **4 ns** |
+| the same, plus `cuCtxSetCurrent` | **365 ns** |
+| one-way hand-off to a pinned worker, buffered | 174 ns |
+| **round-trip hand-off, caller must see a result** | **16.2 µs** |
+
+The last row is the decisive one, and it is decisive because of *which* calls
+need a context: every one in the lower half of the table returns something the
+caller needs — a device pointer, a module, a stream, or the fact that a
+synchronous copy finished. There is no fire-and-forget among them. So a worker
+pool pays 16.2 µs where an inline lock pays 365 ns, on exactly the class of call
+it exists to serve, and it buys nothing on the class that is already
+free-threaded.
+
+> **The rule.** A call that needs a current context is wrapped inline —
+> `LockOSThread`, `cuCtxSetCurrent`, the call sequence, `UnlockOSThread` — and
+> the locked region never contains a blocking wait. The backend owns no
+> context-armed threads.
+
+**The locked region excludes every wait, and the table is why.**
+`cuEventSynchronize`, `cuStreamSynchronize` and `cuEventQuery` need no current
+context, so they sit outside it. That is what removes the objection to the inline
+shape: a blocking call inside a locked region parks an OS thread, and tgo's
+runner holds many conversations at once, but no wait is ever inside one.
+
+**A submission is armed anyway, even though it is measured not to need it.**
+365 ns against a cycle measured at 433 µs is 0.08%, and the alternative is
+depending on stream-carried context being a guarantee rather than driver
+580.173.02's behaviour, which is not established. The measurement's value is that
+it rules out the pool and frees the waits, not that it licenses the bet.
+
+**The device is concurrent, which is a separate question and also measured.**
+One primary context, shared across locked goroutines running the full cycle:
+
+| Concurrent goroutines | Cycles | Per cycle |
+| --- | --- | --- |
+| 1 | 1600 | 801 µs |
 | 8 | 8 × 200 | 497 µs |
 | 16 | 16 × 100 | 433 µs |
 
-> **The rule.** Every driver call happens on a goroutine that is locked to its
-> OS thread for the whole call sequence it belongs to, with the context asserted
-> once inside the locked region. Not per call, and not once per process.
-
-So the backend owns a **pool** of context-armed worker threads, one per in-flight
-submission slot (§8), not a single replay thread. `cuCtxSetCurrent` costs 574 ns
-and `cuCtxGetCurrent` 350 ns through purego, both measured, which is why arming
-is done once per slot acquisition and not defensively per call.
+That is evidence the hardware overlaps submissions, not evidence for any
+threading shape. It rules out [006](006-backends.md) §2.5's single replay
+thread, which would leave the top row's 801 µs on the table.
 
 **`cuDevicePrimaryCtxRetain`, not `cuCtxCreate`.** The primary context is the one
 `libcudart` uses, so a process that also links something CUDA-based shares a
 context rather than fighting over the current one. `cuCtxCreate` is a second
 context on the same device: legal, and it makes every pointer from the other one
 invalid in this one, with `CUDA_ERROR_INVALID_CONTEXT` as the only symptom. The
-probe used `cuCtxCreate` because it was alone on the machine; a backend is not.
+first probe used `cuCtxCreate` because it was alone on the machine; a backend is
+not.
 
-**A test asserts the rule rather than trusting it.** `internal/cu` exposes no
-call that is reachable off a locked thread: the typed calls take a `*cu.Ctx`
-token that only the slot acquisition can mint, so "forgot to lock" is a compile
-error and not a flake. That is the only mechanism here that is not a
-transcription of an existing backend, and §14 item 3 is what checks it.
+**A type asserts the split rather than a comment describing it.** `internal/cu`
+divides its typed calls in two. The free-threaded ones take a `cu.Stream` and are
+callable from anywhere. The context-requiring ones take a `cu.Armed` token that
+only the inline wrapper can mint and that does not escape it, so "called it
+without a context" is a compile error and not a flake, and the boundary is the
+measured table rather than a rule someone has to remember. That is the only
+mechanism here not transcribed from an existing backend, and §14 items 3 and 4
+check it.
 
 ## 5. Enumeration, capabilities, and limits
 
@@ -430,10 +502,14 @@ before the claim.
 wait makes `Fence` a lie: `Done()` is always true and every in-flight test passes
 vacuously.
 
-> **The submission slot.** One `CUstream` (created `NON_BLOCKING`), one
-> `CUevent` (created `DISABLE_TIMING`), and one context-armed locked goroutine
-> per in-flight submission, per §4. A slot is reclaimed when its event is
-> observed complete. A submission with no free slot waits for the oldest.
+> **The submission slot.** One `CUstream` (created `NON_BLOCKING`) and one
+> `CUevent` (created `DISABLE_TIMING`) per in-flight submission. A slot is
+> reclaimed when its event is observed complete. A submission with no free slot
+> waits for the oldest.
+
+The slot owns no thread. §4 measures the whole submission path as free-threaded,
+so a slot is two handles and a caller's goroutine, and the only locked region in
+a submission is the one around its host writes.
 
 `driver.Fence` maps directly and better than Vulkan's: `Wait()` is
 `cuEventSynchronize`, `Done()` is `cuEventQuery` where `CUDA_ERROR_NOT_READY` is
@@ -563,36 +639,43 @@ Each is a checkable assertion, and each names what it catches.
 2. **`Enumerate` with no driver returns a `ProbeDiagnostic` separating
    `ProbeLoadLibrary` from `ProbeEnumerateAdapters`, and does not panic** — R1's
    failure, and the difference between no GPU and a broken installation.
-3. **No `internal/cu` call is reachable without a slot token**, asserted by a
-   type-level test — §4's flaky row, which passes most of the time.
-4. **A driver call sequence on an unlocked goroutine is refused by construction,
-   and a stress test of 16 concurrent slots × 100 cycles produces correct results
-   with no `CUDA_ERROR_INVALID_CONTEXT`** — the measured 2-of-5 flake.
-5. **No `driver.Limits` field is zero on an opened device**, via the existing
+3. **No context-requiring `internal/cu` call is reachable without a `cu.Armed`
+   token, and no free-threaded call demands one**, asserted by a type-level test
+   — §4's flaky row, which passes most of the time, and the opposite error of
+   arming calls that do not need it.
+4. **A stress test of 16 concurrent submissions × 100 cycles produces correct
+   results with no `CUDA_ERROR_INVALID_CONTEXT`, with every wait outside a
+   locked region** — the measured 2-of-5 flake, and the thread-parking the
+   inline shape would otherwise cause.
+5. **The free-threaded half of §4's table still succeeds with no current
+   context** — a driver on which stream-carried context is not the behaviour
+   580.173.02 showed, which would otherwise surface as item 4 flaking on someone
+   else's machine.
+6. **No `driver.Limits` field is zero on an opened device**, via the existing
    `TestLimitsArePopulated` — the fabricated constant and the forgotten row.
-6. **`MaxPoolBytes` on an integrated adapter is neither `cuDeviceTotalMem` nor
+7. **`MaxPoolBytes` on an integrated adapter is neither `cuDeviceTotalMem` nor
    `cuMemGetInfo`'s free, and an explicit budget replaces it exactly** — §6, the
    failure that takes the host down rather than the process.
-7. **`Block.Bytes()` is nil for a `MemoryDevice` pool on a machine where all
+8. **`Block.Bytes()` is nil for a `MemoryDevice` pool on a machine where all
    memory is physically shared** — the predecessor's foreclosure, on the one
    machine that would otherwise hide it.
-8. **A `Write` then `Read` on a `MemoryDevice` pool at a non-zero offset
+9. **A `Write` then `Read` on a `MemoryDevice` pool at a non-zero offset
    round-trips every dtype.**
-9. **A deliberately corrupted `.ptx` is rejected and the driver's JIT log reaches
+10. **A deliberately corrupted `.ptx` is rejected and the driver's JIT log reaches
    the caller** — a compile path that ignores its `CUresult`. The probe already
    plumbs `CU_JIT_ERROR_LOG_BUFFER`.
-10. **A kernel writing its global id, dispatched at a 3-D grid with every axis
+11. **A kernel writing its global id, dispatched at a 3-D grid with every axis
     above one, produces exactly the expected ids** — the prior art's
     `dispatch(x, y, z) { c.gx = x }`, which passes every 1-D test.
-11. **A record whose workgroup size disagrees with
+12. **A record whose workgroup size disagrees with
     `cuFuncGetAttribute(MAX_THREADS_PER_BLOCK)` is refused at `Compile`, naming
     both triples** — the quarter-grid dispatch.
-12. **`Fence.Done()` is false for a submission still in flight** — a
+13. **`Fence.Done()` is false for a submission still in flight** — a
     `cuCtxSynchronize` left in the submission path.
-13. **Device loss from an illegal address is sticky and reported by every later
+14. **Device loss from an illegal address is sticky and reported by every later
     call; out-of-memory is not loss** — the classifier that turns a recoverable
     bug into a permanently discarded device.
-14. **E2E through the public API only**: `Enumerate` finds a CUDA adapter,
+15. **E2E through the public API only**: `Enumerate` finds a CUDA adapter,
     `OpenDevice` opens it by id, a pool allocates, a graph records upload →
     dispatch of the fixture → readback, submits, and the fence completes.
 

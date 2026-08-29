@@ -464,7 +464,7 @@ because both are correct-looking everywhere else.
 11. **`sin` and `cos` meet 2⁻²⁰ absolute over |x| ≤ 2¹⁶** against a high-precision
     reference, at Tier 4 — the generated reduction and polynomial.
 12. **A deliberately corrupted artifact is rejected with the JIT's own log
-    reaching the caller** — [060](060-cuda-bringup.md) §14 item 9 from this side.
+    reaching the caller** — [060](060-cuda-bringup.md) §14 item 10 from this side.
 13. **A kernel whose pointers, lengths and std140 uniforms exceed 4352 bytes is
     refused by the emitter, naming the total and the ceiling** — §5's budget,
     which `ptxas` otherwise reports against generated line numbers the author
