@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"golang.design/x/accel/tensor"
 )
 
@@ -130,17 +131,21 @@ func TestAFeedForwardBlockRuns(t *testing.T) {
 	if err := d.Queue().ReadBuffer(normedOut.Buffer, 0, gotNorm); err != nil {
 		t.Fatalf("readback: %v", err)
 	}
+	// Against specs/008-numerics.md section 8's composed budget rather than a
+	// tolerance. 1e-4 was two orders looser than what the arithmetic
+	// supports, so it would have accepted a scale computed at the wrong width
+	// or a reduction with the wrong depth -- the two ways this kernel goes
+	// wrong that still produce plausible numbers.
 	for r := range rows {
-		var sum float64
+		row := make([]numeq.Value, width)
 		for c := range width {
-			v := float64(xs[r*width+c])
-			sum += v * v
+			row[c] = numeq.Input(xs[r*width+c])
 		}
-		scale := 1 / math.Sqrt(sum/float64(width)+1e-5)
+		depth := numeq.TreeDepth(width)
 		for c := range width {
-			want := float32(float64(xs[r*width+c]) * scale * float64(gs[c]))
-			if got := gotNorm[r*width+c]; math.Abs(float64(got-want)) > 1e-4 {
-				t.Fatalf("normed (%d,%d) is %v, want about %v", r, c, got, want)
+			v := numeq.RMSNormValue(row, numeq.Input(gs[c]), c, depth, 1e-5)
+			if got := gotNorm[r*width+c]; !v.OK(got) {
+				t.Fatalf("normed (%d,%d) is %v and the composed budget is %s", r, c, got, v)
 			}
 		}
 	}
