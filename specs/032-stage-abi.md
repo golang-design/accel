@@ -829,3 +829,52 @@ from one that ignores the call — `HalfTriangleVS`'s reason, one layer down.
 §8.6, so §12.2 is history rather than status. What §4 still owes is §4.3's
 refusal of a fragment stage that writes a slice parameter, and what §3 owes is
 the interpolation work of §3.1 and §3.2.
+
+## 14. The interpolation slot limit — 2026-08-29
+
+§3.2, built, and the section's own contradiction resolved rather than left
+standing.
+
+**§3.2 said two different things about where the limit comes from** — *"reported
+as a device limit"* and *"the generator knows the struct and the target
+profile's limit"*. §9 and [000](000-decisions.md) decision 6 settle it for the
+second: the generator has no device to ask, and an error that waits for pipeline
+creation arrives without the source position that makes it actionable. The limit
+is `mslabi.StageVaryingSlotLimit`, beside `StageTextureLimit` and for its
+reason.
+
+**Fifteen, which is a floor and not a round number.** OpenGL ES 3.1 requires
+`GL_MAX_VARYING_VECTORS` to be at least 15, the smallest guarantee among the
+targets [006](006-backends.md) names; Vulkan's `maxVertexOutputComponents` and
+`maxFragmentInputComponents` each require at least 64, which is 16 slots, and
+Metal's fragment input is 124 scalars. Refusing at the *smallest* guarantee is
+what stops a stage that compiles on the developer's Mac from failing on a phone.
+
+**`varyingSlots` is not `varyingFloats`.** The existing count is how many floats
+the flat form carries — 4 for a `Vec4` — and the limit counts slots, which is 1.
+Reusing it would have refused every stage with four float vectors in it, so the
+formula is written separately and the difference is stated where both live.
+
+Two cases, and the second is the one with teeth: a struct of sixteen `Vec4`
+fields is refused naming the count, the limit and the field list, and a struct
+of *fifteen* is accepted. At the boundary rather than far past it, because a
+wildly oversized struct is refused by a wrong ceiling division too, while an
+off-by-one shows up only as a legal struct being turned away.
+
+**What §3.1 still owes is separate work and is sequenced deliberately.** The
+`flat` and `noperspective` tags do not exist, and neither does the refusal of an
+untagged integer varying. That refusal cannot ship first: 009's rule is that a
+rule whose accepting half is untestable is a withdrawal waiting to happen, and
+this one's accepting half *is* the tag working — `stageFlatten` appends every
+field straight into a `[]float32`, so a caller told to add `accel:"flat"` would
+still get a generated package that does not compile. A refusal pointing at a fix
+that does not fix anything is worse than the uncompilable code, because it looks
+deliberate.
+
+**`raster.State.Flat` already exists and nothing sets it.** The rasterizer takes
+a per-slot mask marking the varyings that take the provoking vertex's value, and
+`flatAt` reads it in the interpolation loop — so the *consuming* half of §3.1's
+integer rule is built and unreachable, the same shape §13 found in `Discards`
+and [058](058-ballot.md) found in `Ballot`. What that changes is the size of the
+work rather than its shape: the compiler has to say which slots are flat, not
+the rasterizer.
