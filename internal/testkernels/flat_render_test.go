@@ -231,3 +231,108 @@ func TestNoPerspectiveInterpolatesDifferently(t *testing.T) {
 	}
 	t.Logf("%d of %d covered pixels differ, by at most %v", differing, covered, maxGap)
 }
+
+// renderTwiceFromOneGraph submits one built graph twice and returns both
+// images.
+//
+// One graph rather than two identical ones: specs/003-command-graph.md's
+// guarantee is that a *replay* produces the same result, and rebuilding would
+// also be re-planning, which is a different claim.
+func renderTwiceFromOneGraph(t *testing.T, d *accel.Device, w, h int) (first, second []float32) {
+	t.Helper()
+	q := d.Queue()
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.PerspectiveVSStage,
+		Fragment: &testkernels.PerspectiveFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "determinism",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryReadback, Label: "determinism",
+	})
+	if err != nil {
+		t.Fatalf("texture: %v", err)
+	}
+	defer tex.Close()
+	view, err := tex.Whole()
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: view, Load: accel.LoadClear}},
+		Width: w, Height: h, Label: "determinism",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	read := func() []float32 {
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		raw := make([]byte, w*h*tex.Format().BytesPerPixel())
+		if err := q.ReadTexture(tex, raw); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		out := make([]float32, len(raw)/4)
+		for i := range out {
+			out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
+				uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
+		}
+		return out
+	}
+	return read(), read()
+}
+
+// assertDeterministic compares two replays of one graph, bit for bit.
+func assertDeterministic(t *testing.T, first, second []float32) {
+	t.Helper()
+	var covered int
+	for i := range first {
+		if first[i] != 0 {
+			covered++
+		}
+		if math.Float32bits(first[i]) != math.Float32bits(second[i]) {
+			t.Fatalf("element %d is %v on the first submission and %v on the second",
+				i, first[i], second[i])
+		}
+	}
+	// Two blank images are identical, and would say nothing.
+	if covered == 0 {
+		t.Fatal("the graph drew nothing, so replaying it identically proves nothing")
+	}
+}
+
+// specs/035-cpu-rasterizer.md section 7's determinism corpus entry, which had
+// no test: specs/003-command-graph.md guarantees a replay produces the same
+// result, and TestPlansAreDeterministic is about plan-cache identity rather
+// than pixels.
+//
+// Bit for bit rather than within a bound. Two runs of one program over one
+// input have no licence to differ at all, and a bound here would hide exactly
+// the non-determinism the entry exists to catch.
+func TestARenderGraphReplaysIdentically(t *testing.T) {
+	const w, h = 32, 32
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer d.Close()
+	a, b := renderTwiceFromOneGraph(t, d, w, h)
+	assertDeterministic(t, a, b)
+}

@@ -1651,3 +1651,313 @@ func TestTheInterpolationQualifiersAgreeOnBothBackends(t *testing.T) {
 		t.Errorf("%d channel values differ by more than %v", differing, bound)
 	}
 }
+
+// A colour write mask means the same channels on Metal as on the oracle.
+//
+// specs/033-render-api.md's ColorWriteMask numbers its channels from red at bit
+// 0; MTLColorWriteMask numbers them from *alpha* at bit 0, red at bit 3. So a
+// backend that passes the value through numerically writes the mirror of what
+// the caller asked for, and WriteAll -- the default, and the only mask any test
+// used -- is 0xF either way, which is why nothing noticed.
+//
+// specs/035-cpu-rasterizer.md section 7.1 requires every pixel-producing corpus
+// entry to run on both backends. The write-mask entry ran on the CPU only.
+//
+// Exactly, not within a bound: a masked channel keeps the clear value and an
+// unmasked one takes the stage's, and both are constants here.
+func TestAColourWriteMaskAgreesOnBothBackends(t *testing.T) {
+	const w, h = 8, 8
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// Each case names one channel, so a reversed mapping puts the stage's value
+	// in the wrong place rather than in none.
+	for _, c := range []struct {
+		name string
+		mask accel.ColorWriteMask
+	}{
+		{"red only", accel.WriteRed},
+		{"green only", accel.WriteGreen},
+		{"blue only", accel.WriteBlue},
+		{"alpha only", accel.WriteAlpha},
+		{"red and alpha", accel.WriteRed | accel.WriteAlpha},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			onCPU := maskedImage(t, cpu, w, h, c.mask)
+			onMetal := maskedImage(t, metal, w, h, c.mask)
+			for i := range onCPU {
+				if onCPU[i] != onMetal[i] {
+					px := i / 4
+					t.Fatalf("pixel (%d,%d) channel %d is %v on the oracle and %v on "+
+						"Metal: the mask reached the wrong channel",
+						px%w, px/w, i%4, onCPU[i], onMetal[i])
+				}
+			}
+			// SolidFS writes 0.25/0.5/0.75/1 and the clear is zero, so a
+			// channel is the stage's value if masked in and zero if masked out.
+			// Asserting that here means a backend which ignored the mask
+			// entirely fails even though the two would still agree.
+			want := [4]float32{0.25, 0.5, 0.75, 1}
+			for ch := range 4 {
+				got := onCPU[ch]
+				if c.mask&(1<<uint(ch)) == 0 {
+					if got != 0 {
+						t.Errorf("channel %d is masked out and holds %v, not the clear", ch, got)
+					}
+					continue
+				}
+				if got != want[ch] {
+					t.Errorf("channel %d is masked in and holds %v, want %v", ch, got, want[ch])
+				}
+			}
+		})
+	}
+}
+
+// maskedImage draws one full-screen triangle through a pipeline with the given
+// colour write mask, over a target cleared to zero.
+func maskedImage(t *testing.T, d *accel.Device, w, h int, mask accel.ColorWriteMask) []float32 {
+	t.Helper()
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.FullScreenVSStage,
+		Fragment: &testkernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float, Mask: mask}},
+		Label:    "masked",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tex := colourTexture(t, d, "masked", w, h)
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{
+			View: wholeOf(t, tex), Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
+		}},
+		Width: w, Height: h, Label: "masked",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	return readColourTexture(t, d, tex)
+}
+
+// mrtImage draws one triangle into two colour attachments and returns both.
+//
+// GeometryVS/ShadeFS is the corpus's multiple-render-target entry.
+// specs/032-stage-abi.md section 4.1 maps a fragment stage's result fields onto
+// attachments in declaration order, so which field lands in which attachment is
+// the thing under test -- and it is a mapping each backend applies for itself.
+func mrtImage(t *testing.T, d *accel.Device, w, h int, blends [2]accel.BlendState) [2][]float32 {
+	t.Helper()
+	targets := make([]accel.ColorTargetState, 2)
+	for i := range targets {
+		targets[i] = accel.ColorTargetState{Format: accel.RGBA32Float, Blend: blends[i]}
+	}
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.GeometryVSStage,
+		Fragment: &testkernels.ShadeFSStage,
+		VertexBuffers: []accel.VertexBufferLayout{{
+			Stride: 32,
+			Attributes: []accel.VertexAttribute{
+				{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+				{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+			},
+		}},
+		Primitive: accel.PrimitiveState{Topology: accel.TriangleList},
+		Targets:   targets,
+		Label:     "mrt",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	// Position then uv, per the layout above. A triangle covering the lower
+	// left, with uv varying so the second attachment is not a constant.
+	verts := []float32{
+		-1, -1, 0.5, 0, 0, 0, 0, 0,
+		1, -1, 0.5, 1, 0, 0, 0, 0,
+		-1, 1, 0.5, 0, 1, 0, 0, 0,
+	}
+	vb, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: len(verts),
+		Usage: accel.BufferVertex | accel.BufferCopyDst, Label: "verts",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer vb.Close()
+	if err := d.Queue().WriteBuffer(vb, 0, verts); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	vv, err := vb.View(0, vb.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	albedo := colourTexture(t, d, "albedo", w, h)
+	normal := colourTexture(t, d, "normal", w, h)
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{
+			// Different clears, so an attachment pair that was swapped or that
+			// shared one buffer is visible in the untouched corner as well as
+			// in the covered half.
+			{View: wholeOf(t, albedo), Load: accel.LoadClear, Clear: [4]float32{0.1, 0, 0, 1}},
+			{View: wholeOf(t, normal), Load: accel.LoadClear, Clear: [4]float32{0, 0.2, 0, 1}},
+		},
+		Width: w, Height: h, Label: "mrt",
+	})
+	p.SetPipeline(pipe)
+	p.SetVertexBuffer(0, vv)
+	p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1, Offset: accel.Vec2{0, 0}})
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	return [2][]float32{
+		readColourTexture(t, d, albedo), readColourTexture(t, d, normal),
+	}
+}
+
+// Two attachments land where the stage declared them, on both backends.
+//
+// specs/035-cpu-rasterizer.md section 7.1 requires every pixel-producing corpus
+// entry to run on both backends and be compared on its declared side. The MRT
+// entry ran on the CPU only, in internal/raster and internal/cpu, so which
+// attachment a field reaches had never been compared against a device.
+func TestMultipleRenderTargetsAgreeOnBothBackends(t *testing.T) {
+	const w, h = 16, 16
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	var none [2]accel.BlendState
+	onCPU := mrtImage(t, cpu, w, h, none)
+	onMetal := mrtImage(t, metal, w, h, none)
+
+	// Interpolated, so within the bound the plain triangle differential
+	// derives: one rounding of the largest value, doubled for a weighted sum.
+	const bound = 2 * 1.1920929e-7
+	for a := range onCPU {
+		var covered int
+		for i := range onCPU[a] {
+			if onCPU[a][i] != 0 {
+				covered++
+			}
+			if d := math.Abs(float64(onCPU[a][i] - onMetal[a][i])); d > bound {
+				px := i / 4
+				t.Fatalf("attachment %d pixel (%d,%d) channel %d is %v on the oracle "+
+					"and %v on Metal", a, px%w, px/w, i%4, onCPU[a][i], onMetal[a][i])
+			}
+		}
+		if covered == 0 {
+			t.Fatalf("attachment %d is blank on the oracle", a)
+		}
+	}
+	// The two attachments must differ, or a backend writing one field to both
+	// would pass. ShadeFS writes the interpolated colour to Albedo and the uv
+	// with the fragment depth to Normal.
+	same := true
+	for i := range onCPU[0] {
+		if onCPU[0][i] != onCPU[1][i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("the two attachments hold identical images, so a backend that wrote " +
+			"one field to both would agree with the oracle")
+	}
+}
+
+// Per-attachment blend: each attachment blends by its own state.
+//
+// One attachment blending and the other replacing, which is the case a backend
+// that applied attachment zero's blend to every attachment gets wrong -- and
+// the case the single-attachment blend entry cannot reach.
+func TestPerAttachmentBlendAgreesOnBothBackends(t *testing.T) {
+	const w, h = 16, 16
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	blends := [2]accel.BlendState{
+		{
+			Enabled:  true,
+			SrcColor: accel.FactorOne, DstColor: accel.FactorOne, ColorOp: accel.BlendAdd,
+			SrcAlpha: accel.FactorOne, DstAlpha: accel.FactorOne, AlphaOp: accel.BlendAdd,
+		},
+		{},
+	}
+	onCPU := mrtImage(t, cpu, w, h, blends)
+	onMetal := mrtImage(t, metal, w, h, blends)
+
+	const bound = 2 * 1.1920929e-7
+	for a := range onCPU {
+		for i := range onCPU[a] {
+			if d := math.Abs(float64(onCPU[a][i] - onMetal[a][i])); d > bound {
+				px := i / 4
+				t.Fatalf("attachment %d pixel (%d,%d) channel %d is %v on the oracle "+
+					"and %v on Metal: the per-attachment blend states did not both apply",
+					a, px%w, px/w, i%4, onCPU[a][i], onMetal[a][i])
+			}
+		}
+	}
+	// Attachment 0 added its clear to the fragment and attachment 1 replaced,
+	// so the covered region must show the clear's contribution in one and not
+	// the other. Without this the test passes on a backend that blends neither.
+	plain := mrtImage(t, cpu, w, h, [2]accel.BlendState{})
+	if equalImages(onCPU[0], plain[0]) {
+		t.Error("attachment 0 blended and unblended are identical, so this case " +
+			"exercises no blend at all")
+	}
+	if !equalImages(onCPU[1], plain[1]) {
+		t.Error("attachment 1 declares no blend and changed anyway, so attachment 0's " +
+			"state reached it")
+	}
+}
+
+func equalImages(a, b []float32) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The determinism entry on Metal, where a GPU has more ways to differ between
+// two runs of one command buffer than the oracle does.
+func TestARenderGraphReplaysIdenticallyOnMetal(t *testing.T) {
+	const w, h = 32, 32
+	a, b := renderTwiceFromOneGraph(t, openMetalDevice(t), w, h)
+	assertDeterministic(t, a, b)
+}
