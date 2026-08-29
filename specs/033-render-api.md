@@ -658,12 +658,54 @@ casting. The same shortcut on the colour write mask shipped a mirrored mask to
 Metal for as long as the mask existed — [035](035-cpu-rasterizer.md) §11.1 — and
 two enumerations agreeing today is not a property either side maintains.
 
-### 10.5 Metal refuses it, and says so
+### 10.5 Metal refuses it, and the reason is a layout decision
 
 `internal/metal` has no stencil attachment, no `setStencilReferenceValue:` and
 no front/back state on `MTLDepthStencilDescriptor`. A draw whose stencil is
 enabled is **refused by name** rather than drawn without it, per
 [006](006-backends.md) decision 6: a draw whose stencil state was ignored
 produces a picture, and it is exactly the picture a caller gets when the
-technique they are building does nothing. That is the next slice, and
+technique they are building does nothing. It is
 [035](035-cpu-rasterizer.md) §7.1's last CPU-only entry until it lands.
+
+The missing selectors are mechanical. **What is not mechanical is the
+attachment's layout**, and it is worth deciding before it is written rather
+than after.
+
+This backend stages an attachment through a buffer, so a combined depth/stencil
+attachment has to be blitted between an `MTLTexture` and buffer bytes. Metal
+copies a combined format **one aspect at a time**: a blit takes
+`MTLBlitOptionDepthFromDepthStencil` or `MTLBlitOptionStencilFromDepthStencil`,
+never both, and each produces a *tightly packed plane* — four bytes per texel
+for depth, one for stencil.
+
+> **Recalled from the API, not measured**, and flagged the way
+> [059](059-subgroup-reductions.md) §5 flagged its Metal claims for the reason
+> [058](058-ballot.md) gave: a plausible spelling can be absent. The first step
+> of this slice is a probe that attempts the blit without an option and records
+> what the validation layer says.
+
+§10.1's layout is **interleaved** — depth, stencil byte, three reserved — which
+is what a per-texel codec wants and what every other format in the table is.
+Two aspect blits cannot land in it. Three ways out:
+
+1. **Planar: a depth plane followed by a stencil plane.** Metal's two blits
+   land directly. The CPU codec reads planar, which it half does already —
+   `newFramebuffer` splits the aspects and `storeAttachments` re-interleaves
+   them, and planar would delete both loops. The cost is that `DepthPitch` is
+   one number and a planar attachment has two, and `FormatInfo.BytesPerPixel`
+   stops being a texel stride.
+2. **Keep interleaved and convert on the device.** A compute dispatch
+   interleaves the two planes after the blits and de-interleaves before them.
+   Nothing about the format changes, and every stencil frame gains two
+   dispatches and a scratch allocation that the graph would have to own.
+3. **Keep interleaved and convert on the host.** Correct, and it puts a host
+   round-trip inside a frame, which is what [005](005-graphics.md)'s
+   handoff-stays-on-device test exists to prevent.
+
+**Option 1 is the likely answer** and it is not free: it makes this the first
+format whose layout is not a texel stride, which touches `Limits`'s reporting
+and the pitch arithmetic every attachment path shares. Option 3 is rejected
+outright. The decision is deferred rather than taken here because it changes a
+public format's documented layout, and doing that twice is worse than doing it
+once late.
