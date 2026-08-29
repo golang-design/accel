@@ -309,9 +309,18 @@ func (e *emitter) stage(k *ir.Func) {
 		}
 		e.printf("\t},\n")
 	}
-	if m := varyingFlatMask(k.Varyings); len(m) > 0 {
-		e.printf("\tFlatVaryings: []bool{")
-		for i, f := range m {
+	for _, m := range []struct {
+		field string
+		mask  []bool
+	}{
+		{"FlatVaryings", varyingMask(k.Varyings, func(f ir.Field) bool { return f.Flat })},
+		{"LinearVaryings", varyingMask(k.Varyings, func(f ir.Field) bool { return f.NoPerspective })},
+	} {
+		if len(m.mask) == 0 {
+			continue
+		}
+		e.printf("\t%s: []bool{", m.field)
+		for i, f := range m.mask {
 			if i > 0 {
 				e.printf(", ")
 			}
@@ -497,13 +506,13 @@ func (e *emitter) unpackVarying(t *ir.Type, expr string) string {
 	}
 }
 
-// varyingFlatMask is one bool per float of the flat form, marking the floats a
-// rasterizer must not interpolate.
+// varyingMask is one bool per float of the flat form, from a predicate over the
+// fields, marking the floats a rasterizer must treat specially.
 //
-// Nil when nothing is tagged, so the common stage carries no slice and
-// raster.State's "a nil or short slice leaves the remaining slots smooth"
+// Nil when the predicate holds nowhere, so the common stage carries no slice and
+// raster.State's "a nil or short slice leaves the remaining slots" default
 // covers it without a special case here.
-func varyingFlatMask(t *ir.Type) []bool {
+func varyingMask(t *ir.Type, pick func(ir.Field) bool) []bool {
 	out := make([]bool, 0, varyingFloats(t))
 	any := false
 	for _, f := range t.Fields {
@@ -511,10 +520,11 @@ func varyingFlatMask(t *ir.Type) []bool {
 		if f.Type != nil && f.Type.Kind == ir.Array {
 			n = f.Type.Len
 		}
+		v := pick(f)
 		for range n {
-			out = append(out, f.Flat)
+			out = append(out, v)
 		}
-		any = any || f.Flat
+		any = any || v
 	}
 	if !any {
 		return nil

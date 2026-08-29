@@ -182,6 +182,12 @@ type Field struct {
 	// the type because two structs may carry the same type with different
 	// interpolation, and because a tag is what the author wrote.
 	Flat bool
+
+	// NoPerspective marks a varyings field interpolated linearly in window
+	// space, from an `accel:"noperspective"` struct tag. Meaningless together
+	// with Flat, and the front end refuses a field carrying both rather than
+	// picking one.
+	NoPerspective bool
 }
 
 // Bytes is a scalar kind's size in memory.

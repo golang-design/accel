@@ -267,14 +267,27 @@ func isVec4(t types.Type) bool {
 	return ok && b.Kind() == types.Float32
 }
 
-// hasFlatTag reports whether a varyings field carries `accel:"flat"`.
+// varyingTag is the interpolation a varyings field's struct tag asks for.
 //
 // A struct tag rather than a wrapper type or a naming convention: it is the one
 // place Go lets an author annotate a field without changing what the field *is*,
 // so the same Vec2 is a Vec2 whether it interpolates or not, and the generated
 // lowering and the authored source read the identical declaration.
-func hasFlatTag(tag string) bool {
-	return reflect.StructTag(tag).Get("accel") == "flat"
+//
+// An unrecognised value is returned rather than ignored, so the caller can
+// refuse it: a misspelled qualifier that silently meant "smooth" is a picture
+// that is subtly wrong wherever the perspective is strong.
+func varyingTag(tag string) (flat, noPerspective bool, unknown string) {
+	switch v := reflect.StructTag(tag).Get("accel"); v {
+	case "":
+		return false, false, ""
+	case "flat":
+		return true, false, ""
+	case "noperspective":
+		return false, true, ""
+	default:
+		return false, false, v
+	}
 }
 
 // interpolable reports whether a varyings field can be interpolated at all.
@@ -300,6 +313,13 @@ func interpolable(t *ir.Type) bool {
 // existed: the refusal a caller got was a Go type error inside generated code.
 func (c *checker) checkVaryingInterpolation(pos token.Pos, name string, t *ir.Type) {
 	for _, f := range t.Fields {
+		if f.NoPerspective && !interpolable(f.Type) {
+			c.errorf(pos, "stage %s varyings %s.%s is %s and is tagged noperspective, "+
+				"which asks for an interpolation no backend performs on it: the only "+
+				"qualifier a non-float varying takes is \"flat\" "+
+				"(specs/032-stage-abi.md section 3.1)", name, t.Name, f.Name, kindName(f.Type))
+			continue
+		}
 		if f.Flat || interpolable(f.Type) {
 			continue
 		}
@@ -384,8 +404,14 @@ func (c *checker) namedStructType(t types.Type) *ir.Type {
 				ft = &ir.Type{Kind: ir.Array, Len: int(arr.Len()), Elem: &ir.Type{Kind: ek}}
 			}
 		}
+		flat, noPersp, unknown := varyingTag(st.Tag(i))
+		if unknown != "" {
+			c.errorf(f.Pos(), "varyings field %s carries accel:%q, and the interpolation "+
+				"qualifiers are \"flat\" and \"noperspective\" "+
+				"(specs/032-stage-abi.md section 3.1)", f.Name(), unknown)
+		}
 		out.Fields = append(out.Fields, ir.Field{
-			Name: f.Name(), Type: ft, Flat: hasFlatTag(st.Tag(i)),
+			Name: f.Name(), Type: ft, Flat: flat, NoPerspective: noPersp,
 		})
 	}
 	return out

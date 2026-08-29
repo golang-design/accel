@@ -139,6 +139,20 @@ type State struct {
 	// integer. The mask lives here rather than being inferred from a type
 	// because this package deliberately has no types -- see the package doc.
 	Flat []bool
+
+	// NoPerspective marks the varying slots interpolated linearly in *window*
+	// space rather than perspective-correctly.
+	//
+	// specs/032-stage-abi.md section 3.1's third row. Screen-linear is what a
+	// value that is already a function of the pixel wants -- a screen-space
+	// offset, a window coordinate -- and dividing such a value by w a second
+	// time distorts it exactly where the perspective is strongest.
+	//
+	// Read only for a slot that is not flat: flat wins, since a value that is
+	// not interpolated cannot be interpolated one way or the other. A nil or
+	// short slice leaves the remaining slots perspective-correct, which is the
+	// default the section names.
+	NoPerspective []bool
 }
 
 // Rect is a window-space rectangle, top-origin, with X,Y its minimum corner.
@@ -215,6 +229,11 @@ func Rasterize(st State, tri [3]Vertex, emit func(Fragment)) bool {
 // flatAt reports whether slot k takes the provoking vertex's value.
 func (st State) flatAt(k int) bool { return k < len(st.Flat) && st.Flat[k] }
 
+// linearAt reports whether slot k interpolates linearly in window space.
+func (st State) linearAt(k int) bool {
+	return k < len(st.NoPerspective) && st.NoPerspective[k]
+}
+
 // rasterOne rasterizes one already-clipped triangle.
 func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fragment)) bool {
 	var w [3]window
@@ -286,6 +305,12 @@ func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fr
 			for k := range vary {
 				if st.flatAt(k) {
 					vary[k] = provoking[k]
+					continue
+				}
+				if st.linearAt(k) {
+					// The barycentric weights alone: no division by w, which is
+					// the whole of what noperspective means.
+					vary[k] = l0*w[0].vary[k] + l1*w[1].vary[k] + l2*w[2].vary[k]
 					continue
 				}
 				num := l0*w[0].vary[k]*w[0].invW +

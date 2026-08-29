@@ -68,6 +68,11 @@ type Stage struct {
 	// is the default and what a stage with no tagged field carries.
 	FlatVaryings []bool
 
+	// LinearVaryings marks, per float of the flat varyings form, the ones
+	// interpolated linearly in window space rather than perspective-correctly.
+	// specs/032-stage-abi.md section 3.1's noperspective row.
+	LinearVaryings []bool
+
 	// Discards reports that the body reaches a discard, so a backend does not
 	// promise an early depth test this stage cannot have.
 	Discards bool

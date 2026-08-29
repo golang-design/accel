@@ -67,8 +67,16 @@ func (m *msl) varyingsStruct(k *ir.Func, name string, withPosition bool) {
 		// driver rejects. Emitting it here rather than at each call site is
 		// what makes that automatic.
 		interp := ""
-		if f.Flat {
+		switch {
+		case f.Flat:
 			interp = " [[flat]]"
+		case f.NoPerspective:
+			// center_no_perspective rather than no_perspective: MSL spells the
+			// sampling position and the interpolation in one qualifier, and
+			// centre sampling is what the CPU rasterizer does -- it samples the
+			// pixel centre, which is what makes the fill rule a statement about
+			// a point.
+			interp = " [[center_no_perspective]]"
 		}
 		m.printf("    %s %s [[user(v%d)]]%s;\n", m.stageType(f.Type), f.Name, i, interp)
 	}
