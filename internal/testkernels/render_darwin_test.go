@@ -1538,3 +1538,55 @@ func TestADiscardAgreesOnBothBackends(t *testing.T) {
 		t.Fatalf("%d columns kept and %d discarded; the comparison needs both", kept, dropped)
 	}
 }
+
+// A flat varying is flat on Metal too, and both backends pick the same vertex.
+//
+// specs/032-stage-abi.md section 3.1's rule is portable and its *provoking
+// vertex* is not: which of a triangle's three vertices supplies a flat value is
+// a convention, no spec here fixes it, and a divergence would be invisible in
+// any single-backend test. That is what this compares -- the id itself, not
+// only that there is one of it.
+//
+// It is also the first place an integer crosses the stage boundary on a device.
+// The flat form carries it as bits through a []float32 on the CPU and as an
+// `int` member on Metal, which are two different representations that must
+// produce one number.
+func TestAFlatVaryingAgreesOnBothBackends(t *testing.T) {
+	const w, h = 16, 16
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	cpuIDs, cpuCovered := flatIDs(flatImage(t, cpu, w, h), w)
+	metalIDs, metalCovered := flatIDs(flatImage(t, metal, w, h), w)
+
+	if cpuCovered == 0 || metalCovered == 0 {
+		t.Fatalf("covered %d on the oracle and %d on Metal; two blank images agree",
+			cpuCovered, metalCovered)
+	}
+	if len(metalIDs) != 1 {
+		t.Fatalf("Metal produced %d distinct ids over %d covered pixels: %v -- "+
+			"the [[flat]] qualifier did not reach the pipeline", len(metalIDs),
+			metalCovered, metalIDs)
+	}
+	for id := range cpuIDs {
+		if metalIDs[id] == 0 {
+			t.Errorf("the flat id is %v on the oracle and %v on Metal: the two "+
+				"backends disagree about which vertex is provoking, which is a "+
+				"convention divergence for docs/conventions.md rather than a bug "+
+				"in either", id, keysOf(metalIDs))
+		}
+	}
+}
+
+// keysOf names the ids in a histogram, for a diagnostic.
+func keysOf(m map[float32]int) []float32 {
+	out := make([]float32, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

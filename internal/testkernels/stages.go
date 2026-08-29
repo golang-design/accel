@@ -236,3 +236,44 @@ func DiscardFS(f accel.Fragment, in accel.NoVaryings) Solid {
 	}
 	return Solid{Colour: accel.Vec4{0.25, 0.5, 0.75, 1}}
 }
+
+// IndexedVaryings carries an integer alongside a float one.
+//
+// specs/032-stage-abi.md section 3.1: no backend interpolates an integer, so
+// the field is tagged and the tag is what the compiler checks. The float beside
+// it is deliberate -- a struct whose every field were flat would not show a
+// packer that applied the mask to the wrong slot.
+type IndexedVaryings struct {
+	Tint accel.Vec4
+	ID   int32 `accel:"flat"`
+}
+
+// IndexedVS gives each vertex a distinct id, and covers the lower-left half.
+//
+// Distinct rather than equal, because equal ids interpolate to themselves: a
+// backend that ignored the flat tag and interpolated the bit pattern would
+// still produce the right answer everywhere, and the test would pass while
+// checking nothing.
+//
+//accel:vertex
+func IndexedVS(v accel.Vertex) (accel.Clip, IndexedVaryings) {
+	i := v.VertexIndex()
+	x := float32(-1)
+	y := float32(-1)
+	if i == 1 {
+		x = 1
+	}
+	if i == 2 {
+		y = 1
+	}
+	return accel.Clip{x, y, 0.5, 1},
+		IndexedVaryings{Tint: accel.Vec4{0, 1, 0, 1}, ID: int32(i)*100 + 7}
+}
+
+// IndexedFS writes the integer varying into a channel, so a bit pattern that
+// did not survive the flat form is readable as a number.
+//
+//accel:fragment
+func IndexedFS(f accel.Fragment, in IndexedVaryings) Solid {
+	return Solid{Colour: accel.Vec4{float32(in.ID), in.Tint[1], in.Tint[2], 1}}
+}

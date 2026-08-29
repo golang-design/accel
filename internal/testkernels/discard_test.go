@@ -62,3 +62,51 @@ func TestAStageRecordsWhetherItDiscards(t *testing.T) {
 		t.Error("SolidFS reaches no Discard and its record says it does")
 	}
 }
+
+// An integer varying survives the flat form, bit for bit, and the generated
+// lowering agrees with its authored source.
+//
+// specs/032-stage-abi.md section 3.1 and section 8's exact list: "whether an
+// integer varying arrives unchanged". It travels through a []float32, so it
+// travels by bits -- a value conversion would lose every id above 2^24, and
+// lose it as a plausible number rather than an error.
+func TestAnIntegerVaryingSurvivesTheFlatForm(t *testing.T) {
+	for _, id := range []int32{0, 7, -1, 1 << 24, (1 << 24) + 1, 1<<31 - 1, -1 << 31} {
+		in := IndexedVaryings{Tint: accel.Vec4{0, 1, 0, 1}, ID: id}
+		got := unflattenIndexedVaryings(flattenIndexedVaryings(in))
+		if got != in {
+			t.Errorf("id %d round-tripped to %+v, want %+v", id, got, in)
+		}
+	}
+}
+
+// The generated stages agree with their authored sources.
+func TestTheGeneratedIndexedStagesAgreeWithTheirSource(t *testing.T) {
+	for i := range uint32(3) {
+		v := accel.NewVertexForTest(i, 0)
+		wantPos, wantVary := IndexedVS(v)
+		gotPos, gotVary := indexedVSFlat(v)
+		if gotPos != wantPos || gotVary != wantVary {
+			t.Errorf("vertex %d: generated (%v, %+v), authored (%v, %+v)",
+				i, gotPos, gotVary, wantPos, wantVary)
+		}
+		f := accel.NewFragmentForTest(accel.Vec4{0.5, 0.5, 0.5, 1}, true)
+		if got, want := indexedFSFlat(f, wantVary), IndexedFS(f, wantVary); got != want {
+			t.Errorf("vertex %d varyings: generated %+v, authored %+v", i, got, want)
+		}
+	}
+}
+
+// The three vertices carry different ids, which is what makes the flat rule
+// observable: interpolating them would produce a fourth value.
+func TestTheIndexedStageGivesEachVertexItsOwnID(t *testing.T) {
+	seen := map[int32]bool{}
+	for i := range uint32(3) {
+		_, vary := IndexedVS(accel.NewVertexForTest(i, 0))
+		seen[vary.ID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("the three vertices carry %d distinct ids, want 3: a flat varying "+
+			"whose vertices agree cannot tell flat from interpolated", len(seen))
+	}
+}

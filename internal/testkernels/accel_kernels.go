@@ -12316,6 +12316,115 @@ fragment DiscardFS_out DiscardFS(
 	Generator: kernelabi.Version,
 }
 
+// indexedVSFlat is the generated lowering of the vertex stage IndexedVS.
+//
+// specs/032-stage-abi.md. The authored IndexedVS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func indexedVSFlat(v accel.Vertex) (accel.Clip, IndexedVaryings) {
+	var i uint32 = v.VertexIndex()
+	var x float32 = float32(-1)
+	var y float32 = float32(-1)
+	if i == uint32(1) {
+		x = float32(1)
+	}
+	if i == uint32(2) {
+		y = float32(1)
+	}
+	return [4]float32{x, y, math.Float32frombits(0x3F000000 /* 0.5 */), float32(1)}, IndexedVaryings{[4]float32{float32(0), float32(1), float32(0), float32(1)}, ((int32(i) * int32(100)) + int32(7))}
+}
+
+// IndexedVSStage is the compiled form of IndexedVS.
+var IndexedVSStage = accel.Stage{
+	Name:         "IndexedVS",
+	Kind:         accel.StageVertex,
+	Varyings:     "IndexedVaryings",
+	FlatVaryings: []bool{false, false, false, false, true},
+	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
+		pos, vary := indexedVSFlat(v)
+		return pos, flattenIndexedVaryings(vary)
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct IndexedVS_out {
+    float4 _pos [[position]];
+    float4 Tint [[user(v0)]];
+    int ID [[user(v1)]] [[flat]];
+};
+
+vertex IndexedVS_out IndexedVS(
+    uint _vid [[vertex_id]],
+    uint _iid [[instance_id]]) {
+    IndexedVS_out _out;
+    uint i = _vid;
+    float x = float(-1);
+    float y = float(-1);
+    if ((i == uint(1))) {
+        x = float(1);
+    }
+    if ((i == uint(2))) {
+        y = float(1);
+    }
+    _out._pos = float4(x, y, as_type<float>(0x3F000000u) /* 0.5 */, float(1));
+    _out.Tint = float4(float(0), float(1), float(0), float(1));
+    _out.ID = ((int(i) * int(100)) + int(7));
+    _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
+    return _out;
+}
+`,
+	Digest:    "7b50888462ef18e921d54ca0a4df4421",
+	Generator: kernelabi.Version,
+}
+
+// indexedFSFlat is the generated lowering of the fragment stage IndexedFS.
+//
+// specs/032-stage-abi.md. The authored IndexedFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func indexedFSFlat(f accel.Fragment, in IndexedVaryings) Solid {
+	return Solid{[4]float32{float32(in.ID), in.Tint[int32(1)], in.Tint[int32(2)], float32(1)}}
+}
+
+// IndexedFSStage is the compiled form of IndexedFS.
+var IndexedFSStage = accel.Stage{
+	Name:     "IndexedFS",
+	Kind:     accel.StageFragment,
+	Varyings: "IndexedVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	FlatVaryings: []bool{false, false, false, false, true},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
+		out := indexedFSFlat(f, unflattenIndexedVaryings(vv))
+		return [][4]float32{out.Colour}
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct IndexedFS_in {
+    float4 _pos [[position]];
+    float4 Tint [[user(v0)]];
+    int ID [[user(v1)]] [[flat]];
+};
+
+struct IndexedFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment IndexedFS_out IndexedFS(
+    IndexedFS_in _in [[stage_in]],
+    bool _front [[front_facing]]) {
+    IndexedFS_in in = _in;
+    IndexedFS_out _out;
+    _out.Colour = float4(float(in.ID), in.Tint[int(1)], in.Tint[int(2)], float(1));
+    return _out;
+}
+`,
+	Digest:    "9bf13867df7d37a2b58ac09e2d57232e",
+	Generator: kernelabi.Version,
+}
+
 // subgroupReduceFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -13742,6 +13851,28 @@ func unflattenTexelVaryings(f []float32) TexelVaryings {
 	return v
 }
 
+// flattenIndexedVaryings packs IndexedVaryings into the flat form a rasterizer interpolates.
+func flattenIndexedVaryings(v IndexedVaryings) []float32 {
+	out := make([]float32, 0, 5)
+	out = append(out, v.Tint[0])
+	out = append(out, v.Tint[1])
+	out = append(out, v.Tint[2])
+	out = append(out, v.Tint[3])
+	out = append(out, math.Float32frombits(uint32(v.ID)))
+	return out
+}
+
+// unflattenIndexedVaryings is flattenIndexedVaryings's inverse.
+func unflattenIndexedVaryings(f []float32) IndexedVaryings {
+	var v IndexedVaryings
+	v.Tint[0] = f[0]
+	v.Tint[1] = f[1]
+	v.Tint[2] = f[2]
+	v.Tint[3] = f[3]
+	v.ID = int32(math.Float32bits(f[4]))
+	return v
+}
+
 // Kernels is every kernel this package generated, in source order.
 //
 // Generated rather than written, so that a pass over the whole corpus cannot
@@ -13850,4 +13981,6 @@ var Stages = []*accel.Stage{
 	&DisplacedVSStage,
 	&BlitFSStage,
 	&DiscardFSStage,
+	&IndexedVSStage,
+	&IndexedFSStage,
 }
