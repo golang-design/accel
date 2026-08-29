@@ -602,6 +602,12 @@ const (
 	OpFragCoord
 	OpFrontFacing
 
+	// OpDiscard ends a fragment invocation, writing neither an attachment nor
+	// depth. specs/032-stage-abi.md section 4.2. It has no result and it is not
+	// a return: a Go return needs a value, and any value it produced would be
+	// read by nothing and mean nothing.
+	OpDiscard
+
 	// OpTexelFetch is an indexed load from a texture at a signed integer
 	// coordinate: no filter, no LOD selection, no addressing mode. The
 	// subresource is the binding's, not the operation's, so there is no level
@@ -643,6 +649,7 @@ var opcodeNames = [...]string{
 	OpInstanceIndex:            "InstanceIndex",
 	OpFragCoord:                "FragCoord",
 	OpFrontFacing:              "FrontFacing",
+	OpDiscard:                  "Discard",
 	OpTexelFetch:               "Fetch",
 	OpLocalID:                  "LocalID",
 	OpGroupID:                  "GroupID",
@@ -928,8 +935,8 @@ type Func struct {
 	// result struct, in declaration order.
 	Outputs []*Target
 
-	// Discards reports that the body reaches accel.Discard, which stops a
-	// backend promising an early depth test the stage cannot have.
+	// Discards reports that the body reaches a discard, which stops a backend
+	// promising an early depth test the stage cannot have.
 	Discards bool
 
 	// Atomics reports that this function's own body reaches an atomic

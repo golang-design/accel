@@ -27,14 +27,14 @@ func TestStageReceiversCarryTheirIdentity(t *testing.T) {
 	}
 
 	coord := kernel.Vec4{12.5, 4.5, 0.25, 2}
-	f := kernel.NewFragment(coord, true)
+	f := kernel.NewFragment(coord, true, nil)
 	if got := f.Coord(); got != coord {
 		t.Errorf("Coord is %v, want %v", got, coord)
 	}
 	if !f.FrontFacing() {
 		t.Error("FrontFacing is false for a front-facing fragment")
 	}
-	if kernel.NewFragment(coord, false).FrontFacing() {
+	if kernel.NewFragment(coord, false, nil).FrontFacing() {
 		t.Error("FrontFacing is true for a back-facing fragment")
 	}
 }
@@ -49,7 +49,7 @@ func TestFragmentCoordRecoversNDCDepth(t *testing.T) {
 	for _, tc := range []struct{ window, ndc float32 }{
 		{0, -1}, {0.5, 0}, {1, 1},
 	} {
-		f := kernel.NewFragment(kernel.Vec4{0, 0, tc.window, 1}, true)
+		f := kernel.NewFragment(kernel.Vec4{0, 0, tc.window, 1}, true, nil)
 		if got := f.Coord()[2]*2 - 1; got != tc.ndc {
 			t.Errorf("window depth %g recovers to %g, want %g", tc.window, got, tc.ndc)
 		}

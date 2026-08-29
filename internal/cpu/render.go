@@ -202,11 +202,17 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 		}
 	}
 
+	// One discard cell for the whole draw, reset per fragment rather than
+	// allocated per fragment: shading is sequential here, and a cell per
+	// fragment is a megabyte of garbage at a megapixel.
+	var discarded bool
 	shade := func(f raster.Fragment) raster.Shaded {
-		out := fs(kernel.NewFragment(
+		discarded = false
+		frag := kernel.NewFragment(
 			kernel.Vec4{float32(f.X) + 0.5, float32(f.Y) + 0.5, f.Depth, f.InvW},
-			f.Front), d.FragmentUniforms, f.Varyings, ftex)
-		return raster.Shaded{Color: out}
+			f.Front, &discarded)
+		out := fs(frag, d.FragmentUniforms, f.Varyings, ftex)
+		return raster.Shaded{Discard: frag.Discarded(), Color: out}
 	}
 
 	dc := raster.DrawCall{

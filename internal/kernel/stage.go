@@ -84,12 +84,25 @@ func (v Vertex) InstanceIndex() uint32 { return v.instance }
 type Fragment struct {
 	coord Vec4
 	front bool
+
+	// discarded is the cell [Fragment.Discard] writes. A pointer rather than a
+	// field, because a stage body holds the Fragment by value and its discard
+	// has to be visible to the adapter that called it.
+	discarded *bool
 }
 
 // NewFragment builds one fragment invocation's identity, for the rasterizer and
 // the harness rather than for a stage body.
-func NewFragment(coord Vec4, front bool) Fragment {
-	return Fragment{coord: coord, front: front}
+//
+// discarded is where [Fragment.Discard] records itself, and a caller shading
+// many fragments passes one cell and resets it rather than allocating per
+// fragment -- which at a megapixel is a megabyte of garbage per draw. A nil
+// cell is allocated here, so a Discard is never silently dropped.
+func NewFragment(coord Vec4, front bool, discarded *bool) Fragment {
+	if discarded == nil {
+		discarded = new(bool)
+	}
+	return Fragment{coord: coord, front: front, discarded: discarded}
 }
 
 // Coord is the window coordinate: xy is the pixel centre, z is window depth in
@@ -113,6 +126,19 @@ func (f Fragment) Coord() Vec4 { return f.coord }
 // silhouette stays right while every per-pixel attribute comes from the wrong
 // surface.
 func (f Fragment) FrontFacing() bool { return f.front }
+
+// Discard ends this invocation: no attachment write and no depth write.
+//
+// specs/032-stage-abi.md section 4.2. It does not return, because a Go return
+// needs a value and any value it returned would be a lie -- so a stage that
+// discards still returns its attachment struct, and what that struct holds is
+// never read. Every target spells it the same way: MSL's discard_fragment()
+// also runs on and the fragment is dropped afterwards.
+func (f Fragment) Discard() { *f.discarded = true }
+
+// Discarded reports whether this invocation discarded, which is what the
+// generated adapter reads to tell a rasterizer to write nothing.
+func (f Fragment) Discarded() bool { return *f.discarded }
 
 // NoVaryings is the empty varyings struct, for a vertex stage that returns only
 // a position.

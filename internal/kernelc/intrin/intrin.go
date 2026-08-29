@@ -42,7 +42,7 @@ import (
 // ABIVersion versions the table's contents. It participates in the kernel
 // digest, so adding, removing, or retyping an intrinsic makes every generated
 // file stale rather than letting one generated against a different table run.
-const ABIVersion = 10
+const ABIVersion = 11
 
 // Stage is when an intrinsic becomes usable.
 type Stage int
@@ -188,6 +188,17 @@ var table = map[key]*Intrinsic{
 	{kernelPkg, "Fragment", "FrontFacing"}: {
 		Authored: "accel.Fragment.FrontFacing", Op: ir.OpFrontFacing,
 		Uniformity: PerInvocation, Result: ir.Bool,
+	},
+	// Discard, specs/032-stage-abi.md section 4.2. A method on Fragment rather
+	// than a free function, and the receiver is the whole reason: a discard has
+	// to be visible to whoever called the stage, and Fragment is the only value
+	// a fragment body holds that the caller still has afterwards. It also scopes
+	// the operation in the type system -- a vertex stage holds a Vertex and a
+	// kernel a Thread, so neither can spell it -- which is a compiler guarantee
+	// rather than a diagnostic.
+	{kernelPkg, "Fragment", "Discard"}: {
+		Authored: "accel.Fragment.Discard", Op: ir.OpDiscard,
+		Uniformity: PerInvocation, Result: ir.Invalid,
 	},
 	// Integer texel fetch. A free function on the root package taking the
 	// texture and two signed coordinates, for the reason an atomic takes a

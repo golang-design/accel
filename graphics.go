@@ -75,4 +75,6 @@ type NoVaryings = kernel.NoVaryings
 func NewVertexForTest(vertex, instance uint32) Vertex { return kernel.NewVertex(vertex, instance) }
 
 // NewFragmentForTest builds a fragment receiver. See [NewVertexForTest].
-func NewFragmentForTest(coord Vec4, front bool) Fragment { return kernel.NewFragment(coord, front) }
+func NewFragmentForTest(coord Vec4, front bool) Fragment {
+	return kernel.NewFragment(coord, front, nil)
+}

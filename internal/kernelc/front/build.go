@@ -860,6 +860,12 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 		if in.Op.IsAtomic() {
 			c.current.Atomics = true
 		}
+		// A discard is what stops a backend hoisting the depth test in front of
+		// the stage, so the record carries it for the same reason: derived from
+		// the body, never declared. specs/032-stage-abi.md section 4.2.
+		if in.Op == ir.OpDiscard {
+			c.current.Discards = true
+		}
 	}
 	// A barrier or a subgroup rendezvous makes the whole kernel cooperative,
 	// which selects the resumable lowering. Both need something the flat path

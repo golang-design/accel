@@ -1047,6 +1047,12 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 	case ir.OpFrontFacing:
 		m.printf("_front")
 		return
+	case ir.OpDiscard:
+		// discard_fragment() does not return: MSL runs on and drops the
+		// fragment afterwards, which is why a discarding stage still returns
+		// its attachment struct here and on the CPU alike.
+		m.printf("discard_fragment()")
+		return
 
 	case ir.OpTexelFetch:
 		if len(v.Args) != 3 {

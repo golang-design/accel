@@ -1314,6 +1314,12 @@ var intrinsicMethod = map[ir.Opcode]string{
 	ir.OpInstanceIndex: "InstanceIndex",
 	ir.OpFragCoord:     "Coord",
 	ir.OpFrontFacing:   "FrontFacing",
+
+	// Discard is a method for the reason the intrinsic table gives, and the
+	// generated lowering calls it exactly as the authored source does. The
+	// discard reaches the rasterizer through the Fragment the backend built
+	// and still holds, so the adapter needs no return channel for it.
+	ir.OpDiscard: "Discard",
 }
 
 // intrinsicFunc maps an opcode to the free function the Go lowering calls.

@@ -230,6 +230,7 @@ func TestNamesAndDigestAreStable(t *testing.T) {
 		"accel.KernelMask.LowestSet",
 		"accel.Float16.F32",
 		"accel.Fragment.Coord",
+		"accel.Fragment.Discard",
 		"accel.Fragment.FrontFacing",
 		"accel.MaxI32",
 		"accel.MaxU32",
