@@ -54,6 +54,21 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		}
 	}()
 
+	// The textures the stages fetch, materialized and filled before the render
+	// encoder opens. A blit cannot be encoded inside a render encoder, so this
+	// is the only place it can happen, and it has to be here rather than at
+	// plan time: a pass that fetches what an earlier pass drew would otherwise
+	// copy the buffer as it was before that pass ran.
+	bound, owned, err := e.stageTextures(p, rp)
+	defer func() {
+		for _, t := range owned {
+			t.Close()
+		}
+	}()
+	if err != nil {
+		return fmt.Errorf("accel: node %d: %w", n.ID, err)
+	}
+
 	// LoadKeep is the only action that needs the buffer's current contents in
 	// the texture before the pass runs.
 	for i, a := range targets.color {
@@ -73,7 +88,7 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		return fmt.Errorf("accel: node %d: %w", n.ID, err)
 	}
 	for i, d := range rp.Draws {
-		if err := e.encodeDraw(enc, rp, d, i); err != nil {
+		if err := e.encodeDraw(enc, rp, d, bound[i]); err != nil {
 			enc.End()
 			return fmt.Errorf("accel: node %d draw %d: %w", n.ID, i, err)
 		}
@@ -228,8 +243,88 @@ func metalLoadAction(l driver.LoadOp) int {
 	return mtl.LoadActionDontCare
 }
 
+// drawTextures is one draw's stage textures, in each stage's own dense texture
+// order.
+//
+// Indexed the same as driver.RenderDraw's slices, holes included: a stage that
+// declares a texture it does not read leaves a gap that nothing is bound at,
+// and preserving the gap is what keeps a later slot at the index the emitter
+// gave it. Binding by position in a compacted list would put every texture
+// after a hole one argument too low, which is a wrong picture rather than an
+// error.
+type drawTextures struct {
+	vertex   []*mtl.Texture
+	fragment []*mtl.Texture
+}
+
+// stageTextures materializes every texture the pass's draws fetch.
+//
+// One Metal texture per binding per draw, allocated and filled per pass. Two
+// draws fetching the same view pay for it twice, which is renderTargets'
+// arrangement and its reason: a cache keyed by extent and format would be an
+// optimisation with no test behind it, and the lifetime would become this
+// backend's rather than the graph's.
+//
+// The second return is every texture allocated, including those from a failed
+// call, so the caller closes them whether this succeeds or not.
+func (e *executable) stageTextures(p *pass, rp *driver.RenderPass) ([]drawTextures, []*mtl.Texture, error) {
+	out := make([]drawTextures, len(rp.Draws))
+	var owned []*mtl.Texture
+	for i, d := range rp.Draws {
+		for _, s := range []struct {
+			in   []driver.RenderTexture
+			out  *[]*mtl.Texture
+			what string
+		}{
+			{d.VertexTextures, &out[i].vertex, "vertex"},
+			{d.FragmentTextures, &out[i].fragment, "fragment"},
+		} {
+			*s.out = make([]*mtl.Texture, len(s.in))
+			for j, rt := range s.in {
+				// A stage's declared texture that no draw reads. build.go
+				// leaves the slot zero rather than refusing it, because a
+				// stage may declare a texture a branch never fetches.
+				if rt.Width == 0 || rt.Height == 0 {
+					continue
+				}
+				t, err := e.stageTexture(p, rt)
+				if err != nil {
+					return out, owned, fmt.Errorf("draw %d %s texture %d: %w", i, s.what, j, err)
+				}
+				owned = append(owned, t)
+				(*s.out)[j] = t
+			}
+		}
+	}
+	return out, owned, nil
+}
+
+// stageTexture allocates one fetched texture and copies the caller's bytes in.
+func (e *executable) stageTexture(p *pass, rt driver.RenderTexture) (*mtl.Texture, error) {
+	pf, err := metalPixelFormat(rt.Format)
+	if err != nil {
+		return nil, err
+	}
+	t, err := e.dev.dev.NewSampledTexture(pf, rt.Width, rt.Height)
+	if err != nil {
+		return nil, err
+	}
+	op, err := e.operand(rt.Operand)
+	if err != nil {
+		t.Close()
+		return nil, err
+	}
+	// The *source's* pitch, which the plan computed from the device's copy
+	// alignment. The texture's rows are tight and the buffer's are padded, so
+	// copying at the texture's pitch reads every row after the first from the
+	// wrong offset -- the same trap the attachment write-back names, in the
+	// other direction.
+	p.blit().CopyBufferToTexture(op.buf, op.off, t, rt.Pitch)
+	return t, nil
+}
+
 // encodeDraw encodes one draw.
-func (e *executable) encodeDraw(enc *mtl.RenderEncoder, rp *driver.RenderPass, d driver.RenderDraw, at int) error {
+func (e *executable) encodeDraw(enc *mtl.RenderEncoder, rp *driver.RenderPass, d driver.RenderDraw, tx drawTextures) error {
 	pipe, err := e.renderPipeline(rp, d)
 	if err != nil {
 		return err
@@ -254,6 +349,16 @@ func (e *executable) encodeDraw(enc *mtl.RenderEncoder, rp *driver.RenderPass, d
 	}
 	if err := e.bindStageUniforms(enc, d); err != nil {
 		return err
+	}
+	for i, t := range tx.vertex {
+		if t != nil {
+			enc.SetVertexTexture(t, mslabi.StageTextureIndex(i))
+		}
+	}
+	for i, t := range tx.fragment {
+		if t != nil {
+			enc.SetFragmentTexture(t, mslabi.StageTextureIndex(i))
+		}
 	}
 
 	prim := metalPrimitive(d.Topology)

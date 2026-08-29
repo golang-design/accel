@@ -50,6 +50,7 @@ const (
 	// PixelFormatDepth32Float, for the same reason.
 	PixelFormatDepth32Float = 252
 
+	textureUsageShaderRead   = 1
 	textureUsageRenderTarget = 4
 	storageModePrivate       = 2
 
@@ -136,6 +137,8 @@ var (
 	selSetDepthStencil     = objc.RegisterName("setDepthStencilState:")
 	selSetVertexBuffer     = objc.RegisterName("setVertexBuffer:offset:atIndex:")
 	selSetFragmentBuffer   = objc.RegisterName("setFragmentBuffer:offset:atIndex:")
+	selSetVertexTexture    = objc.RegisterName("setVertexTexture:atIndex:")
+	selSetFragmentTexture  = objc.RegisterName("setFragmentTexture:atIndex:")
 	selSetCullMode         = objc.RegisterName("setCullMode:")
 	selSetWinding          = objc.RegisterName("setFrontFacingWinding:")
 	selDrawPrimitives      = objc.RegisterName("drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:")
@@ -179,9 +182,29 @@ type Texture struct {
 // caller through a blit into their own buffer, which is where the bytes have to
 // end up anyway.
 func (d *Device) NewRenderTarget(format, w, h int) (*Texture, error) {
+	return d.newTexture2D(format, w, h, textureUsageRenderTarget, "render target")
+}
+
+// NewSampledTexture allocates a private texture a stage fetches from.
+//
+// A separate constructor rather than a usage argument on NewRenderTarget,
+// because the two usages are not interchangeable and neither is a superset of
+// the other in intent: an attachment Metal may never read from a shader, and a
+// fetched texture Metal may never render into. Declaring both on every texture
+// would compile and would tell the driver less than it is told now.
+//
+// Private storage for the same reason a render target has it. The bytes arrive
+// by blit from the caller's buffer, which is where specs/033-render-api.md
+// keeps them.
+func (d *Device) NewSampledTexture(format, w, h int) (*Texture, error) {
+	return d.newTexture2D(format, w, h, textureUsageShaderRead, "sampled texture")
+}
+
+// newTexture2D allocates one private 2D texture with the usage named.
+func (d *Device) newTexture2D(format, w, h, usage int, what string) (*Texture, error) {
 	classes()
 	if w <= 0 || h <= 0 {
-		return nil, fmt.Errorf("accel/mtl: a %dx%d render target", w, h)
+		return nil, fmt.Errorf("accel/mtl: a %dx%d %s", w, h, what)
 	}
 	bpp := bytesPerPixel(format)
 	if bpp == 0 {
@@ -196,13 +219,13 @@ func (d *Device) NewRenderTarget(format, w, h int) (*Texture, error) {
 		if desc == 0 {
 			return
 		}
-		desc.Send(selSetTexUsage, uintptr(textureUsageRenderTarget))
+		desc.Send(selSetTexUsage, uintptr(usage))
 		desc.Send(selSetTexStorage, uintptr(storageModePrivate))
 		t.id = d.id.Send(selNewTexture, desc)
 	})
 	if t.id == 0 {
-		return nil, fmt.Errorf("accel/mtl: the device refused a %dx%d render target in "+
-			"pixel format %d", w, h, format)
+		return nil, fmt.Errorf("accel/mtl: the device refused a %dx%d %s in "+
+			"pixel format %d", w, h, what, format)
 	}
 	return t, nil
 }
@@ -504,6 +527,16 @@ func (e *RenderEncoder) SetFragmentBuffer(b *Buffer, offset, index int) {
 	withPool(func() {
 		e.id.Send(selSetFragmentBuffer, b.id, uintptr(offset), uintptr(index))
 	})
+}
+
+// SetVertexTexture binds a texture the vertex stage fetches from.
+func (e *RenderEncoder) SetVertexTexture(t *Texture, index int) {
+	e.id.Send(selSetVertexTexture, t.id, uintptr(index))
+}
+
+// SetFragmentTexture binds a texture the fragment stage fetches from.
+func (e *RenderEncoder) SetFragmentTexture(t *Texture, index int) {
+	e.id.Send(selSetFragmentTexture, t.id, uintptr(index))
 }
 
 // SetCull selects the cull mode: 0 none, 1 front, 2 back.
