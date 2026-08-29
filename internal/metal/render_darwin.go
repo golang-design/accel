@@ -219,6 +219,33 @@ func metalPixelFormat(f driver.Format) (int, error) {
 		"specs/045-texture-attachments.md section 4 owns the mapping", f)
 }
 
+// metalWriteMask maps a plan's colour write mask onto Metal's.
+//
+// Written out by name, and this one is the reason the rule exists. accel
+// numbers its channels red-first from bit 0, as Vulkan and D3D12 do;
+// MTLColorWriteMask numbers them **alpha-first**, red at bit 3. A numeric
+// conversion is therefore the mirror image of what the caller asked for, and it
+// is right for exactly the masks that are symmetric about the middle -- which
+// includes WriteAll, the default, and the only mask any test used before this
+// one. A caller who masked red got alpha, on the GPU only, with no error.
+func metalWriteMask(m uint8) int {
+	out := mtl.ColorWriteMaskNone
+	for _, c := range []struct {
+		accel uint8
+		metal int
+	}{
+		{1 << 0, mtl.ColorWriteMaskRed},
+		{1 << 1, mtl.ColorWriteMaskGreen},
+		{1 << 2, mtl.ColorWriteMaskBlue},
+		{1 << 3, mtl.ColorWriteMaskAlpha},
+	} {
+		if m&c.accel != 0 {
+			out |= c.metal
+		}
+	}
+	return out
+}
+
 // metalStoreAction maps a plan's store action onto Metal's.
 func metalStoreAction(s driver.StoreOp) int {
 	if s == driver.StoreDiscard {
@@ -488,7 +515,7 @@ func (e *executable) renderPipeline(rp *driver.RenderPass, d driver.RenderDraw) 
 		spec.ColorFormats = append(spec.ColorFormats, pf)
 	}
 	for _, m := range d.Masks {
-		spec.WriteMasks = append(spec.WriteMasks, int(m))
+		spec.WriteMasks = append(spec.WriteMasks, metalWriteMask(m))
 	}
 	for _, b := range d.Blends {
 		spec.Blends = append(spec.Blends, metalBlend(b))

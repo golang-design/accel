@@ -62,6 +62,21 @@ const (
 
 	StoreActionDontCare = 0
 	StoreActionStore    = 1
+
+	// MTLColorWriteMask, exported because the mapping onto it belongs beside
+	// the other named mappings in internal/metal rather than as a cast.
+	//
+	// **Metal numbers its channels from alpha.** Red is bit 3 and alpha is bit
+	// 0, which is the reverse of the natural RGBA order that accel, Vulkan and
+	// D3D12 all use. Writing the constants out is the only way that fact is
+	// visible anywhere; a numeric conversion is correct for `All` and for any
+	// mask symmetric about the middle, and wrong for every other.
+	ColorWriteMaskNone  = 0
+	ColorWriteMaskAlpha = 1 << 0
+	ColorWriteMaskBlue  = 1 << 1
+	ColorWriteMaskGreen = 1 << 2
+	ColorWriteMaskRed   = 1 << 3
+	ColorWriteMaskAll   = 0xf
 )
 
 // The Metal classes, looked up on first use rather than at package
