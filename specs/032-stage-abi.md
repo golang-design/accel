@@ -744,3 +744,88 @@ transform rather than a parser.
 The texel fetch of §5, which needs a texture binding for a stage. That is also
 what blocks [033](033-render-api.md)'s feedback rejection: with no way for a
 stage to read a texture, the case cannot be constructed.
+
+## 13. Discard — 2026-08-29
+
+§4.2, built on both backends. **Four of its six pieces already existed**, which
+is why it read as missing rather than as unreachable: `ir.Func.Discards` was
+declared, `emit` copied it into the generated stage record, `kernel.Stage.Discards`
+was declared, and `internal/raster` honoured `Shaded.Discard` before both the
+depth test and the attachment write. What was absent was the intrinsic and the
+line that sets the flag, so the field was permanently false and the rasterizer's
+branch permanently untaken — [042](042-surface-completion.md) §2.1 counted it as
+"three layers of machinery for a value that is permanently false" and was right.
+
+| Where | What |
+| --- | --- |
+| `ir` | `OpDiscard`, after the stage built-ins and outside the subgroup range |
+| `intrin` | `accel.Fragment.Discard`, `Result: ir.Invalid` |
+| `front` | sets `Func.Discards` where the op appears, beside `Atomics` and `Cooperative` |
+| `emit` (Go) | `f.Discard()`, the same call the authored source makes |
+| `emit` (MSL) | `discard_fragment()` |
+| `internal/kernel` | `Fragment.Discard`/`Discarded`, and the cell they use |
+| `internal/cpu` | reads the cell after shading and fills `raster.Shaded.Discard` |
+
+### 13.1 Deviation 1: the spelling is `f.Discard()`, not `accel.Discard()`
+
+§4.2 writes `accel.Discard()`. What shipped is a method on the fragment
+receiver, and the reason is not style.
+
+**A discard has to be visible to whoever called the stage.** The authored
+function and its generated lowering have the same Go signature — that identity
+is the whole basis of the differential that makes the CPU path an oracle — so
+the discard cannot travel out through the return. A free `accel.Discard()` has
+nowhere to record itself except package state, which is wrong under `-race` and
+wrong under parallel subtests. `Fragment` is the one value the body holds that
+the caller still has afterwards.
+
+It also scopes the operation in the **type system**: a vertex stage holds a
+`Vertex` and a kernel a `Thread`, so neither can spell a discard, and that is a
+compile error rather than a diagnostic this spec would have to write.
+
+`accel.Discard(f)` — a free function taking the receiver, the shape
+[045](045-texture-attachments.md)'s `Fetch` uses — satisfies the same
+constraint and keeps §4.2's spelling. It was not chosen because a discard is
+not a load: `Fetch` names a *binding* and a coordinate, while a discard acts on
+the invocation itself, which is what every other `Fragment` built-in is spelled
+as. **This is a naming decision rather than a settled one**, and it joins
+[002](002-compute-model.md) §5.2's `t.Ballot`-versus-`t.SubgroupBallot` in the
+batch waiting on an answer. Nothing depends on which way it goes.
+
+### 13.2 The depth half could not be asserted the obvious way
+
+§4.2 is normative that a discard writes **"no attachment, no depth"**, and §10's
+Done bullet only covers colour. The depth half has no readback to assert
+against: `Queue.ReadTexture` refuses every depth format, because what a device
+stores for one is device-defined.
+
+So it is asserted through the pipeline that consumes depth instead, which is a
+better question than a readback would have answered — it asks what the depth
+buffer *does* rather than what it holds:
+
+```
+ draw 1   full-screen at z = 0,   discards x < 4,  depth write on
+ draw 2   full-screen at z = 0.5, CompareLess,     depth write on
+
+ x < 4    draw 1 wrote no depth  ->  0.5 < 1 passes  ->  draw 2's colour
+ x >= 4   draw 1 wrote z = 0     ->  0.5 < 0 fails   ->  draw 1's colour
+```
+
+Three distinct failures are readable in that one picture, and the test names
+which it is: the clear colour on the left means the discard suppressed the
+colour and wrote depth anyway; draw 1's colour everywhere means the discard did
+not happen; draw 2's colour everywhere means it took fragments it should have
+kept. Confirmed by reinstating each, on both backends.
+
+**The stage keeps half of what it covers rather than all or none.** A stage
+discarding everything cannot distinguish a backend that honours a discard from
+one that draws nothing, and a stage discarding nothing cannot distinguish it
+from one that ignores the call — `HalfTriangleVS`'s reason, one layer down.
+
+### 13.3 What §12.2 said, and what is left of it
+
+§12.2 named the texel fetch of §5 as not built. It landed with
+[045](045-texture-attachments.md) §3 and reaches a device since that spec's
+§8.6, so §12.2 is history rather than status. What §4 still owes is §4.3's
+refusal of a fragment stage that writes a slice parameter, and what §3 owes is
+the interpolation work of §3.1 and §3.2.
