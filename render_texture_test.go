@@ -216,3 +216,88 @@ func readRenderTexture(t *testing.T, d *accel.Device, tex *accel.Texture) []floa
 	}
 	return out
 }
+
+// A clear value with a load op that never clears is refused rather than
+// discarded.
+//
+// specs/033-render-api.md section 3.1 names this as an error and section 6's
+// table lists it at graph build; neither existed, so the value was appended to
+// the plan unconditionally and dropped by both backends. The caller wrote what
+// they wanted the attachment to start as and got whatever was there.
+func TestAClearValueWithoutLoadClearIsRefused(t *testing.T) {
+	const w, h = 4, 4
+	d := openDevice(t)
+	tex := renderTexture(t, d, "target", w, h)
+	depth, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.Depth32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryDevice, Label: "depth",
+	})
+	if err != nil {
+		t.Fatalf("depth: %v", err)
+	}
+	defer depth.Close()
+	dv, err := depth.Whole()
+	if err != nil {
+		t.Fatalf("depth view: %v", err)
+	}
+
+	for _, c := range []struct {
+		name string
+		desc accel.RenderPassDescriptor
+		want string
+	}{
+		{
+			name: "colour clear with LoadKeep",
+			desc: accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{
+					View: whole2D(t, tex), Load: accel.LoadKeep,
+					Clear: [4]float32{1, 0, 0, 1},
+				}},
+				Width: w, Height: h, Label: "keep",
+			},
+			want: "colour 0 sets a clear value and loads",
+		},
+		{
+			name: "depth clear with LoadDontCare",
+			desc: accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{
+					View: whole2D(t, tex), Load: accel.LoadClear,
+				}},
+				Depth: &accel.DepthAttachment{
+					View: dv, Load: accel.LoadDontCare, Clear: 1,
+				},
+				Width: w, Height: h, Label: "dontcare",
+			},
+			want: "depth sets a clear value and loads",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := d.NewRecorder()
+			r.RenderPass(c.desc)
+			_, err := r.Build()
+			if err == nil {
+				t.Fatal("the pass was accepted, so the clear value is silently discarded")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("the refusal does not say %q: %v", c.want, err)
+			}
+		})
+	}
+
+	// The accepting half, and it is the one that constrains the rule: a zero
+	// clear value is also the field's zero value, so a pass that says nothing
+	// about clearing must still be legal with any load op.
+	pipe := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.SolidFSStage)
+	defer pipe.Close()
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: whole2D(t, tex), Load: accel.LoadKeep}},
+		Width: w, Height: h, Label: "silent",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+	if _, err := r.Build(); err != nil {
+		t.Errorf("a pass with no clear value and LoadKeep was refused: %v", err)
+	}
+}

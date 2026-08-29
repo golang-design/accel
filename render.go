@@ -586,6 +586,31 @@ func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
 		a.stage = st
 		accesses = append(accesses, a)
 	}
+	// A clear value with a load op that never clears is silently discarded, and
+	// specs/033-render-api.md section 3.1 makes that an error rather than a
+	// convention: the caller wrote what they wanted the attachment to start as
+	// and got whatever was there.
+	//
+	// A *zero* clear value is exempt, and there is no way around that: it is
+	// also the zero value of the field, so "cleared to black" and "said nothing
+	// about clearing" are the same bytes. The refusal fires where the caller's
+	// intent is unambiguous, which is the only place it can.
+	clearWithoutClear := func(what string, load LoadOp, set bool) {
+		if !set || load == LoadClear {
+			return
+		}
+		r.fail("RenderPass %q: %s sets a clear value and loads %v, so the value is "+
+			"discarded; use LoadClear, or drop the value "+
+			"(specs/033-render-api.md section 3.1)", label, what, load)
+		p.failed = true
+	}
+	for i, c := range desc.Color {
+		clearWithoutClear(fmt.Sprintf("colour %d", i), c.Load, c.Clear != [4]float32{})
+	}
+	if desc.Depth != nil {
+		clearWithoutClear("depth", desc.Depth.Load, desc.Depth.Clear != 0)
+	}
+
 	for i, c := range desc.Color {
 		what := fmt.Sprintf("colour %d", i)
 		if (c.View.Texture == nil) == (c.Slot == 0) {
