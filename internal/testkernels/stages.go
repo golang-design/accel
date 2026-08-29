@@ -212,3 +212,27 @@ func BlitFS(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
 	c := f.Coord()
 	return Solid{Colour: accel.Fetch(src, kmath.ToI32(c[0]), kmath.ToI32(c[1]))}
 }
+
+// DiscardFS covers its half of the viewport and discards the other half.
+//
+// Half rather than all or none, for HalfTriangleVS's reason: a stage that
+// discarded everything cannot tell a backend that honours a discard from one
+// that draws nothing, and a stage that discarded nothing cannot tell it from
+// one that ignores the call. The kept half is what gives the assertion teeth.
+//
+// It returns a colour after discarding because there is nothing else it can
+// return, and that value is exactly what specs/032-stage-abi.md section 4.2
+// says is never read -- on the CPU because the rasterizer skips the write, and
+// on Metal because discard_fragment() drops the fragment. Returning the same
+// colour on both paths is deliberate: a backend that ignored the discard would
+// then write the *same* value it writes where it covers, so the failure is a
+// covered half becoming a covered whole rather than a colour change.
+//
+//accel:fragment
+func DiscardFS(f accel.Fragment, in accel.NoVaryings) Solid {
+	c := f.Coord()
+	if c[0] < 4 {
+		f.Discard()
+	}
+	return Solid{Colour: accel.Vec4{0.25, 0.5, 0.75, 1}}
+}

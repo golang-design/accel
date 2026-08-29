@@ -1492,3 +1492,49 @@ func TestAStageTextureFormatMetalCannotSpellIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A discard on Metal drops the same fragments the oracle drops.
+//
+// specs/032-stage-abi.md section 4.2. The oracle's own assertion is portable
+// and lives beside the root package's render tests, because it is a statement
+// about the rasterizer; this one is the statement that the MSL lowering agrees,
+// which is the only thing that makes discard_fragment() more than emitted text.
+//
+// Exactly, not within a bound. Every value in the picture is a clear colour or
+// a by-value colour, so nothing here is interpolated and there is no rounding
+// for the two rasterizers to differ over. What can differ is *which* fragments
+// survived, and that is the assertion.
+func TestADiscardAgreesOnBothBackends(t *testing.T) {
+	const w, h = 8, 4
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	onCPU := discardImage(t, cpu, w, h)
+	onMetal := discardImage(t, metal, w, h)
+
+	var kept, dropped int
+	for i := range onCPU {
+		if onMetal[i] != onCPU[i] {
+			px := i / 4
+			t.Fatalf("pixel (%d,%d) channel %d is %v on Metal and %v on the oracle",
+				px%w, px/w, i%4, onMetal[i], onCPU[i])
+		}
+	}
+	// Both outcomes have to be in the picture. Two images where every fragment
+	// survived agree perfectly and say nothing about a discard, and so do two
+	// where none did.
+	for x := range w {
+		if onCPU[x*4+1] == 1 {
+			dropped++
+		} else {
+			kept++
+		}
+	}
+	if kept == 0 || dropped == 0 {
+		t.Fatalf("%d columns kept and %d discarded; the comparison needs both", kept, dropped)
+	}
+}
