@@ -5,6 +5,7 @@
 package accel_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -111,5 +112,52 @@ func TestRenderPipelineRefusals(t *testing.T) {
 				t.Errorf("the message should say %q, got %v", c.says, err)
 			}
 		})
+	}
+}
+
+// A vertex-buffer layout is refused against the *device's* limit, and the
+// refusal names the device.
+//
+// specs/042-surface-completion.md section 5.3. It used to be refused against
+// mslabi.StageVertexBufferLimit on every device -- Metal's reservation, the
+// index a stage's uniforms begin at -- so a caller on the CPU oracle met a
+// ceiling one backend's ABI happens to have. That is 000's layering rule 3 with
+// a constant standing in for the type.
+func TestAVertexLayoutIsRefusedAgainstTheDevicesLimit(t *testing.T) {
+	d := openDevice(t)
+	limit := d.Info().Limits.MaxVertexBuffers
+	if limit <= 0 {
+		t.Fatal("the device reports no vertex-buffer limit, so nothing constrains a layout")
+	}
+
+	layout := func(n int) []accel.VertexBufferLayout {
+		out := make([]accel.VertexBufferLayout, n)
+		for i := range out {
+			out[i] = accel.VertexBufferLayout{
+				Stride:     12,
+				Attributes: []accel.VertexAttribute{{Location: i, Format: accel.AttrFloat32x3}},
+			}
+		}
+		return out
+	}
+	_, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.AttributeVSStage,
+		Fragment: &testkernels.TintFSStage,
+		Targets:  []accel.ColorTargetState{rgba()},
+		// One past the limit, which is where an off-by-one shows; a wildly
+		// oversized layout is refused by a wrong comparison too.
+		VertexBuffers: layout(limit + 1),
+		Label:         "too many",
+	})
+	if err == nil {
+		t.Fatal("a layout past the device's vertex-buffer limit was accepted")
+	}
+	for _, want := range []string{d.Info().Name, "limit"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+	if !errors.Is(err, accel.ErrUnsupported) {
+		t.Errorf("the refusal is not ErrUnsupported: %v", err)
 	}
 }

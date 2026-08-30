@@ -124,17 +124,49 @@ func TestTheMetalEnumerationsMapByName(t *testing.T) {
 	t.Run("vertex formats", func(t *testing.T) {
 		// MTLVertexFormatFloat is 28 and the widths follow, which is the one
 		// place this backend relies on an enumeration being contiguous.
+		float32x := func(n int) driver.VertexAttribute {
+			return driver.VertexAttribute{Components: n, Bytes: 4, Signed: true}
+		}
 		for n, want := range map[int]int{1: 28, 2: 29, 3: 30, 4: 31} {
-			if got := metalVertexFormat(n); got != want {
+			if got := metalVertexFormat(float32x(n)); got != want {
 				t.Errorf("%d components maps to %d, want MTLVertexFormatFloat%d = %d",
 					n, got, n, want)
 			}
 		}
 		for _, n := range []int{0, 5, -1} {
-			if got := metalVertexFormat(n); got != 0 {
+			if got := metalVertexFormat(float32x(n)); got != 0 {
 				t.Errorf("%d components maps to %d, want an invalid format so the "+
 					"pipeline refuses rather than fetching something", n, got)
 			}
+		}
+
+		// The normalized families are *not* contiguous: MTLVertexFormat
+		// interleaves the plain and normalized integer families and their
+		// widths, so each is written out by name and each is checked.
+		for _, c := range []struct {
+			attr driver.VertexAttribute
+			want int
+			name string
+		}{
+			{driver.VertexAttribute{Components: 2, Bytes: 1, Normalized: true}, 7, "UChar2Normalized"},
+			{driver.VertexAttribute{Components: 4, Bytes: 1, Normalized: true}, 9, "UChar4Normalized"},
+			{driver.VertexAttribute{Components: 2, Bytes: 1, Signed: true, Normalized: true}, 10, "Char2Normalized"},
+			{driver.VertexAttribute{Components: 4, Bytes: 1, Signed: true, Normalized: true}, 12, "Char4Normalized"},
+			{driver.VertexAttribute{Components: 2, Bytes: 2, Normalized: true}, 19, "UShort2Normalized"},
+			{driver.VertexAttribute{Components: 4, Bytes: 2, Normalized: true}, 21, "UShort4Normalized"},
+			{driver.VertexAttribute{Components: 2, Bytes: 2, Signed: true, Normalized: true}, 22, "Short2Normalized"},
+			{driver.VertexAttribute{Components: 4, Bytes: 2, Signed: true, Normalized: true}, 24, "Short4Normalized"},
+		} {
+			if got := metalVertexFormat(c.attr); got != c.want {
+				t.Errorf("%s maps to %d, want %d", c.name, got, c.want)
+			}
+		}
+		// A width no format carries is invalid rather than a guess.
+		if got := metalVertexFormat(driver.VertexAttribute{
+			Components: 3, Bytes: 1, Normalized: true,
+		}); got != 0 {
+			t.Errorf("a three-wide normalized format maps to %d, and it is not portable "+
+				"-- Metal has UChar3Normalized and D3D12 does not", got)
 		}
 	})
 

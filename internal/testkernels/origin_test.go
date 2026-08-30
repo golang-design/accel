@@ -208,3 +208,6 @@ func float32sOf(raw []byte) []float32 {
 	}
 	return out
 }
+
+// mathBits is math.Float32bits, named so the attribute fixture reads as bytes.
+func mathBits(f float32) uint32 { return math.Float32bits(f) }
