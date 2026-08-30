@@ -137,3 +137,59 @@ func TestAStageWithATextureDeclaresIt(t *testing.T) {
 		}
 	}
 }
+
+// The origin corpus entry's two stages, generated against authored.
+//
+// specs/010-kernel-corpus.md section 6: every corpus entry's authored form is
+// run against its generated lowering. It is asserted here, in a portable file,
+// because the Metal differential is what exercises a lowering on a Mac and it
+// does not run anywhere else -- so a stage with no portable caller reads as
+// covered on darwin and drops the Linux gate. That has happened three times.
+func TestTheOriginStagesAgreeWithTheirSource(t *testing.T) {
+	tex := checker3x2()
+
+	t.Run("RowFS", func(t *testing.T) {
+		// Every pixel of a small grid, because the stage's whole content is
+		// its own coordinate and a constant would agree with anything.
+		for y := range 3 {
+			for x := range 4 {
+				f := accel.NewFragmentForTest(
+					accel.Vec4{float32(x) + 0.5, float32(y) + 0.5, 0.25, 1}, true)
+				want := RowFS(f, accel.NoVaryings{})
+				if got := rowFSFlat(f, accel.NoVaryings{}); got != want {
+					t.Errorf("(%d,%d): generated %+v, authored %+v", x, y, got, want)
+				}
+				if want.Colour[0] != float32(x)+0.5 || want.Colour[1] != float32(y)+0.5 {
+					t.Errorf("(%d,%d) reports %v, and a target encoding row position "+
+						"has to name where it is", x, y, want.Colour)
+				}
+			}
+		}
+	})
+
+	t.Run("TopRowFS", func(t *testing.T) {
+		// Rows above zero as well, since the stage's point is that it fetches
+		// row zero whatever row it is shading.
+		for y := range 3 {
+			for x := range 4 {
+				f := accel.NewFragmentForTest(
+					accel.Vec4{float32(x) + 0.5, float32(y) + 0.5, 0.25, 1}, true)
+				want := TopRowFS(f, accel.NoVaryings{}, tex)
+				if got := topRowFSFlat(f, accel.NoVaryings{}, tex); got != want {
+					t.Errorf("(%d,%d): generated %+v, authored %+v", x, y, got, want)
+				}
+			}
+		}
+		// And it is row zero rather than its own row: the checker's rows differ
+		// by ten, so shading row 1 and fetching row 1 would be a different
+		// number.
+		top := TopRowFS(accel.NewFragmentForTest(accel.Vec4{0.5, 0.5, 0, 1}, true),
+			accel.NoVaryings{}, tex)
+		lower := TopRowFS(accel.NewFragmentForTest(accel.Vec4{0.5, 1.5, 0, 1}, true),
+			accel.NoVaryings{}, tex)
+		if top != lower {
+			t.Errorf("shading row 0 gives %v and row 1 gives %v; the fetch is at its own "+
+				"row rather than at row zero", top.Colour, lower.Colour)
+		}
+	})
+}

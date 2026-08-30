@@ -71,12 +71,27 @@ func Generate(p Package) ([]byte, error) {
 	// belongs to the type rather than to a kernel: two kernels taking the same
 	// Params want one encoder, and a caller constructing a value wants one name
 	// to write.
+	//
+	// The decoder is emitted only for a block a *stage* takes. A dispatch's
+	// by-value parameter is written and never read back, so a decoder for one
+	// would be generated code nothing can call -- the built-and-unreachable
+	// shape specs/009-sequencing.md keeps recording, arriving here by the
+	// generator rather than by hand. specs/033-render-api.md section 4.1's
+	// recorded-offset channel is what reads a block, and only a stage has one.
+	decoded := map[string]bool{}
+	for _, k := range p.Kernels {
+		if k.Stage == ir.StageVertex || k.Stage == ir.StageFragment {
+			for _, u := range k.Uniforms {
+				decoded[u.TypeName] = true
+			}
+		}
+	}
 	emitted := map[string]bool{}
 	for _, k := range p.Kernels {
 		for _, u := range k.Uniforms {
 			if !emitted[u.TypeName] {
 				emitted[u.TypeName] = true
-				e.codec(u)
+				e.codec(u, decoded[u.TypeName])
 			}
 		}
 	}
@@ -737,7 +752,7 @@ func (e *emitter) mslArtifact(k *ir.Func) {
 // the layout rather than from Go's own struct. That separation is the whole
 // point: a caller's struct declares no padding field, and an unsafe cast would
 // be silently correct until the first three-component vector.
-func (e *emitter) codec(u *ir.Uniform) {
+func (e *emitter) codec(u *ir.Uniform, withDecoder bool) {
 	name := u.TypeName + "Codec"
 
 	e.printf("// %s is the generated std140 codec for %s.\n", name, u.TypeName)
@@ -765,6 +780,11 @@ func (e *emitter) codec(u *ir.Uniform) {
 	// recorded-offset channel hands a backend std140 bytes and the CPU
 	// rasterizer needs the typed value back; reflecting over the Go struct
 	// would be a second layout implementation beside this one.
+	//
+	// Only for a block a stage takes: see Generate.
+	if !withDecoder {
+		return
+	}
 	e.printf("// Decode reads a std140 block out of src.\n")
 	e.printf("//\n")
 	e.printf("// The inverse of Encode, generated from the same offsets, so the two\n")
