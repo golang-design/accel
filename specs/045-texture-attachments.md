@@ -543,3 +543,76 @@ recorded in prose has no accepting half and nothing makes it resume.
 Measured rather than assumed: removing the check fails the refusal test;
 degrading the range comparison to a texture-handle comparison fails **nothing**,
 which is the gap stated exactly.
+
+## 10. Mip levels and array layers — 2026-08-30
+
+§8.5's last bullet, and the prerequisite [009](009-sequencing.md) named for
+itself: *"033 §3.3's feedback rejection cannot be built before mip levels above
+one... A rule whose accepting half is untestable is a withdrawal waiting to
+happen, so the feature that makes it testable is the prerequisite."*
+
+The refusal that stood here stated its own exit condition — a view named a
+subresource and **the allocation, the copy and the hazard range did not follow
+it**. Two of the three now do.
+
+### 10.1 The layout, stated because a caller has to compute it
+
+Levels in order, array layers consecutive within a level, each level padding its
+rows to the device's copy alignment:
+
+$$
+\text{extent}(m) = \big(\max(1, w \gg m),\; \max(1, h \gg m)\big)
+$$
+
+`Texture.Subresource(mip, layer)` returns the offset, size, extent and **that
+level's** pitch. The pitch is the level's rather than the base's: level 3 of a
+1024-wide texture is 128 texels, and padding its rows to the base's pitch would
+leave seven eighths of the allocation unused and every row of it in the wrong
+place.
+
+A single-level texture's layout is unchanged, which is what keeps every existing
+plan byte-identical.
+
+### 10.2 Three things now name a subresource
+
+| | was | is |
+| --- | --- | --- |
+| allocation | base level's pitch × height | the sum over levels × layers |
+| hazard range | `off: 0, size: t.bytes` | the view's subresource range |
+| attachment extent | the texture's `Size` | the view's level extent |
+| stage fetch extent and pitch | the base's | the view's |
+
+The hazard range is the one with a consequence beyond correctness. An access
+covering the whole allocation would make a pass writing mip 1 and a pass reading
+mip 0 conflict, so §3.3's *"a different mip is a different subresource"* would be
+true of the feedback rule and false of the barrier plan — two answers to one
+question, which is the failure `STATUS.md` exists to end.
+
+### 10.3 The copy still addresses the base level, and says so
+
+`Queue.ReadTexture` and the recorded texture-buffer copies take a **texture**
+rather than a view, so there is no subresource for a caller to name. They move
+the base level, and the copy's access now says exactly that rather than covering
+the allocation — a copy of the base level hazarding against a pass writing mip 3
+is a barrier the plan does not need and a serialization a caller cannot explain.
+
+Giving those entry points a view is the remaining piece, and it is an API change
+rather than a layout one.
+
+### 10.4 The accepting half self-activated
+
+`TestADisjointSubresourceIsNotFeedback` was written to skip until a second mip
+was admissible and to run the day it was. It ran, and it passes: an attachment
+at mip 0 and a fetch at mip 1 are accepted, which is the permission §3.3's rule
+has been asserting a rejection against with no accepting case since it shipped.
+
+Its skip is now removed rather than left. A skip that can never fire is a
+comparison nobody notices is not happening — the same class
+[035](035-cpu-rasterizer.md) §12.4 records two of.
+
+**The end-to-end assertion is two mips written and read independently**, with
+the second read through a fetch because `ReadTexture` returns the base level and
+cannot see it. A wrong offset is *overlap*: mip 1 of an 8×8 RGBA32Float texture
+at offset zero sits on mip 0's first rows, the two passes write each other's
+bytes, and the fetch returns whichever ran last. Collapsing the offset fails the
+test on both backends.
