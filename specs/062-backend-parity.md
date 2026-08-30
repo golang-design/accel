@@ -292,16 +292,10 @@ never been compared against Metal" is answerable on all three Tier 1 platforms.
 | `Topology` | 5 | 2 | 3 |
 | `FrontFace` / `CullMode` | 2 / 3 | 2 / 3 | 0 |
 | `IndexFormat` | 2 | 2 | 0 |
-| `AttrFormat` | 13 | 11 | 2 |
+| `AttrFormat` | 5 | 3 | 2 |
 | `LoadOp` / `StoreOp` | 3 / 2 | 3 / 1 | 0 / 1 |
 | `StencilOp` | 8 | 0 | 8 |
 | tensor operators | 40 | 40 | 0 |
-
-`AttrFormat` grew from five members to thirteen while this was being built:
-another session added the eight normalized integer formats, and the gate failed
-on the next run naming all eight. That is the mechanism working rather than an
-anecdote about it -- under the previous arrangement the eight would have landed
-with one hand-written case between them and nothing would have said so.
 
 The eight excluded stencil operations are the largest debt and they have one
 creditor: Metal does not lower stencil state. When
