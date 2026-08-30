@@ -121,3 +121,45 @@ func joined(errs []error) string {
 	}
 	return b.String()
 }
+
+// The matrix gate routes a qualified claim to its surface, and says so when it
+// cannot.
+func TestCheckMatrixRoutesByQualifiedName(t *testing.T) {
+	surfaces := []parity.Surface{
+		{Name: "Colour", Members: []string{"Red", "Green"}},
+		{Name: "Op", Members: []string{"OpKeep"}},
+	}
+
+	errs := parity.CheckMatrix(surfaces,
+		parity.Covers{"Colour.Red", "Colour.Green", "Op.OpKeep"}, nil)
+	if len(errs) != 0 {
+		t.Fatalf("a complete matrix failed: %s", joined(errs))
+	}
+
+	// A member of one surface claimed under another is a gap in both, and the
+	// unqualified form would have hidden it as coverage.
+	errs = parity.CheckMatrix(surfaces,
+		parity.Covers{"Colour.Red", "Colour.OpKeep", "Op.OpKeep"}, nil)
+	all := joined(errs)
+	for _, want := range []string{"Colour: OpKeep is claimed", "Green"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("the failure does not say %q:\n%s", want, all)
+		}
+	}
+
+	for _, c := range []struct{ claim, want string }{
+		{"Red", "is not a qualified name"},
+		{"Nothing.Red", `does not gate`},
+	} {
+		if got := joined(parity.CheckMatrix(surfaces, parity.Covers{c.claim}, nil)); !strings.Contains(got, c.want) {
+			t.Errorf("claiming %q does not say %q:\n%s", c.claim, c.want, got)
+		}
+	}
+
+	if got := joined(parity.CheckMatrix([]parity.Surface{
+		{Name: "Colour", Members: []string{"Red"}},
+		{Name: "Colour", Members: []string{"Red"}},
+	}, nil, nil)); !strings.Contains(got, "declared twice") {
+		t.Errorf("a surface declared twice is accepted: %s", got)
+	}
+}

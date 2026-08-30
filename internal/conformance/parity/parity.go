@@ -178,3 +178,61 @@ func Check(universe []string, s Set) []error {
 	}
 	return errs
 }
+
+// Surface is one universe: its name and its members, in declaration order.
+type Surface struct {
+	Name    string
+	Members []string
+}
+
+// CheckMatrix gates a registry that spans several surfaces at once.
+//
+// Names are qualified -- "CompareFunc.CompareLess" -- because one recorded
+// case usually covers members of more than one surface, and an unqualified
+// list would make a misspelling indistinguishable from a member of another
+// surface. Qualifying it means the gate can still say "CompareFunc has eight
+// members and you have spelled one of them wrong" rather than silently moving
+// the claim to a surface where it is also not a member.
+func CheckMatrix(surfaces []Surface, covered Covers, excludes []Excluded) []error {
+	sets := make(map[string]*Set, len(surfaces))
+	order := make([]string, 0, len(surfaces))
+	for _, s := range surfaces {
+		if _, dup := sets[s.Name]; dup {
+			return []error{fmt.Errorf("surface %s is declared twice", s.Name)}
+		}
+		sets[s.Name] = &Set{Surface: s.Name}
+		order = append(order, s.Name)
+	}
+
+	var errs []error
+	route := func(qualified string, add func(*Set)) {
+		surface, member, ok := strings.Cut(qualified, ".")
+		if !ok || member == "" {
+			errs = append(errs, fmt.Errorf(
+				"%q is not a qualified name; a claim is spelled Surface.Member so the "+
+					"gate can tell a misspelling from another surface's member", qualified))
+			return
+		}
+		set, ok := sets[surface]
+		if !ok {
+			errs = append(errs, fmt.Errorf(
+				"%q names surface %q, which this matrix does not gate: %s",
+				qualified, surface, strings.Join(order, ", ")))
+			return
+		}
+		add(set)
+	}
+	for _, c := range covered {
+		_, member, _ := strings.Cut(c, ".")
+		route(c, func(s *Set) { s.Add(member) })
+	}
+	for _, e := range excludes {
+		_, member, _ := strings.Cut(e.Name, ".")
+		route(e.Name, func(s *Set) { s.Exclude(member, e.Why) })
+	}
+
+	for _, s := range surfaces {
+		errs = append(errs, Check(s.Members, *sets[s.Name])...)
+	}
+	return errs
+}
