@@ -5,7 +5,6 @@
 package accel_test
 
 import (
-	"strings"
 	"testing"
 
 	"golang.design/x/accel"
@@ -60,11 +59,10 @@ func TestATextureRoundTripKeepsCallerOrderOnMetal(t *testing.T) {
 		}
 	}
 
-	// notLowered is Metal's honest refusal of a texture copy today. When it
-	// stops being returned, this entry starts comparing -- which is the point
-	// of writing it now.
-	const notLowered = "does not lower at specs/021-metal-bringup.md"
-
+	// The skip that waited for Metal to lower a texture copy is gone: it does,
+	// this entry compares, and the refusal it watched for exists nowhere in the
+	// tree. A skip that can never fire is a comparison nobody notices is not
+	// happening.
 	roundTrip := func(t *testing.T, d *accel.Device) []byte {
 		t.Helper()
 		tex, err := d.NewTexture(accel.TextureDescriptor{
@@ -87,12 +85,6 @@ func TestATextureRoundTripKeepsCallerOrderOnMetal(t *testing.T) {
 		r.CopyTextureToBuffer(whole(t, dst), tex)
 		g, err := r.Build()
 		if err != nil {
-			if strings.Contains(err.Error(), notLowered) {
-				t.Skipf("owed, not failing: this backend does not lower a texture copy "+
-					"yet, so there is nothing to compare against the oracle. The entry "+
-					"exists so that the comparison happens on the first day it can, "+
-					"rather than being remembered afterwards: %v", err)
-			}
 			t.Fatalf("build: %v", err)
 		}
 		defer g.Close()

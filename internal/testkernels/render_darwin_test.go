@@ -15,24 +15,15 @@ import (
 	"golang.design/x/accel/internal/testkernels"
 )
 
-// notLowered is the Metal backend's honest refusal of a texture attachment.
+// The Metal backend lowered a texture attachment while these tests were being
+// written, and the skip that waited for it is gone.
 //
-// specs/045-texture-attachments.md made an attachment a texture view and gave
-// the Metal path its own slice, so on a Metal device every pass here is
-// refused at Build until that lands. The entries skip with the reason rather
-// than being deleted, which is what makes the comparison start again on the
-// first day it can -- the arrangement TestATextureRoundTripKeepsCallerOrderOnMetal
-// already uses, and the reason a convention bug is cheapest to catch in the
-// commit that makes it reachable.
-const notLowered = "does not lower a texture attachment at specs/045-texture-attachments.md"
-
-func skipUnlessLowered(t *testing.T, err error) {
-	t.Helper()
-	if err != nil && strings.Contains(err.Error(), notLowered) {
-		t.Skipf("owed, not failing: this backend does not lower a texture attachment "+
-			"yet, so there is no Metal side to compare against the oracle: %v", err)
-	}
-}
+// It read a build error for a named refusal and skipped with the reason, so the
+// comparison would start on the first day it could. That day came: the refusal
+// text exists nowhere in the tree, every entry below compares, and the guard
+// was removed rather than left standing -- a skip that can never fire is a
+// comparison nobody notices is not happening, which is the same defect the
+// entries here exist to catch, one level up.
 
 // colourTexture is a render target the host can read back.
 func colourTexture(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
@@ -156,7 +147,6 @@ func TestARenderPassAgreesOnBothBackends(t *testing.T) {
 
 		g, err := r.Build()
 		if err != nil {
-			skipUnlessLowered(t, err)
 			t.Fatalf("build: %v", err)
 		}
 		defer g.Close()
@@ -386,7 +376,6 @@ func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
 
 	g, err := r.Build()
 	if err != nil {
-		skipUnlessLowered(t, err)
 		t.Fatalf("build: %v", err)
 	}
 	defer g.Close()
@@ -777,7 +766,6 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 
 	g, err := r.Build()
 	if err != nil {
-		skipUnlessLowered(t, err)
 		t.Fatalf("build: %v", err)
 	}
 	defer g.Close()
@@ -1960,4 +1948,29 @@ func TestARenderGraphReplaysIdenticallyOnMetal(t *testing.T) {
 	const w, h = 32, 32
 	a, b := renderTwiceFromOneGraph(t, openMetalDevice(t), w, h)
 	assertDeterministic(t, a, b)
+}
+
+// The origin entry on Metal, which is the backend it exists for.
+//
+// specs/035-cpu-rasterizer.md section 7 and docs/conventions.md: the
+// predecessor's compute-path test passed while its texture path was mirrored,
+// and that is a divergence a single-backend test cannot see. The oracle's own
+// run is portable and lives beside this one.
+func TestTheDeviceAndTheHostAgreeAboutRowZeroOnMetal(t *testing.T) {
+	checkRowZeroAgreement(t, openMetalDevice(t), 12, 5)
+}
+
+// The handoff entry on Metal, where a staged attachment could turn a
+// device-resident G-buffer into a round trip without changing the picture.
+func TestADeferredHandoffStaysOnDeviceOnMetal(t *testing.T) {
+	checkHandoffStaysOnDevice(t, openMetalDevice(t), 8, 8)
+}
+
+// The depth-readback entry on Metal, which is the platform whose private-depth
+// constraint the entry exists for.
+//
+// It skips while this backend refuses a texture copy, rather than being absent:
+// a convention bug is cheapest to catch in the commit that makes it reachable.
+func TestADepthAttachmentIsReadBackThroughATransferNodeOnMetal(t *testing.T) {
+	checkDepthReadbackThroughATransfer(t, openMetalDevice(t), 8, 8, 0.25, 0.625)
 }
