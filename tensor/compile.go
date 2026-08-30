@@ -523,7 +523,18 @@ func (p *Plan) whole(name string) window {
 // computed value becomes the transient its producer wrote.
 func (p *Plan) operand(t *Tensor, views []accel.BufferView,
 	wroteSlot []accel.Slot) (accel.Binding, error) {
-	if t.node < 0 {
+	// The port decides, and the node only orders. A tensor carries both when it
+	// is a read of a state some node advanced: the node is the edge that puts
+	// the read after the write, and the port is where the value actually lives.
+	//
+	// Taking the node's transient instead is wrong whenever that node's own
+	// output is not the state -- LinearAttention writes the step's output to a
+	// transient and mutates the state beside it, so a reader of the advanced
+	// state was handed the step's output, a buffer of a different size. It read
+	// past the end of it, which on a GPU backend is an out-of-bounds access
+	// with undefined results rather than a panic. Found by
+	// specs/062-backend-parity.md section 6.6's case for the recurrence.
+	if t.port != "" {
 		w := p.whole(t.port)
 		if t.win != nil {
 			w = *t.win
@@ -534,6 +545,9 @@ func (p *Plan) operand(t *Tensor, views []accel.BufferView,
 				"[%d,%d)", w.port, w.off, w.off+w.count)
 		}
 		return accel.Binding{Slot: slot}, nil
+	}
+	if t.node < 0 {
+		return accel.Binding{}, fmt.Errorf("it names neither a port nor a producing node")
 	}
 	if v := views[t.node]; v.Buffer != nil {
 		return accel.Binding{Buffer: v}, nil
