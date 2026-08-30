@@ -1938,3 +1938,244 @@ func TestADepthAttachmentIsReadBackThroughATransferNodeOnMetal(t *testing.T) {
 func TestTwoMipsAreWrittenAndReadIndependentlyOnMetal(t *testing.T) {
 	checkMipsAreIndependent(t, openMetalDevice(t), 8, 8)
 }
+
+// A colour attachment is rendered into directly, not copied through a staging
+// texture.
+//
+// specs/045-texture-attachments.md section 11. This backend used to allocate a
+// private texture per attachment per pass, blit the caller's bytes in for
+// LoadKeep, render, and blit the result back -- several full-frame round trips
+// per frame at 1080p, and specs/042-surface-completion.md's review noted that
+// none of it was visible as a failing test, because the images are identical
+// either way.
+//
+// That is why the count exists and why this asserts on it. A regression to
+// staging would produce exactly the same picture as the fast path.
+func TestAColourAttachmentIsNotStagedOnMetal(t *testing.T) {
+	const w, h = 16, 16
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.FullScreenVSStage,
+		Fragment: &testkernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "aliased",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tex := colourTexture(t, d, "target", w, h)
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		// LoadKeep, which is the action that used to cost a copy *in* as well
+		// as the copy out. An aliased attachment keeps what the buffer holds
+		// because the texture is the buffer.
+		Color: []accel.ColorAttachment{{View: wholeOf(t, tex), Load: accel.LoadKeep}},
+		Width: w, Height: h, Label: "aliased",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.StagedAttachments != 0 {
+		t.Errorf("%d attachments were staged; a colour attachment's rows are aligned to "+
+			"256 and Metal's linear-texture alignment for it is 16, so it should render "+
+			"into the caller's bytes", stats.StagedAttachments)
+	}
+
+	// And the picture is right, so "not staged" is not satisfied by a pass that
+	// rendered nowhere.
+	px := readColourTexture(t, d, tex)
+	want := [4]float32{0.25, 0.5, 0.75, 1}
+	for i := range px {
+		if px[i] != want[i%4] {
+			t.Fatalf("element %d is %v, want %v", i, px[i], want[i%4])
+		}
+	}
+}
+
+// A depth attachment is staged, because Metal's linear textures do not support
+// depth or stencil formats.
+//
+// Measured rather than assumed, and the measurement is unusually sharp:
+// -minimumLinearTextureAlignmentForPixelFormat: does not return zero for a
+// depth format, it *asserts* -- "Linear textures do not support depth/stencil
+// pixel formats" -- and takes the process down. Asking is not a question with a
+// safe answer, so the backend does not ask.
+//
+// This is asserted rather than left implicit because it is the reason
+// specs/033-render-api.md section 10.5's layout question survives: a combined
+// depth/stencil attachment cannot be the caller's buffer, so its bytes still
+// have to be copied one aspect at a time.
+func TestADepthAttachmentIsStagedOnMetal(t *testing.T) {
+	const w, h = 16, 16
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.FullScreenVSStage,
+		Fragment: &testkernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		DepthStencil: &accel.DepthStencilState{
+			Format: accel.Depth32Float, Test: true, Write: true,
+			Compare: accel.CompareLess,
+		},
+		Label: "depth",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	colour := colourTexture(t, d, "colour", w, h)
+	depth, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.Depth32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryDevice, Label: "depth",
+	})
+	if err != nil {
+		t.Fatalf("depth: %v", err)
+	}
+	defer depth.Close()
+	dv, err := depth.Whole()
+	if err != nil {
+		t.Fatalf("depth view: %v", err)
+	}
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: wholeOf(t, colour), Load: accel.LoadClear}},
+		Depth: &accel.DepthAttachment{View: dv, Load: accel.LoadClear, Clear: 1},
+		Width: w, Height: h, Label: "depth",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	// Exactly one: the depth attachment. The colour one beside it aliases, so a
+	// count of two would mean the colour path regressed with it.
+	if stats.StagedAttachments != 1 {
+		t.Errorf("%d attachments were staged, want 1: the depth attachment cannot be a "+
+			"linear texture and the colour one beside it can", stats.StagedAttachments)
+	}
+}
+
+// An attachment whose offset does not meet Metal's linear-texture alignment is
+// staged, and still produces the right picture.
+//
+// A texture attachment always aliases: its rows are aligned to 256 and the
+// requirement is 16. A *slot* attachment is a buffer view at whatever offset
+// the caller bound, so it can miss -- and this binds it deliberately one float
+// in, which is four bytes and not a multiple of sixteen.
+//
+// The fallback is the path that used to be the only path, so this is also what
+// keeps it working: without a case that takes it, it would be code nothing runs
+// until the day a caller's offset happens to land wrong.
+func TestAMisalignedAttachmentIsStagedAndStillCorrect(t *testing.T) {
+	const w, h = 8, 8
+	const n = w * h * 4
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &testkernels.FullScreenVSStage,
+		Fragment: &testkernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "misaligned",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	// One float of slack at the front, so the view's byte offset is 4.
+	buf, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: n + 1,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+		Label: "offset",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer buf.Close()
+	view, err := buf.View(1, n)
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	r := d.NewRecorder()
+	slot := r.Slot(accel.SlotDescriptor{
+		Name: "offset", Kind: accel.BindingStorageBuffer,
+		DType: accel.F32, Access: accel.AccessWrite, MinCount: n,
+	})
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{Slot: slot, Load: accel.LoadClear}},
+		Width: w, Height: h, Label: "misaligned",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := g.Bind(accel.SlotBinding{Slot: slot, Buffer: view}); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.StagedAttachments != 1 {
+		t.Errorf("%d attachments were staged, want 1: a four-byte offset is not a "+
+			"multiple of the sixteen a linear RGBA32Float texture needs",
+			stats.StagedAttachments)
+	}
+
+	// And the staged path put the bytes where the view named, not where the
+	// buffer starts. An off-by-one-float write would be invisible in a pixel
+	// comparison that read from the same wrong place.
+	got := make([]float32, n+1)
+	if err := d.Queue().ReadBuffer(buf, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if got[0] != 0 {
+		t.Errorf("the float before the view is %v, want 0: the pass wrote outside the "+
+			"range it was bound to", got[0])
+	}
+	want := [4]float32{0.25, 0.5, 0.75, 1}
+	for i := range n {
+		if got[i+1] != want[i%4] {
+			t.Fatalf("element %d is %v, want %v", i, got[i+1], want[i%4])
+		}
+	}
+}
