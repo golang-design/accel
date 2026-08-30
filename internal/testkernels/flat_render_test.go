@@ -336,3 +336,49 @@ func TestARenderGraphReplaysIdentically(t *testing.T) {
 	a, b := renderTwiceFromOneGraph(t, d, w, h)
 	assertDeterministic(t, a, b)
 }
+
+// The render helpers below are portable on purpose.
+//
+// They lived in render_darwin_test.go and were called from this file and from
+// the other portable corpus entries, which builds on a Mac and fails everywhere
+// else -- twice in one day. A helper used by a portable test belongs in a
+// portable file, and `GOOS=linux go vet ./...` is what says so before CI does.
+
+// colourTexture is a render target the host can read back.
+func colourTexture(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
+	t.Helper()
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryReadback, Label: label,
+	})
+	if err != nil {
+		t.Fatalf("texture %s: %v", label, err)
+	}
+	t.Cleanup(func() { _ = tex.Close() })
+	return tex
+}
+
+func wholeOf(t *testing.T, tex *accel.Texture) accel.TextureView {
+	t.Helper()
+	v, err := tex.Whole()
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	return v
+}
+
+func readColourTexture(t *testing.T, d *accel.Device, tex *accel.Texture) []float32 {
+	t.Helper()
+	sz := tex.Size()
+	raw := make([]byte, sz.Width*sz.Height*tex.Format().BytesPerPixel())
+	if err := d.Queue().ReadTexture(tex, raw); err != nil {
+		t.Fatalf("read texture: %v", err)
+	}
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
+			uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
+	}
+	return out
+}

@@ -108,7 +108,13 @@ a reference into shared code:
 
 ```sh
 for os in linux windows darwin; do GOOS=$os CGO_ENABLED=0 go build ./... || break; done
+for os in linux windows darwin; do GOOS=$os go vet ./... || break; done
 ```
+
+**`vet` as well as `build`, because `build` does not compile tests.** A helper
+defined in a `_darwin_test.go` file and called from a portable one builds
+everywhere and fails to vet anywhere but a Mac, which is a red CI on a change
+whose own tests all passed locally. It has happened twice.
 
 M0 through M7 are built, which is the v0 proof
 [000](specs/000-decisions.md#the-v0-milestone) names. A CPU device opens, pooled

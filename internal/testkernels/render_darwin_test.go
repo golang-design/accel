@@ -24,45 +24,6 @@ import (
 // comparison nobody notices is not happening, which is the same defect the
 // entries here exist to catch, one level up.
 
-// colourTexture is a render target the host can read back.
-func colourTexture(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
-	t.Helper()
-	tex, err := d.NewTexture(accel.TextureDescriptor{
-		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
-		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
-		Kind:  accel.MemoryReadback, Label: label,
-	})
-	if err != nil {
-		t.Fatalf("texture %s: %v", label, err)
-	}
-	t.Cleanup(func() { _ = tex.Close() })
-	return tex
-}
-
-func wholeOf(t *testing.T, tex *accel.Texture) accel.TextureView {
-	t.Helper()
-	v, err := tex.Whole()
-	if err != nil {
-		t.Fatalf("view: %v", err)
-	}
-	return v
-}
-
-func readColourTexture(t *testing.T, d *accel.Device, tex *accel.Texture) []float32 {
-	t.Helper()
-	sz := tex.Size()
-	raw := make([]byte, sz.Width*sz.Height*tex.Format().BytesPerPixel())
-	if err := d.Queue().ReadTexture(tex, raw); err != nil {
-		t.Fatalf("read texture: %v", err)
-	}
-	out := make([]float32, len(raw)/4)
-	for i := range out {
-		out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
-			uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
-	}
-	return out
-}
-
 // The differential the MSL stage target could not have without a render path:
 // the same graph on the CPU rasterizer and on Metal, compared pixel by pixel.
 //
