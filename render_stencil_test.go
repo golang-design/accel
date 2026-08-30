@@ -229,9 +229,18 @@ func TestTheStencilFormatReportsItsLayout(t *testing.T) {
 	if !info.IsDepth || !info.IsStencil {
 		t.Errorf("Depth32FloatStencil8 reports depth=%t stencil=%t", info.IsDepth, info.IsStencil)
 	}
-	if info.BytesPerPixel != 8 {
-		t.Errorf("BytesPerPixel is %d, want 8: the layout is a float32 depth, a stencil "+
-			"byte and three reserved bytes", info.BytesPerPixel)
+	// The depth plane's, because the format is planar: BytesPerPixel is what a
+	// row pitch is computed from and the two planes have different ones.
+	if info.BytesPerPixel != 4 {
+		t.Errorf("BytesPerPixel is %d, want 4: it is the depth plane's, and the stencil "+
+			"plane has its own pitch", info.BytesPerPixel)
+	}
+	if !accel.Depth32FloatStencil8.Planar() {
+		t.Error("Depth32FloatStencil8 does not report itself planar, so a caller sizing " +
+			"a subresource from BytesPerPixel alone would be wrong by a whole plane")
+	}
+	if accel.Depth32Float.Planar() {
+		t.Error("Depth32Float reports itself planar and has one aspect")
 	}
 	// Depth24PlusStencil8 stays device-defined, and adding a stencil format is
 	// not a reason to relax that: "24 plus" still has two defensible encodings.

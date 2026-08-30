@@ -5,6 +5,7 @@
 package cpu
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
 	"strings"
@@ -326,59 +327,38 @@ func TestADepthCodecIsOneComponentWide(t *testing.T) {
 	}
 }
 
-// The stencil aspect survives the attachment's encoding, at every value a byte
-// can hold.
+// A planar depth/stencil attachment decodes its *depth* plane through the
+// codec, and the codec says so.
 //
-// specs/033-render-api.md's stencil state needs a format that carries the
-// aspect across passes, and this codec is what carries it. The stencil travels
-// as a float because that is the only channel type here, and it is exact:
-// every uint8 is a float32 with no rounding, so the round trip is the identity
-// rather than a conversion with a domain.
-func TestTheStencilAspectRoundTrips(t *testing.T) {
+// specs/045-texture-attachments.md section 12 made the format planar, measured
+// against Metal: a combined texture copies one aspect at a time and each copy
+// is a tightly packed plane, so an interleaved texel has nowhere for the two to
+// land. A texel codec's unit is one texel of one plane, and the interleaved
+// version pretended otherwise.
+func TestThePlanarDepthStencilCodecIsTheDepthPlane(t *testing.T) {
 	c, err := codecFor(driver.Depth32FloatStencil8)
 	if err != nil {
 		t.Fatalf("codec: %v", err)
 	}
-	if c.bytes != 8 || c.components != 2 {
-		t.Fatalf("the codec is %d bytes and %d components, want 8 and 2",
-			c.bytes, c.components)
+	if c.bytes != 4 || c.components != 1 {
+		t.Fatalf("the codec is %d bytes and %d components, want 4 and 1: it is the "+
+			"depth plane, and the stencil plane is read beside it", c.bytes, c.components)
 	}
-	for _, z := range []float32{0, 0.5, 1, math.SmallestNonzeroFloat32, math.MaxFloat32} {
-		for s := range 256 {
-			var raw [8]byte
-			c.encode(raw[:], [4]float32{z, float32(s), 0, 1})
-			got := c.decode(raw[:])
-			if got[0] != z || got[1] != float32(s) {
-				t.Fatalf("(%v, %d) round-tripped to (%v, %v)", z, s, got[0], got[1])
-			}
-			// Written zero rather than left alone: an attachment's bytes are
-			// compared against the oracle's, and uninitialised padding is a
-			// difference nobody caused.
-			if raw[5] != 0 || raw[6] != 0 || raw[7] != 0 {
-				t.Fatalf("(%v, %d) left the reserved bytes as %v", z, s, raw[5:])
-			}
+	// It is the same encoding as a plain depth attachment, which is the point:
+	// the two differ in what follows the plane, not in the plane.
+	plain, err := codecFor(driver.Depth32Float)
+	if err != nil {
+		t.Fatalf("depth codec: %v", err)
+	}
+	for _, z := range []float32{0, 0.5, 1, math.MaxFloat32} {
+		var a, b [8]byte
+		c.encode(a[:], [4]float32{z, 0, 0, 1})
+		plain.encode(b[:], [4]float32{z, 0, 0, 1})
+		if !bytes.Equal(a[:4], b[:4]) {
+			t.Errorf("depth %v encodes as %v planar and %v plain", z, a[:4], b[:4])
 		}
-	}
-}
-
-// A stencil value outside a byte clamps rather than wrapping.
-//
-// The oracle has to answer a caller error the same way every time, and a wrap
-// depends on the conversion's direction: 256 truncating to 0 and -1 truncating
-// to 255 are both defensible and neither is a stencil value anyone meant.
-func TestAStencilValueOutsideAByteClamps(t *testing.T) {
-	c, err := codecFor(driver.Depth32FloatStencil8)
-	if err != nil {
-		t.Fatalf("codec: %v", err)
-	}
-	for _, tc := range []struct {
-		in   float32
-		want float32
-	}{{-1, 0}, {256, 255}, {1e9, 255}, {float32(math.NaN()), 0}} {
-		var raw [8]byte
-		c.encode(raw[:], [4]float32{0, tc.in, 0, 1})
-		if got := c.decode(raw[:])[1]; got != tc.want {
-			t.Errorf("stencil %v encoded to %v, want %v", tc.in, got, tc.want)
+		if got := c.decode(a[:])[0]; got != z {
+			t.Errorf("depth %v round-tripped to %v", z, got)
 		}
 	}
 }

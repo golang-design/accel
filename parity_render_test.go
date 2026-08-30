@@ -509,10 +509,6 @@ func indexFormatConstName(f accel.IndexFormat) string {
 // waits on. An exclusion is a debt with a stated creditor: when the backend
 // gains what the entry names, the entry goes and the gate demands a case.
 func renderStateParityExclusions() []parity.Excluded {
-	const noStencil = "the Metal backend refuses a stencil state by name " +
-		"(internal/metal/render_darwin.go: \"does not lower stencil state\"), so the " +
-		"CPU backend's stencil has nothing to be compared against. Delete this entry " +
-		"when specs/033-render-api.md section 10.5's Metal half lands"
 	const noPrimitive = "refused on both backends: specs/035-cpu-rasterizer.md " +
 		"section 10 leaves the rule open, because lines have a diamond-exit rule on " +
 		"some backends and a Bresenham-ish one on others. A refusal is not a result " +
@@ -531,11 +527,6 @@ func renderStateParityExclusions() []parity.Excluded {
 		{Name: "AttrFormat.AttrFloat32", Why: "no stage in the corpus reads a " +
 			"one-component attribute, so there is nothing to fetch into. Delete this " +
 			"entry when a [1]float32 attribute stage is generated"},
-	}
-	for _, op := range []string{"StencilKeep", "StencilZero", "StencilReplace",
-		"StencilIncrementClamp", "StencilDecrementClamp", "StencilInvert",
-		"StencilIncrementWrap", "StencilDecrementWrap"} {
-		out = append(out, parity.Excluded{Name: "StencilOp." + op, Why: noStencil})
 	}
 	return out
 }
@@ -669,7 +660,8 @@ func attrFormatParityCases() []parityCase {
 			return append(readTargetBytes(t, d, albedo), readTargetBytes(t, d, normal)...)
 		},
 	}}
-	return append(cases, normalizedAttrParityCases()...)
+	cases = append(cases, normalizedAttrParityCases()...)
+	return append(cases, stencilOpParityCases()...)
 }
 
 // normalizedAttrParityCases compares each normalized integer attribute format
@@ -808,4 +800,133 @@ func normalizedAttrCase(name string, f accel.AttrFormat, raw []byte, pos []float
 			return readTargetBytes(t, d, read)
 		},
 	}
+}
+
+// stencilOpParityCases compares each stencil operation between the backends.
+//
+// specs/033-render-api.md section 10 built the CPU half and section 10.5's
+// Metal half landed with specs/045-texture-attachments.md section 12's planar
+// layout, so the whole surface is comparable for the first time.
+//
+// # The operation is observed through a second pass
+//
+// A stencil buffer cannot be read back -- Queue.ReadTexture refuses every depth
+// format -- so each case marks with the operation under test and then draws a
+// full-screen pass that keeps only where the stencil equals the value that
+// operation should have left. The coverage of the second pass *is* the stencil
+// buffer, and it is a picture the harness already knows how to compare.
+func stencilOpParityCases() []parityCase {
+	// The marking pass covers the lower-left half, so an operation that wrote
+	// everywhere and one that wrote nowhere are different pictures.
+	face := func(op accel.StencilOp, compare accel.CompareFunc) accel.StencilFace {
+		return accel.StencilFace{
+			Compare: compare, ReadMask: 0xff, WriteMask: 0xff,
+			Fail: accel.StencilKeep, DepthFail: accel.StencilKeep, Pass: op,
+		}
+	}
+	var cases []parityCase
+	for _, c := range []struct {
+		name string
+		op   accel.StencilOp
+		// want is what the buffer holds where the marking pass covered, given a
+		// clear of 3 and a reference of 5.
+		want uint8
+	}{
+		{"StencilKeep", accel.StencilKeep, 3},
+		{"StencilZero", accel.StencilZero, 0},
+		{"StencilReplace", accel.StencilReplace, 5},
+		{"StencilIncrementClamp", accel.StencilIncrementClamp, 4},
+		{"StencilDecrementClamp", accel.StencilDecrementClamp, 2},
+		{"StencilInvert", accel.StencilInvert, 0xfc},
+		{"StencilIncrementWrap", accel.StencilIncrementWrap, 4},
+		{"StencilDecrementWrap", accel.StencilDecrementWrap, 2},
+	} {
+		cases = append(cases, stencilOpCase(c.name, c.op, c.want, face))
+	}
+	return cases
+}
+
+func stencilOpCase(name string, op accel.StencilOp, want uint8,
+	face func(accel.StencilOp, accel.CompareFunc) accel.StencilFace) parityCase {
+	return parityCase{
+		name:   "the stencil operation " + name,
+		covers: parity.Covers{"StencilOp." + name},
+		run: func(t *testing.T, d *accel.Device) []byte {
+			t.Helper()
+			mark := stencilPipeline(t, d, &testkernels.HalfTriangleVSStage,
+				face(op, accel.CompareAlways), true, name+" mark")
+			defer mark.Close()
+			// Equal against the value the operation should have left, with the
+			// reference supplied per pass.
+			test := stencilPipeline(t, d, &testkernels.FullScreenVSStage,
+				face(accel.StencilKeep, accel.CompareEqual), false, name+" test")
+			defer test.Close()
+
+			colour := colourTarget(t, d, "colour", parityW, parityH)
+			depth, err := d.NewTexture(accel.TextureDescriptor{
+				Format: accel.Depth32FloatStencil8,
+				Size:   accel.Extent{Width: parityW, Height: parityH},
+				Usage: accel.TextureRenderTarget | accel.TextureCopySrc |
+					accel.TextureCopyDst,
+				Kind: accel.MemoryDevice, Label: "stencil",
+			})
+			if err != nil {
+				t.Fatalf("depth: %v", err)
+			}
+			defer depth.Close()
+			dv, err := depth.Whole()
+			if err != nil {
+				t.Fatalf("depth view: %v", err)
+			}
+
+			r := d.NewRecorder()
+			p1 := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{
+					View: view(t, colour), Load: accel.LoadClear, Clear: parityClear,
+				}},
+				Depth: &accel.DepthAttachment{View: dv, Load: accel.LoadClear, Clear: 1},
+				Width: parityW, Height: parityH, Label: "mark",
+			})
+			p1.SetPipeline(mark)
+			p1.SetStencilReference(5)
+			p1.Draw(accel.Draw{VertexCount: 3})
+
+			p2 := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{
+					View: view(t, colour), Load: accel.LoadKeep,
+				}},
+				Depth: &accel.DepthAttachment{View: dv, Load: accel.LoadKeep},
+				Width: parityW, Height: parityH, Label: "test",
+			})
+			p2.SetPipeline(test)
+			p2.SetStencilReference(want)
+			p2.Draw(accel.Draw{VertexCount: 3})
+
+			submitOne(t, d, r)
+			return readTargetBytes(t, d, colour)
+		},
+	}
+}
+
+// stencilPipeline is a pipeline whose stencil state is one face repeated.
+//
+// The clear is 3 rather than 0 so that Keep, Zero and Decrement are three
+// different answers rather than two.
+func stencilPipeline(t *testing.T, d *accel.Device, vs *accel.Stage,
+	f accel.StencilFace, write bool, label string) *accel.RenderPipeline {
+	t.Helper()
+	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   vs,
+		Fragment: &testkernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		DepthStencil: &accel.DepthStencilState{
+			Format:  accel.Depth32FloatStencil8,
+			Stencil: accel.StencilState{Enabled: true, Front: f, Back: f},
+		},
+		Label: label,
+	})
+	if err != nil {
+		t.Fatalf("%s pipeline: %v", label, err)
+	}
+	return p
 }

@@ -33,6 +33,13 @@ func TestEveryPlanFormatIsMappedOrRefusedByName(t *testing.T) {
 		driver.BGRA8Unorm:     mtl.PixelFormatBGRA8Unorm,
 		driver.Depth32Float:   mtl.PixelFormatDepth32Float,
 
+		// The combined depth/stencil format, added 2026-08-30 with the stencil
+		// path. specs/045-texture-attachments.md section 12: accel stores it as
+		// two planes because Metal copies one aspect at a time, and the pixel
+		// format here is the texture's own, which is interleaved and Metal's
+		// business rather than the plan's.
+		driver.Depth32FloatStencil8: mtl.PixelFormatDepth32FloatStencil8,
+
 		// The float colour formats, added 2026-08-30. The format table marks
 		// all nine colour formats renderable on every backend and these five
 		// were refused at submit, which specs/062-backend-parity.md section
