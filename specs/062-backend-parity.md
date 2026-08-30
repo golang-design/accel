@@ -1,6 +1,6 @@
 ---
 title: "Backend parity: an enumerated CPU/Metal agreement matrix, gated on every platform"
-status: implemented
+status: in progress
 layer: process
 depends_on:
   - 006-backends.md
@@ -308,10 +308,17 @@ creditor: Metal does not lower stencil state. When
 [033](033-render-api.md) §10.5's Metal half lands, the eight entries go and the
 gate demands eight cases.
 
-### What is not done
+### What is not done, and why this stays *in progress*
 
-§6.8's texture-copy half. Metal lowers a buffer-to-texture copy, but the
+**§6.8's texture-copy half.** Metal lowers a buffer-to-texture copy, but the
 existing round trip in `texture_darwin_test.go` was written against a refusal
 and is another session's file at the time of writing. The colour formats are
 covered through the render path instead, which is the stronger comparison
-anyway -- it puts the encoding, not only the copy, in the result.
+anyway -- it puts the encoding, not only the copy, in the result. What is
+missing is the copy path itself: `CopyBufferToTexture` and
+`CopyTextureToBuffer` over each host-copyable format, compared between the two
+backends.
+
+The spec therefore stays `in progress` rather than `implemented`, per
+[009](009-sequencing.md)'s rule and [STATUS.md](STATUS.md)'s: a spec does not
+reach `implemented` while any section it owns is unbuilt, and one section is.
