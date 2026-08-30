@@ -646,6 +646,14 @@ type RenderPass struct {
 	ColorPitch []int
 	DepthPitch int
 
+	// StencilPitch is a planar depth/stencil attachment's stencil-plane pitch,
+	// and zero when the format has no stencil aspect. The stencil plane begins
+	// at the depth attachment's operand offset plus DepthPitch times Height.
+	//
+	// Two numbers because the two planes have different widths in bytes, and a
+	// backend copying one aspect at a time needs each. specs/045 section 12.
+	StencilPitch int
+
 	// ColorLoad and DepthLoad are the load actions. The backend needs the
 	// distinction because clear is free on a tiler and a full-screen clear draw
 	// is not.

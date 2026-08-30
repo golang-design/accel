@@ -98,7 +98,7 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
-		p.blit().CopyBufferToTexture(op.buf, op.off, targets.depth.Texture, rp.DepthPitch)
+		e.copyDepthPlanes(p, rp, op, targets.depth.Texture, true)
 	}
 	p.end()
 
@@ -143,7 +143,7 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
-		p.blit().CopyTextureToBuffer(targets.depth.Texture, op.buf, op.off, rp.DepthPitch)
+		e.copyDepthPlanes(p, rp, op, targets.depth.Texture, false)
 	}
 	p.end()
 	return nil
@@ -194,7 +194,11 @@ func (e *executable) renderTargets(p *pass, rp *driver.RenderPass) (renderAttach
 		})
 	}
 	if rp.Depth != nil {
-		t, staged, err := e.attachmentTexture(*rp.Depth, driver.Depth32Float,
+		df := driver.Depth32Float
+		if rp.StencilPitch > 0 {
+			df = driver.Depth32FloatStencil8
+		}
+		t, staged, err := e.attachmentTexture(*rp.Depth, df,
 			rp.Width, rp.Height, rp.DepthPitch)
 		if err != nil {
 			return fail(fmt.Errorf("depth attachment: %w", err))
@@ -206,6 +210,11 @@ func (e *executable) renderTargets(p *pass, rp *driver.RenderPass) (renderAttach
 			Load:       metalLoadAction(rp.DepthLoad),
 			Store:      metalStoreAction(rp.DepthStore),
 			ClearDepth: float64(rp.DepthClear),
+			// A combined format takes the same texture on both attachments of
+			// the pass descriptor. A pass that set only the depth one would run
+			// with no stencil buffer, which is a stencil test that always
+			// passes rather than an error.
+			Stencil: rp.StencilPitch > 0,
 		}
 	}
 	return out, nil
@@ -280,9 +289,8 @@ func isDepthFormat(f driver.Format) bool {
 // enumeration is what found it, which is the argument for enumerating a
 // surface rather than testing the members somebody thought of.
 //
-// The remaining absences are depth formats a backend genuinely does not carry:
-// Depth24PlusStencil8 has a device-defined layout the oracle refuses, and
-// Depth32FloatStencil8 waits on the stencil path this backend does not lower.
+// The one remaining absence is Depth24PlusStencil8, whose layout is
+// device-defined and which the oracle refuses for that reason.
 // The refusal names the format so the next caller to want one is told what is
 // missing rather than left with a wrong picture.
 func metalPixelFormat(f driver.Format) (int, error) {
@@ -307,6 +315,8 @@ func metalPixelFormat(f driver.Format) (int, error) {
 		return mtl.PixelFormatRG32Float, nil
 	case driver.Depth32Float:
 		return mtl.PixelFormatDepth32Float, nil
+	case driver.Depth32FloatStencil8:
+		return mtl.PixelFormatDepth32FloatStencil8, nil
 	}
 	return 0, fmt.Errorf("accel: this Metal backend has no pixel format for %v; "+
 		"specs/045-texture-attachments.md section 4 owns the mapping", f)
@@ -361,6 +371,43 @@ func metalLoadAction(l driver.LoadOp) int {
 		return mtl.LoadActionLoad
 	}
 	return mtl.LoadActionDontCare
+}
+
+// copyDepthPlanes moves a depth attachment between the caller's bytes and the
+// staged texture, one aspect at a time when the format has two.
+//
+// Metal copies a combined depth/stencil texture with
+// MTLBlitOptionDepthFromDepthStencil or MTLBlitOptionStencilFromDepthStencil
+// and never both, and each copy is a tightly packed plane -- measured in
+// internal/mtl's TestOnlyOneAspectAtATimeRoundTrips. That is the whole reason
+// specs/045-texture-attachments.md section 12 stores the format as two planes:
+// an interleaved layout has nowhere for these two copies to land.
+//
+// The stencil plane follows the depth plane, at the pitch the plan carries.
+func (e *executable) copyDepthPlanes(p *pass, rp *driver.RenderPass, op resolved,
+	tex *mtl.Texture, in bool) {
+	if rp.StencilPitch == 0 {
+		// One aspect, so no option and no second plane.
+		if in {
+			p.blit().CopyBufferToTexture(op.buf, op.off, tex, rp.DepthPitch)
+		} else {
+			p.blit().CopyTextureToBuffer(tex, op.buf, op.off, rp.DepthPitch)
+		}
+		return
+	}
+	stencilAt := op.off + rp.DepthPitch*rp.Height
+	for _, a := range []struct {
+		offset, pitch, bpp, option int
+	}{
+		{op.off, rp.DepthPitch, 4, mtl.BlitOptionDepthFromDepthStencil},
+		{stencilAt, rp.StencilPitch, 1, mtl.BlitOptionStencilFromDepthStencil},
+	} {
+		if in {
+			p.blit().CopyBufferToAspect(op.buf, a.offset, tex, a.pitch, a.bpp, a.option)
+			continue
+		}
+		p.blit().CopyAspectToBuffer(tex, op.buf, a.offset, a.pitch, a.bpp, a.option)
+	}
 }
 
 // drawTextures is one draw's stage textures, in each stage's own dense texture
@@ -445,15 +492,6 @@ func (e *executable) stageTexture(p *pass, rt driver.RenderTexture) (*mtl.Textur
 
 // encodeDraw encodes one draw.
 func (e *executable) encodeDraw(enc *mtl.RenderEncoder, rp *driver.RenderPass, d driver.RenderDraw, tx drawTextures) error {
-	// Stencil is not lowered here yet. Refused rather than dropped, per
-	// specs/006-backends.md decision 6: a draw whose stencil state was ignored
-	// would produce a picture, and the picture would be the one the caller gets
-	// when the technique they are building does nothing.
-	if d.Stencil.Enabled {
-		return fmt.Errorf("accel: this backend does not lower stencil state at " +
-			"specs/033-render-api.md section 2.1; the CPU backend does, and the " +
-			"comparison resumes when it lands here")
-	}
 	pipe, err := e.renderPipeline(rp, d)
 	if err != nil {
 		return err
@@ -467,6 +505,9 @@ func (e *executable) encodeDraw(enc *mtl.RenderEncoder, rp *driver.RenderPass, d
 			return err
 		}
 		enc.SetDepthState(ds)
+		if d.Stencil.Enabled {
+			enc.SetStencilReference(uint32(d.StencilReference))
+		}
 	}
 
 	for i := range d.VertexBuffers {
@@ -668,6 +709,43 @@ func (e *executable) stageFunction(s *kernel.Stage) (*mtl.Function, error) {
 }
 
 // depthState compiles a draw's depth rule, once per distinct rule.
+// metalStencilFace maps one face onto Metal's own numbering, by name.
+//
+// MTLStencilOperation is Keep, Zero, Replace, IncrementClamp, DecrementClamp,
+// Invert, IncrementWrap, DecrementWrap -- which happens to be the plan's order
+// today. It is written out anyway, for the reason the colour write mask taught
+// this file: two enumerations agreeing now is not a property either maintains.
+func metalStencilFace(f driver.StencilFace) mtl.StencilFace {
+	return mtl.StencilFace{
+		Compare:   metalCompare(f.Compare),
+		ReadMask:  uint32(f.ReadMask),
+		WriteMask: uint32(f.WriteMask),
+		Fail:      metalStencilOp(f.Fail),
+		DepthFail: metalStencilOp(f.DepthFail),
+		Pass:      metalStencilOp(f.Pass),
+	}
+}
+
+func metalStencilOp(op driver.StencilOp) int {
+	switch op {
+	case driver.StencilZero:
+		return 1
+	case driver.StencilReplace:
+		return 2
+	case driver.StencilIncrementClamp:
+		return 3
+	case driver.StencilDecrementClamp:
+		return 4
+	case driver.StencilInvert:
+		return 5
+	case driver.StencilIncrementWrap:
+		return 6
+	case driver.StencilDecrementWrap:
+		return 7
+	}
+	return 0 // MTLStencilOperationKeep
+}
+
 func (e *executable) depthState(d driver.RenderDraw) (*mtl.DepthState, error) {
 	compare := metalCompare(d.DepthCompare)
 	if !d.DepthTest {
@@ -677,14 +755,21 @@ func (e *executable) depthState(d driver.RenderDraw) (*mtl.DepthState, error) {
 		// attachment and a draw does not use it.
 		compare = 7 // MTLCompareFunctionAlways
 	}
-	key := fmt.Sprintf("%d/%v", compare, d.DepthWrite)
+	var spec *mtl.StencilSpec
+	if d.Stencil.Enabled {
+		spec = &mtl.StencilSpec{
+			Front: metalStencilFace(d.Stencil.Front),
+			Back:  metalStencilFace(d.Stencil.Back),
+		}
+	}
+	key := fmt.Sprintf("%d/%v/%+v", compare, d.DepthWrite, spec)
 	if s, ok := e.depthStates[key]; ok {
 		return s, nil
 	}
 	if e.depthStates == nil {
 		e.depthStates = map[string]*mtl.DepthState{}
 	}
-	s, err := e.dev.dev.NewDepthState(compare, d.DepthWrite)
+	s, err := e.dev.dev.NewDepthStencilState(compare, d.DepthWrite, spec)
 	if err != nil {
 		return nil, err
 	}

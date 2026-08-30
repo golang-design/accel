@@ -124,7 +124,9 @@ func textureBytes(d *Device, desc TextureDescriptor) int {
 	for m := range levels {
 		w := mipExtent(desc.Size.Width, m)
 		h := mipExtent(desc.Size.Height, m)
-		total += levelPitch(d, desc.Format, w) * h * layers
+		// Both planes, for a planar format; the second term is zero otherwise.
+		total += (levelPitch(d, desc.Format, w) +
+			d.StencilPlanePitch(desc.Format, w)) * h * layers
 	}
 	return total
 }

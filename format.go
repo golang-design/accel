@@ -40,6 +40,7 @@ type formatEntry struct {
 	storageRead  bool
 	storageWrite bool
 	blendable    bool
+	planar       bool
 }
 
 var formatTable = map[Format]formatEntry{
@@ -105,13 +106,22 @@ var formatTable = map[Format]formatEntry{
 		renderable: true,
 	},
 	Depth32FloatStencil8: {
-		// Eight bytes rather than five. The stencil byte is followed by three
-		// reserved bytes so a texel starts on a four-byte boundary, which is
-		// what lets the depth aspect be read as a float32 without an unaligned
-		// load on any target -- and what keeps the row pitch arithmetic the
-		// same shape as every other format's.
-		name: "Depth32FloatStencil8", bpp: 8, channels: 2,
-		depth: true, stencil: true, renderable: true,
+		// Planar, not interleaved: a depth plane of float32 followed by a
+		// stencil plane of uint8, each with its own aligned row pitch.
+		//
+		// Measured rather than chosen. Metal copies a combined depth/stencil
+		// texture one aspect at a time -- MTLBlitOptionDepthFromDepthStencil or
+		// MTLBlitOptionStencilFromDepthStencil, never both -- and each copy
+		// produces a tightly packed plane. internal/mtl's
+		// TestOnlyOneAspectAtATimeRoundTrips is that measurement, and an
+		// interleaved layout has nowhere for those two copies to land.
+		//
+		// bpp is the *depth* plane's, because that is what a row pitch is
+		// computed from; the stencil plane's pitch is one byte per texel
+		// aligned the same way. [Device.StencilPlanePitch] gives it, and
+		// [Format.Planar] is what tells a caller to ask.
+		name: "Depth32FloatStencil8", bpp: 4, channels: 2,
+		depth: true, stencil: true, planar: true, renderable: true,
 	},
 }
 
@@ -271,4 +281,26 @@ func tightRowPitch(f Format, width int) int { return width * f.BytesPerPixel() }
 // whose alignment is 256.
 func (d *Device) repacks(f Format, width int) bool {
 	return d.AlignedRowPitch(f, width) != tightRowPitch(f, width)
+}
+
+// Planar reports whether the format stores its aspects as separate planes
+// rather than interleaving them in one texel.
+//
+// Only Depth32FloatStencil8 is, and specs/045-texture-attachments.md section 12
+// records the measurement that decided it. A caller sizing a subresource from
+// [Format.BytesPerPixel] alone would be wrong for a planar format, which is why
+// [Texture.Subresource] reports the whole footprint and each plane's pitch.
+func (f Format) Planar() bool { return formatTable[f].planar }
+
+// StencilPlanePitch is the aligned row pitch of a planar format's stencil
+// plane, or zero for a format that has none.
+//
+// One byte per texel, aligned the way every other row is. It is separate from
+// [Device.AlignedRowPitch] rather than folded into it because the two planes
+// have different pitches and a single number cannot say both.
+func (d *Device) StencilPlanePitch(f Format, width int) int {
+	if !f.Planar() || width <= 0 {
+		return 0
+	}
+	return alignUp(width, d.info.Limits.MinBufferCopyRowPitchAlignment)
 }

@@ -164,6 +164,10 @@ type Subresource struct {
 	// below one -- the rule every target shares.
 	Width, Height int
 
+	// StencilPitch is a planar format's stencil-plane pitch, and zero for every
+	// other format. The stencil plane begins at Offset + Pitch*Height.
+	StencilPitch int
+
 	// Pitch is this level's aligned row pitch. It is *this level's*, not the
 	// base's: level 3 of a 1024-wide texture is 128 texels, and padding its
 	// rows to the base's pitch would leave seven eighths of the allocation
@@ -186,11 +190,12 @@ func (t *Texture) Subresource(mip, layer int) Subresource {
 		w := mipExtent(t.desc.Size.Width, m)
 		h := mipExtent(t.desc.Size.Height, m)
 		pitch := levelPitch(t.pool.dev, t.desc.Format, w)
-		size := pitch * h
+		stencil := t.pool.dev.StencilPlanePitch(t.desc.Format, w)
+		size := (pitch + stencil) * h
 		if m == mip {
 			return Subresource{
 				Offset: off + layer*size, Size: size,
-				Width: w, Height: h, Pitch: pitch,
+				Width: w, Height: h, Pitch: pitch, StencilPitch: stencil,
 			}
 		}
 		off += size * layers

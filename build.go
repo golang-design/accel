@@ -461,6 +461,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 		out.Depth = &op
 		out.DepthFormat = format.plan()
 		out.DepthPitch = pitch
+		if v := p.desc.Depth.View; v.Texture != nil {
+			out.StencilPitch = v.Subresource().StencilPitch
+		}
 		out.DepthLoad = p.desc.Depth.Load
 		out.DepthStore = p.desc.Depth.Store
 		out.DepthClear = p.desc.Depth.Clear

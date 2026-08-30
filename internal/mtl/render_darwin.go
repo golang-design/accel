@@ -63,6 +63,11 @@ const (
 	// PixelFormatDepth32Float, for the same reason.
 	PixelFormatDepth32Float = 252
 
+	// PixelFormatDepth32FloatStencil8, the one combined format whose layout is
+	// not device-defined. specs/045-texture-attachments.md section 12 records
+	// why accel stores it as two planes rather than interleaved.
+	PixelFormatDepth32FloatStencil8 = 260
+
 	textureUsageShaderRead   = 1
 	textureUsageRenderTarget = 4
 
@@ -94,6 +99,14 @@ const (
 	ColorWriteMaskGreen = 1 << 2
 	ColorWriteMaskRed   = 1 << 3
 	ColorWriteMaskAll   = 0xf
+
+	// MTLBlitOption. A combined depth/stencil texture is copied one aspect at a
+	// time and the two are mutually exclusive: internal/mtl's
+	// TestOnlyOneAspectAtATimeRoundTrips measures both facts, and a no-option
+	// copy of such a texture moves nothing usable.
+	BlitOptionNone                    = 0
+	BlitOptionDepthFromDepthStencil   = 1 << 0
+	BlitOptionStencilFromDepthStencil = 1 << 1
 )
 
 // The Metal classes, looked up on first use rather than at package
@@ -111,6 +124,7 @@ var (
 	clsRenderPipelineDesc   objc.Class
 	clsVertexDescriptor     objc.Class
 	clsDepthStencilDesc     objc.Class
+	clsStencilDesc          objc.Class
 )
 
 func classes() {
@@ -120,17 +134,36 @@ func classes() {
 		clsRenderPipelineDesc = objc.GetClass("MTLRenderPipelineDescriptor")
 		clsVertexDescriptor = objc.GetClass("MTLVertexDescriptor")
 		clsDepthStencilDesc = objc.GetClass("MTLDepthStencilDescriptor")
+		clsStencilDesc = objc.GetClass("MTLStencilDescriptor")
 	})
 }
 
 var (
-	selTexture2D      = objc.RegisterName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:")
-	selNewTexFromBuf  = objc.RegisterName("newTextureWithDescriptor:offset:bytesPerRow:")
-	selLinearAlign    = objc.RegisterName("minimumLinearTextureAlignmentForPixelFormat:")
-	selSetTexUsage    = objc.RegisterName("setUsage:")
-	selSetTexStorage  = objc.RegisterName("setStorageMode:")
-	selNewTexture     = objc.RegisterName("newTextureWithDescriptor:")
-	selRenderPassDesc = objc.RegisterName("renderPassDescriptor")
+	selTexture2D       = objc.RegisterName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:")
+	selNewTexFromBuf   = objc.RegisterName("newTextureWithDescriptor:offset:bytesPerRow:")
+	selCopyTexToBufOpt = objc.RegisterName(
+		"copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:" +
+			"toBuffer:destinationOffset:destinationBytesPerRow:" +
+			"destinationBytesPerImage:options:")
+	selCopyBufferToTexOpt = objc.RegisterName(
+		"copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:" +
+			"toTexture:destinationSlice:destinationLevel:destinationOrigin:options:")
+	selLinearAlign       = objc.RegisterName("minimumLinearTextureAlignmentForPixelFormat:")
+	selSetTexUsage       = objc.RegisterName("setUsage:")
+	selSetTexStorage     = objc.RegisterName("setStorageMode:")
+	selNewTexture        = objc.RegisterName("newTextureWithDescriptor:")
+	selRenderPassDesc    = objc.RegisterName("renderPassDescriptor")
+	selStencilAttachment = objc.RegisterName("stencilAttachment")
+	selSetClearStencil   = objc.RegisterName("setClearStencil:")
+	selSetStencilRef     = objc.RegisterName("setStencilReferenceValue:")
+	selSetFrontStencil   = objc.RegisterName("setFrontFaceStencil:")
+	selSetBackStencil    = objc.RegisterName("setBackFaceStencil:")
+	selSetStencilCompare = objc.RegisterName("setStencilCompareFunction:")
+	selSetStencilFail    = objc.RegisterName("setStencilFailureOperation:")
+	selSetDepthFail      = objc.RegisterName("setDepthFailureOperation:")
+	selSetDepthStencilOK = objc.RegisterName("setDepthStencilPassOperation:")
+	selSetReadMask       = objc.RegisterName("setReadMask:")
+	selSetStencilFmt     = objc.RegisterName("setStencilAttachmentPixelFormat:")
 
 	selColorAttachments = objc.RegisterName("colorAttachments")
 	selDepthAttachment  = objc.RegisterName("depthAttachment")
@@ -204,6 +237,12 @@ func bytesPerPixel(format int) int {
 	case PixelFormatRG16Float, PixelFormatR32Float:
 		return 4
 	case PixelFormatRGBA16Float, PixelFormatRG32Float:
+		return 8
+	case PixelFormatDepth32FloatStencil8:
+		// The interleaved texel a Metal texture stores, which is what a
+		// whole-texture stride would be. Every copy of this format goes through
+		// CopyAspectToBuffer with the aspect's own bytes per texel instead, so
+		// this number exists for the allocation path rather than for a blit.
 		return 8
 	}
 	return 0
@@ -511,6 +550,25 @@ func (s *DepthState) Close() {
 // writes off — Metal's default is Always with writes disabled, so a nil state
 // is that, and this exists for everything else.
 func (d *Device) NewDepthState(compare int, write bool) (*DepthState, error) {
+	return d.NewDepthStencilState(compare, write, nil)
+}
+
+// StencilFace is one face's compiled stencil state, in Metal's own numbering.
+type StencilFace struct {
+	Compare               int
+	ReadMask, WriteMask   uint32
+	Fail, DepthFail, Pass int
+}
+
+// StencilSpec is both faces. The reference value is dynamic and is set on the
+// encoder, so it is not here.
+type StencilSpec struct{ Front, Back StencilFace }
+
+// NewDepthStencilState compiles a depth state, with stencil when one is given.
+//
+// One call rather than two, because MTLDepthStencilDescriptor carries both and
+// a pipeline that set them separately would need two descriptors for one state.
+func (d *Device) NewDepthStencilState(compare int, write bool, st *StencilSpec) (*DepthState, error) {
 	classes()
 	s := &DepthState{}
 	withPool(func() {
@@ -525,6 +583,25 @@ func (d *Device) NewDepthState(compare int, write bool) (*DepthState, error) {
 			w = 1
 		}
 		desc.Send(selSetDepthWrite, w)
+		if st != nil {
+			for _, f := range []struct {
+				sel  objc.SEL
+				face StencilFace
+			}{{selSetFrontStencil, st.Front}, {selSetBackStencil, st.Back}} {
+				sd := objc.ID(clsStencilDesc).Send(selAlloc).Send(selInit)
+				if sd == 0 {
+					continue
+				}
+				sd.Send(selSetStencilCompare, uintptr(f.face.Compare))
+				sd.Send(selSetStencilFail, uintptr(f.face.Fail))
+				sd.Send(selSetDepthFail, uintptr(f.face.DepthFail))
+				sd.Send(selSetDepthStencilOK, uintptr(f.face.Pass))
+				sd.Send(selSetReadMask, uintptr(f.face.ReadMask))
+				sd.Send(selSetWriteMask, uintptr(f.face.WriteMask))
+				desc.Send(f.sel, sd)
+				release(sd)
+			}
+		}
 		s.id = d.id.Send(selNewDepthStencil, desc)
 	})
 	if s.id == 0 {
@@ -540,6 +617,17 @@ type RenderAttachment struct {
 	Store      int
 	ClearColor [4]float64
 	ClearDepth float64
+
+	// Stencil marks a depth attachment whose format carries a stencil aspect,
+	// and ClearStencil is what the pass clears it to.
+	//
+	// One attachment rather than two, because Metal takes the *same* texture on
+	// both the depth and the stencil attachment of the pass descriptor when the
+	// format is combined -- and a pass that set only the depth one would run
+	// with no stencil buffer at all, which is a stencil test that always
+	// passes rather than an error.
+	Stencil      bool
+	ClearStencil uint32
 }
 
 // RenderEncoder encodes draws into a command buffer.
@@ -586,6 +674,13 @@ func (cb *CommandBuffer) Render(color []RenderAttachment, depth *RenderAttachmen
 			x.Send(selSetLoadAction, uintptr(depth.Load))
 			x.Send(selSetStoreAction, uintptr(depth.Store))
 			setClearDepth(x, depth.ClearDepth)
+			if depth.Stencil {
+				y := rp.Send(selStencilAttachment)
+				y.Send(selSetTexture, depth.Texture.id)
+				y.Send(selSetLoadAction, uintptr(depth.Load))
+				y.Send(selSetStoreAction, uintptr(depth.Store))
+				y.Send(selSetClearStencil, uintptr(depth.ClearStencil))
+			}
 		}
 		// Retained for the reason the compute encoder is: the encoder is
 		// autoreleased, and this pool drains before End is called. Without the
@@ -632,6 +727,16 @@ func (e *RenderEncoder) SetVertexTexture(t *Texture, index int) {
 // SetFragmentTexture binds a texture the fragment stage fetches from.
 func (e *RenderEncoder) SetFragmentTexture(t *Texture, index int) {
 	e.id.Send(selSetFragmentTexture, t.id, uintptr(index))
+}
+
+// SetStencilReference sets the dynamic stencil reference for subsequent draws.
+//
+// specs/033-render-api.md section 2.1 keeps this out of the pipeline because
+// every target backend does: the faces are a compile-time input and the
+// reference is an encoder call, so a technique that varies it between draws
+// costs nothing.
+func (e *RenderEncoder) SetStencilReference(ref uint32) {
+	e.id.Send(selSetStencilRef, uintptr(ref))
 }
 
 // SetCull selects the cull mode: 0 none, 1 front, 2 back.
@@ -755,6 +860,41 @@ func copyBufferToTexture(enc objc.ID, src *Buffer, offset int, dst *Texture, row
 //
 // Zero means the texture's own tight pitch, which is what a copy between a
 // tightly packed buffer and a texture wants.
+// CopyAspectToBuffer copies one aspect of a combined depth/stencil texture.
+//
+// bpp is that aspect's bytes per texel -- four for depth, one for stencil --
+// because the texture's own bpp is the interleaved pair and the plane is not.
+func (b *BlitEncoder) CopyAspectToBuffer(src *Texture, dst *Buffer, offset, rowBytes, bpp, option int) {
+	copyAspectToBuffer(b.id, src, dst, offset, rowBytes, bpp, option)
+}
+
+// CopyBufferToAspect is its inverse.
+func (b *BlitEncoder) CopyBufferToAspect(src *Buffer, offset int, dst *Texture, rowBytes, bpp, option int) {
+	type origin struct{ X, Y, Z uint64 }
+	type size struct{ W, H, D uint64 }
+	withPool(func() {
+		b.id.Send(selCopyBufferToTexOpt,
+			src.id, uintptr(offset), uintptr(rowBytes), uintptr(rowBytes*dst.height),
+			size{W: uint64(dst.width), H: uint64(dst.height), D: 1},
+			dst.id, uintptr(0), uintptr(0), origin{}, uintptr(option))
+	})
+}
+
+func copyAspectToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset, rowBytes, bpp, option int) {
+	type origin struct{ X, Y, Z uint64 }
+	type size struct{ W, H, D uint64 }
+	if rowBytes <= 0 {
+		rowBytes = src.width * bpp
+	}
+	withPool(func() {
+		enc.Send(selCopyTexToBufOpt,
+			src.id, uintptr(0), uintptr(0),
+			origin{}, size{W: uint64(src.width), H: uint64(src.height), D: 1},
+			dst.id, uintptr(offset), uintptr(rowBytes),
+			uintptr(rowBytes*src.height), uintptr(option))
+	})
+}
+
 func (b *BlitEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, offset, rowBytes int) {
 	copyTextureToBuffer(b.id, src, dst, offset, rowBytes)
 }

@@ -90,26 +90,31 @@ func framebufferFor(n *resolvedNode) (*raster.Framebuffer, error) {
 	if n.depthAttach != nil {
 		c := n.depthCodec
 		px := rp.Width * rp.Height
-		raw := make([]float32, px*c.components)
-		if err := c.decodeImage(raw, n.depthAttach, rp.Width, rp.Height, rp.DepthPitch); err != nil {
+		z := make([]float32, px)
+		if err := c.decodeImage(z, n.depthAttach, rp.Width, rp.Height, rp.DepthPitch); err != nil {
 			return nil, fmt.Errorf("accel: render pass %q depth attachment: %w", rp.Label, err)
 		}
-		t := &raster.DepthTarget{W: rp.Width, H: rp.Height, Z: raw}
-		// A format with a stencil aspect arrives interleaved, depth then
-		// stencil per texel, and the rasterizer holds the two separately. The
-		// split happens here rather than in the codec because the codec's unit
-		// is a texel and the rasterizer's is an image.
+		t := &raster.DepthTarget{W: rp.Width, H: rp.Height, Z: z}
+		// A planar format's stencil plane follows the depth plane, one byte per
+		// texel at its own pitch. It is read directly rather than through the
+		// codec, because the codec's unit is a texel of the *depth* plane and
+		// this is a different plane with a different stride.
 		//
 		// Without a stencil aspect there is no stencil buffer at all. Allocating
 		// one anyway is what this path used to do, and it made every
 		// Depth32Float pass carry an array nothing could address -- which is
 		// also what let the stencil pipeline look reachable.
-		if c.components == 2 {
-			t.Z = make([]float32, px)
+		if rp.StencilPitch > 0 {
+			base := rp.DepthPitch * rp.Height
+			if have := len(n.depthAttach); have < base+rp.StencilPitch*rp.Height {
+				return nil, fmt.Errorf("accel: render pass %q depth attachment is %d bytes "+
+					"and its two planes need %d", rp.Label, have,
+					base+rp.StencilPitch*rp.Height)
+			}
 			t.Stencil = make([]uint8, px)
-			for i := range px {
-				t.Z[i] = raw[i*2]
-				t.Stencil[i] = uint8(raw[i*2+1])
+			for y := range rp.Height {
+				copy(t.Stencil[y*rp.Width:(y+1)*rp.Width],
+					n.depthAttach[base+y*rp.StencilPitch:])
 			}
 		}
 		fb.Depth = t
@@ -135,22 +140,19 @@ func storeAttachments(n *resolvedNode, fb *raster.Framebuffer) error {
 		}
 	}
 	if n.depthAttach != nil {
-		// Re-interleaved, the inverse of the split in newFramebuffer. The
-		// stencil aspect goes back into the attachment, which is what makes a
-		// stencil written in one pass readable by the next -- and is the whole
-		// difference between a stencil buffer and a scratch array.
-		src := fb.Depth.Z
-		if n.depthCodec.components == 2 {
-			px := rp.Width * rp.Height
-			src = make([]float32, px*2)
-			for i := range px {
-				src[i*2] = fb.Depth.Z[i]
-				src[i*2+1] = float32(fb.Depth.Stencil[i])
-			}
-		}
-		if err := n.depthCodec.encodeImage(n.depthAttach, src,
+		if err := n.depthCodec.encodeImage(n.depthAttach, fb.Depth.Z,
 			rp.Width, rp.Height, rp.DepthPitch); err != nil {
 			return fmt.Errorf("accel: render pass %q depth attachment: %w", rp.Label, err)
+		}
+		// And the stencil plane after it, which is what makes a stencil written
+		// in one pass readable by the next -- the whole difference between a
+		// stencil buffer and a scratch array.
+		if rp.StencilPitch > 0 && fb.Depth.Stencil != nil {
+			base := rp.DepthPitch * rp.Height
+			for y := range rp.Height {
+				copy(n.depthAttach[base+y*rp.StencilPitch:base+y*rp.StencilPitch+rp.Width],
+					fb.Depth.Stencil[y*rp.Width:])
+			}
 		}
 	}
 	return nil
