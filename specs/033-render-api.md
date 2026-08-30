@@ -722,3 +722,76 @@ and the pitch arithmetic every attachment path shares. Option 3 is rejected
 outright. The decision is deferred rather than taken here because it changes a
 public format's documented layout, and doing that twice is worse than doing it
 once late.
+
+## 11. The recorded-offset uniform channel — 2026-08-30
+
+§4.1, built. Deviation 1 removed the draw-time uniform channel in 2026-08-24 and
+did not replace it; §9 left the shape open and this is it.
+
+    p.SetVertexUniformBuffer(0, ub.View(i*stride, size))
+    p.SetFragmentUniformBuffer(0, tints.View(i*stride, size))
+    p.Draw(...)
+
+The **offset is structure** and is baked into the graph; the bytes at that
+offset are contents and are rewritten every frame through
+[003](003-command-graph.md)'s first kind of variation. Nothing is re-recorded
+and the graph replays.
+
+`Device.UniformStride` computes the stride, because §4.1 is explicit that the
+alignment is a device limit rather than `sizeof(T)`: a 68-byte transform on a
+device that aligns uniform offsets to 256 strides by 256, and a caller who wrote
+`i*68` gets garbage for every object but the first.
+
+### 11.1 What each backend does with it
+
+| | |
+| --- | --- |
+| Metal | `setVertexBuffer:offset:atIndex:` — the native expression §4.1 says this mechanism has everywhere |
+| CPU | decodes the std140 block back into the Go value the generated adapter takes |
+
+**The decoder is generated**, beside the encoder and from the same offsets, so
+the two cannot drift: a field added to the struct adds a line to both.
+Reflecting over the Go struct would have been a second layout implementation
+beside the generated codec, and the disagreement would be a stage reading a
+transform's fields in the wrong order — which is a picture, not an error.
+
+`accel.UniformReader` is `UniformWriter`'s inverse and is what the generated
+decoder is written against.
+
+### 11.2 Both channels, and which wins
+
+`SetVertexUniform` (pass state, one value for the pass) and
+`SetVertexUniformBuffer` (one per draw) answer different questions, so both
+exist. Where a draw set both for one index the **buffer wins**, and that is
+stated rather than left to discover: build skips the by-value entry for a
+buffer-bound index and Metal skips the `setVertexBytes` for it, so the two
+cannot both reach the stage.
+
+### 11.3 The refusals
+
+Each is here because its absence is silent:
+
+- an offset the device cannot address, naming the offset and the device's
+  alignment;
+- a bound range shorter than the block;
+- a uniform buffer at an index the stage declares no parameter at.
+
+A uniform buffer is also **declared as a read** at record, like a vertex buffer.
+Without that the graph would not order a pass that reads a transform against
+whatever wrote it, and an undeclared read is a hazard nobody sees.
+
+### 11.4 Per-object replay, and the fixture that first proved nothing
+
+[035](035-cpu-rasterizer.md) §7's entry, blocked on this channel since it was
+written. Three objects are recorded once at three offsets, submitted, their
+transforms rewritten, and the **same graph** submitted again.
+
+The first version of the test passed with every draw reading offset zero. The
+colours it wrote were a rotation, so all three objects holding object 0's colour
+rotated the same way and the permutation check agreed with itself. What it
+lacked was the simplest assertion available: **every object's colour is
+somewhere in the image**. With that, collapsing the offsets fails immediately.
+
+It is the fixture-degeneracy shape [059](059-subgroup-reductions.md) §8.1
+records, and it is worth recording again because the check that catches it is
+always cheaper than the one that missed it.
