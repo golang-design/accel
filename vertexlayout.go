@@ -6,8 +6,6 @@ package accel
 
 import (
 	"fmt"
-
-	"golang.design/x/accel/internal/mslabi"
 )
 
 // The vertex input layout of specs/033-render-api.md section 2.
@@ -28,11 +26,34 @@ import (
 
 // AttrFormat is the type of one vertex attribute in memory.
 //
-// Only the float32 vector widths exist, because a stage's attribute parameter
-// is [N]float32 and nothing else can receive a fetch. Normalized integer
-// formats convert on fetch, which is a conversion the CPU rasterizer would have
-// to match bit for bit to stay an oracle; they arrive with a spec that states
-// the rounding.
+// A stage's attribute parameter is [N]float32, so every format arrives at the
+// stage as floats. What differs is the bytes in the buffer and the conversion
+// between them, and the normalized integer formats exist because that is how
+// meshes are actually stored: a normal, a tangent and a colour are each three
+// or four bytes, not sixteen, and a caller who has only the float32 formats
+// either quadruples their vertex bandwidth or cannot use the vertex path at
+// all.
+//
+// # The conversions, stated
+//
+// They are stated rather than left to a backend, for the reason the fill rule
+// is: the CPU rasterizer is the oracle, so a conversion with two defensible
+// readings would make every comparison against it a tolerance.
+//
+//	unorm8:   v / 255              snorm8:   max(v / 127, -1)
+//	unorm16:  v / 65535            snorm16:  max(v / 32767, -1)
+//
+// The signed forms clamp at -1 because two's complement has one more negative
+// value than positive: -128/127 is below -1, and every target defines the
+// result as -1 rather than letting it through. Getting that wrong is a normal
+// that is slightly too long on exactly one input value, which is invisible.
+//
+// # Why two and four components and not one or three
+//
+// A three-component normalized attribute is not portable: Metal has
+// UChar3Normalized and D3D12 does not, so a caller who used one would find the
+// same declaration legal on one backend and refused on another. Two and four
+// are universal, and four is what a packed normal or colour uses anyway.
 type AttrFormat uint8
 
 const (
@@ -41,33 +62,67 @@ const (
 	AttrFloat32x2
 	AttrFloat32x3
 	AttrFloat32x4
+
+	// The normalized integer formats. Each converts to [0,1] or [-1,1] on
+	// fetch, by the rules stated above.
+	AttrUnorm8x2
+	AttrUnorm8x4
+	AttrSnorm8x2
+	AttrSnorm8x4
+	AttrUnorm16x2
+	AttrUnorm16x4
+	AttrSnorm16x2
+	AttrSnorm16x4
 )
 
-// Components is how many float32 values the format holds, and 0 if it holds
-// none — which is what makes an unset AttrFormat a refusal rather than a
-// single-component fetch.
-func (f AttrFormat) Components() int {
-	switch f {
-	case AttrFloat32:
-		return 1
-	case AttrFloat32x2:
-		return 2
-	case AttrFloat32x3:
-		return 3
-	case AttrFloat32x4:
-		return 4
-	}
-	return 0
+// attrInfo is one format's shape: how many components, how many bytes each, and
+// how the bytes become floats.
+type attrInfo struct {
+	name       string
+	components int
+	bytes      int  // per component
+	signed     bool // two's complement rather than unsigned
+	normalized bool
 }
 
-// Size is the format's size in bytes.
-func (f AttrFormat) Size() int { return f.Components() * 4 }
+var attrTable = map[AttrFormat]attrInfo{
+	AttrFloat32:   {"float32", 1, 4, true, false},
+	AttrFloat32x2: {"float32x2", 2, 4, true, false},
+	AttrFloat32x3: {"float32x3", 3, 4, true, false},
+	AttrFloat32x4: {"float32x4", 4, 4, true, false},
+
+	AttrUnorm8x2:  {"unorm8x2", 2, 1, false, true},
+	AttrUnorm8x4:  {"unorm8x4", 4, 1, false, true},
+	AttrSnorm8x2:  {"snorm8x2", 2, 1, true, true},
+	AttrSnorm8x4:  {"snorm8x4", 4, 1, true, true},
+	AttrUnorm16x2: {"unorm16x2", 2, 2, false, true},
+	AttrUnorm16x4: {"unorm16x4", 4, 2, false, true},
+	AttrSnorm16x2: {"snorm16x2", 2, 2, true, true},
+	AttrSnorm16x4: {"snorm16x4", 4, 2, true, true},
+}
+
+// Components is how many float32 values the format delivers to a stage, and 0
+// if it delivers none — which is what makes an unset AttrFormat a refusal
+// rather than a single-component fetch.
+//
+// It is the count the *stage* sees, not the count in memory, and for every
+// format here the two are equal: a normalized format converts each component
+// and adds none.
+func (f AttrFormat) Components() int { return attrTable[f].components }
+
+// Size is the format's size in bytes, which for a normalized format is a
+// quarter or a half of what the stage receives.
+func (f AttrFormat) Size() int {
+	i := attrTable[f]
+	return i.components * i.bytes
+}
+
+// Normalized reports whether the format converts on fetch.
+func (f AttrFormat) Normalized() bool { return attrTable[f].normalized }
 
 func (f AttrFormat) String() string {
-	if c := f.Components(); c > 1 {
-		return fmt.Sprintf("float32x%d", c)
-	} else if c == 1 {
-		return "float32"
+	if n := attrTable[f].name; n != "" {
+		return n
 	}
 	return "an unset attribute format"
 }
@@ -121,17 +176,23 @@ type VertexBufferLayout struct {
 // number of floats, so the geometry is subtly deformed rather than absent. And
 // locations that are not dense let an attribute read another's data: the stage
 // indexes its attributes densely, so a gap shifts every one after it.
-func checkVertexLayout(label string, vs *Stage, bufs []VertexBufferLayout) error {
-	// The ceiling exists because a Metal vertex stage's uniforms and its vertex
-	// buffers share one buffer index space, and the two are separated by a
-	// constant both the MSL emitter and the backend follow. Refused here, where
-	// a caller can act on it, rather than at a draw where a uniform would land
-	// on top of a vertex buffer and the stage would read geometry as a
-	// transform.
-	if len(bufs) > mslabi.StageVertexBufferLimit {
-		return fmt.Errorf("accel: NewRenderPipeline %q: %d vertex buffers, and a stage's "+
-			"uniforms begin at index %d on Metal, so %d is the ceiling", label,
-			len(bufs), mslabi.StageVertexBufferLimit, mslabi.StageVertexBufferLimit)
+func checkVertexLayout(label string, dev string, limit int, vs *Stage, bufs []VertexBufferLayout) error {
+	// The ceiling is the *device's*, and it names the device.
+	//
+	// It used to be mslabi.StageVertexBufferLimit on every device, because on
+	// Metal a vertex stage's uniforms and its vertex buffers share one index
+	// space and the two are separated by that constant. That is a real ceiling
+	// on Metal and no ceiling at all on the CPU oracle, so a caller was refused
+	// by one backend's ABI wherever they ran -- which is
+	// specs/000-decisions.md's layering rule 3 with the constant standing in
+	// for the type.
+	//
+	// Refused here, where a caller can act on it, rather than at a draw where a
+	// uniform would land on top of a vertex buffer and the stage would read
+	// geometry as a transform.
+	if limit > 0 && len(bufs) > limit {
+		return fmt.Errorf("%w: NewRenderPipeline %q: %d vertex buffers and %q reports a "+
+			"limit of %d", ErrUnsupported, label, len(bufs), dev, limit)
 	}
 	declared := map[int]VertexAttribute{}
 	for i, b := range bufs {

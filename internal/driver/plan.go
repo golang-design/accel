@@ -791,6 +791,17 @@ type VertexAttribute struct {
 	Location   int
 	Offset     int
 	Components int
+
+	// Bytes is one component's size in the buffer and Signed and Normalized
+	// say how those bytes become the float a stage receives.
+	//
+	// Carried rather than re-derived from a public enum, for the reason every
+	// other plan field is: the plan is what a backend reads, and a backend
+	// reaching back into the public package to interpret one of its own fields
+	// is the layering rule inverted.
+	Bytes      int
+	Signed     bool
+	Normalized bool
 }
 
 // LoadOp is what happens to an attachment at the start of a render pass.

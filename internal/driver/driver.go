@@ -93,6 +93,11 @@ type Limits struct {
 	// Zero means this backend reports none, which at v0 means it cannot draw.
 	MaxColorAttachments int
 
+	// MaxVertexBuffers is how many vertex buffers one draw may bind. A backend
+	// with no ceiling of its own reports zero, which the public check reads as
+	// "no limit" rather than as "none allowed".
+	MaxVertexBuffers int
+
 	MinSubgroupSize int
 	MaxSubgroupSize int
 }

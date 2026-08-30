@@ -413,7 +413,8 @@ func (d *Device) NewRenderPipeline(desc RenderPipelineDescriptor) (*RenderPipeli
 	// wrong vertex stage fails both this and the varyings check, and the
 	// varyings message names both stages where this one names only the vertex
 	// stage -- so it is the more useful of the two to report first.
-	if err := checkVertexLayout(label, desc.Vertex, desc.VertexBuffers); err != nil {
+	if err := checkVertexLayout(label, d.info.Name, d.info.Limits.MaxVertexBuffers,
+		desc.Vertex, desc.VertexBuffers); err != nil {
 		return nil, err
 	}
 

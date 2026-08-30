@@ -671,6 +671,9 @@ func lowerLayout(l VertexBufferLayout) driver.VertexLayout {
 	for _, a := range l.Attributes {
 		out.Attributes = append(out.Attributes, driver.VertexAttribute{
 			Location: a.Location, Offset: a.Offset, Components: a.Format.Components(),
+			Bytes:      a.Format.Size() / max(a.Format.Components(), 1),
+			Signed:     attrTable[a.Format].signed,
+			Normalized: a.Format.Normalized(),
 		})
 	}
 	return out

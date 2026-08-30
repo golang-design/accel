@@ -305,6 +305,9 @@ func newFetcher(d driver.RenderDraw, bufs [][]byte) func(index, instance uint32)
 		stride     int
 		offset     int
 		components int
+		width      int // bytes per component
+		signed     bool
+		normalized bool
 		perInst    bool
 	}
 	src := make([]source, n)
@@ -314,7 +317,9 @@ func newFetcher(d driver.RenderDraw, bufs [][]byte) func(index, instance uint32)
 		for _, a := range l.Attributes {
 			src[a.Location] = source{
 				bytes: raw, stride: l.Stride, offset: a.Offset,
-				components: a.Components, perInst: l.PerInstance,
+				components: a.Components, width: a.Bytes,
+				signed: a.Signed, normalized: a.Normalized,
+				perInst: l.PerInstance,
 			}
 			out[a.Location] = make([]float32, a.Components)
 		}
@@ -329,8 +334,8 @@ func newFetcher(d driver.RenderDraw, bufs [][]byte) func(index, instance uint32)
 			}
 			base := at*s.stride + s.offset
 			for c := range s.components {
-				out[i][c] = math.Float32frombits(
-					binary.LittleEndian.Uint32(s.bytes[base+c*4:]))
+				out[i][c] = decodeAttribute(s.bytes[base+c*s.width:],
+					s.width, s.signed, s.normalized)
 			}
 		}
 		return out
@@ -515,4 +520,39 @@ func rasterStencilOp(op driver.StencilOp) raster.StencilOp {
 		return raster.StencilDecrementWrap
 	}
 	return raster.StencilKeep
+}
+
+// decodeAttribute turns one vertex attribute component's bytes into the float a
+// stage receives.
+//
+// specs/033-render-api.md's AttrFormat states each conversion, and this is the
+// oracle every backend is compared against, so the rules are written out rather
+// than expressed as a scale factor somebody could round differently:
+//
+//	unorm8   v/255      snorm8   max(v/127, -1)
+//	unorm16  v/65535    snorm16  max(v/32767, -1)
+//
+// The signed clamp is not decoration. Two's complement has one more negative
+// value than positive, so -128/127 is below -1, and every target defines the
+// result as -1 rather than letting it through. Without the clamp a packed
+// normal is slightly too long on exactly one input value, which is invisible in
+// an image and wrong in a lighting term.
+func decodeAttribute(b []byte, width int, signed, normalized bool) float32 {
+	if !normalized {
+		return math.Float32frombits(binary.LittleEndian.Uint32(b))
+	}
+	switch {
+	case width == 1 && !signed:
+		return float32(b[0]) / 255
+	case width == 1 && signed:
+		return max(float32(int8(b[0]))/127, -1)
+	case width == 2 && !signed:
+		return float32(binary.LittleEndian.Uint16(b)) / 65535
+	case width == 2 && signed:
+		return max(float32(int16(binary.LittleEndian.Uint16(b)))/32767, -1)
+	}
+	// Unreachable for any format the public enumeration admits; a width the
+	// table does not carry would be a plan this backend cannot read, and zero
+	// is the only answer that is not a guess at somebody's encoding.
+	return 0
 }

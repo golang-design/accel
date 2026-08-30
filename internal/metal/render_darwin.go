@@ -555,7 +555,7 @@ func (e *executable) renderPipeline(rp *driver.RenderPass, d driver.RenderDraw) 
 		for _, a := range l.Attributes {
 			vl.Attributes = append(vl.Attributes, mtl.VertexAttributeSpec{
 				Location: a.Location, Offset: a.Offset,
-				Format: metalVertexFormat(a.Components),
+				Format: metalVertexFormat(a),
 			})
 		}
 		spec.VertexLayouts = append(spec.VertexLayouts, vl)
@@ -636,11 +636,41 @@ func renderKey(rp *driver.RenderPass, d driver.RenderDraw) string {
 // float is 28 and the vector widths follow it, which is the one place this
 // backend relies on an enumeration being contiguous -- stated here so a reader
 // can check it against the header rather than infer it from arithmetic.
-func metalVertexFormat(components int) int {
-	if components < 1 || components > 4 {
-		return 0
+// metalVertexFormat maps a plan's attribute shape onto MTLVertexFormat.
+//
+// Written out by name for the normalized forms rather than computed. The float
+// formats are contiguous from MTLVertexFormatFloat and stay arithmetic; the
+// normalized ones are not -- MTLVertexFormat interleaves the plain and
+// normalized integer families and the two- and three- and four-wide members of
+// each, so any expression over them is a coincidence waiting to stop holding.
+// The colour write mask is what this file learned that from.
+func metalVertexFormat(a driver.VertexAttribute) int {
+	if !a.Normalized {
+		if a.Components < 1 || a.Components > 4 {
+			return 0
+		}
+		// MTLVertexFormatFloat is 28 and Float2..4 follow it.
+		return 27 + a.Components
 	}
-	return 27 + components
+	switch {
+	case a.Bytes == 1 && !a.Signed && a.Components == 2:
+		return 7 // UChar2Normalized
+	case a.Bytes == 1 && !a.Signed && a.Components == 4:
+		return 9 // UChar4Normalized
+	case a.Bytes == 1 && a.Signed && a.Components == 2:
+		return 10 // Char2Normalized
+	case a.Bytes == 1 && a.Signed && a.Components == 4:
+		return 12 // Char4Normalized
+	case a.Bytes == 2 && !a.Signed && a.Components == 2:
+		return 19 // UShort2Normalized
+	case a.Bytes == 2 && !a.Signed && a.Components == 4:
+		return 21 // UShort4Normalized
+	case a.Bytes == 2 && a.Signed && a.Components == 2:
+		return 22 // Short2Normalized
+	case a.Bytes == 2 && a.Signed && a.Components == 4:
+		return 24 // Short4Normalized
+	}
+	return 0
 }
 
 // metalCompare maps a compare function onto MTLCompareFunction.

@@ -99,6 +99,13 @@ var portableFloor = driver.Limits{
 	MaxTextureExtent2D:    2048,
 	MaxTextureExtent3D:    256,
 	MaxTextureArrayLayers: 256,
+	// Vulkan's maxVertexInputBindings required minimum, which is also what
+	// Metal's buffer-index reservation leaves and what D3D12's input assembler
+	// carries. Sixteen is the portable floor rather than this backend's own
+	// ceiling -- the CPU rasterizer indexes buffers by slice position and has
+	// none -- and the floor is what the oracle reports so a layout that passes
+	// here passes everywhere.
+	MaxVertexBuffers: 16,
 
 	// Vulkan maxUniformBufferRange and GLES 3.1 GL_MAX_UNIFORM_BLOCK_SIZE
 	// guaranteed minimums.
@@ -180,6 +187,11 @@ var developerLimits = driver.Limits{
 	// has no limit of its own -- a Framebuffer holds a slice -- so this is a
 	// portability ceiling rather than a capacity one, and reporting no limit
 	// would let a kernel that works here fail on every real device.
+	// The developer profile has no ABI reservation to respect, so its ceiling
+	// is generous. Strict mode reports the floor above, which is what makes a
+	// layout that passes on the oracle pass on a real device.
+	MaxVertexBuffers: 64,
+
 	MaxColorAttachments: 8,
 
 	MinSubgroupSize: defaultSubgroupSize,

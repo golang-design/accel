@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/mslabi"
 	"golang.design/x/accel/internal/mtl"
 )
 
@@ -422,6 +423,11 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			MaxTextureExtent2D:             16384,
 			MaxTextureExtent3D:             2048,
 			MaxTextureArrayLayers:          2048,
+			// A vertex stage's uniforms begin where its vertex buffers end,
+			// because Metal gives the two one buffer index space. The
+			// reservation is mslabi's and this is where it becomes a *device's*
+			// limit rather than every device's.
+			MaxVertexBuffers: mslabi.StageVertexBufferLimit,
 
 			// Queried. maxBufferLength is the largest single allocation, and a
 			// pool is exactly one allocation.

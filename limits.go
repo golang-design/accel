@@ -73,6 +73,17 @@ type Limits struct {
 	// backend that cannot draw.
 	MaxColorAttachments int
 
+	// MaxVertexBuffers is how many vertex buffers one draw may bind.
+	//
+	// Reported per device rather than taken from a constant. It used to be
+	// mslabi.StageVertexBufferLimit, which is *Metal's* reservation -- the
+	// index a stage's uniforms begin at -- so every device, including the CPU
+	// oracle, was refused at a ceiling one backend's ABI happens to have.
+	// specs/042-surface-completion.md section 5.3 names that as a
+	// backend-specific type shaping the public API, which is
+	// specs/000-decisions.md's layering rule 3.
+	MaxVertexBuffers int
+
 	// Devices without subgroups report 1/1 while Capabilities.Subgroups is false,
 	// so every opened device still has positive numeric limits.
 	MinSubgroupSize int
