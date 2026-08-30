@@ -12534,6 +12534,117 @@ fragment PerspectiveFS_out PerspectiveFS(
 	Generator: kernelabi.Version,
 }
 
+// rowFSFlat is the generated lowering of the fragment stage RowFS.
+//
+// specs/032-stage-abi.md. The authored RowFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func rowFSFlat(f accel.Fragment, in accel.NoVaryings) Solid {
+	var c [4]float32 = f.Coord()
+	return Solid{[4]float32{c[int32(0)], c[int32(1)], float32(0), float32(1)}}
+}
+
+// RowFSStage is the compiled form of RowFS.
+var RowFSStage = accel.Stage{
+	Name:     "RowFS",
+	Kind:     accel.StageFragment,
+	Varyings: "NoVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
+		out := rowFSFlat(f, unflattenNoVaryings(vv))
+		return [][4]float32{out.Colour}
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowFS_in {
+    float4 _pos [[position]];
+};
+
+struct RowFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment RowFS_out RowFS(
+    RowFS_in _in [[stage_in]],
+    bool _front [[front_facing]]) {
+    RowFS_in in = _in;
+    RowFS_out _out;
+    float4 c = _in._pos;
+    _out.Colour = float4(c[int(0)], c[int(1)], float(0), float(1));
+    return _out;
+}
+`,
+	Digest:    "e40743122a17926b995bb1a679ec4efd",
+	Generator: kernelabi.Version,
+}
+
+// topRowFSFlat is the generated lowering of the fragment stage TopRowFS.
+//
+// specs/032-stage-abi.md. The authored TopRowFS supplies the typed source this
+// was built from, and is run only by the test that checks the two agree.
+func topRowFSFlat(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
+	var c [4]float32 = f.Coord()
+	return Solid{accel.Fetch(src, kmath.ToI32(c[int32(0)]), int32(0))}
+}
+
+// TopRowFSStage is the compiled form of TopRowFS.
+var TopRowFSStage = accel.Stage{
+	Name:     "TopRowFS",
+	Kind:     accel.StageFragment,
+	Varyings: "NoVaryings",
+	Outputs: []accel.StageOutput{
+		{Name: "Colour", Index: 0},
+	},
+	Textures: []accel.StageTexture{
+		{Name: "src", Index: 0, Reads: true},
+	},
+	RunFragment: func(f accel.Fragment, u []any, vv []float32, tx []accel.Texture2D) [][4]float32 {
+		out := topRowFSFlat(f, unflattenNoVaryings(vv), tx[0])
+		return [][4]float32{out.Colour}
+	},
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static int _accel_to_i32(float x) {
+    if (x != x) { return 0; }
+    if (x <= -2147483648.0f) { return (-2147483647 - 1); }
+    if (x >= 2147483648.0f) { return 2147483647; }
+    return int(x);
+}
+
+static float4 _accel_fetch2d(texture2d<float> t, int x, int y) {
+    if (x < 0 || y < 0) { return float4(0.0); }
+    if (uint(x) >= t.get_width() || uint(y) >= t.get_height()) { return float4(0.0); }
+    return t.read(uint2(uint(x), uint(y)));
+}
+
+struct TopRowFS_in {
+    float4 _pos [[position]];
+};
+
+struct TopRowFS_out {
+    float4 Colour [[color(0)]];
+};
+
+fragment TopRowFS_out TopRowFS(
+    TopRowFS_in _in [[stage_in]],
+    texture2d<float> src [[texture(0)]],
+    bool _front [[front_facing]]) {
+    TopRowFS_in in = _in;
+    TopRowFS_out _out;
+    float4 c = _in._pos;
+    _out.Colour = _accel_fetch2d(src, _accel_to_i32(c[int(0)]), int(0));
+    return _out;
+}
+`,
+	Digest:    "30fccd021bdbd11fecfb677f679987d8",
+	Generator: kernelabi.Version,
+}
+
 // subgroupReduceFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -14114,4 +14225,6 @@ var Stages = []*accel.Stage{
 	&IndexedFSStage,
 	&PerspectiveVSStage,
 	&PerspectiveFSStage,
+	&RowFSStage,
+	&TopRowFSStage,
 }

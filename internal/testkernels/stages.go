@@ -317,3 +317,30 @@ func PerspectiveVS(v accel.Vertex) (accel.Clip, PerspectiveVaryings) {
 func PerspectiveFS(f accel.Fragment, in PerspectiveVaryings) Solid {
 	return Solid{Colour: accel.Vec4{in.Smooth[0], in.Linear[0], in.Smooth[1], 1}}
 }
+
+// RowFS writes its own window coordinate, so every texel of the target names
+// the row and column it sits at.
+//
+// specs/035-cpu-rasterizer.md section 7's origin entry needs "a target encoding
+// row position", and this is that target: a texel that has been mirrored,
+// transposed or shifted names where it actually came from rather than merely
+// differing from what was expected.
+//
+//accel:fragment
+func RowFS(f accel.Fragment, in accel.NoVaryings) Solid {
+	c := f.Coord()
+	return Solid{Colour: accel.Vec4{c[0], c[1], 0, 1}}
+}
+
+// TopRowFS fetches row zero at its own column, whatever row it is shading.
+//
+// The fixed zero is the point. BlitFS fetches at its own coordinate, so a
+// mirrored fetch and a mirrored readback cancel in it; this reads one named row
+// through the device's own texel fetch, which is the path
+// specs/035-cpu-rasterizer.md section 7 compares against a host readback.
+//
+//accel:fragment
+func TopRowFS(f accel.Fragment, in accel.NoVaryings, src accel.Texture2D) Solid {
+	c := f.Coord()
+	return Solid{Colour: accel.Fetch(src, kmath.ToI32(c[0]), 0)}
+}
