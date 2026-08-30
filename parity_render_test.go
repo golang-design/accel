@@ -5,6 +5,8 @@
 package accel_test
 
 import (
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"golang.design/x/accel"
@@ -614,7 +616,7 @@ func attrFormatParityCases() []parityCase {
 		3, -1, 0.5, 2, 0,
 		-1, 3, 0.5, 0, 2,
 	}
-	return []parityCase{{
+	cases := []parityCase{{
 		name:   "a two-component attribute into a two-target pass",
 		covers: parity.Covers{"AttrFormat.AttrFloat32x2"},
 		// Two interpolated varyings, each a barycentric sum of three products,
@@ -667,4 +669,143 @@ func attrFormatParityCases() []parityCase {
 			return append(readTargetBytes(t, d, albedo), readTargetBytes(t, d, normal)...)
 		},
 	}}
+	return append(cases, normalizedAttrParityCases()...)
+}
+
+// normalizedAttrParityCases compares each normalized integer attribute format
+// between the two backends.
+//
+// specs/042-surface-completion.md section 10.2 states each conversion, and
+// these are what hold the two backends to it.
+//
+// # Bounded, and the bound is not the conversion's
+//
+// The conversion itself is exact -- a division by a constant, which the two
+// backends have nothing to weight differently -- and the value still reaches
+// the attachment through an *interpolated varying*. A constant attribute
+// interpolates to itself in real arithmetic and to within an ulp in f32, so two
+// rasterizers computing barycentric weights differently disagree in the last
+// bits. This was found by running the case exactly: one pixel of sixty-four
+// differed by one ulp, which is specs/008-numerics.md section 8.1's term rather
+// than a conversion error.
+//
+// # The bytes are chosen where the conversion is interesting
+//
+// Both ends, and -128 for the signed forms -- the value where the clamp shows.
+// Two's complement has one more negative value than positive, so -128/127 is
+// -1.007874 and every target defines the result as -1. A fixture of middling
+// values would agree with a backend that omitted the clamp.
+func normalizedAttrParityCases() []parityCase {
+	// The attribute is constant across the three vertices, so interpolation
+	// cannot change it: a constant field interpolates to itself under any
+	// weights, which leaves the conversion as the only thing under test.
+	pos := []float32{-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}
+
+	var cases []parityCase
+	for _, c := range []struct {
+		name   string
+		format accel.AttrFormat
+		raw    []byte
+	}{
+		{"AttrUnorm8x2", accel.AttrUnorm8x2, []byte{0, 255}},
+		{"AttrUnorm8x4", accel.AttrUnorm8x4, []byte{0, 255, 128, 1}},
+		{"AttrSnorm8x2", accel.AttrSnorm8x2, []byte{0x80, 0x7f}},
+		{"AttrSnorm8x4", accel.AttrSnorm8x4, []byte{0x80, 0x81, 0x7f, 0x00}},
+		{"AttrUnorm16x2", accel.AttrUnorm16x2, []byte{0x00, 0x00, 0xff, 0xff}},
+		{"AttrUnorm16x4", accel.AttrUnorm16x4,
+			[]byte{0x00, 0x00, 0xff, 0xff, 0x00, 0x80, 0x01, 0x00}},
+		{"AttrSnorm16x2", accel.AttrSnorm16x2, []byte{0x00, 0x80, 0xff, 0x7f}},
+		{"AttrSnorm16x4", accel.AttrSnorm16x4,
+			[]byte{0x00, 0x80, 0x01, 0x80, 0xff, 0x7f, 0x00, 0x00}},
+	} {
+		cases = append(cases, normalizedAttrCase(c.name, c.format, c.raw, pos))
+	}
+	return cases
+}
+
+// normalizedAttrCase renders one triangle whose location-1 attribute holds raw.
+//
+// The stage is chosen by the attribute's width: pipeline creation checks the
+// declared format against the parameter's type, so a two-component format needs
+// the stage that takes a Vec2 and a four-component one the stage that takes a
+// Vec4. A mismatch is refused, correctly -- a fetch of the wrong width deforms
+// geometry rather than losing it.
+func normalizedAttrCase(name string, f accel.AttrFormat, raw []byte, pos []float32) parityCase {
+	two := f.Components() == 2
+	stride := 12 + 16
+	verts := make([]byte, stride*3)
+	for v := range 3 {
+		for i := range 3 {
+			binary.LittleEndian.PutUint32(verts[v*stride+i*4:], math.Float32bits(pos[v*3+i]))
+		}
+		copy(verts[v*stride+12:], raw)
+	}
+
+	return parityCase{
+		name:   "a " + name + " attribute",
+		covers: parity.Covers{"AttrFormat." + name},
+		// specs/008-numerics.md section 8.1: a triangle's interpolation carries
+		// γ(4) + γ(3) + u of the largest vertex value, which is 8u, and a
+		// normalized value is at most 1.
+		ceiling: parity.Ceiling{Abs: 8 * 1.1920929e-7,
+			Why: "the attribute reaches the attachment through an interpolated " +
+				"varying; the conversion itself is exact"},
+		run: func(t *testing.T, d *accel.Device) []byte {
+			t.Helper()
+			vs, fs := &testkernels.AttributeVSStage, &testkernels.TintFSStage
+			targets := []accel.ColorTargetState{{Format: accel.RGBA32Float}}
+			if two {
+				vs, fs = &testkernels.GeometryVSStage, &testkernels.ShadeFSStage
+				targets = append(targets, accel.ColorTargetState{Format: accel.RGBA32Float})
+			}
+			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+				Vertex: vs, Fragment: fs,
+				VertexBuffers: []accel.VertexBufferLayout{{
+					Stride: stride, StepMode: accel.StepVertex,
+					Attributes: []accel.VertexAttribute{
+						{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+						{Location: 1, Format: f, Offset: 12},
+					},
+				}},
+				Targets: targets, Label: name,
+			})
+			if err != nil {
+				t.Fatalf("pipeline: %v", err)
+			}
+			defer pipe.Close()
+
+			vb := newBytes(t, d, "verts", len(verts))
+			if err := d.Queue().WriteBuffer(vb, 0, verts); err != nil {
+				t.Fatalf("write verts: %v", err)
+			}
+
+			first := colourTarget(t, d, "first", parityW, parityH)
+			colour := []accel.ColorAttachment{
+				{View: view(t, first), Load: accel.LoadClear, Clear: parityClear},
+			}
+			read := first
+			if two {
+				// ShadeFS writes the interpolated colour to attachment 0 and
+				// the fetched attribute to attachment 1.
+				second := colourTarget(t, d, "second", parityW, parityH)
+				colour = append(colour, accel.ColorAttachment{
+					View: view(t, second), Load: accel.LoadClear, Clear: parityClear,
+				})
+				read = second
+			}
+
+			r := d.NewRecorder()
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: colour, Width: parityW, Height: parityH, Label: name,
+			})
+			p.SetPipeline(pipe)
+			p.SetVertexBuffer(0, whole(t, vb))
+			if two {
+				p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+			}
+			p.Draw(accel.Draw{VertexCount: 3})
+			submitOne(t, d, r)
+			return readTargetBytes(t, d, read)
+		},
+	}
 }

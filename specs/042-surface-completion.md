@@ -460,7 +460,25 @@ attribute is not portable: Metal has `UChar3Normalized` and D3D12 does not, so
 the same declaration would be legal on one backend and refused on another. Four
 is what a packed normal or colour uses anyway.
 
-### 10.3 The Metal mapping is written out by name
+### 10.3 The comparison lives in 062's matrix, and the bound is not the conversion's
+
+The first version of this shipped its own CPU/Metal comparison beside the
+formats. [062](062-backend-parity.md)'s gate refused it on the right grounds:
+eight enumeration members had been added and none had a parity case, so the
+coverage table would have reported a full surface over a five-member universe.
+The comparison moved into the matrix, where one mechanism does it.
+
+Running it there **found what the standalone test had missed**. The conversion
+is exact — a division by a constant, which two backends have nothing to weight
+differently — and the value still reaches the attachment through an
+*interpolated varying*. A constant attribute interpolates to itself in real
+arithmetic and to within an ulp in f32, so one pixel of sixty-four differed. The
+case carries [008](008-numerics.md) §8.1's interpolation bound and says in its
+own words that the conversion is not what it is bounding.
+
+The standalone test read pixel zero. The matrix reads the attachment.
+
+### 10.4 The Metal mapping is written out by name
 
 `MTLVertexFormat` is contiguous from `Float` through `Float4`, and the
 normalized families are not: it interleaves the plain and normalized integer

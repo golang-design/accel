@@ -1928,15 +1928,3 @@ func TestADepthAttachmentIsReadBackThroughATransferNodeOnMetal(t *testing.T) {
 func TestTwoMipsAreWrittenAndReadIndependentlyOnMetal(t *testing.T) {
 	checkMipsAreIndependent(t, openMetalDevice(t), 8, 8)
 }
-
-// checkAttributeAgreesOnMetal runs the same attribute fetch on Metal.
-func checkAttributeAgreesOnMetal(t *testing.T, f accel.AttrFormat, raw []byte, want [4]float32) {
-	t.Helper()
-	got := fetchAttribute(t, openMetalDevice(t), f, raw)
-	for i := range f.Components() {
-		if got[i] != want[i] {
-			t.Errorf("component %d is %v on Metal and %v on the oracle: the two "+
-				"backends decode %v differently", i, got[i], want[i], f)
-		}
-	}
-}
