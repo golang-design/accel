@@ -32,6 +32,16 @@ func TestEveryPlanFormatIsMappedOrRefusedByName(t *testing.T) {
 		driver.RGBA8UnormSRGB: mtl.PixelFormatRGBA8UnormSRGB,
 		driver.BGRA8Unorm:     mtl.PixelFormatBGRA8Unorm,
 		driver.Depth32Float:   mtl.PixelFormatDepth32Float,
+
+		// The float colour formats, added 2026-08-30. The format table marks
+		// all nine colour formats renderable on every backend and these five
+		// were refused at submit, which specs/062-backend-parity.md section
+		// 6.2's enumeration found.
+		driver.R16Float:    mtl.PixelFormatR16Float,
+		driver.RG16Float:   mtl.PixelFormatRG16Float,
+		driver.RGBA16Float: mtl.PixelFormatRGBA16Float,
+		driver.R32Float:    mtl.PixelFormatR32Float,
+		driver.RG32Float:   mtl.PixelFormatRG32Float,
 	}
 	for _, f := range driver.Formats {
 		t.Run(f.String(), func(t *testing.T) {
