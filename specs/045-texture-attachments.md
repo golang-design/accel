@@ -619,3 +619,83 @@ cannot see it. A wrong offset is *overlap*: mip 1 of an 8×8 RGBA32Float texture
 at offset zero sits on mip 0's first rows, the two passes write each other's
 bytes, and the fetch returns whichever ran last. Collapsing the offset fails the
 test on both backends.
+
+## 11. Metal renders into the caller's bytes — 2026-08-30
+
+§8.1's "Metal's per-pass staging copies" row, and §8.5's third bullet. A colour
+attachment is no longer copied at all.
+
+### 11.1 Aliasing, not optimising
+
+`MTLBuffer`'s `newTextureWithDescriptor:offset:bytesPerRow:` returns a texture
+over a region of a buffer. So the attachment **is** the caller's allocation, and
+a pass renders straight into the memory the graph ordered every other node
+against. The copy in for `LoadKeep`, the copy out at store, and the private
+texture between them are gone rather than made cheaper.
+
+**Measured before it was designed**, because the recalled claim went the other
+way — linear textures are widely said not to be render targets on Apple GPUs.
+The probe is kept as a test, `TestALinearTextureMayBeARenderTarget`, because the
+whole staging path was deleted on the strength of the answer.
+
+Two numbers make it free rather than a repack:
+
+| | |
+| --- | --- |
+| `minimumLinearTextureAlignmentForPixelFormat(RGBA32Float)` | 16, measured |
+| accel's `MinBufferCopyRowPitchAlignment` | 256 |
+
+256 is a multiple of 16, so every texture row accel already aligns satisfies
+Metal's requirement without moving.
+
+### 11.2 A depth attachment cannot alias, and asking is not safe
+
+`-minimumLinearTextureAlignmentForPixelFormat:` does not return zero for a depth
+format. It **asserts** — *"Linear textures do not support depth/stencil pixel
+formats"* — and takes the process down. That is how this was found: the first
+version asked, and the test binary aborted.
+
+So the backend does not ask. A depth or stencil attachment keeps the staged
+path, and that is a property of Metal rather than a gap here.
+
+### 11.3 This does **not** unblock stencil, and the reasoning that said it would
+
+The change was ranked first partly on the argument that if an attachment were a
+texture the graph owned, [033](033-render-api.md) §10.5's planar-versus-
+interleaved question would not arise — no buffer round trip, no aspect blit.
+
+**That argument is wrong, and §11.2 is why.** A combined depth/stencil
+attachment is exactly the case that cannot be a linear texture, so its bytes
+still reach the caller's buffer through a copy, and Metal still copies a
+combined format one aspect at a time. 033 §10.5's decision stands untouched.
+
+The prediction was worth making and worth measuring; recording that it failed is
+what stops the next reader inheriting it.
+
+### 11.4 The present draw is a conversion, not staging
+
+It is not removed and it is not the same thing. A drawable's pixel format comes
+from the short list Core Animation composites and `RGBA32Float` is not on it, so
+presenting *converts*; a blit cannot. Removing it means the present slot
+declaring a compositor format, which is [034](034-surface-present.md)'s question
+about the slot rather than this backend's about copies.
+
+### 11.5 The fast path is asserted, because the pictures are identical
+
+[042](042-surface-completion.md)'s review said the round trips were "not visible
+as a failing test", and that is still true of the images: a staged attachment
+and an aliased one produce the same pixels. So the count is the assertion.
+`SubmissionStats.StagedAttachments` is host-counted while a pass is encoded —
+not gated on the run-statistics opt-in, since it costs nothing — and three tests
+read it:
+
+- a colour attachment with `LoadKeep` stages **zero**, which is the action that
+  used to cost a copy in *and* out;
+- a pass with a depth attachment stages **exactly one**, so a colour regression
+  beside it shows as two;
+- a slot attachment bound one float in — four bytes, not a multiple of
+  sixteen — stages one, takes the fallback, and still writes the range it was
+  bound to rather than the buffer's start.
+
+Forcing the aliasing off makes the first two fail and leaves every pixel
+comparison green, which is the whole argument for counting.

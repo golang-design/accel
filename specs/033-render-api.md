@@ -668,6 +668,14 @@ produces a picture, and it is exactly the picture a caller gets when the
 technique they are building does nothing. It is
 [035](035-cpu-rasterizer.md) §7.1's last CPU-only entry until it lands.
 
+> **The layout question was predicted to dissolve and did not — 2026-08-30.**
+> [045](045-texture-attachments.md) §11 made a Metal colour attachment an alias
+> of the caller's buffer, on the argument that an attachment the graph owns
+> needs no aspect blit. Depth and stencil are exactly the formats a linear
+> texture cannot carry, so a combined attachment still reaches the caller's
+> bytes through a copy and Metal still copies one aspect at a time. Everything
+> below stands.
+
 The missing selectors are mechanical. **What is not mechanical is the
 attachment's layout**, and it is worth deciding before it is written rather
 than after.
