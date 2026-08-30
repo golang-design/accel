@@ -222,25 +222,51 @@ func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 // surface: if RenderPass ever grows a call taking a BufferView for a stage
 // uniform, this stops describing the library and should be written out.
 func TestADrawCanBeParameterisedByAUniformBuffer(t *testing.T) {
+	const w, h = 8, 8
 	d := openDevice(t)
 
-	ub, err := accel.NewUniformBuffer[testkernels.Params](d, testkernels.ParamsCodec{})
+	ub, err := accel.NewUniformBuffer[testkernels.StageTint](d, testkernels.StageTintCodec{})
 	if err != nil {
 		t.Fatalf("NewUniformBuffer: %v", err)
 	}
 	defer ub.Close()
 
-	// The encoding half works, which is why the type is exported.
-	if err := ub.Write(d.Queue(), testkernels.Params{}); err != nil {
+	want := accel.Vec4{0.125, 0.25, 0.5, 1}
+	if err := ub.Write(d.Queue(), testkernels.StageTint{Colour: want}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	if _, err := ub.View(); err != nil {
+	view, err := ub.View()
+	if err != nil {
 		t.Fatalf("View: %v", err)
 	}
 
-	t.Skip("a draw cannot be parameterised by a uniform buffer: a stage takes its " +
-		"block as pass state through SetVertexUniform and SetFragmentUniform, both " +
-		"by value, and no call binds a BufferView to a stage uniform. " +
-		"specs/033-render-api.md deviation 1 removed the draw-time channel; this " +
-		"test is what runs the day it comes back")
+	pipe := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.TintedFSStage)
+	defer pipe.Close()
+	tex := renderTexture(t, d, "target", w, h)
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: whole2D(t, tex), Load: accel.LoadClear}},
+		Width: w, Height: h, Label: "uniformed",
+	})
+	p.SetPipeline(pipe)
+	p.SetFragmentUniformBuffer(0, view)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	got := readRenderTexture(t, d, tex)
+	for i := range got {
+		if got[i] != want[i%4] {
+			t.Fatalf("element %d is %v, want %v: the stage did not read the block the "+
+				"buffer holds", i, got[i], want[i%4])
+		}
+	}
 }

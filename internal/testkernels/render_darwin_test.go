@@ -2179,3 +2179,9 @@ func TestAMisalignedAttachmentIsStagedAndStillCorrect(t *testing.T) {
 		}
 	}
 }
+
+// Per-object replay on Metal, where the recorded offset is a buffer binding
+// rather than a decode.
+func TestObjectsReplayAtRecordedUniformOffsetsOnMetal(t *testing.T) {
+	checkPerObjectReplay(t, openMetalDevice(t), 8, 8, 3)
+}
