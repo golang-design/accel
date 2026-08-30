@@ -108,3 +108,41 @@ func TestOpenRefusesADirectoryOutsideAModule(t *testing.T) {
 		t.Fatal("Open above every go.mod returned no error")
 	}
 }
+
+// The three alias forms the extractor refuses, and the reason it must.
+//
+// Each of these would otherwise come back as an empty surface, and an empty
+// surface is worse than a wrong one: a gate over no members passes every time,
+// so a whole enumeration would report full coverage while nothing compared it.
+func TestEnumRefusesWhatItCannotFollow(t *testing.T) {
+	p := fixture(t, "edge")
+	for _, c := range []struct {
+		typeName string
+		want     string
+	}{
+		{"Outside", "outside module"},
+		{"Missing", "no import"},
+		{"Bare", "re-exports none"},
+	} {
+		t.Run(c.typeName, func(t *testing.T) {
+			_, err := parity.Enum(p, c.typeName)
+			if err == nil {
+				t.Fatalf("Enum(%s) returned no error; an empty surface is a gate "+
+					"that always passes", c.typeName)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("the error does not say %q: %v", c.want, err)
+			}
+		})
+	}
+}
+
+func TestADirectoryWithNoGoFilesIsRefused(t *testing.T) {
+	p := fixture(t, "empty")
+	if _, err := parity.Enum(p, "Anything"); err == nil {
+		t.Error("Enum over a directory with no Go files returned no error")
+	}
+	if _, err := parity.Funcs(p, "*Builder"); err == nil {
+		t.Error("Funcs over a directory with no Go files returned no error")
+	}
+}

@@ -212,14 +212,27 @@ func rasterStateParityCases() []parityCase {
 			Primitive: accel.PrimitiveState{Topology: t, FrontFace: f, Cull: c},
 		})
 	}
+	// A small un-culled triangle in one corner, drawn after the triangle under
+	// test. Three of the five cases below are culled away and leave only the
+	// clear, and two blank targets agree perfectly -- so the marker is what
+	// separates "the state discarded the triangle on both backends" from "the
+	// pass encoded nothing on either". The degeneracy check cannot tell those
+	// apart on its own, because a clear is not all zero.
+	marker := prim("marker", accel.TriangleList, accel.CounterClockwise, accel.CullNone)
+	markerVerts := []float32{-1, -1, 0.5, -0.5, -1, 0.5, -1, -0.5, 0.5}
+
 	one := func(name string, covers parity.Covers, verts []float32, count int,
 		pipe func(*testing.T, *accel.Device) *accel.RenderPipeline) parityCase {
 		return parityCase{
 			name: name, covers: covers,
 			run: parityPass{
 				label: name, load: accel.LoadClear,
-				draws: []parityDraw{{pipe: pipe, verts: verts,
-					tint: [4]float32{0.75, 0.5, 0.25, 1}, count: count}},
+				draws: []parityDraw{
+					{pipe: pipe, verts: verts,
+						tint: [4]float32{0.75, 0.5, 0.25, 1}, count: count},
+					{pipe: marker, verts: markerVerts,
+						tint: [4]float32{0, 0.9, 0.9, 1}, count: 3},
+				},
 			}.run,
 		}
 	}

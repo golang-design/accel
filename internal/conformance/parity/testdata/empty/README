@@ -1,0 +1,3 @@
+This directory holds no Go files on purpose: the extractor must refuse it
+rather than report an empty surface, because a gate over an empty universe
+always passes.
