@@ -370,6 +370,20 @@ the measurement `docs/conventions.md` says localises this fastest.
 A skipped test that says what it is owed beats a comment saying the same thing,
 because the skip is attached to the code that will make it run.
 
+**It self-activated, and then it grew — 2026-08-30.** Metal lowers a texture
+copy, so the skip fired for the last time and the entry started comparing, which
+is what it was built to do. `TestATextureRoundTripKeepsCallerOrderOnMetal` is
+now retired into [062](062-backend-parity.md) §6.8's matrix, because comparing
+one format was the shape of a test written before the feature and not the shape
+of the obligation: eleven formats are host-copyable and the other ten had no
+copy case.
+
+What this section argued for is kept whole. Every case still asserts caller
+order against the row-identifiable pattern *before* the two backends are
+compared — agreement alone cannot see this bug, since two backends that flipped
+identically agree perfectly — and a misplaced byte still names the row it came
+from and says whether that is a clean flip or a shear.
+
 ## 6. The documentation guard
 
 [036](036-documentation.md) §3.1 requires tutorial code to live in `Example`

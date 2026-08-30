@@ -407,8 +407,11 @@ tight rows, so a texture attachment would have produced a plausible image rather
 than an error.
 
 The differential entries on that path skip with the reason rather than being
-deleted, the arrangement `TestATextureRoundTripKeepsCallerOrderOnMetal` already
-uses, so the comparison resumes on the first day it can.
+deleted, so the comparison resumes on the first day it can. That arrangement is
+[042](042-surface-completion.md) §5.4's, and it has since done what it was for:
+the texture round trip it names stopped skipping when Metal lowered a copy, and
+is now [062](062-backend-parity.md) §6.8's matrix over every host-copyable
+format.
 
 **The cost is measured, and it is stated as a level rather than as a drop.**
 Running the coverage gate on a Mac after this change puts `internal/metal` at

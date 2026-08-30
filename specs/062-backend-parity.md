@@ -295,11 +295,14 @@ Read out of the registry rather than written down, and re-counted whenever a
 row here is edited: a coverage table maintained by hand is the artefact this
 spec exists to replace.
 
+The names are the ones a failure prints, so a row here and a red build name the
+same thing.
+
 | Surface | Members | Covered | Excluded |
 | --- | --- | --- | --- |
 | `DType` | 7 | 7 | 0 |
-| `Format` (render) | 13 | 10 | 3 |
-| `Format` (copy) | 13 | 11 | 2 |
+| `Format` | 13 | 10 | 3 |
+| `FormatCopy` | 13 | 11 | 2 |
 | `CompareFunc` | 8 | 8 | 0 |
 | `BlendFactor` | 10 | 10 | 0 |
 | `BlendOp` | 5 | 5 | 0 |
