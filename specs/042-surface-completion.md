@@ -409,3 +409,64 @@ thing a tutorial can drift from.
   caricature — a "subgroup" of one lane proves nothing about a real one. The
   line taken here is that the CPU backend implements the *semantics* and the
   conformance corpus states what a caricature cannot prove.
+
+## 10. §5.3's two forces, resolved — 2026-08-30
+
+§5.3 named two places where the wrong thing was setting the public API's
+ceiling. Both are closed, and they are the same mistake in two forms.
+
+### 10.1 The vertex-buffer limit was one backend's ABI
+
+`checkVertexLayout` refused more than `mslabi.StageVertexBufferLimit` buffers on
+**every** device. That constant is Metal's reservation — the buffer index a
+vertex stage's uniforms begin at, since Metal gives buffers and uniforms one
+index space. It is a real ceiling on Metal and no ceiling at all on the CPU
+rasterizer, which indexes buffers by slice position.
+
+So a caller met one backend's ABI wherever they ran, which is
+[000](000-decisions.md)'s layering rule 3 with a constant standing in for the
+type. `Limits.MaxVertexBuffers` is now reported per device — Metal's
+reservation, the CPU's portable floor of 16 in strict mode and 64 in the
+developer profile — and the refusal names the device and its number.
+
+### 10.2 The oracle was setting the format list
+
+§5.3's first force: *"the CPU oracle is setting the public API's ceiling"*.
+`AttrFormat` carried the four float32 widths and nothing else, and the doc
+comment gave the reason this section rejects — that a normalized conversion is
+one the CPU rasterizer would have to match bit for bit.
+
+**It would, and that is an argument for stating the conversion, not for omitting
+the format.** Every real mesh packs normals, tangents and colours as bytes or
+shorts; with only the float widths a caller quadruples their vertex bandwidth or
+cannot use the vertex path.
+
+$$
+\text{unorm8} = \frac{v}{255} \quad
+\text{snorm8} = \max\!\left(\frac{v}{127}, -1\right) \quad
+\text{unorm16} = \frac{v}{65535} \quad
+\text{snorm16} = \max\!\left(\frac{v}{32767}, -1\right)
+$$
+
+**The clamp is the whole of the interesting part.** Two's complement has one
+more negative value than positive, so $-128/127 = -1.007874$, and every target
+defines the result as $-1$. Removing it makes the oracle disagree with Metal on
+exactly one input value per component — a packed normal slightly too long,
+invisible in an image and wrong in a lighting term. Confirmed by removing it and
+watching the differential report $-1.007874$ against Metal's $-1$.
+
+**Two and four components, not one or three.** A three-component normalized
+attribute is not portable: Metal has `UChar3Normalized` and D3D12 does not, so
+the same declaration would be legal on one backend and refused on another. Four
+is what a packed normal or colour uses anyway.
+
+### 10.3 The Metal mapping is written out by name
+
+`MTLVertexFormat` is contiguous from `Float` through `Float4`, and the
+normalized families are not: it interleaves the plain and normalized integer
+families and their widths. So the float path stays arithmetic and the eight
+normalized forms are eight named cases, each checked.
+
+That distinction is not caution. It is what [035](035-cpu-rasterizer.md) §11.1
+cost: the colour write mask was cast numerically between two enumerations that
+never agreed, and only the default value hid it.
