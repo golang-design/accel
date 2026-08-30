@@ -25,8 +25,9 @@ nothing checks it -- the failure this project keeps finding, one level up from
 operator refusals.
 
 As of 2026-08-27: **31 in progress**, 9 implemented, 4 drafted,
-with **266 outstanding items** across the in-progress set. [062](062-backend-parity.md)
-was added on 2026-08-30 and is the thirty-second, with one.
+with **266 outstanding items** across the in-progress set.
+[062](062-backend-parity.md) was written and finished on 2026-08-30 and is the
+tenth implemented; it owns nothing unbuilt.
 
 All 50 specs are audited. 003, 004, 005, 009, 010 and 011 were re-audited after
 the first pass failed on them and appear in their own sections at the end.
@@ -42,6 +43,12 @@ the first pass failed on them and appear in their own sections at the end.
 - [043-per-row-values.md](043-per-row-values.md)
 - [048-int4.md](048-int4.md)
 - [049-grouped-gemm.md](049-grouped-gemm.md)
+- [062-backend-parity.md](062-backend-parity.md) — written and finished
+  2026-08-30. Seventy-four parity cases in the root package and nine in
+  `tensor`, over fifteen surfaces, with a completeness gate that needs no
+  device and runs on all three Tier 1 platforms. Its standing exclusions are
+  other specs' work and are listed in its own §10, each with the spec that
+  retires it.
 
 ## Drafted — nothing built yet, by intent
 
@@ -585,35 +592,6 @@ the first pass failed on them and appear in their own sections at the end.
 - §5: "alpha = 1, beta = 0 ... makes o the same for every token." — No assertion. internal/testkernels/linear_test.go:209 TestALinearStepWithNoWriteLeavesTheStateAlone checks only that the state did not move, then closes with `if len(out) == 0 { t.Fatal("no output") }
 - §5: "The state's shape is [slots, heads, V, K] and a step writes only its own slot, asserted by leaving another slot filled with a sentinel." — No sentinel exists. The untouched slot starts at zero in both tests (tensor/linear_test.go:197 reads it back and asserts it is still 0), so "untouched" is indistinguishable from "written with zeros". 
 
-
-### [062-backend-parity.md](062-backend-parity.md)
-
-Written and built on 2026-08-30, and `in progress` from its first day for one
-reason rather than an audit's: it owns a section that is not built, and it says
-so in its own Outcome.
-
-**Unbuilt:**
-
-- **§6.8, the texture-copy half** — The colour formats are compared through the
-  render path, which is the stronger comparison and covers all nine. What has
-  no case is the *copy* path: `Recorder.CopyBufferToTexture` and
-  `CopyTextureToBuffer` over each host-copyable format, compared between the
-  two backends. Metal lowers a row copy now, so the case is writable; the
-  existing round trip in `texture_darwin_test.go` was written against a refusal
-  and needs rewriting rather than extending.
-
-**Debts the gate is already holding**, each a stated exclusion with a named
-creditor rather than a gap — these are not outstanding work in this spec, they
-are work in another that this spec will notice landing:
-
-- Eight `StencilOp` members and `Format.Depth32FloatStencil8` wait on
-  [033](033-render-api.md) §10.5's Metal half. When Metal lowers stencil state,
-  the nine exclusions go and the gate demands nine cases.
-- `AttrFormat.AttrFloat32` waits on a generated stage that reads a
-  one-component attribute. Nothing in the corpus does.
-- `Format.Depth24PlusStencil8` is permanent while the CPU backend is the
-  oracle: "24 plus" has two defensible encodings and the oracle refuses to
-  assert one, so there is nothing to compare against.
 
 ## The split plan
 
