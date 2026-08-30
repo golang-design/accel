@@ -47,6 +47,19 @@ const (
 	// copy rather than a conversion.
 	PixelFormatRGBA32Float = 125
 
+	// The float colour formats. Absent until 2026-08-30, which is what
+	// specs/062-backend-parity.md section 6.2 found: the format table marks all
+	// nine colour formats renderable on every backend, the CPU rasterizer
+	// renders all nine, and Metal refused five of them at submit because their
+	// constants were not written down here. A device that reports a format
+	// renderable and then refuses it is a capability answer that is not true,
+	// which is the failure decision 6 exists to prevent.
+	PixelFormatR16Float    = 25
+	PixelFormatRG16Float   = 65
+	PixelFormatRGBA16Float = 115
+	PixelFormatR32Float    = 55
+	PixelFormatRG32Float   = 105
+
 	// PixelFormatDepth32Float, for the same reason.
 	PixelFormatDepth32Float = 252
 
@@ -180,6 +193,12 @@ func bytesPerPixel(format int) int {
 		return 4
 	case PixelFormatRGBA8Unorm, PixelFormatRGBA8UnormSRGB:
 		return 4
+	case PixelFormatR16Float:
+		return 2
+	case PixelFormatRG16Float, PixelFormatR32Float:
+		return 4
+	case PixelFormatRGBA16Float, PixelFormatRG32Float:
+		return 8
 	}
 	return 0
 }

@@ -198,10 +198,18 @@ func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, er
 // four. A silently wrong image is the failure specs/042-surface-completion.md
 // section 5.2 found eight of on this surface.
 //
-// The formats absent here are absent because Metal's constants for them are not
-// in internal/mtl yet, not because Metal lacks them. Adding one is a constant
-// and a bytesPerPixel row; the refusal names the format so the next caller to
-// want one is told what is missing rather than left with a wrong picture.
+// Every colour format the format table marks renderable is here as of
+// 2026-08-30. The five float formats were not, and nothing noticed: the table
+// marks them renderable on every backend, FormatInfo said so on this device,
+// and the refusal arrived at submit. specs/062-backend-parity.md section 6.2's
+// enumeration is what found it, which is the argument for enumerating a
+// surface rather than testing the members somebody thought of.
+//
+// The remaining absences are depth formats a backend genuinely does not carry:
+// Depth24PlusStencil8 has a device-defined layout the oracle refuses, and
+// Depth32FloatStencil8 waits on the stencil path this backend does not lower.
+// The refusal names the format so the next caller to want one is told what is
+// missing rather than left with a wrong picture.
 func metalPixelFormat(f driver.Format) (int, error) {
 	switch f {
 	case driver.RGBA32Float:
@@ -212,6 +220,16 @@ func metalPixelFormat(f driver.Format) (int, error) {
 		return mtl.PixelFormatRGBA8UnormSRGB, nil
 	case driver.BGRA8Unorm:
 		return mtl.PixelFormatBGRA8Unorm, nil
+	case driver.R16Float:
+		return mtl.PixelFormatR16Float, nil
+	case driver.RG16Float:
+		return mtl.PixelFormatRG16Float, nil
+	case driver.RGBA16Float:
+		return mtl.PixelFormatRGBA16Float, nil
+	case driver.R32Float:
+		return mtl.PixelFormatR32Float, nil
+	case driver.RG32Float:
+		return mtl.PixelFormatRG32Float, nil
 	case driver.Depth32Float:
 		return mtl.PixelFormatDepth32Float, nil
 	}
