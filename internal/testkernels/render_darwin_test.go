@@ -787,6 +787,16 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 	}
 }
 
+// Renamed from TestMetalRendersEachAttachmentFormat on 2026-08-30, because it
+// renders two of the nine colour formats and "each" claimed the enumeration.
+// specs/062-backend-parity.md section 6.9.
+//
+// It is kept rather than retired, because it asserts something the enumeration
+// does not: that the oracle's f32 attachment holds SolidFS's own constants, so
+// the pair cannot pass by both backends agreeing on something wrong. The
+// enumeration is section 6.2's -- all nine formats, compared byte for byte --
+// and this is the absolute check underneath it.
+
 // Metal renders in the format the attachment declares.
 //
 // The Metal path hardcoded RGBA32Float for every colour attachment until
@@ -815,7 +825,7 @@ func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
 // its components is exact in f32 and in 8-bit unorm, so a disagreement is a
 // format fault rather than a rounding one -- a path still assuming RGBA32Float
 // reads four bytes of one f32 as four channels and returns nothing like it.
-func TestMetalRendersEachAttachmentFormat(t *testing.T) {
+func TestAnAttachmentDecodesToWhatTheStageWrote(t *testing.T) {
 	const w, h = 4, 4
 	// What SolidFS writes. The oracle and Metal are compared against each
 	// other rather than against these numbers, because 0.25 is not exact in

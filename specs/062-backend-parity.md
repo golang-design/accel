@@ -1,6 +1,6 @@
 ---
 title: "Backend parity: an enumerated CPU/Metal agreement matrix, gated on every platform"
-status: in progress
+status: implemented
 layer: process
 depends_on:
   - 006-backends.md
@@ -211,9 +211,16 @@ is worse than an absent one, because it answers "is this covered" with a yes.
 | Test | What it actually does | Fix |
 | --- | --- | --- |
 | `TestEveryDTypeRoundTripsOnMetal` | enumerates 7 dtypes, checks Metal alone | §6.1 compares both |
-| `TestMetalRendersEachAttachmentFormat` | compares both backends over **2** of 9 colour formats, while named "each" | superseded by §6.2, which covers all nine; the test is left in place |
+| `TestMetalRendersEachAttachmentFormat` | compares both backends over **2** of 9 colour formats, while named "each" | renamed; §6.2 covers all nine, and the two-format test keeps the absolute check underneath it |
 | `TestIndirectDispatchOnMetal` | clamp behaviour on Metal alone | compare the clamped count on both |
 | `TestContiguousRunsOnMetal` | Metal against a host reference | renamed to say so; the parity half is §6.6's |
+
+All four are discharged. Two were retired into the matrix and two were renamed,
+and the split is the rule this leaves behind: **a test that also asserts
+absolute correctness against a written-down value is kept and renamed; one that
+only compared a backend against itself is retired.** The first proves something
+the matrix cannot, because two backends agreeing on a wrong value is exactly
+what an agreement test cannot see.
 
 ## 7. Cost
 
@@ -291,7 +298,8 @@ spec exists to replace.
 | Surface | Members | Covered | Excluded |
 | --- | --- | --- | --- |
 | `DType` | 7 | 7 | 0 |
-| `Format` | 13 | 10 | 3 |
+| `Format` (render) | 13 | 10 | 3 |
+| `Format` (copy) | 13 | 11 | 2 |
 | `CompareFunc` | 8 | 8 | 0 |
 | `BlendFactor` | 10 | 10 | 0 |
 | `BlendOp` | 5 | 5 | 0 |
@@ -304,7 +312,7 @@ spec exists to replace.
 | `StencilOp` | 8 | 0 | 8 |
 | tensor operators | 40 | 40 | 0 |
 
-Sixty-three cases in the root package's matrix and nine in `tensor`'s.
+Seventy-four cases in the root package's matrix and nine in `tensor`'s.
 
 **`AttrFormat` grew from five members to thirteen while this was being built.**
 Another session added the eight normalized integer formats, and the gate failed
@@ -321,20 +329,39 @@ creditor: Metal does not lower stencil state. When
 [033](033-render-api.md) §10.5's Metal half lands, the eight entries go and the
 gate demands eight cases.
 
-### What is not done, and why this stays *in progress*
+### §6.8, and why the format enumeration is a surface twice
 
-**§6.8's texture-copy half.** The colour formats are compared through the
-render path, which is the stronger comparison and covers all nine: it puts the
-encoding, not only the copy, into the compared bytes. What has no case is the
-copy path itself -- `Recorder.CopyBufferToTexture` and `CopyTextureToBuffer`
-over each host-copyable format, compared between the two backends.
+§6.8 was the last section unbuilt, and building it settled a question the rest
+of the spec had not had to answer: **when is one enumeration two surfaces?**
 
-It was blocked when this was written and is not any more: Metal lowers a row
-copy as of `metal: render into the attachment's own format, and lower a row
-copy`. What remains is that the round trip in `texture_darwin_test.go` was
-written against a refusal, so the work is to rewrite it as a matrix case rather
-than to extend it.
+The formats were already covered. Every colour format had a render case, so a
+copy case adding `Format.RGBA16Float` to its claims would have changed no number
+the gate reports — and the gate could therefore never have said *this format has
+never been copied*, which for eleven of the thirteen it could not. The two paths
+fail differently: a render pass compares what a texel **encodes**, and a copy
+compares how the rows around it are **addressed**. A backend can encode
+`RGBA16Float` correctly and copy it at the wrong pitch.
 
-The spec therefore stays `in progress` rather than `implemented`, per
-[009](009-sequencing.md)'s rule and [STATUS.md](STATUS.md)'s: a spec does not
-reach `implemented` while any section it owns is unbuilt, and one section is.
+So `FormatCopy` is a second surface over the same `Enum(".", "Format")`. The
+rule this sets, for whoever adds the third: **one enumeration earns a second
+surface when there are two independent ways to get a member wrong, and neither
+path's coverage implies the other's.** Not when a member is merely reachable
+two ways.
+
+Each case runs both directions at an aligned width and at one whose rows are
+not aligned on either backend, because [001](001-device-resources.md) §4.2
+makes tight rows the caller's guarantee and accel's cost — and the aligned
+width does not exercise it.
+
+`Depth32FloatStencil8` is excluded from the render surface and covered on the
+copy one, which is the modelling paying for itself immediately: Metal has no
+attachment pixel format for it and copies it perfectly.
+
+**And the comparison is not the whole assertion here.** Every case checks
+caller order against a row-identifiable pattern before the matrix compares the
+two backends. docs/conventions.md records that reading a render target back
+yields bottom-origin rows on GL and on Metal — on Metal *despite* its top-left
+texture origin — while accel guarantees caller order and the backend flips. Two
+backends that flipped identically would agree perfectly, so agreement alone
+cannot be the bar. That was checked by flipping a result and confirming the
+failure names the flip.
