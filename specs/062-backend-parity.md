@@ -43,7 +43,10 @@ forty-sixth operator produces a green run.
 it compiles on one of the three Tier 1 platforms. An unlisted kernel added on
 Linux is invisible until someone runs the suite on a Mac.
 
-### 1.1 The measured gap
+### 1.1 The measured gap, before this spec
+
+Counted on 2026-08-30, before any of the work below. It is a snapshot and is
+kept as one; §10 has what the gate holds now.
 
 | Surface | Universe | Parity cases today |
 | --- | --- | --- |
@@ -281,7 +284,11 @@ never been compared against Metal" is answerable on all three Tier 1 platforms.
 
 ### What the gate holds today
 
-| Surface | Members | Cases | Excluded |
+Read out of the registry rather than written down, and re-counted whenever a
+row here is edited: a coverage table maintained by hand is the artefact this
+spec exists to replace.
+
+| Surface | Members | Covered | Excluded |
 | --- | --- | --- | --- |
 | `DType` | 7 | 7 | 0 |
 | `Format` | 13 | 10 | 3 |
@@ -292,10 +299,22 @@ never been compared against Metal" is answerable on all three Tier 1 platforms.
 | `Topology` | 5 | 2 | 3 |
 | `FrontFace` / `CullMode` | 2 / 3 | 2 / 3 | 0 |
 | `IndexFormat` | 2 | 2 | 0 |
-| `AttrFormat` | 5 | 3 | 2 |
+| `AttrFormat` | 13 | 11 | 2 |
 | `LoadOp` / `StoreOp` | 3 / 2 | 3 / 1 | 0 / 1 |
 | `StencilOp` | 8 | 0 | 8 |
 | tensor operators | 40 | 40 | 0 |
+
+Sixty-three cases in the root package's matrix and nine in `tensor`'s.
+
+**`AttrFormat` grew from five members to thirteen while this was being built.**
+Another session added the eight normalized integer formats, and the gate failed
+on the next run naming all eight by name. That is the mechanism working rather
+than an anecdote about it: under the previous arrangement the eight would have
+landed with one hand-written case between them and nothing would have said so.
+The cases that answered the gate hold the attribute *constant across the three
+vertices*, which isolates the conversion -- a constant field interpolates to
+itself under any weights, so what is left under test is the divisor and the
+signed clamp rather than the rasterizer's barycentric arithmetic.
 
 The eight excluded stencil operations are the largest debt and they have one
 creditor: Metal does not lower stencil state. When
@@ -304,14 +323,17 @@ gate demands eight cases.
 
 ### What is not done, and why this stays *in progress*
 
-**§6.8's texture-copy half.** Metal lowers a buffer-to-texture copy, but the
-existing round trip in `texture_darwin_test.go` was written against a refusal
-and is another session's file at the time of writing. The colour formats are
-covered through the render path instead, which is the stronger comparison
-anyway -- it puts the encoding, not only the copy, in the result. What is
-missing is the copy path itself: `CopyBufferToTexture` and
-`CopyTextureToBuffer` over each host-copyable format, compared between the two
-backends.
+**§6.8's texture-copy half.** The colour formats are compared through the
+render path, which is the stronger comparison and covers all nine: it puts the
+encoding, not only the copy, into the compared bytes. What has no case is the
+copy path itself -- `Recorder.CopyBufferToTexture` and `CopyTextureToBuffer`
+over each host-copyable format, compared between the two backends.
+
+It was blocked when this was written and is not any more: Metal lowers a row
+copy as of `metal: render into the attachment's own format, and lower a row
+copy`. What remains is that the round trip in `texture_darwin_test.go` was
+written against a refusal, so the work is to rewrite it as a matrix case rather
+than to extend it.
 
 The spec therefore stays `in progress` rather than `implemented`, per
 [009](009-sequencing.md)'s rule and [STATUS.md](STATUS.md)'s: a spec does not
