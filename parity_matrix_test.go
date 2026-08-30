@@ -48,6 +48,7 @@ func parityCases() []parityCase {
 	cases = append(cases, dtypeParityCases()...)
 	cases = append(cases, formatParityCases()...)
 	cases = append(cases, renderStateParityCases()...)
+	cases = append(cases, formatCopyParityCases()...)
 	return cases
 }
 
@@ -61,6 +62,7 @@ func parityExclusions() []parity.Excluded {
 	var out []parity.Excluded
 	out = append(out, formatParityExclusions()...)
 	out = append(out, renderStateParityExclusions()...)
+	out = append(out, formatCopyParityExclusions()...)
 	return out
 }
 
@@ -78,7 +80,7 @@ func paritySurfaces(t *testing.T) []parity.Surface {
 		"IndexFormat", "AttrFormat", "ColorWriteMask",
 		"BlendFactor", "BlendOp", "LoadOp", "StoreOp",
 	}
-	out := make([]parity.Surface, 0, len(names))
+	out := make([]parity.Surface, 0, len(names)+1)
 	for _, n := range names {
 		members, err := parity.Enum(pkg, n)
 		if err != nil {
@@ -86,7 +88,19 @@ func paritySurfaces(t *testing.T) []parity.Surface {
 		}
 		out = append(out, parity.Surface{Name: n, Members: members})
 	}
-	return out
+
+	// The format enumeration a second time, against the copy entry points.
+	//
+	// One enumeration can be a surface twice when there are two independent
+	// ways to get a format wrong, and there are: section 6.2 compares what a
+	// pass *encodes* into a texel and section 6.8 compares how a copy
+	// *addresses* the rows around it. Sharing one surface would let a render
+	// case's claim answer for a copy that no test has ever made.
+	formats, err := parity.Enum(pkg, "Format")
+	if err != nil {
+		t.Fatalf("enumerate Format: %v", err)
+	}
+	return append(out, parity.Surface{Name: formatCopySurface, Members: formats})
 }
 
 // Every member of every enumerated surface has a parity case, or a stated
