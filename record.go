@@ -296,7 +296,14 @@ func (r *Recorder) declareTexture(op string, v TextureView, mode Access) (access
 		r.fail("%s: %q belongs to a different device", op, t.desc.Label)
 		return access{}, false
 	}
-	return access{res: resourceRef{tex: t}, off: 0, size: t.bytes, mode: mode}, true
+	// The *subresource's* range, not the whole allocation. A pass writing mip 1
+	// and a pass reading mip 0 touch disjoint bytes, so an access covering the
+	// texture would make them hazard and serialize -- and would make
+	// specs/033-render-api.md section 3.3's "a different mip is a different
+	// subresource" true of the feedback rule and false of the barrier plan,
+	// which is two answers to one question.
+	sub := t.Subresource(v.Mip, v.Layer)
+	return access{res: resourceRef{tex: t}, off: sub.Offset, size: sub.Size, mode: mode}, true
 }
 
 // slotAccess declares an access relative to a slot's eventual resource.

@@ -725,10 +725,14 @@ func (g *Graph) checkAttachment(p *RenderPass, what string, v TextureView, s Slo
 			"%v and was created with %v", ErrUsage, p.desc.Label, what, t.desc.Label,
 			TextureRenderTarget, t.desc.Usage)
 	}
-	if t.desc.Size.Width < p.desc.Width || t.desc.Size.Height < p.desc.Height {
-		return 0, 0, fmt.Errorf("accel: Build: render pass %q %s is texture %q, which is "+
-			"%dx%d, and the render area is %dx%d", p.desc.Label, what, t.desc.Label,
-			t.desc.Size.Width, t.desc.Size.Height, p.desc.Width, p.desc.Height)
+	// The *view's* extent, which is the level's. Comparing the base extent
+	// would let a pass render 512 rows into mip 3's 64, and the write would run
+	// off the end of the subresource into the next one.
+	sub := v.Subresource()
+	if sub.Width < p.desc.Width || sub.Height < p.desc.Height {
+		return 0, 0, fmt.Errorf("accel: Build: render pass %q %s is texture %q at mip %d, "+
+			"which is %dx%d, and the render area is %dx%d", p.desc.Label, what,
+			t.desc.Label, v.Mip, sub.Width, sub.Height, p.desc.Width, p.desc.Height)
 	}
 
 	// The aspect check, and what it is worth given V13 exists.
@@ -750,7 +754,7 @@ func (g *Graph) checkAttachment(p *RenderPass, what string, v TextureView, s Slo
 		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is viewed as %v, and %s",
 			ErrFormat, p.desc.Label, what, v.Format, aspectMismatch(components == 1))
 	}
-	pitch := g.dev.AlignedRowPitch(v.Format, t.desc.Size.Width)
+	pitch := g.dev.AlignedRowPitch(v.Format, sub.Width)
 	if pitch == 0 {
 		return 0, 0, fmt.Errorf("%w: Build: render pass %q %s is %v, whose layout is "+
 			"device-defined -- there is no row pitch to give a backend and no one "+
@@ -888,15 +892,20 @@ func (g *Graph) textureOperands(n *recNode, p *RenderPass, draw int, pipe *Rende
 				return fmt.Errorf("accel: Build: render pass %q draw %d %s texture %d: %w",
 					p.desc.Label, draw, s.what, tx.Index, err)
 			}
-			sz := v.Texture.desc.Size
+			// The *view's* extent and pitch, which are the level's. Taking the
+			// base extent would put every fetch past the level's last row in
+			// range and reading the next subresource's bytes -- and would
+			// compute a pitch the level's rows are not stored at, so even an
+			// in-range fetch would land in the wrong row.
+			sub := v.Subresource()
 			for len(*s.out) <= tx.Index {
 				*s.out = append(*s.out, driver.RenderTexture{})
 			}
 			(*s.out)[tx.Index] = driver.RenderTexture{
 				Operand: op,
 				Format:  v.Format.plan(),
-				Width:   sz.Width, Height: sz.Height,
-				Pitch: g.dev.AlignedRowPitch(v.Format, sz.Width),
+				Width:   sub.Width, Height: sub.Height,
+				Pitch: g.dev.AlignedRowPitch(v.Format, sub.Width),
 			}
 		}
 	}

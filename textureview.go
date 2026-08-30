@@ -139,3 +139,81 @@ func incompatible(d *Device, have, want Format) string {
 	}
 	return ""
 }
+
+// Subresource is one (mip, layer)'s extent and byte range inside a texture.
+//
+// specs/045-texture-attachments.md section 2 makes a view name a subresource,
+// and this is where that name becomes an address. The layout is stated rather
+// than discovered because a caller sizing a copy or reading a pitch has to be
+// able to compute it:
+//
+//	level 0 layer 0, level 0 layer 1, … level 1 layer 0, …
+//
+// Levels in order, and within a level the array layers consecutive. Each level
+// pads its rows to the device's copy alignment, exactly as a single-level
+// texture does -- so a one-level texture's layout is unchanged by mips
+// existing, which is what keeps every existing plan byte-identical.
+type Subresource struct {
+	// Offset is the byte offset from the texture's own allocation base.
+	Offset int
+
+	// Size is the subresource's byte footprint, Pitch × Height.
+	Size int
+
+	// Width and Height are this level's extent, halved per level and never
+	// below one -- the rule every target shares.
+	Width, Height int
+
+	// Pitch is this level's aligned row pitch. It is *this level's*, not the
+	// base's: level 3 of a 1024-wide texture is 128 texels, and padding its
+	// rows to the base's pitch would leave seven eighths of the allocation
+	// unused and every row of it in the wrong place.
+	Pitch int
+}
+
+// mipExtent is a level's extent: halved per level, never below one.
+func mipExtent(base, level int) int { return max(1, base>>level) }
+
+// Subresource reports where a view's own bytes live.
+//
+// It is a method on the texture rather than on the view because the layout is a
+// property of the allocation, and a view is a name for part of one.
+func (t *Texture) Subresource(mip, layer int) Subresource {
+	levels := max(t.desc.MipLevels, 1)
+	layers := max(t.desc.ArrayLayers, 1)
+	off := 0
+	for m := range levels {
+		w := mipExtent(t.desc.Size.Width, m)
+		h := mipExtent(t.desc.Size.Height, m)
+		pitch := levelPitch(t.pool.dev, t.desc.Format, w)
+		size := pitch * h
+		if m == mip {
+			return Subresource{
+				Offset: off + layer*size, Size: size,
+				Width: w, Height: h, Pitch: pitch,
+			}
+		}
+		off += size * layers
+	}
+	return Subresource{}
+}
+
+// Subresource reports where this view's own bytes live, at its own extent.
+func (v TextureView) Subresource() Subresource {
+	if v.Texture == nil {
+		return Subresource{}
+	}
+	return v.Texture.Subresource(v.Mip, v.Layer)
+}
+
+// levelPitch is one level's aligned row pitch, with the device-defined-layout
+// fallback textureBytes uses.
+func levelPitch(d *Device, f Format, width int) int {
+	if p := d.AlignedRowPitch(f, width); p != 0 {
+		return p
+	}
+	// A device-defined layout, as for Depth24PlusStencil8: four bytes per pixel
+	// is the largest any backend uses, so this over-allocates rather than
+	// under-allocating.
+	return alignUp(width*4, d.info.Limits.MinBufferCopyRowPitchAlignment)
+}

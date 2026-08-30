@@ -96,12 +96,23 @@ type TextureDescriptor struct {
 	Size   Extent
 	Usage  TextureUsage
 
-	// MipLevels of 0 means one level. Values greater than one are still
-	// rejected; see [TextureViewDesc] for what changed and what did not.
+	// MipLevels of 0 means one level.
+	//
+	// Each level halves both axes and never goes below one, so a 16x8 texture
+	// has five: 16x8, 8x4, 4x2, 2x1, 1x1. More than the extent has is refused
+	// naming the number it does have, because the off-by-one at the end of a
+	// chain is where a mip count is usually wrong.
+	//
+	// [Texture.Subresource] states where each level's bytes are, and a
+	// [TextureView] naming one is what a pass renders into, a stage fetches
+	// from, and the graph hazards against. What still addresses the base level
+	// only is the host copy -- [Queue.ReadTexture] and the recorded
+	// texture-buffer copies take a texture rather than a view, so there is no
+	// subresource for a caller to name.
 	MipLevels int
 
-	// ArrayLayers of 0 means one layer. Values greater than one are rejected
-	// for the same reason MipLevels are.
+	// ArrayLayers of 0 means one layer. Layers are consecutive within a level,
+	// and more than the device reports is refused naming both numbers.
 	ArrayLayers int
 
 	// Kind is the memory the implicit pool behind [Device.NewTexture] is taken

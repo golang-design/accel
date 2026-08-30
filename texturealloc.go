@@ -65,24 +65,22 @@ func validateTexture(d *Device, desc TextureDescriptor) error {
 		return fmt.Errorf("accel: texture %q: depth %d is a 3D texture, and every v0 "+
 			"operation addresses a single layer (spec 001 section 4)", desc.Label, d)
 	}
-	// Zero normalizes to one; anything larger is still rejected, and the reason
-	// is now narrower than it was. [TextureView] names a subresource, so
-	// *binding* one is no longer the obstacle. The rest of the path still
-	// addresses a whole allocation: textureBytes sizes one level, a
-	// texture-buffer copy moves one, and a recorded access covers the texture's
-	// whole byte range. A texture whose mips could be created but not sized,
-	// copied, or hazarded is worse than one that cannot be created, so this
-	// stays until those three follow the view.
-	if desc.MipLevels > 1 {
-		return fmt.Errorf("accel: texture %q: %d mip levels, and this addresses the base "+
-			"level only: a view names a subresource but the allocation, the copy and the "+
-			"hazard range are still whole-texture (spec 001 section 4, "+
-			"specs/045-texture-attachments.md section 4)", desc.Label, desc.MipLevels)
+	// Zero normalizes to one. Mip chains and array layers are admitted since
+	// 2026-08-30: [Texture.Subresource] states the layout, textureBytes sizes
+	// every level, and a recorded access covers the *subresource's* range
+	// rather than the whole allocation. What still addresses the base level
+	// only is the host copy, and that is refused per view rather than per
+	// texture -- see readTexture and Recorder.textureCopy.
+	if levels := desc.MipLevels; levels > 1 {
+		if w, h := desc.Size.Width, desc.Size.Height; levels > mipChainLength(w, h) {
+			return fmt.Errorf("%w: texture %q: %d mip levels, and a %dx%d texture has %d "+
+				"before an axis reaches one", ErrUsage, desc.Label, levels, w, h,
+				mipChainLength(w, h))
+		}
 	}
-	if desc.ArrayLayers > 1 {
-		return fmt.Errorf("accel: texture %q: %d array layers, and this addresses a single "+
-			"layer for the same reason mip chains are deferred (spec 001 section 4)",
-			desc.Label, desc.ArrayLayers)
+	if lim := d.info.Limits.MaxTextureArrayLayers; lim > 0 && desc.ArrayLayers > lim {
+		return fmt.Errorf("%w: texture %q: %d array layers and %q reports a limit of %d",
+			ErrUsage, desc.Label, desc.ArrayLayers, d.info.Name, lim)
 	}
 	if desc.Usage == 0 {
 		return fmt.Errorf("%w: texture %q declares no usage, so nothing can be done "+
@@ -121,15 +119,14 @@ func validateTexture(d *Device, desc TextureDescriptor) error {
 // API boundary rather than of the allocation. Sizing from the tight pitch would
 // under-allocate on any backend that pads.
 func textureBytes(d *Device, desc TextureDescriptor) int {
-	pitch := d.AlignedRowPitch(desc.Format, desc.Size.Width)
-	if pitch == 0 {
-		// A device-defined layout, as for Depth24PlusStencil8. Four bytes per
-		// pixel is the largest any backend uses for it, so this over-allocates
-		// rather than under-allocating, and over-allocating is the direction
-		// that is merely wasteful.
-		pitch = alignUp(desc.Size.Width*4, d.info.Limits.MinBufferCopyRowPitchAlignment)
+	levels, layers := max(desc.MipLevels, 1), max(desc.ArrayLayers, 1)
+	total := 0
+	for m := range levels {
+		w := mipExtent(desc.Size.Width, m)
+		h := mipExtent(desc.Size.Height, m)
+		total += levelPitch(d, desc.Format, w) * h * layers
 	}
-	return pitch * desc.Size.Height
+	return total
 }
 
 // readTexture returns the base level as tightly packed rows.
@@ -309,12 +306,16 @@ func (r *Recorder) textureCopy(op string, buf BufferView, tex *Texture, toBuffer
 		return r.node(textureNodeKind(toBuffer), op, nil, nil)
 	}
 
-	// The texture's access is declared against its whole extent, because every
-	// v0 operation addresses the base level and a single layer: there is no
-	// sub-range to name and pretending otherwise would be a hazard the barrier
-	// plan sees more precisely than it can.
+	// A copy moves the **base level**, and its access says exactly that.
+	//
+	// It takes a texture rather than a view, so there is no subresource for a
+	// caller to name; the size check above is against the base extent for the
+	// same reason. Declaring the whole allocation instead would make a copy of
+	// the base level hazard against a pass writing mip 3, which is a barrier
+	// the plan does not need and a serialization a caller cannot explain.
+	base := tex.Subresource(0, 0)
 	texAccess := access{
-		res: resourceRef{tex: tex}, off: 0, size: tex.bytes, mode: mode,
+		res: resourceRef{tex: tex}, off: base.Offset, size: base.Size, mode: mode,
 	}
 
 	kind := textureNodeKind(toBuffer)
@@ -343,4 +344,19 @@ func oppositeAccess(tex Access) Access {
 		return AccessWrite
 	}
 	return AccessRead
+}
+
+// mipChainLength is how many levels a texture of this extent has before both
+// axes reach one.
+//
+// Stated as a rule rather than left to a caller's arithmetic, because the
+// off-by-one at the end of a chain is where a mip count is usually wrong: a
+// 1024x1024 texture has eleven levels, not ten, since level ten is the 1x1.
+func mipChainLength(w, h int) int {
+	n := 1
+	for w > 1 || h > 1 {
+		w, h = max(1, w/2), max(1, h/2)
+		n++
+	}
+	return n
 }
