@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"golang.design/x/accel/internal/testkernels"
 )
 
@@ -267,93 +268,17 @@ func TestMetalRefusesAKernelItCannotLower(t *testing.T) {
 	_ = storage
 }
 
-// A buffer round trip at every v0 dtype, on Metal.
+// The buffer round trip at every dtype moved, and it moved because it was not
+// a parity test.
 //
-// specs/009-sequencing.md's M6 done list, item 3. A round trip is a copy and
-// not a dispatch, so it needs nothing from the MSL target -- which is what makes
-// it worth asserting separately: bf16, i8 and u8 have no kernel in the corpus
-// and the compute differential would never touch them. A dtype whose *storage*
-// worked and whose stride was wrong would corrupt whatever the tensor layer
-// later put in it, silently.
-//
-// specs/001-device-resources.md section 3.2 makes a storage buffer a tightly
-// packed array of one dtype, so the element stride is the dtype's size and
-// there is no padding anywhere. The offsets below are non-zero for that reason:
-// a copy that ignored its offset would pass at zero and fail on every real
-// suballocation.
-func TestEveryDTypeRoundTripsOnMetal(t *testing.T) {
-	d := openMetal(t)
-	const n = 64
-	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
-
-	// Bit patterns rather than values: a round trip moves bytes, and comparing
-	// values would ask a question about conversion that this test is not about.
-	// Every pattern is chosen to have all four bytes distinct where the width
-	// allows, so a transposed or truncated element is visible.
-	for _, dt := range []accel.DType{accel.F32, accel.F16, accel.BF16,
-		accel.I32, accel.U32, accel.I8, accel.U8} {
-		t.Run(dt.String(), func(t *testing.T) {
-			b, err := d.NewBuffer(accel.BufferDescriptor{
-				DType: dt, Count: n, Usage: usage, Label: dt.String(),
-			})
-			if err != nil {
-				t.Fatalf("buffer: %v", err)
-			}
-			defer b.Close()
-
-			switch dt {
-			case accel.F32:
-				roundTrip(t, d, b, func(i int) float32 { return float32(i)*1.5 - 8 })
-			case accel.I32:
-				roundTrip(t, d, b, func(i int) int32 { return int32(i)*7 - 100 })
-			case accel.U32:
-				roundTrip(t, d, b, func(i int) uint32 { return uint32(i)*0x01020304 + 5 })
-			case accel.F16, accel.BF16:
-				roundTrip(t, d, b, func(i int) uint16 { return uint16(i)*0x0102 + 3 })
-			case accel.I8:
-				roundTrip(t, d, b, func(i int) int8 { return int8(i) - 32 })
-			case accel.U8:
-				roundTrip(t, d, b, func(i int) uint8 { return uint8(i) + 7 })
-			}
-		})
-	}
-}
-
-// roundTrip writes a buffer through the queue and reads it back, at an offset.
-func roundTrip[T comparable](t *testing.T, d *accel.Device, b *accel.Buffer, at func(int) T) {
-	t.Helper()
-	n := b.Count()
-	src := make([]T, n)
-	for i := range src {
-		src[i] = at(i)
-	}
-	if err := d.Queue().WriteBuffer(b, 0, src); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got := make([]T, n)
-	if err := d.Queue().ReadBuffer(b, 0, got); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	for i := range got {
-		if got[i] != src[i] {
-			t.Fatalf("element %d came back as %v, want %v", i, got[i], src[i])
-		}
-	}
-
-	// And a partial read from a non-zero offset, which is what every transfer
-	// into a suballocated pool looks like.
-	const off = 16
-	tail := make([]T, n-off)
-	if err := d.Queue().ReadBuffer(b, off, tail); err != nil {
-		t.Fatalf("read at %d: %v", off, err)
-	}
-	for i := range tail {
-		if tail[i] != src[off+i] {
-			t.Fatalf("element %d of a read at offset %d came back as %v, want %v: the "+
-				"element stride is not the dtype's size", i, off, tail[i], src[off+i])
-		}
-	}
-}
+// It enumerated all seven dtypes and then checked Metal alone, which reads in a
+// summary as coverage of the dtype surface and is not: a backend that stored
+// bf16 at the wrong stride would round-trip through its own queue perfectly and
+// disagree with the oracle. specs/062-backend-parity.md section 6.9 lists it as
+// one of four tests in that shape. It is now parity_transfer_test.go's
+// dtypeParityCases, which does the same round trip -- through a recorded copy,
+// with an offset read -- on both backends and compares the bytes, and which the
+// section 6.1 gate holds to all seven.
 
 // An indirect dispatch runs the device's count on Metal, clamped in every mode,
 // and reports what the count turned out to be.
@@ -372,20 +297,22 @@ func roundTrip[T comparable](t *testing.T, d *accel.Device, b *accel.Buffer, at 
 // produce the right answer anyway. The over-limit case below is what notices,
 // because it is the one where the clamped and unclamped counts differ.
 func TestIndirectDispatchOnMetal(t *testing.T) {
-	d := openMetal(t)
+	metal := openMetal(t)
+	// The CPU backend runs the same graph, because the clamp is a portable
+	// rule and not Metal's: specs/003-command-graph.md makes it unconditional
+	// on every backend. Checking it on one was checking that this backend is
+	// self-consistent, which a backend that clamped to the wrong number would
+	// also be. specs/062-backend-parity.md section 6.9.
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
 	const n = 256
 	const wg = 64 // AddKernel's workgroup
-
-	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
-	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
-	})
-	if err != nil {
-		t.Fatalf("pipeline: %v", err)
-	}
-	defer p.Close()
-
 	max := accel.WorkgroupCount{X: 3, Y: 1, Z: 1}
+
 	for _, tc := range []struct {
 		name    string
 		supply  uint32
@@ -398,50 +325,27 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 		{"zero", 0, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			in := newBuffer(t, d, "in", n, storage)
-			out := newBuffer(t, d, "out", n, storage)
-			count, err := d.NewBuffer(accel.BufferDescriptor{
-				DType: accel.U32, Count: 3, Label: "count",
-				Usage: accel.BufferIndirect | accel.BufferCopyDst | accel.BufferStorage,
-			})
-			if err != nil {
-				t.Fatalf("count buffer: %v", err)
+			onCPU := indirectRun(t, cpu, n, tc.supply, max)
+			onMetal := indirectRun(t, metal, n, tc.supply, max)
+
+			// Byte for byte: a dispatch of ones over ones is exact addition,
+			// so the two backends have no rounding to differ about, and the
+			// only thing that can differ is how many workgroups ran.
+			if r := numeq.Exact(onMetal.out, onCPU.out); !r.Equal {
+				t.Fatalf("the two backends wrote different results: %v\n  a clamp is "+
+					"portable, so a difference here is one backend running a different "+
+					"number of workgroups", r)
 			}
-			defer count.Close()
-			countView, err := count.View(0, 3)
-			if err != nil {
-				t.Fatalf("view: %v", err)
+			if onCPU.stats.Clamped != onMetal.stats.Clamped {
+				t.Errorf("Clamped is %v on the CPU backend and %v on Metal",
+					onCPU.stats.Clamped, onMetal.stats.Clamped)
+			}
+			if onCPU.stats.Actual[0] != onMetal.stats.Actual[0] {
+				t.Errorf("the reported actual count is %d on the CPU backend and %d on "+
+					"Metal", onCPU.stats.Actual[0], onMetal.stats.Actual[0])
 			}
 
-			r := d.NewRecorder()
-			r.CollectRunStats(true)
-			r.UploadToBuffer(countView, []uint32{tc.supply, 1, 1})
-			// Ones in, so every element the dispatch touched is 2 and every one
-			// it did not is 0. Counting them is how many workgroups ran, which
-			// is the only externally visible consequence of the clamp.
-			ones := make([]float32, n)
-			for i := range ones {
-				ones[i] = 1
-			}
-			r.UploadToBuffer(whole(t, in), ones)
-			r.UploadToBuffer(whole(t, out), make([]float32, n))
-			r.DispatchIndirect(p, []accel.Binding{
-				{Index: 0, Buffer: whole(t, in)},
-				{Index: 1, Buffer: whole(t, in)},
-				{Index: 2, Buffer: whole(t, out)},
-			}, nil, countView, max)
-
-			g, err := r.Build()
-			if err != nil {
-				t.Fatalf("build: %v", err)
-			}
-			defer g.Close()
-			f := d.Queue().Submit(g)
-			if err := f.Wait(); err != nil {
-				t.Fatalf("submit: %v", err)
-			}
-
-			got := readback(t, d, out)
+			got, s := onMetal.out, onMetal.stats
 			touched := 0
 			for _, v := range got {
 				if v != 0 {
@@ -454,15 +358,6 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 					touched, want, tc.want, wg, tc.supply, max.X)
 			}
 
-			stats, err := f.Stats()
-			if err != nil {
-				t.Fatalf("the graph asked for run stats: %v", err)
-			}
-			if len(stats.Indirect) != 1 {
-				t.Fatalf("the graph asked for run stats and reported %d indirect nodes",
-					len(stats.Indirect))
-			}
-			s := stats.Indirect[0]
 			if s.Actual[0] != tc.supply {
 				t.Errorf("the reported actual count is %d, want the %d the device wrote: "+
 					"this is read from the device, so a wrong value means the clamp kernel "+
@@ -473,6 +368,80 @@ func TestIndirectDispatchOnMetal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// indirectResult is one backend's answer: what the dispatch wrote, and what the
+// graph reported about the count it read.
+type indirectResult struct {
+	out   []float32
+	stats accel.IndirectStats
+}
+
+// indirectRun records the indirect dispatch and returns both halves.
+//
+// Ones in, so every element the dispatch touched is 2 and every one it did not
+// is 0. Counting them is how many workgroups ran, which is the only externally
+// visible consequence of the clamp.
+func indirectRun(t *testing.T, d *accel.Device, n int, supply uint32,
+	max accel.WorkgroupCount) indirectResult {
+	t.Helper()
+	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.AddKernel, Label: "add",
+	})
+	if err != nil {
+		t.Fatalf("%v pipeline: %v", d.Info().Backend, err)
+	}
+	defer p.Close()
+
+	in := newBuffer(t, d, "in", n, storage)
+	out := newBuffer(t, d, "out", n, storage)
+	count, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.U32, Count: 3, Label: "count",
+		Usage: accel.BufferIndirect | accel.BufferCopyDst | accel.BufferStorage,
+	})
+	if err != nil {
+		t.Fatalf("%v count buffer: %v", d.Info().Backend, err)
+	}
+	defer count.Close()
+	countView, err := count.View(0, 3)
+	if err != nil {
+		t.Fatalf("%v view: %v", d.Info().Backend, err)
+	}
+
+	r := d.NewRecorder()
+	r.CollectRunStats(true)
+	r.UploadToBuffer(countView, []uint32{supply, 1, 1})
+	ones := make([]float32, n)
+	for i := range ones {
+		ones[i] = 1
+	}
+	r.UploadToBuffer(whole(t, in), ones)
+	r.UploadToBuffer(whole(t, out), make([]float32, n))
+	r.DispatchIndirect(p, []accel.Binding{
+		{Index: 0, Buffer: whole(t, in)},
+		{Index: 1, Buffer: whole(t, in)},
+		{Index: 2, Buffer: whole(t, out)},
+	}, nil, countView, max)
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("%v build: %v", d.Info().Backend, err)
+	}
+	defer g.Close()
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("%v submit: %v", d.Info().Backend, err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("%v asked for run stats: %v", d.Info().Backend, err)
+	}
+	if len(stats.Indirect) != 1 {
+		t.Fatalf("%v asked for run stats and reported %d indirect nodes",
+			d.Info().Backend, len(stats.Indirect))
+	}
+	return indirectResult{out: readback(t, d, out), stats: stats.Indirect[0]}
 }
 
 // The eight-node worked graph of specs/003-command-graph.md runs on Metal and

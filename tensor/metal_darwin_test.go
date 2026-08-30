@@ -322,6 +322,16 @@ func openMetalRuntimeDevice(t *testing.T) *accel.Device {
 	return nil
 }
 
+// A pack copies the row a slice named, checked against the host values it came
+// from.
+//
+// Renamed from TestContiguousRunsOnMetal on 2026-08-30. The old name claimed a
+// backend comparison the test does not make -- it runs on Metal and checks the
+// arithmetic, which is worth having and is not parity.
+// specs/062-backend-parity.md section 6.9 lists it as one of four tests in that
+// shape; the parity half is now parity_cases_test.go's viewParityCase, which
+// runs Contiguous on both backends and compares.
+
 // Contiguous runs on Metal, which it could not until the emitter learned to
 // spell a std140 array member.
 //
@@ -336,7 +346,7 @@ func openMetalRuntimeDevice(t *testing.T) *accel.Device {
 // pack it, which is the LM-head case and the one with no alternative. Running
 // the head over every position instead costs T times the vocabulary, which for
 // a 4B model at two thousand positions is more memory than the model.
-func TestContiguousRunsOnMetal(t *testing.T) {
+func TestContiguousPacksExactlyWhatTheSliceNamed(t *testing.T) {
 	const rows, cols = 4, 8
 	d := openMetalRuntimeDevice(t)
 	rt, err := tensor.NewRuntime(d)
