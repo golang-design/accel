@@ -519,12 +519,69 @@ func TestBlendFactorsAndOperations(t *testing.T) {
 
 				var want [4]float32
 				for c := range 4 {
+					// Min and max take the unscaled operands. Every target
+					// backend ignores the factors for those two, and this
+					// reference asserted otherwise until
+					// specs/062-backend-parity.md section 6.4 compared the five
+					// operations against Metal one at a time.
+					if op == raster.BlendMin || op == raster.BlendMax {
+						want[c] = apply(op, src[c], dst[c])
+						continue
+					}
 					want[c] = apply(op, ref(sf, c)*src[c], ref(df, c)*dst[c])
 				}
 				if got := tgt.At(0, 0); got != want {
 					t.Fatalf("src %v dst %v op %v: got %v, want %v", sf, df, op, got, want)
 				}
 			}
+		}
+	}
+}
+
+// Min and max ignore the blend factors.
+//
+// Separated from the sweep above because it is the one rule in this equation
+// that cannot be read off specs/035-cpu-rasterizer.md section 5's formula, and
+// because the sweep would still pass if it were wrong in one direction: with
+// FactorOne on both sides the scaled and unscaled forms agree, and most of the
+// sweep's combinations are far enough apart that a reader cannot tell which
+// reading a passing run confirmed.
+//
+// The factors here are chosen so the two readings disagree. Scaling the source
+// by its own alpha drags it below the destination, so a factored minimum picks
+// the source and an unfactored one picks the destination -- opposite answers
+// rather than nearby ones.
+func TestMinAndMaxIgnoreTheBlendFactors(t *testing.T) {
+	const n = 1
+	src := [4]float32{0.8, 0.8, 0.8, 0.25}
+	dst := [4]float32{0.5, 0.5, 0.5, 1}
+
+	for _, c := range []struct {
+		op   raster.BlendOp
+		want float32
+	}{
+		// Unfactored: min(0.8, 0.5) = 0.5. Factored would be
+		// min(0.8*0.25, 0.5*1) = 0.2.
+		{raster.BlendMin, 0.5},
+		// Unfactored: max(0.8, 0.5) = 0.8. Factored would be
+		// max(0.2, 0.5) = 0.5.
+		{raster.BlendMax, 0.8},
+	} {
+		tgt := raster.NewColorTarget(n, n, dst)
+		fb := &raster.Framebuffer{Color: []*raster.ColorTarget{tgt}}
+		ps := pass(n, n)
+		ps.Blend = []raster.Blend{{
+			Enabled:  true,
+			SrcColor: raster.FactorSrcAlpha, DstColor: raster.FactorOne, ColorOp: c.op,
+			SrcAlpha: raster.FactorSrcAlpha, DstAlpha: raster.FactorOne, AlphaOp: c.op,
+		}}
+		raster.Draw(ps, fb, quadAt(0), constant(src))
+
+		if got := tgt.At(0, 0)[0]; got != c.want {
+			t.Errorf("%v with a source factor of src alpha gives %v, want %v: "+
+				"the factors are ignored for min and max on every target backend, "+
+				"so the operands are the unscaled source and destination",
+				c.op, got, c.want)
 		}
 	}
 }

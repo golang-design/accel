@@ -440,20 +440,39 @@ func Draw(ps PassState, fb *Framebuffer, tri [3]Vertex, shade func(Fragment) Sha
 	return written
 }
 
-// blend applies specs/035-cpu-rasterizer.md section 5's equation per channel:
-//
-//	dst' = op(F_src * src, F_dst * dst)
-//
+// blend applies specs/035-cpu-rasterizer.md section 5's equation per channel,
 // with colour and alpha carrying their own factors and operation.
 func blend(b Blend, src, dst [4]float32) [4]float32 {
 	var out [4]float32
 	for c := range 3 {
-		s := b.SrcColor.value(src, dst, c) * src[c]
-		d := b.DstColor.value(src, dst, c) * dst[c]
-		out[c] = b.ColorOp.apply(s, d)
+		out[c] = b.ColorOp.combine(b.SrcColor, b.DstColor, src, dst, c)
 	}
-	s := b.SrcAlpha.value(src, dst, 3) * src[3]
-	d := b.DstAlpha.value(src, dst, 3) * dst[3]
-	out[3] = b.AlphaOp.apply(s, d)
+	out[3] = b.AlphaOp.combine(b.SrcAlpha, b.DstAlpha, src, dst, 3)
 	return out
+}
+
+// combine is one channel of the blend equation:
+//
+//	dst' = op(F_src * src, F_dst * dst)
+//
+// except for min and max, which take the unscaled operands:
+//
+//	dst' = op(src, dst)
+//
+// **The factors are ignored for min and max on every target backend**, and this
+// rasterizer applied them until specs/062-backend-parity.md section 6.4's
+// enumeration compared the five operations against Metal one at a time. Vulkan
+// states it (VK_BLEND_OP_MIN and MAX "ignore the source and destination blend
+// factors"), D3D and Metal do the same, and it is the only reading that makes
+// the operation useful: a minimum of two values scaled by different factors is
+// not the minimum of anything a caller can name.
+//
+// The oracle was wrong and Metal was right, which is the case this comparison
+// exists for -- the CPU backend being the reference is a claim that has to be
+// checked rather than assumed.
+func (op BlendOp) combine(fs, fd BlendFactor, src, dst [4]float32, c int) float32 {
+	if op == BlendMin || op == BlendMax {
+		return op.apply(src[c], dst[c])
+	}
+	return op.apply(fs.value(src, dst, c)*src[c], fd.value(src, dst, c)*dst[c])
 }

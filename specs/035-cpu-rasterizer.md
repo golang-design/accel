@@ -161,6 +161,29 @@ $$
 C_{\text{dst}}' \;=\; \text{op}\big(F_{\text{src}} \cdot C_{\text{src}},\; F_{\text{dst}} \cdot C_{\text{dst}}\big)
 $$
 
+**Except for min and max, which ignore the factors** — added 2026-08-30, after
+[062](062-backend-parity.md) §6.4 compared the five operations against Metal one
+at a time and found this rasterizer applying them:
+
+$$
+C_{\text{dst}}' \;=\; \min\big(C_{\text{src}},\; C_{\text{dst}}\big)
+\quad\text{and}\quad
+C_{\text{dst}}' \;=\; \max\big(C_{\text{src}},\; C_{\text{dst}}\big)
+$$
+
+Vulkan states it outright (`VK_BLEND_OP_MIN` and `MAX` "ignore the source and
+destination blend factors"), and D3D and Metal do the same. It is also the only
+reading under which the operation means anything: a minimum of two values each
+scaled by a different factor is not the minimum of anything a caller can name.
+
+The rule matters more than the arithmetic does. **The oracle was wrong and the
+device was right**, which is what a differential is for and is not what one
+usually finds. `internal/raster`'s own test asserted the factored form, so the
+error was checked rather than merely unchecked — a reference written from the
+implementation reproduces the implementation. §6 below draws the line between
+what the oracle proves exactly and what it proves within a bound; this is the
+third case, where it proved something false exactly.
+
 **Early-Z is an observable, not an optimization, and this rasterizer never
 performs it.** [032](032-stage-abi.md) §4.2 records `Discards` in the stage
 record precisely so [033](033-render-api.md) does not promise an early-Z a
