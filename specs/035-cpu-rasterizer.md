@@ -434,3 +434,78 @@ value is what every existing test uses.
 §7.1's remaining CPU-only entry is stencil, which no caller can reach at all —
 [033](033-render-api.md) §2.1's state is unbuilt in the public API while
 `internal/raster` implements the whole of it.
+
+## 12. Three corpus entries, and two skips that could never fire — 2026-08-30
+
+§7's origin agreement, handoff, and depth-readback rows, built. Five of §7's
+eighteen entries had no test; these are three of the five.
+
+### 12.1 Origin agreement, and the assertion that earns its place
+
+§7 singles this entry out as the one that caught the predecessor's *actual*
+bug — `docs/conventions.md` records that its compute-path test passed while the
+texture path was mirrored. What existed here was
+`TestRowZeroIsTheTopRow`, which checks the rasterizer's own window mapping:
+one path, with nothing to disagree with.
+
+The two paths now differ in **how the data reaches the host**:
+
+| | |
+| --- | --- |
+| A | the device reads the texture at row 0 through a texel fetch, writes a buffer-backed attachment, and the host reads the *buffer* |
+| B | the host reads the *texture* and takes row 0 |
+
+A buffer has rows only by arithmetic, so path A has no origin convention to get
+wrong; path B does. Both assertions were confirmed by reinstating a fault, and
+**they catch different things**:
+
+- mirroring the host readback breaks `A == B`, because only path B goes through
+  it;
+- mirroring the *stored image* — which both paths then read identically —
+  leaves `A == B` intact and is caught only by the second assertion, that row
+  zero holds the **top** row's value. The failure reads
+  *"row zero holds row 4's value, so the origin is at the bottom on both
+  paths"*, which is the predecessor's bug stated in the test's own words.
+
+§7 asks for the fetch to be a **compute** one. It cannot be:
+[032](032-stage-abi.md) §5.1 refuses a texture in a compute kernel by name,
+because a dispatch's argument set cannot carry one. The fragment fetch crosses
+the same seam — the device's view of the texture's rows against the host's — and
+that substitution is recorded here rather than left as a silent divergence from
+the corpus table.
+
+### 12.2 The handoff is structural, and the values are there so it is not vacuous
+
+A G-buffer that goes to the host and back every frame produces an identical
+picture, so no value comparison can see it. The assertion is on `Graph.Nodes()`:
+two nodes, a pass then a dispatch, no copy node of any kind, and a hazard
+between them — without the edge the two could run in either order and be right
+by luck on a backend that happens to serialize. The values are asserted too,
+because "no transfer" is also satisfied by a graph that did nothing.
+
+The attachment is a **slot** rather than a texture for §12.1's reason: a compute
+kernel cannot read a texture, so the handoff a caller can build today is a pass
+writing buffer-backed bytes and a dispatch reading them.
+
+### 12.3 Depth readback names the refusal it routes around
+
+`Queue.ReadTexture` refuses every depth format, because a depth texture is
+device-private on macOS and the API declines to offer a path that works on one
+platform. The entry asserts **both** halves: that the direct read is refused,
+and that the recorded copy works and lands the window depth the convention
+predicts — clip $z = 0.25$ at $w = 1$ is $0.625$, neither of which is the depth
+clear, so a buffer the pass never wrote fails rather than matching by accident.
+
+### 12.4 Two skips that could never fire
+
+Both backends lower a texture copy, and Metal has lowered a texture attachment
+since [045](045-texture-attachments.md). Two skip guards were still watching for
+refusal text that **exists nowhere in the tree**: `skipUnlessLowered` here and
+`notLowered` in the texture round-trip. Each was written for the right reason —
+so the comparison would start on the first day it could — and each had outlived
+it silently.
+
+**A skip that can never fire is a comparison nobody notices is not happening**,
+which is one level up from the class §7.1 exists to catch. They are removed
+rather than left standing. The guard is worth writing; what is missing is
+anything that tells you when it has done its job.
