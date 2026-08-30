@@ -198,3 +198,13 @@ func checkRowZeroAgreement(t *testing.T, d *accel.Device, w, h int) {
 	}
 
 }
+
+// float32sOf reinterprets little-endian bytes as float32s.
+func float32sOf(raw []byte) []float32 {
+	out := make([]float32, len(raw)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
+			uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
+	}
+	return out
+}

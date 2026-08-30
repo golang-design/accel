@@ -163,9 +163,12 @@ func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 		Kind: accel.MemoryReadback, Label: "mipped",
 	})
 	if err != nil {
-		t.Skipf("a texture with two mips is still refused (%v), so a disjoint "+
-			"subresource cannot be constructed and the permission this test exists "+
-			"for is unreachable. It runs the day that changes", err)
+		// It self-activated on 2026-08-30 and the skip is gone with the
+		// refusal it watched for. A skip that can never fire is a comparison
+		// nobody notices is not happening, so a two-mip texture being refused
+		// again is a failure rather than a quiet pass.
+		t.Fatalf("a texture with two mips was refused, so the permission this test "+
+			"exists for is unreachable again: %v", err)
 	}
 	defer tex.Close()
 

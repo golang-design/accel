@@ -111,7 +111,7 @@ func TestRenderPassRefusals(t *testing.T) {
 			p.SetPipeline(solidPipeline(t, d))
 			p.Draw(accel.Draw{VertexCount: 3})
 		},
-		says: `is texture "target", which is 4x4, and the render area is 64x64`,
+		says: `is texture "target" at mip 0, which is 4x4, and the render area is 64x64`,
 	}, {
 		name: "a depth attachment too small for the area",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
@@ -124,7 +124,7 @@ func TestRenderPassRefusals(t *testing.T) {
 			p.SetPipeline(depthPipeline(t, d))
 			p.Draw(accel.Draw{VertexCount: 3})
 		},
-		says: `depth attachment is texture "shallow", which is 2x2`,
+		says: `depth attachment is texture "shallow" at mip 0, which is 2x2`,
 	}, {
 		name: "a depth clear outside the window range",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {

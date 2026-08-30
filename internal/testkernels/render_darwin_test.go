@@ -8,7 +8,6 @@ package testkernels_test
 
 import (
 	"math"
-	"strings"
 	"testing"
 
 	"golang.design/x/accel"
@@ -1415,71 +1414,20 @@ func TestAVertexStageFetchAgreesOnBothBackends(t *testing.T) {
 	t.Logf("%d of %d pixels covered on both", onCPU, w*h)
 }
 
-// A stage texture in a format this backend cannot spell is refused by name.
+// The refusal this file used to assert -- a stage texture in a format Metal
+// cannot spell -- is gone, and so is the test.
 //
-// The staged copy needs a Metal pixel format, and internal/metal maps five.
-// R32Float is a format accel offers and that map does not, so a caller who
-// binds one has to be told which format is missing rather than handed a
-// picture: the same rule metalPixelFormat was written for on the attachment
-// path, where hardcoding RGBA32Float had produced sixteen bytes per pixel for
-// a caller who asked for four.
+// It bound R32Float and required a named refusal. That was correct on
+// 2026-08-29 and wrong the next day: R32Float is renderable and sampleable in
+// the format table, Metal has it, and the backend refused it anyway.
+// specs/062-backend-parity.md section 6.2's enumeration found that, and every
+// sampleable format is now mapped -- so no format a caller can bind to a stage
+// reaches the refusal, and a test asserting one would be asserting against an
+// input nobody can construct.
 //
-// The texture is never rendered into, only fetched, because rendering into it
-// would be refused first and this is an assertion about the fetch.
-func TestAStageTextureFormatMetalCannotSpellIsRefused(t *testing.T) {
-	const w, h = 8, 8
-	d := openMetalDevice(t)
-
-	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.FullScreenVSStage,
-		Fragment: &testkernels.BlitFSStage,
-		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
-		Label:    "unspellable",
-	})
-	if err != nil {
-		t.Fatalf("pipeline: %v", err)
-	}
-	defer pipe.Close()
-
-	lut, err := d.NewTexture(accel.TextureDescriptor{
-		Format: accel.R32Float, Size: accel.Extent{Width: w, Height: h},
-		Usage: accel.TextureSampled | accel.TextureCopySrc | accel.TextureCopyDst,
-		Kind:  accel.MemoryReadback, Label: "lut",
-	})
-	if err != nil {
-		t.Fatalf("texture: %v", err)
-	}
-	defer lut.Close()
-	out := colourTexture(t, d, "out", w, h)
-
-	r := d.NewRecorder()
-	p := r.RenderPass(accel.RenderPassDescriptor{
-		Color: []accel.ColorAttachment{{View: wholeOf(t, out), Load: accel.LoadClear}},
-		Width: w, Height: h, Label: "unspellable",
-	})
-	p.SetPipeline(pipe)
-	p.SetTexture(0, wholeOf(t, lut))
-	p.Draw(accel.Draw{VertexCount: 3})
-
-	g, err := r.Build()
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	defer g.Close()
-
-	err = d.Queue().Submit(g).Wait()
-	if err == nil {
-		t.Fatal("a stage texture in R32Float was accepted; this backend has no pixel " +
-			"format for it, so the fetch would have read the wrong bytes")
-	}
-	// The format and the owning spec, so the next caller to want one is told
-	// what is missing rather than left to compare pictures.
-	for _, want := range []string{"R32Float", "045-texture-attachments.md"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
-	}
-}
+// What guards the mapping now is that enumeration rather than this: a format
+// added to the table without a Metal spelling fails there, by name, without
+// anyone remembering to write a case.
 
 // A discard on Metal drops the same fragments the oracle drops.
 //
@@ -1973,4 +1921,10 @@ func TestADeferredHandoffStaysOnDeviceOnMetal(t *testing.T) {
 // a convention bug is cheapest to catch in the commit that makes it reachable.
 func TestADepthAttachmentIsReadBackThroughATransferNodeOnMetal(t *testing.T) {
 	checkDepthReadbackThroughATransfer(t, openMetalDevice(t), 8, 8, 0.25, 0.625)
+}
+
+// Mip independence on Metal, where the staged texture the backend builds per
+// pass has to be the level's extent rather than the base's.
+func TestTwoMipsAreWrittenAndReadIndependentlyOnMetal(t *testing.T) {
+	checkMipsAreIndependent(t, openMetalDevice(t), 8, 8)
 }

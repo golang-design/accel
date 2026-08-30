@@ -237,10 +237,10 @@ func TestTextureValidationRows(t *testing.T) {
 			func(d *accel.TextureDescriptor) { d.Size.Width = 0 }},
 		{"a 3D extent", "every v0 operation addresses a single layer", false,
 			func(d *accel.TextureDescriptor) { d.Size.Depth = 4 }},
-		{"mip levels", "a view names a subresource but the allocation", false,
-			func(d *accel.TextureDescriptor) { d.MipLevels = 4 }},
-		{"array layers", "array layers", false,
-			func(d *accel.TextureDescriptor) { d.ArrayLayers = 6 }},
+		{"more mips than the extent has", "before an axis reaches one", false,
+			func(d *accel.TextureDescriptor) { d.MipLevels = 99 }},
+		{"more array layers than the device reports", "array layers", false,
+			func(d *accel.TextureDescriptor) { d.ArrayLayers = 1 << 20 }},
 		{"no usage", "declares no usage", false,
 			func(d *accel.TextureDescriptor) { d.Usage = 0 }},
 		{"storage on an sRGB format", "cannot be used as a storage image", false,
@@ -597,36 +597,100 @@ func TestNewTextureCanAskForReadbackMemory(t *testing.T) {
 	}
 }
 
-// A texture with mips above the base level is refused, and says why.
+// A mip chain is allocated, and each level's bytes are where the layout says.
 //
-// specs/045-texture-attachments.md §8.3 records this as the current state
-// rather than a permanent rule: [TextureView] names a subresource, so *binding*
-// one is no longer the obstacle, but sizing, copying and hazarding still
-// address a whole allocation. A texture whose mips could be created but not
-// sized, copied or hazarded would be worse than one that cannot be created.
+// specs/045-texture-attachments.md section 2 makes a view name a subresource
+// and section 8.6 turned that name into an address. The layout is levels in
+// order, array layers consecutive within a level, each level padding its rows
+// to the device's copy alignment.
 //
-// It is asserted here because two things depend on the refusal firing.
-// `TestADisjointSubresourceIsNotFeedback` skips on it and self-activates when it
-// lifts, so a refusal that quietly stopped firing would turn that marker into a
-// test asserting a permission against a texture nobody could build. And §8.3's
-// entry is a promise about what a caller meets.
-func TestMipsAboveTheBaseLevelAreRefused(t *testing.T) {
+// Asserted by arithmetic rather than by "it did not crash": a level whose
+// offset is wrong overlaps its neighbour, and every write to one silently
+// corrupts the other.
+func TestAMipChainIsLaidOutAsTheSpecStates(t *testing.T) {
 	d := openDevice(t)
+	const w, h, levels = 16, 8, 5
 
-	_, err := d.NewTexture(accel.TextureDescriptor{
-		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: 8, Height: 8},
-		MipLevels: 2, Usage: accel.TextureSampled | accel.TextureCopyDst,
-		Label: "mipped",
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: w, Height: h},
+		MipLevels: levels, Usage: accel.TextureSampled | accel.TextureRenderTarget |
+			accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind: accel.MemoryReadback, Label: "mipped",
 	})
-	if err == nil {
-		t.Fatal("a texture with two mip levels was created; the allocation is sized " +
-			"for one, so a copy or a hazard covering the whole texture is wrong by " +
-			"the size of every level after the base")
+	if err != nil {
+		t.Fatalf("a %d-level mip chain was refused: %v", levels, err)
 	}
-	for _, want := range []string{"mip level", "base"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refused with %q, which does not mention %q — a caller has to be "+
-				"able to tell this from an unsupported format", err, want)
+	defer tex.Close()
+
+	// Each level halves and never goes below one, so a 16x8 texture's levels
+	// are 16x8, 8x4, 4x2, 2x1, 1x1 -- the last two are where an off-by-one in
+	// the halving shows.
+	want := [levels][2]int{{16, 8}, {8, 4}, {4, 2}, {2, 1}, {1, 1}}
+	var end int
+	for m := range levels {
+		sub := tex.Subresource(m, 0)
+		if sub.Width != want[m][0] || sub.Height != want[m][1] {
+			t.Errorf("level %d is %dx%d, want %dx%d", m, sub.Width, sub.Height,
+				want[m][0], want[m][1])
 		}
+		if sub.Pitch < sub.Width*4 {
+			t.Errorf("level %d has pitch %d, which is below its %d tight bytes",
+				m, sub.Pitch, sub.Width*4)
+		}
+		if sub.Size != sub.Pitch*sub.Height {
+			t.Errorf("level %d is %d bytes and its pitch times its height is %d",
+				m, sub.Size, sub.Pitch*sub.Height)
+		}
+		// Levels are consecutive and do not overlap. This is the assertion an
+		// allocation bug fails; the extents above would pass with every level
+		// at offset zero.
+		if sub.Offset != end {
+			t.Errorf("level %d starts at %d and the previous level ended at %d",
+				m, sub.Offset, end)
+		}
+		end = sub.Offset + sub.Size
+	}
+	// And the allocation covers the whole chain rather than the base level.
+	if got := tex.Bytes(); got < end {
+		t.Errorf("the texture is %d bytes and its levels need %d: every level after "+
+			"the base would be outside the allocation", got, end)
+	}
+}
+
+// A view of each level names that level, and two views of different levels name
+// disjoint bytes.
+//
+// This is the property specs/033-render-api.md section 3.3's feedback rule is
+// stated in terms of -- "a different mip is a different subresource" -- and it
+// could not be constructed at all until a second level was admissible.
+func TestTwoMipsAreDisjointSubresources(t *testing.T) {
+	d := openDevice(t)
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: 8, Height: 8},
+		MipLevels: 2, Usage: accel.TextureSampled | accel.TextureRenderTarget,
+		Label: "two",
+	})
+	if err != nil {
+		t.Fatalf("texture: %v", err)
+	}
+	defer tex.Close()
+
+	base, err := tex.View(accel.TextureViewDesc{Mip: 0})
+	if err != nil {
+		t.Fatalf("base view: %v", err)
+	}
+	second, err := tex.View(accel.TextureViewDesc{Mip: 1})
+	if err != nil {
+		t.Fatalf("second view: %v", err)
+	}
+	a, b := base.Subresource(), second.Subresource()
+	if a.Offset+a.Size > b.Offset {
+		t.Errorf("mip 0 covers [%d, %d) and mip 1 starts at %d: they overlap, so the "+
+			"feedback rule and the barrier plan would disagree about whether a pass "+
+			"reading one and writing the other conflicts",
+			a.Offset, a.Offset+a.Size, b.Offset)
+	}
+	if a.Width == b.Width {
+		t.Errorf("both mips report width %d, so the view is not naming a level", a.Width)
 	}
 }
