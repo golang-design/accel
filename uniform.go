@@ -93,6 +93,64 @@ func (w *UniformWriter) U32(offset int, v uint32) {
 // rejected at device open rather than byte-swapped here, per spec 001 section
 // 3.5.
 
+// UniformReader reads a std140 block, and is what a generated decoder is
+// written against.
+//
+// The inverse of [UniformWriter], field for field and offset for offset. It
+// exists because specs/033-render-api.md section 4.1's recorded-offset channel
+// hands a *backend* std140 bytes, and the CPU rasterizer is a Go function that
+// needs the typed value back. Reflecting over the struct would be a second
+// layout implementation beside the generated one, and the two would disagree
+// eventually.
+type UniformReader struct {
+	src []byte
+	err error
+}
+
+// NewUniformReader reads a std140 block out of src.
+func NewUniformReader(src []byte) *UniformReader { return &UniformReader{src: src} }
+
+// Err reports the first failure, so a generated decoder can read every field
+// and check once.
+func (r *UniformReader) Err() error { return r.err }
+
+func (r *UniformReader) room(offset, n int) bool {
+	if r.err != nil {
+		return false
+	}
+	if offset < 0 || offset+n > len(r.src) {
+		r.err = fmt.Errorf("accel: uniform decode reads bytes [%d, %d) of a %d-byte "+
+			"block: the source is smaller than the codec's encoded size",
+			offset, offset+n, len(r.src))
+		return false
+	}
+	return true
+}
+
+// F32 reads a 32-bit float at a std140 offset.
+func (r *UniformReader) F32(offset int) float32 {
+	if !r.room(offset, 4) {
+		return 0
+	}
+	return math.Float32frombits(binary.LittleEndian.Uint32(r.src[offset:]))
+}
+
+// I32 reads a signed 32-bit integer at a std140 offset.
+func (r *UniformReader) I32(offset int) int32 {
+	if !r.room(offset, 4) {
+		return 0
+	}
+	return int32(binary.LittleEndian.Uint32(r.src[offset:]))
+}
+
+// U32 reads an unsigned 32-bit integer at a std140 offset.
+func (r *UniformReader) U32(offset int) uint32 {
+	if !r.room(offset, 4) {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(r.src[offset:])
+}
+
 // UniformBuffer owns a generated-codec uniform allocation.
 //
 // It exists so that a value may change between submissions without changing

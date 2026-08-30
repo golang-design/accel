@@ -291,6 +291,8 @@ func (e *emitter) stage(k *ir.Func) {
 			e.printf("\t\t{Name: %q, Type: %q, Index: %d, Size: %d, Encode: func(dst []byte, v any) error {\n",
 				u.Name, u.TypeName, i, u.Size)
 			e.printf("\t\t\treturn kernelabi.EncodeUniform(dst, v, %sCodec{}.Encode)\n", u.TypeName)
+			e.printf("\t\t}, Decode: func(src []byte) (any, error) {\n")
+			e.printf("\t\t\treturn %sCodec{}.Decode(src)\n", u.TypeName)
 			e.printf("\t\t}},\n")
 		}
 		e.printf("\t},\n")
@@ -757,6 +759,53 @@ func (e *emitter) codec(u *ir.Uniform) {
 	}
 	e.printf("\treturn w.Err()\n")
 	e.printf("}\n\n")
+
+	// The decoder, field for field and offset for offset with the encoder
+	// above. It exists because specs/033-render-api.md section 4.1's
+	// recorded-offset channel hands a backend std140 bytes and the CPU
+	// rasterizer needs the typed value back; reflecting over the Go struct
+	// would be a second layout implementation beside this one.
+	e.printf("// Decode reads a std140 block out of src.\n")
+	e.printf("//\n")
+	e.printf("// The inverse of Encode, generated from the same offsets, so the two\n")
+	e.printf("// cannot drift: a field added to the struct adds a line to both.\n")
+	e.printf("func (%s) Decode(src []byte) (%s, error) {\n", name, u.TypeName)
+	e.printf("\tvar value %s\n", u.TypeName)
+	e.printf("\tr := accel.NewUniformReader(src)\n")
+	for _, f := range u.Fields {
+		e.decodeField(f, "value."+f.Name, f.Offset, 1)
+	}
+	e.printf("\treturn value, r.Err()\n")
+	e.printf("}\n\n")
+}
+
+// decodeField emits the reads for one member, mirroring codecField.
+func (e *emitter) decodeField(f ir.UniformField, expr string, offset, depth int) {
+	read := func(off int, dst string) {
+		e.printf("%s%s = r.%s(%d)\n", indent(depth), dst, writerMethod(f.Scalar), off)
+	}
+
+	switch f.Kind {
+	case "scalar":
+		read(offset, expr)
+	case "vector":
+		for i := range f.Len {
+			read(offset+i*4, fmt.Sprintf("%s[%d]", expr, i))
+		}
+	case "array":
+		for i := range f.Len {
+			read(offset+i*f.Stride, fmt.Sprintf("%s[%d]", expr, i))
+		}
+	case "matrix":
+		for col := range f.Len {
+			base := offset + col*f.Stride
+			for row := range f.Len {
+				read(base+row*4, fmt.Sprintf("%s[%d][%d]", expr, col, row))
+			}
+		}
+	default:
+		e.fail("no decoder for uniform member %s of kind %q", f.Name, f.Kind)
+	}
 }
 
 // codecField emits the writes for one member.

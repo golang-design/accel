@@ -30,6 +30,20 @@ func (AttnDimsCodec) Encode(dst []byte, value AttnDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (AttnDimsCodec) Decode(src []byte) (AttnDims, error) {
+	var value AttnDims
+	r := accel.NewUniformReader(src)
+	value.QHeads = r.U32(0)
+	value.KVHeads = r.U32(4)
+	value.HeadDim = r.U32(8)
+	value.Scale = r.F32(12)
+	return value, r.Err()
+}
+
 // BallotDimsCodec is the generated std140 codec for BallotDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -46,6 +60,17 @@ func (BallotDimsCodec) Encode(dst []byte, value BallotDims) error {
 	w := accel.NewUniformWriter(dst)
 	w.U32(0, value.Below)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (BallotDimsCodec) Decode(src []byte) (BallotDims, error) {
+	var value BallotDims
+	r := accel.NewUniformReader(src)
+	value.Below = r.U32(0)
+	return value, r.Err()
 }
 
 // BatchedDimsCodec is the generated std140 codec for BatchedDims.
@@ -72,6 +97,23 @@ func (BatchedDimsCodec) Encode(dst []byte, value BatchedDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (BatchedDimsCodec) Decode(src []byte) (BatchedDims, error) {
+	var value BatchedDims
+	r := accel.NewUniformReader(src)
+	value.Batch = r.U32(0)
+	value.QHeads = r.U32(4)
+	value.KVHeads = r.U32(8)
+	value.HeadDim = r.U32(12)
+	value.Block = r.U32(16)
+	value.MaxPages = r.U32(20)
+	value.Scale = r.F32(24)
+	return value, r.Err()
+}
+
 // ShapeDimsCodec is the generated std140 codec for ShapeDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -88,6 +130,17 @@ func (ShapeDimsCodec) Encode(dst []byte, value ShapeDims) error {
 	w := accel.NewUniformWriter(dst)
 	w.U32(0, value.Stride)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (ShapeDimsCodec) Decode(src []byte) (ShapeDims, error) {
+	var value ShapeDims
+	r := accel.NewUniformReader(src)
+	value.Stride = r.U32(0)
+	return value, r.Err()
 }
 
 // ScaleParamsCodec is the generated std140 codec for ScaleParams.
@@ -108,6 +161,17 @@ func (ScaleParamsCodec) Encode(dst []byte, value ScaleParams) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (ScaleParamsCodec) Decode(src []byte) (ScaleParams, error) {
+	var value ScaleParams
+	r := accel.NewUniformReader(src)
+	value.Factor = r.F32(0)
+	return value, r.Err()
+}
+
 // RowParamsCodec is the generated std140 codec for RowParams.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -126,6 +190,19 @@ func (RowParamsCodec) Encode(dst []byte, value RowParams) error {
 	w.U32(4, value.Width)
 	w.U32(8, value.Capacity)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (RowParamsCodec) Decode(src []byte) (RowParams, error) {
+	var value RowParams
+	r := accel.NewUniformReader(src)
+	value.Rows = r.U32(0)
+	value.Width = r.U32(4)
+	value.Capacity = r.U32(8)
+	return value, r.Err()
 }
 
 // RoPEParamsCodec is the generated std140 codec for RoPEParams.
@@ -149,6 +226,20 @@ func (RoPEParamsCodec) Encode(dst []byte, value RoPEParams) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (RoPEParamsCodec) Decode(src []byte) (RoPEParams, error) {
+	var value RoPEParams
+	r := accel.NewUniformReader(src)
+	value.Rows = r.U32(0)
+	value.Width = r.U32(4)
+	value.RotaryDim = r.U32(8)
+	value.Base = r.F32(12)
+	return value, r.Err()
+}
+
 // BiasParamsCodec is the generated std140 codec for BiasParams.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -165,6 +256,17 @@ func (BiasParamsCodec) Encode(dst []byte, value BiasParams) error {
 	w := accel.NewUniformWriter(dst)
 	w.I32(0, value.Offset)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (BiasParamsCodec) Decode(src []byte) (BiasParams, error) {
+	var value BiasParams
+	r := accel.NewUniformReader(src)
+	value.Offset = r.I32(0)
+	return value, r.Err()
 }
 
 // GEMMDimsCodec is the generated std140 codec for GEMMDims.
@@ -187,6 +289,19 @@ func (GEMMDimsCodec) Encode(dst []byte, value GEMMDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (GEMMDimsCodec) Decode(src []byte) (GEMMDims, error) {
+	var value GEMMDims
+	r := accel.NewUniformReader(src)
+	value.M = r.U32(0)
+	value.N = r.U32(4)
+	value.K = r.U32(8)
+	return value, r.Err()
+}
+
 // GroupedDimsCodec is the generated std140 codec for GroupedDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -205,6 +320,19 @@ func (GroupedDimsCodec) Encode(dst []byte, value GroupedDims) error {
 	w.U32(4, value.K)
 	w.U32(8, value.N)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (GroupedDimsCodec) Decode(src []byte) (GroupedDims, error) {
+	var value GroupedDims
+	r := accel.NewUniformReader(src)
+	value.Experts = r.U32(0)
+	value.K = r.U32(4)
+	value.N = r.U32(8)
+	return value, r.Err()
 }
 
 // GroupedTiledDimsCodec is the generated std140 codec for GroupedTiledDims.
@@ -226,6 +354,20 @@ func (GroupedTiledDimsCodec) Encode(dst []byte, value GroupedTiledDims) error {
 	w.U32(8, value.K)
 	w.U32(12, value.N)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (GroupedTiledDimsCodec) Decode(src []byte) (GroupedTiledDims, error) {
+	var value GroupedTiledDims
+	r := accel.NewUniformReader(src)
+	value.Experts = r.U32(0)
+	value.Tokens = r.U32(4)
+	value.K = r.U32(8)
+	value.N = r.U32(12)
+	return value, r.Err()
 }
 
 // LinearDimsCodec is the generated std140 codec for LinearDims.
@@ -250,6 +392,21 @@ func (LinearDimsCodec) Encode(dst []byte, value LinearDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (LinearDimsCodec) Decode(src []byte) (LinearDims, error) {
+	var value LinearDims
+	r := accel.NewUniformReader(src)
+	value.Batch = r.U32(0)
+	value.Heads = r.U32(4)
+	value.KeyDim = r.U32(8)
+	value.ValueDim = r.U32(12)
+	value.GateHeads = r.U32(16)
+	return value, r.Err()
+}
+
 // RowDimsCodec is the generated std140 codec for RowDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -268,6 +425,19 @@ func (RowDimsCodec) Encode(dst []byte, value RowDims) error {
 	w.U32(4, value.Width)
 	w.F32(8, value.Eps)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (RowDimsCodec) Decode(src []byte) (RowDims, error) {
+	var value RowDims
+	r := accel.NewUniformReader(src)
+	value.Rows = r.U32(0)
+	value.Width = r.U32(4)
+	value.Eps = r.F32(8)
+	return value, r.Err()
 }
 
 // PackParamsCodec is the generated std140 codec for PackParams.
@@ -306,6 +476,35 @@ func (PackParamsCodec) Encode(dst []byte, value PackParams) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (PackParamsCodec) Decode(src []byte) (PackParams, error) {
+	var value PackParams
+	r := accel.NewUniformReader(src)
+	value.Rank = r.U32(0)
+	value.Count = r.U32(4)
+	value.Offset = r.U32(8)
+	value.Extent[0] = r.U32(16)
+	value.Extent[1] = r.U32(32)
+	value.Extent[2] = r.U32(48)
+	value.Extent[3] = r.U32(64)
+	value.Extent[4] = r.U32(80)
+	value.Extent[5] = r.U32(96)
+	value.Extent[6] = r.U32(112)
+	value.Extent[7] = r.U32(128)
+	value.Stride[0] = r.U32(144)
+	value.Stride[1] = r.U32(160)
+	value.Stride[2] = r.U32(176)
+	value.Stride[3] = r.U32(192)
+	value.Stride[4] = r.U32(208)
+	value.Stride[5] = r.U32(224)
+	value.Stride[6] = r.U32(240)
+	value.Stride[7] = r.U32(256)
+	return value, r.Err()
+}
+
 // PagedDimsCodec is the generated std140 codec for PagedDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -326,6 +525,21 @@ func (PagedDimsCodec) Encode(dst []byte, value PagedDims) error {
 	w.U32(12, value.Block)
 	w.F32(16, value.Scale)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (PagedDimsCodec) Decode(src []byte) (PagedDims, error) {
+	var value PagedDims
+	r := accel.NewUniformReader(src)
+	value.QHeads = r.U32(0)
+	value.KVHeads = r.U32(4)
+	value.HeadDim = r.U32(8)
+	value.Block = r.U32(12)
+	value.Scale = r.F32(16)
+	return value, r.Err()
 }
 
 // PagedPrefillDimsCodec is the generated std140 codec for PagedPrefillDims.
@@ -352,6 +566,23 @@ func (PagedPrefillDimsCodec) Encode(dst []byte, value PagedPrefillDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (PagedPrefillDimsCodec) Decode(src []byte) (PagedPrefillDims, error) {
+	var value PagedPrefillDims
+	r := accel.NewUniformReader(src)
+	value.QHeads = r.U32(0)
+	value.KVHeads = r.U32(4)
+	value.HeadDim = r.U32(8)
+	value.QSeq = r.U32(12)
+	value.Base = r.U32(16)
+	value.Block = r.U32(20)
+	value.Scale = r.F32(24)
+	return value, r.Err()
+}
+
 // PenaltyDimsCodec is the generated std140 codec for PenaltyDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -375,6 +606,22 @@ func (PenaltyDimsCodec) Encode(dst []byte, value PenaltyDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (PenaltyDimsCodec) Decode(src []byte) (PenaltyDims, error) {
+	var value PenaltyDims
+	r := accel.NewUniformReader(src)
+	value.Vocab = r.U32(0)
+	value.History = r.U32(4)
+	value.Count = r.U32(8)
+	value.Repetition = r.F32(12)
+	value.Presence = r.F32(16)
+	value.Frequency = r.F32(20)
+	return value, r.Err()
+}
+
 // PrefillDimsCodec is the generated std140 codec for PrefillDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -396,6 +643,22 @@ func (PrefillDimsCodec) Encode(dst []byte, value PrefillDims) error {
 	w.U32(16, value.Base)
 	w.F32(20, value.Scale)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (PrefillDimsCodec) Decode(src []byte) (PrefillDims, error) {
+	var value PrefillDims
+	r := accel.NewUniformReader(src)
+	value.QHeads = r.U32(0)
+	value.KVHeads = r.U32(4)
+	value.HeadDim = r.U32(8)
+	value.QSeq = r.U32(12)
+	value.Base = r.U32(16)
+	value.Scale = r.F32(20)
+	return value, r.Err()
 }
 
 // RaggedDimsCodec is the generated std140 codec for RaggedDims.
@@ -422,6 +685,23 @@ func (RaggedDimsCodec) Encode(dst []byte, value RaggedDims) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (RaggedDimsCodec) Decode(src []byte) (RaggedDims, error) {
+	var value RaggedDims
+	r := accel.NewUniformReader(src)
+	value.Batch = r.U32(0)
+	value.QHeads = r.U32(4)
+	value.KVHeads = r.U32(8)
+	value.HeadDim = r.U32(12)
+	value.Block = r.U32(16)
+	value.MaxPages = r.U32(20)
+	value.Scale = r.F32(24)
+	return value, r.Err()
+}
+
 // SampleDimsCodec is the generated std140 codec for SampleDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -439,6 +719,18 @@ func (SampleDimsCodec) Encode(dst []byte, value SampleDims) error {
 	w.U32(0, value.Vocab)
 	w.U32(4, value.Rows)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (SampleDimsCodec) Decode(src []byte) (SampleDims, error) {
+	var value SampleDims
+	r := accel.NewUniformReader(src)
+	value.Vocab = r.U32(0)
+	value.Rows = r.U32(4)
+	return value, r.Err()
 }
 
 // ParamsCodec is the generated std140 codec for Params.
@@ -479,6 +771,37 @@ func (ParamsCodec) Encode(dst []byte, value Params) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (ParamsCodec) Decode(src []byte) (Params, error) {
+	var value Params
+	r := accel.NewUniformReader(src)
+	value.Scale = r.F32(0)
+	value.Origin[0] = r.F32(16)
+	value.Origin[1] = r.F32(20)
+	value.Origin[2] = r.F32(24)
+	value.Steps = r.U32(28)
+	value.Inverse[0][0] = r.F32(32)
+	value.Inverse[0][1] = r.F32(36)
+	value.Inverse[0][2] = r.F32(40)
+	value.Inverse[0][3] = r.F32(44)
+	value.Inverse[1][0] = r.F32(48)
+	value.Inverse[1][1] = r.F32(52)
+	value.Inverse[1][2] = r.F32(56)
+	value.Inverse[1][3] = r.F32(60)
+	value.Inverse[2][0] = r.F32(64)
+	value.Inverse[2][1] = r.F32(68)
+	value.Inverse[2][2] = r.F32(72)
+	value.Inverse[2][3] = r.F32(76)
+	value.Inverse[3][0] = r.F32(80)
+	value.Inverse[3][1] = r.F32(84)
+	value.Inverse[3][2] = r.F32(88)
+	value.Inverse[3][3] = r.F32(92)
+	return value, r.Err()
+}
+
 // SegmentDimsCodec is the generated std140 codec for SegmentDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -495,6 +818,17 @@ func (SegmentDimsCodec) Encode(dst []byte, value SegmentDims) error {
 	w := accel.NewUniformWriter(dst)
 	w.U32(0, value.Rows)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (SegmentDimsCodec) Decode(src []byte) (SegmentDims, error) {
+	var value SegmentDims
+	r := accel.NewUniformReader(src)
+	value.Rows = r.U32(0)
+	return value, r.Err()
 }
 
 // StageTransformCodec is the generated std140 codec for StageTransform.
@@ -515,6 +849,19 @@ func (StageTransformCodec) Encode(dst []byte, value StageTransform) error {
 	w.F32(8, value.Offset[0])
 	w.F32(12, value.Offset[1])
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (StageTransformCodec) Decode(src []byte) (StageTransform, error) {
+	var value StageTransform
+	r := accel.NewUniformReader(src)
+	value.Scale = r.F32(0)
+	value.Offset[0] = r.F32(8)
+	value.Offset[1] = r.F32(12)
+	return value, r.Err()
 }
 
 // StageTintCodec is the generated std140 codec for StageTint.
@@ -538,6 +885,20 @@ func (StageTintCodec) Encode(dst []byte, value StageTint) error {
 	return w.Err()
 }
 
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (StageTintCodec) Decode(src []byte) (StageTint, error) {
+	var value StageTint
+	r := accel.NewUniformReader(src)
+	value.Colour[0] = r.F32(0)
+	value.Colour[1] = r.F32(4)
+	value.Colour[2] = r.F32(8)
+	value.Colour[3] = r.F32(12)
+	return value, r.Err()
+}
+
 // TopDimsCodec is the generated std140 codec for TopDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -556,6 +917,19 @@ func (TopDimsCodec) Encode(dst []byte, value TopDims) error {
 	w.U32(4, value.K)
 	w.F32(8, value.P)
 	return w.Err()
+}
+
+// Decode reads a std140 block out of src.
+//
+// The inverse of Encode, generated from the same offsets, so the two
+// cannot drift: a field added to the struct adds a line to both.
+func (TopDimsCodec) Decode(src []byte) (TopDims, error) {
+	var value TopDims
+	r := accel.NewUniformReader(src)
+	value.Vocab = r.U32(0)
+	value.K = r.U32(4)
+	value.P = r.F32(8)
+	return value, r.Err()
 }
 
 // clampIndexFlat is the generated lowering of the helper clampIndex.
@@ -11608,6 +11982,8 @@ var GeometryVSStage = accel.Stage{
 	Uniforms: []accel.StageUniform{
 		{Name: "xf", Type: "StageTransform", Index: 0, Size: 16, Encode: func(dst []byte, v any) error {
 			return kernelabi.EncodeUniform(dst, v, StageTransformCodec{}.Encode)
+		}, Decode: func(src []byte) (any, error) {
+			return StageTransformCodec{}.Decode(src)
 		}},
 	},
 	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
@@ -11978,6 +12354,8 @@ var ScaledVSStage = accel.Stage{
 	Uniforms: []accel.StageUniform{
 		{Name: "xf", Type: "StageTransform", Index: 0, Size: 16, Encode: func(dst []byte, v any) error {
 			return kernelabi.EncodeUniform(dst, v, StageTransformCodec{}.Encode)
+		}, Decode: func(src []byte) (any, error) {
+			return StageTransformCodec{}.Decode(src)
 		}},
 	},
 	RunVertex: func(v accel.Vertex, u []any, a [][]float32, tx []accel.Texture2D) (accel.Clip, []float32) {
@@ -12034,6 +12412,8 @@ var TintedFSStage = accel.Stage{
 	Uniforms: []accel.StageUniform{
 		{Name: "tint", Type: "StageTint", Index: 0, Size: 16, Encode: func(dst []byte, v any) error {
 			return kernelabi.EncodeUniform(dst, v, StageTintCodec{}.Encode)
+		}, Decode: func(src []byte) (any, error) {
+			return StageTintCodec{}.Decode(src)
 		}},
 	},
 	Outputs: []accel.StageOutput{

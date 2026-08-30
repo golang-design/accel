@@ -189,6 +189,12 @@ type resolvedNode struct {
 
 	// vertexTextures and fragmentTextures are each stage's bound textures,
 	// per draw and then per slot, decoded to the four floats a fetch returns.
+	// vertexUniformBytes and fragmentUniformBytes are each stage's
+	// buffer-bound by-value parameters, resolved to bytes here and decoded when
+	// the draw runs -- the same split the textures take, for the same reason.
+	vertexUniformBytes   [][][]byte
+	fragmentUniformBytes [][][]byte
+
 	vertexTextures   [][]boundTexture
 	fragmentTextures [][]boundTexture
 
@@ -659,6 +665,17 @@ func (e *executable) resolveRender(r *resolvedNode, n *driver.PlanNode) error {
 		if err != nil {
 			return fmt.Errorf("accel: node %d draw %d fragment texture: %w", n.ID, di, err)
 		}
+		vub, err := e.uniformBytes2(d.VertexUniformBuffers)
+		if err != nil {
+			return fmt.Errorf("accel: node %d draw %d vertex uniform buffer: %w", n.ID, di, err)
+		}
+		fub, err := e.uniformBytes2(d.FragmentUniformBuffers)
+		if err != nil {
+			return fmt.Errorf("accel: node %d draw %d fragment uniform buffer: %w", n.ID, di, err)
+		}
+		r.vertexUniformBytes = append(r.vertexUniformBytes, vub)
+		r.fragmentUniformBytes = append(r.fragmentUniformBytes, fub)
+
 		r.vertexTextures = append(r.vertexTextures, vt)
 		r.fragmentTextures = append(r.fragmentTextures, ft)
 
@@ -742,6 +759,30 @@ func decodeTextures(ts []boundTexture) ([]kernel.Texture2D, error) {
 			return nil, fmt.Errorf("slot %d: %w", i, err)
 		}
 		out[i] = kernel.NewTexture2D(t.desc.Width, t.desc.Height, texels)
+	}
+	return out, nil
+}
+
+// uniformBytes2 resolves each bound uniform block to bytes.
+//
+// Resolved with the rest of the node rather than read when the draw runs, the
+// way every other operand is: the bytes a submission reads are the ones bound
+// to the graph, and resolving them together is what keeps one submission
+// consistent.
+func (e *executable) uniformBytes2(ops []driver.Operand) ([][]byte, error) {
+	if len(ops) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, len(ops))
+	for i, o := range ops {
+		if o.Kind() == driver.OperandUnset {
+			continue
+		}
+		raw, err := e.bytes(o)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = raw
 	}
 	return out, nil
 }

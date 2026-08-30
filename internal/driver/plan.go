@@ -741,6 +741,17 @@ type RenderDraw struct {
 	VertexUniforms   []any
 	FragmentUniforms []any
 
+	// VertexUniformBuffers and FragmentUniformBuffers are the by-value
+	// parameters supplied from a buffer at a recorded offset, indexed by the
+	// stage's own uniform index. A zero-kind operand means that parameter came
+	// from the pass-state slice above instead.
+	//
+	// specs/033-render-api.md section 4.1: the offset is graph structure and the
+	// contents are variation, which is what lets a scene replay without being
+	// re-recorded.
+	VertexUniformBuffers   []Operand
+	FragmentUniformBuffers []Operand
+
 	// VertexTextures and FragmentTextures are the shader-visible textures each
 	// stage declares, in that stage's own dense texture order.
 	//

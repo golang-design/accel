@@ -154,6 +154,15 @@ type StageUniform struct {
 	// codec, which would disagree with it eventually.
 	Size   int
 	Encode func(dst []byte, v any) error
+
+	// Decode is Encode's inverse, and it is what lets a stage's by-value
+	// parameter come from a *buffer* rather than from pass state.
+	//
+	// specs/033-render-api.md section 4.1's recorded-offset channel hands a
+	// backend std140 bytes; this rasterizer is a Go function that needs the
+	// typed value. Generated from the same offsets as Encode, so the two cannot
+	// drift.
+	Decode func(src []byte) (any, error)
 }
 
 // StageTexture is one shader-visible texture a stage declares.

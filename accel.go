@@ -384,3 +384,17 @@ type noCopy struct{}
 
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
+
+// UniformStride is the byte distance between consecutive uniform blocks of this
+// size in one buffer.
+//
+// specs/033-render-api.md section 4.1: the alignment is a device limit, not
+// sizeof(T), and that is why the stride is computed rather than assumed. A
+// 68-byte transform on a device that aligns uniform offsets to 256 strides by
+// 256, and a caller who wrote i*68 gets garbage for every object but the first.
+func (d *Device) UniformStride(size int) int {
+	if size <= 0 {
+		return 0
+	}
+	return alignUp(size, d.info.Limits.MinUniformBufferOffsetAlignment)
+}

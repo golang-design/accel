@@ -539,6 +539,12 @@ type RenderPass struct {
 	// between draws would otherwise recompile mid-frame.
 	stencilRef uint8
 
+	// vertexUniformBufs and fragmentUniformBufs are the buffer-bound uniforms
+	// standing for draws recorded after them, indexed by the stage's own
+	// uniform index. A zero view means the parameter comes from pass state.
+	vertexUniformBufs   []BufferView
+	fragmentUniformBufs []BufferView
+
 	vertexUniforms   []any
 	fragmentUniforms []any
 
@@ -570,14 +576,25 @@ type RenderPass struct {
 
 // drawCall is one recorded draw.
 type drawCall struct {
-	pipeline   *RenderPipeline
-	vertices   int
-	instances  int
-	first      int
-	firstInst  int
-	vertexBuf  []BufferView
-	vertexU    []any
-	fragmentU  []any
+	pipeline  *RenderPipeline
+	vertices  int
+	instances int
+	first     int
+	firstInst int
+	vertexBuf []BufferView
+	vertexU   []any
+	fragmentU []any
+
+	// vertexUB and fragmentUB are the buffer-bound uniforms captured at record,
+	// which is what makes the *offset* structure and the contents variation.
+	vertexUB   []BufferView
+	fragmentUB []BufferView
+
+	// vertexUBAccess and fragmentUBAccess index the node's access list, -1
+	// where nothing is bound.
+	vertexUBAccess   []int
+	fragmentUBAccess []int
+
 	stencilRef uint8
 
 	// indexed and its buffer are set for an indexed draw. baseVertex applies to
@@ -841,6 +858,52 @@ func (p *RenderPass) SetTexture(slot int, v TextureView) {
 // already knows, and a value shared by several draws is written once. A draw
 // captures whatever is set when it is recorded, so a later call does not reach
 // back and change an earlier draw.
+// SetVertexUniformBuffer binds a stage's by-value parameter from a buffer at a
+// recorded byte offset, for every draw recorded after the call.
+//
+// specs/033-render-api.md section 4.1. This is the channel a scene of a thousand
+// objects replays through: the *offset* is structure and is baked into the
+// graph, and the contents are rewritten every frame through
+// specs/003-command-graph.md's first kind of variation. Nothing is re-recorded.
+//
+//	stride := d.UniformStride(codec)
+//	for i, obj := range objects {
+//	    p.SetVertexUniformBuffer(0, ub.ViewAt(i*stride))
+//	    p.Draw(...)
+//	}
+//
+// The stride is [Device.UniformStride] rather than the struct's size, because
+// the device's MinUniformBufferOffsetAlignment decides it: a 68-byte transform
+// on a device that aligns to 256 strides by 256, and a caller who wrote i*68
+// gets garbage for every object but the first.
+//
+// It overrides [RenderPass.SetVertexUniform] for the same index. Both channels
+// exist because they answer different questions -- one value for the pass, or
+// one per draw -- and a draw that set both would be ambiguous, so the buffer
+// wins and the by-value one is ignored for that parameter.
+func (p *RenderPass) SetVertexUniformBuffer(index int, v BufferView) {
+	p.setUniformBuffer(&p.vertexUniformBufs, "SetVertexUniformBuffer", index, v)
+}
+
+// SetFragmentUniformBuffer is [RenderPass.SetVertexUniformBuffer] for the
+// fragment stage, which indexes its uniforms from zero independently.
+func (p *RenderPass) SetFragmentUniformBuffer(index int, v BufferView) {
+	p.setUniformBuffer(&p.fragmentUniformBufs, "SetFragmentUniformBuffer", index, v)
+}
+
+func (p *RenderPass) setUniformBuffer(dst *[]BufferView, op string, index int, v BufferView) {
+	if index < 0 {
+		p.r.fail("RenderPass %q: %s at index %d; an index is a stage's uniform "+
+			"position and cannot be negative", p.desc.Label, op, index)
+		p.failed = true
+		return
+	}
+	for len(*dst) <= index {
+		*dst = append(*dst, BufferView{})
+	}
+	(*dst)[index] = v
+}
+
 // SetStencilReference supplies the stencil reference value for every draw
 // recorded after the call.
 //
@@ -1066,6 +1129,8 @@ func (p *RenderPass) record(d drawCall) {
 	d.pipeline = p.pipeline
 	d.vertexBuf = append([]BufferView(nil), p.buffers...)
 	d.stencilRef = p.stencilRef
+	d.vertexUB = append([]BufferView(nil), p.vertexUniformBufs...)
+	d.fragmentUB = append([]BufferView(nil), p.fragmentUniformBufs...)
 	d.vertexU = append([]any(nil), p.vertexUniforms...)
 	d.fragmentU = append([]any(nil), p.fragmentUniforms...)
 	d.textures = append([]TextureView(nil), p.textures...)
@@ -1096,6 +1161,13 @@ func (p *RenderPass) record(d drawCall) {
 			d.vertexAccess[i] = p.declareRead(v, fmt.Sprintf("vertex buffer %d", i), stageVertexInput)
 		}
 	}
+	// A buffer-bound uniform is read by the stage it belongs to, so it is
+	// declared like a vertex buffer rather than left to build: the graph has to
+	// order a pass that reads a transform against whatever wrote it, and an
+	// undeclared read is a hazard nobody sees.
+	d.vertexUBAccess = declareUniformReads(p, d.vertexUB, stageVertexShader, "vertex uniform")
+	d.fragmentUBAccess = declareUniformReads(p, d.fragmentUB, stageFragmentShader, "fragment uniform")
+
 	d.indexAccess = -1
 	if d.indexed {
 		d.indexAccess = p.declareRead(d.indexBuf, "index buffer", stageVertexInput)
@@ -1226,3 +1298,18 @@ func (p *RenderPass) addRead(a access, st stage) int {
 // Node is the graph node this pass records into, for a caller who wants to
 // name it in a diagnostic.
 func (p *RenderPass) Node() NodeID { return p.id }
+
+// declareUniformReads declares each bound uniform buffer as a read.
+func declareUniformReads(p *RenderPass, bufs []BufferView, st stage, what string) []int {
+	if len(bufs) == 0 {
+		return nil
+	}
+	out := make([]int, len(bufs))
+	for i, v := range bufs {
+		out[i] = -1
+		if v.Buffer != nil {
+			out[i] = p.declareRead(v, fmt.Sprintf("%s %d", what, i), st)
+		}
+	}
+	return out
+}

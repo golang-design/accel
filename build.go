@@ -523,15 +523,25 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 			rd.Masks = append(rd.Masks, uint8(t.Mask.resolved()))
 			rd.Blends = append(rd.Blends, driver.Blend(t.Blend))
 		}
-		vu, err := stageUniforms(p.desc.Label, i, pipe.desc.Vertex, d.vertexU, "SetVertexUniform")
+		vu, err := stageUniforms(p.desc.Label, i, pipe.desc.Vertex, d.vertexU, d.vertexUB,
+			"SetVertexUniform")
 		if err != nil {
 			return nil, err
 		}
-		fu, err := stageUniforms(p.desc.Label, i, pipe.desc.Fragment, d.fragmentU, "SetFragmentUniform")
+		fu, err := stageUniforms(p.desc.Label, i, pipe.desc.Fragment, d.fragmentU, d.fragmentUB,
+			"SetFragmentUniform")
 		if err != nil {
 			return nil, err
 		}
 		rd.VertexUniforms, rd.FragmentUniforms = vu, fu
+		if rd.VertexUniformBuffers, err = g.uniformBuffers(n, p, i, pipe.desc.Vertex,
+			d.vertexUB, d.vertexUBAccess); err != nil {
+			return nil, err
+		}
+		if rd.FragmentUniformBuffers, err = g.uniformBuffers(n, p, i, pipe.desc.Fragment,
+			d.fragmentUB, d.fragmentUBAccess); err != nil {
+			return nil, err
+		}
 		if err := g.textureOperands(n, p, i, pipe, d, &rd); err != nil {
 			return nil, err
 		}
@@ -554,7 +564,9 @@ func (g *Graph) renderOperands(n *recNode) (*driver.RenderPass, error) {
 // The type is compared by name, which is what the stage record carries. Two
 // identically named types in different packages would pass; the adapter's own
 // assertion catches that, and this catches the mistake a caller actually makes.
-func stageUniforms(label string, draw int, s *Stage, set []any, call string) ([]any, error) {
+func stageUniforms(label string, draw int, s *Stage, set []any, bufs []BufferView,
+	call string) ([]any, error) {
+	bound := func(i int) bool { return i < len(bufs) && bufs[i].Buffer != nil }
 	if len(s.Uniforms) == 0 {
 		for i, v := range set {
 			if v != nil {
@@ -567,10 +579,19 @@ func stageUniforms(label string, draw int, s *Stage, set []any, call string) ([]
 	}
 	out := make([]any, len(s.Uniforms))
 	for _, u := range s.Uniforms {
+		// A buffer-bound parameter has no by-value entry, and needs none: the
+		// backend reads the block out of the buffer. The two channels answer
+		// different questions -- one value for the pass, or one per draw -- and
+		// where both were set the buffer wins, which is what the doc on
+		// RenderPass.SetVertexUniformBuffer says.
+		if bound(u.Index) {
+			continue
+		}
 		if u.Index >= len(set) || set[u.Index] == nil {
 			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: %s takes %q at "+
-				"index %d and no value was set; call %s(%d, ...) before the draw",
-				label, draw, s.Name, u.Name, u.Index, call, u.Index)
+				"index %d and no value was set; call %s(%d, ...) or %sBuffer(%d, ...) "+
+				"before the draw",
+				label, draw, s.Name, u.Name, u.Index, call, u.Index, call, u.Index)
 		}
 		v := set[u.Index]
 		if got := reflect.TypeOf(v).Name(); got != u.Type {
@@ -973,4 +994,62 @@ func attachmentFeedback(p *RenderPass, v TextureView) (string, bool) {
 // the other is the feedback this refuses rather than a way around it.
 func sameSubresource(a, b TextureView) bool {
 	return a.Texture != nil && a.Texture == b.Texture && a.Mip == b.Mip && a.Layer == b.Layer
+}
+
+// uniformBuffers lowers a draw's buffer-bound by-value parameters.
+//
+// specs/033-render-api.md section 4.1. Each refusal is here because its absence
+// is silent: an offset the device cannot address, a range too short for the
+// block, and a parameter the stage does not declare all produce a stage reading
+// bytes that are not the ones the caller meant.
+func (g *Graph) uniformBuffers(n *recNode, p *RenderPass, draw int, s *Stage,
+	bufs []BufferView, access []int) ([]driver.Operand, error) {
+	if s == nil || len(bufs) == 0 {
+		return nil, nil
+	}
+	align := g.dev.info.Limits.MinUniformBufferOffsetAlignment
+	out := make([]driver.Operand, len(bufs))
+	for i, v := range bufs {
+		if v.Buffer == nil {
+			continue
+		}
+		u, ok := uniformAt(s, i)
+		if !ok {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: a uniform buffer "+
+				"is bound at index %d and %s declares no by-value parameter there",
+				p.desc.Label, draw, i, s.Name)
+		}
+		off, size := v.byteRange()
+		if align > 0 && off%align != 0 {
+			return nil, fmt.Errorf("%w: Build: render pass %q draw %d: the uniform buffer "+
+				"for %q begins at byte %d and %q aligns uniform offsets to %d",
+				ErrUsage, p.desc.Label, draw, u.Name, off, g.dev.info.Name, align)
+		}
+		if size < u.Size {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the uniform "+
+				"buffer for %q is %d bytes and the block is %d",
+				p.desc.Label, draw, u.Name, size, u.Size)
+		}
+		if i >= len(access) || access[i] < 0 {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the uniform "+
+				"buffer for %q was not declared as an access", p.desc.Label, draw, u.Name)
+		}
+		op, err := g.operand(n, n.accesses[access[i]])
+		if err != nil {
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d uniform %q: %w",
+				p.desc.Label, draw, u.Name, err)
+		}
+		out[i] = op
+	}
+	return out, nil
+}
+
+// uniformAt is the stage's by-value parameter at one index.
+func uniformAt(s *Stage, i int) (StageUniform, bool) {
+	for _, u := range s.Uniforms {
+		if u.Index == i {
+			return u, true
+		}
+	}
+	return StageUniform{}, false
 }

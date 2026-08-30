@@ -46,6 +46,7 @@ func renderPass(n *resolvedNode) (err error) {
 
 	for i, d := range rp.Draws {
 		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.vertexTextures[i], n.fragmentTextures[i],
+			n.vertexUniformBytes[i], n.fragmentUniformBytes[i],
 			n.indexBytes[i], n.indirectArgs[i]); err != nil {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
@@ -176,7 +177,8 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 }
 
 // drawOne rasterizes one draw.
-func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte, vbound, fbound []boundTexture, indices, args []byte) error {
+func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte,
+	vbound, fbound []boundTexture, vubytes, fubytes [][]byte, indices, args []byte) error {
 	// Decoded here, when the draw runs, rather than when the node was
 	// resolved: resolution happens before any node executes, so a pass
 	// fetching what an earlier pass drew would otherwise read the texture as
@@ -189,6 +191,19 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 	if err != nil {
 		return fmt.Errorf("accel: fragment texture: %w", err)
 	}
+	// A by-value parameter supplied from a buffer is decoded here, once per
+	// draw, into the slice the generated adapter indexes. specs/033-render-api.md
+	// section 4.1: the offset is graph structure and the bytes are variation, so
+	// this reads whatever the buffer holds at submission time.
+	vu, err := decodeUniformBuffers(d.Vertex, d.VertexUniforms, vubytes)
+	if err != nil {
+		return fmt.Errorf("accel: render pass %q vertex uniform: %w", rp.Label, err)
+	}
+	fu, err := decodeUniformBuffers(d.Fragment, d.FragmentUniforms, fubytes)
+	if err != nil {
+		return fmt.Errorf("accel: render pass %q fragment uniform: %w", rp.Label, err)
+	}
+
 	vs, fs := d.Vertex.RunVertex, d.Fragment.RunFragment
 	if vs == nil || fs == nil {
 		return fmt.Errorf("stage %q or %q carries no generated adapter, so this backend "+
@@ -233,7 +248,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 		// built-in because backends disagree about whether theirs reports the
 		// pre-offset or post-offset value; the ABI exposes only the one a
 		// caller can act on, and that is the pre-offset index.
-		pos, vary := vs(kernel.NewVertex(index, instance), d.VertexUniforms,
+		pos, vary := vs(kernel.NewVertex(index, instance), vu,
 			fetch(index+base, instance), vtex)
 		return raster.Vertex{
 			Pos:      raster.Clip{X: pos[0], Y: pos[1], Z: pos[2], W: pos[3]},
@@ -250,7 +265,7 @@ func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw,
 		frag := kernel.NewFragment(
 			kernel.Vec4{float32(f.X) + 0.5, float32(f.Y) + 0.5, f.Depth, f.InvW},
 			f.Front, &discarded)
-		out := fs(frag, d.FragmentUniforms, f.Varyings, ftex)
+		out := fs(frag, fu, f.Varyings, ftex)
 		return raster.Shaded{Discard: frag.Discarded(), Color: out}
 	}
 
@@ -557,4 +572,47 @@ func decodeAttribute(b []byte, width int, signed, normalized bool) float32 {
 	// table does not carry would be a plan this backend cannot read, and zero
 	// is the only answer that is not a guess at somebody's encoding.
 	return 0
+}
+
+// decodeUniformBuffers returns the by-value parameters a stage receives, with
+// each buffer-bound one decoded out of its block.
+//
+// The generated Decode rather than reflection over the Go struct, for the
+// reason StageUniform.Encode is carried at all: a second layout implementation
+// beside the generated codec would disagree with it eventually, and the
+// disagreement would be a stage reading a transform's fields in the wrong
+// order.
+func decodeUniformBuffers(s *kernel.Stage, set []any, bufs [][]byte) ([]any, error) {
+	if s == nil || len(bufs) == 0 {
+		return set, nil
+	}
+	out := append([]any(nil), set...)
+	for len(out) < len(s.Uniforms) {
+		out = append(out, nil)
+	}
+	for i, raw := range bufs {
+		if raw == nil {
+			continue
+		}
+		var u *kernel.StageUniform
+		for j := range s.Uniforms {
+			if s.Uniforms[j].Index == i {
+				u = &s.Uniforms[j]
+			}
+		}
+		if u == nil || u.Decode == nil {
+			return nil, fmt.Errorf("%s declares no decodable parameter at index %d",
+				s.Name, i)
+		}
+		if len(raw) < u.Size {
+			return nil, fmt.Errorf("the block for %q is %d bytes and %d were bound",
+				u.Name, u.Size, len(raw))
+		}
+		v, err := u.Decode(raw[:u.Size])
+		if err != nil {
+			return nil, fmt.Errorf("decoding %q: %w", u.Name, err)
+		}
+		out[i] = v
+	}
+	return out, nil
 }

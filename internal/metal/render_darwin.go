@@ -586,14 +586,49 @@ func metalWinding(f uint8) int {
 // either side: the uniform lands on vertex buffer zero and the stage reads
 // geometry as a transform.
 func (e *executable) bindStageUniforms(enc *mtl.RenderEncoder, d driver.RenderDraw) error {
+	// A buffer-bound parameter is a buffer binding at an offset, which is what
+	// specs/033-render-api.md section 4.1 says this mechanism has a native
+	// expression as on every target. It is bound *first* so a parameter that
+	// also has a pass-state value is overwritten by neither -- the by-value
+	// loop below skips an index the buffer covered.
+	bound := map[int]bool{}
+	for i, o := range d.VertexUniformBuffers {
+		if o.Kind() == driver.OperandUnset {
+			continue
+		}
+		op, err := e.operand(o)
+		if err != nil {
+			return fmt.Errorf("vertex uniform buffer %d: %w", i, err)
+		}
+		enc.SetVertexBuffer(op.buf, op.off, mslabi.StageUniformIndex(i))
+		bound[i] = true
+	}
 	for i, v := range d.VertexUniforms {
+		if bound[i] || v == nil {
+			continue
+		}
 		b, err := e.uniformBytes(d.Vertex, i, v)
 		if err != nil {
 			return fmt.Errorf("vertex uniform %d: %w", i, err)
 		}
 		enc.SetVertexBytes(b, mslabi.StageUniformIndex(i))
 	}
+	clear(bound)
+	for i, o := range d.FragmentUniformBuffers {
+		if o.Kind() == driver.OperandUnset {
+			continue
+		}
+		op, err := e.operand(o)
+		if err != nil {
+			return fmt.Errorf("fragment uniform buffer %d: %w", i, err)
+		}
+		enc.SetFragmentBuffer(op.buf, op.off, mslabi.StageFragmentUniformIndex(i))
+		bound[i] = true
+	}
 	for i, v := range d.FragmentUniforms {
+		if bound[i] || v == nil {
+			continue
+		}
 		b, err := e.uniformBytes(d.Fragment, i, v)
 		if err != nil {
 			return fmt.Errorf("fragment uniform %d: %w", i, err)
