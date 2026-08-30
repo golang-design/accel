@@ -9,6 +9,7 @@ package metal
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -164,6 +165,15 @@ type executable struct {
 
 	staging []*mtl.Buffer
 	stageAt []stagedWrite
+
+	// stagedAttachments counts the attachments that could not alias the
+	// caller's bytes and were copied through a private texture instead.
+	//
+	// A count rather than a refusal: the picture is the same either way, so the
+	// only way a caller learns they are paying for a frame of copies is if
+	// something says so. specs/045-texture-attachments.md section 11 records
+	// what puts an attachment on that path.
+	stagedAttachments atomic.Int64
 
 	// uniformBufs is scratch for one dispatch's encoded blocks, reused across
 	// submissions. Guarded by mu with everything else: it is written during

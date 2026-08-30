@@ -232,3 +232,20 @@ type Block interface {
 	// Free releases the allocation.
 	Free()
 }
+
+// AttachmentStager is implemented by a backend that may have to copy an
+// attachment through a private texture instead of rendering into the caller's
+// bytes directly.
+//
+// Optional, and host-side: the count is incremented while a pass is encoded, so
+// reading it costs nothing and is not gated on a graph asking for run
+// statistics the way a device-written counter is.
+//
+// It exists because the difference is invisible in the result. An attachment
+// that was staged produces the same picture as one that was aliased, and the
+// only thing separating them is a frame's worth of copies -- so a caller who
+// cares has to be able to ask, and a test asserting the fast path has to have
+// something to assert on.
+type AttachmentStager interface {
+	StagedAttachments() int64
+}

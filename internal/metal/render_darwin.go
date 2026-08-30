@@ -19,19 +19,31 @@ import (
 //
 // # The shape of it
 //
-// A pass renders into private textures and blits them into the caller's
-// buffers, because MTLRenderPassDescriptor takes textures and
-// specs/033-render-api.md makes an attachment a buffer view. Everything about
-// the texture is inside this file: the plan does not mention one and neither
-// does a caller.
+// An attachment is a buffer view, and a MTLRenderPassDescriptor takes textures,
+// so this file's job is to give Metal a texture that *is* the caller's bytes.
+// It does that by aliasing: MTLBuffer's newTextureWithDescriptor:offset:bytesPerRow:
+// returns a texture over a region of a buffer, so a pass renders straight into
+// the allocation the graph ordered every other node against.
 //
-// # What LoadKeep costs here
+// # What that deleted
 //
-// Keeping prior contents means the texture starts as what the buffer already
-// holds, which is a blit *in* before the pass as well as one out after it.
-// Clear and DontCare skip it. That is the one place the load action costs
-// something on this backend and it is the honest cost of a buffer-shaped
-// attachment: a texture-shaped one would keep its own contents for free.
+// It used to allocate a private texture per attachment per pass, blit the
+// caller's bytes in when the load action was Keep, render, and blit the result
+// back out. specs/042-surface-completion.md's review measured what that cost --
+// several full-frame round trips through system memory per frame at 1080p --
+// and noted that none of it was visible as a failing test, because the images
+// are identical either way. Aliasing removes the copies rather than making them
+// faster.
+//
+// # When it cannot alias
+//
+// Metal requires a linear texture's offset and row pitch to be multiples of
+// minimumLinearTextureAlignmentForPixelFormat. accel aligns every texture row
+// to MinBufferCopyRowPitchAlignment, which is 256 and a multiple of the 16 that
+// requires, so a texture attachment always qualifies. A *slot* attachment is a
+// buffer view at whatever offset the caller bound, so it may not, and the
+// staged path stays for that case -- counted, so a frame that is quietly paying
+// for it can be seen rather than guessed at.
 
 // renderPass encodes one pass and the blits around it.
 func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
@@ -44,7 +56,7 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 	// has between passes.
 	p.end()
 
-	targets, err := e.renderTargets(rp)
+	targets, err := e.renderTargets(p, rp)
 	if err != nil {
 		return err
 	}
@@ -69,10 +81,10 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		return fmt.Errorf("accel: node %d: %w", n.ID, err)
 	}
 
-	// LoadKeep is the only action that needs the buffer's current contents in
-	// the texture before the pass runs.
+	// An aliased attachment needs no copy in: the texture already *is* the
+	// buffer, so LoadKeep keeps what the buffer holds. A staged one still does.
 	for i, a := range targets.color {
-		if rp.ColorLoad[i] != driver.LoadKeep {
+		if !targets.colorStaged[i] || rp.ColorLoad[i] != driver.LoadKeep {
 			continue
 		}
 		op, err := e.operand(rp.Color[i])
@@ -80,6 +92,13 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 			return fmt.Errorf("accel: node %d colour attachment %d: %w", n.ID, i, err)
 		}
 		p.blit().CopyBufferToTexture(op.buf, op.off, a.Texture, rp.ColorPitch[i])
+	}
+	if targets.depth != nil && targets.depthStaged && rp.DepthLoad == driver.LoadKeep {
+		op, err := e.operand(*rp.Depth)
+		if err != nil {
+			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
+		}
+		p.blit().CopyBufferToTexture(op.buf, op.off, targets.depth.Texture, rp.DepthPitch)
 	}
 	p.end()
 
@@ -95,16 +114,18 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 	}
 	enc.End()
 
-	// And back into the buffers the graph ordered other nodes against. Writing
-	// anywhere else would make every inferred edge describe memory nobody
-	// wrote.
-	// A discarded attachment is not written back. Its contents are undefined
-	// after the pass, so the blit would be copying bytes nobody may read -- and
-	// on a depth attachment that is the whole buffer every frame, which is the
-	// saving specs/033-render-api.md names.
-	blit := p.blit()
+	// And back, for the staged ones only. An aliased attachment was written
+	// where the graph ordered every other node against it, so there is nowhere
+	// else for it to go.
+	//
+	// A discarded attachment is not written back either way. Its contents are
+	// undefined after the pass, so the copy would be moving bytes nobody may
+	// read -- and on a depth attachment that is the whole buffer every frame,
+	// which is the saving specs/033-render-api.md names. An *aliased* discarded
+	// attachment does not get that saving, because the pass wrote the bytes in
+	// place; what it gets instead is the copy never happening at all.
 	for i, a := range targets.color {
-		if rp.ColorStore[i] == driver.StoreDiscard {
+		if !targets.colorStaged[i] || rp.ColorStore[i] == driver.StoreDiscard {
 			continue
 		}
 		op, err := e.operand(rp.Color[i])
@@ -115,14 +136,14 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 		// already honours. The texture's rows are tight and the buffer's are
 		// padded to the device's alignment, so writing at the texture's pitch
 		// puts every row after the first in the wrong place.
-		blit.CopyTextureToBuffer(a.Texture, op.buf, op.off, rp.ColorPitch[i])
+		p.blit().CopyTextureToBuffer(a.Texture, op.buf, op.off, rp.ColorPitch[i])
 	}
-	if targets.depth != nil && rp.DepthStore != driver.StoreDiscard {
+	if targets.depth != nil && targets.depthStaged && rp.DepthStore != driver.StoreDiscard {
 		op, err := e.operand(*rp.Depth)
 		if err != nil {
 			return fmt.Errorf("accel: node %d depth attachment: %w", n.ID, err)
 		}
-		blit.CopyTextureToBuffer(targets.depth.Texture, op.buf, op.off, rp.DepthPitch)
+		p.blit().CopyTextureToBuffer(targets.depth.Texture, op.buf, op.off, rp.DepthPitch)
 	}
 	p.end()
 	return nil
@@ -134,32 +155,34 @@ type renderAttachments struct {
 	color    []mtl.RenderAttachment
 	depth    *mtl.RenderAttachment
 	textures []*mtl.Texture
+
+	// colorStaged and depthStaged mark the attachments that could not alias the
+	// caller's bytes and therefore need copies around the pass.
+	colorStaged []bool
+	depthStaged bool
 }
 
-// renderTargets allocates one texture per attachment.
+// renderTargets gives each attachment a texture over the caller's own bytes.
 //
-// Per pass rather than cached, which is a cost this backend pays until 033's
-// texture attachments arrive: a cache keyed by extent and format would be an
-// optimisation with no test behind it, and the lifetime rule would then be
-// this backend's rather than the graph's.
-func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, error) {
+// Aliased where the offset and pitch allow it, which for a texture attachment
+// is always: see the file comment. staged records the attachments that had to
+// fall back, so the pass knows which ones need copies around it.
+func (e *executable) renderTargets(p *pass, rp *driver.RenderPass) (renderAttachments, error) {
 	var out renderAttachments
-	for i := range rp.Color {
-		pf, err := metalPixelFormat(rp.ColorFormat[i])
-		if err != nil {
-			for _, done := range out.textures {
-				done.Close()
-			}
-			return renderAttachments{}, fmt.Errorf("colour attachment %d: %w", i, err)
+	fail := func(err error) (renderAttachments, error) {
+		for _, done := range out.textures {
+			done.Close()
 		}
-		t, err := e.dev.dev.NewRenderTarget(pf, rp.Width, rp.Height)
+		return renderAttachments{}, err
+	}
+	for i := range rp.Color {
+		t, staged, err := e.attachmentTexture(rp.Color[i], rp.ColorFormat[i],
+			rp.Width, rp.Height, rp.ColorPitch[i])
 		if err != nil {
-			for _, done := range out.textures {
-				done.Close()
-			}
-			return renderAttachments{}, fmt.Errorf("colour attachment %d: %w", i, err)
+			return fail(fmt.Errorf("colour attachment %d: %w", i, err))
 		}
 		out.textures = append(out.textures, t)
+		out.colorStaged = append(out.colorStaged, staged)
 		out.color = append(out.color, mtl.RenderAttachment{
 			Texture: t,
 			Load:    metalLoadAction(rp.ColorLoad[i]),
@@ -171,14 +194,13 @@ func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, er
 		})
 	}
 	if rp.Depth != nil {
-		t, err := e.dev.dev.NewRenderTarget(mtl.PixelFormatDepth32Float, rp.Width, rp.Height)
+		t, staged, err := e.attachmentTexture(*rp.Depth, driver.Depth32Float,
+			rp.Width, rp.Height, rp.DepthPitch)
 		if err != nil {
-			for _, done := range out.textures {
-				done.Close()
-			}
-			return renderAttachments{}, fmt.Errorf("depth attachment: %w", err)
+			return fail(fmt.Errorf("depth attachment: %w", err))
 		}
 		out.textures = append(out.textures, t)
+		out.depthStaged = staged
 		out.depth = &mtl.RenderAttachment{
 			Texture:    t,
 			Load:       metalLoadAction(rp.DepthLoad),
@@ -187,6 +209,59 @@ func (e *executable) renderTargets(rp *driver.RenderPass) (renderAttachments, er
 		}
 	}
 	return out, nil
+}
+
+// attachmentTexture aliases the operand's bytes, or stages them when Metal's
+// linear-texture alignment rules out aliasing.
+//
+// The second result says which happened, because the difference is a frame's
+// worth of copies and a caller paying for it should be able to find out.
+func (e *executable) attachmentTexture(o driver.Operand, f driver.Format, w, h, pitch int) (
+	*mtl.Texture, bool, error) {
+	pf, err := metalPixelFormat(f)
+	if err != nil {
+		return nil, false, err
+	}
+	op, err := e.operand(o)
+	if err != nil {
+		return nil, false, err
+	}
+	// A depth or stencil attachment can never alias, and asking is not a
+	// question with a safe answer: -minimumLinearTextureAlignmentForPixelFormat:
+	// *asserts* on a depth format -- "Linear textures do not support
+	// depth/stencil pixel formats" -- which aborts the process rather than
+	// returning zero. Measured, by asking it once.
+	align := 0
+	if !isDepthFormat(f) {
+		align = e.dev.dev.LinearTextureAlignment(pf)
+	}
+	if align > 0 && op.off%align == 0 && pitch%align == 0 {
+		t, err := op.buf.NewLinearTexture(e.dev.dev, pf, w, h, op.off, pitch,
+			mtl.TextureUsageRenderTarget|mtl.TextureUsageShaderRead)
+		if err == nil {
+			return t, false, nil
+		}
+		// Metal accepted the alignment and refused the texture anyway, which
+		// is a device saying something this code does not model. Stage rather
+		// than fail: the picture is the same either way and the count says the
+		// fast path was not taken.
+	}
+	t, err := e.dev.dev.NewRenderTarget(pf, w, h)
+	if err != nil {
+		return nil, false, err
+	}
+	e.stagedAttachments.Add(1)
+	return t, true, nil
+}
+
+// isDepthFormat reports whether a plan format carries a depth or stencil
+// aspect, which is what rules out aliasing it onto a buffer.
+func isDepthFormat(f driver.Format) bool {
+	switch f {
+	case driver.Depth32Float, driver.Depth24PlusStencil8, driver.Depth32FloatStencil8:
+		return true
+	}
+	return false
 }
 
 // metalPixelFormat maps a plan's attachment format onto Metal's.
@@ -750,3 +825,11 @@ func metalBlendOp(o driver.BlendOp) int {
 	}
 	return 0
 }
+
+// StagedAttachments reports how many attachments this executable copied through
+// a private texture rather than rendering into the caller's bytes.
+//
+// specs/045-texture-attachments.md section 11. Zero is the expected answer for
+// a colour-only pass; a depth attachment is always one, because Metal's linear
+// textures do not support depth or stencil formats.
+func (e *executable) StagedAttachments() int64 { return e.stagedAttachments.Load() }

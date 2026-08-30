@@ -763,6 +763,20 @@ func (f *Fence) Stats() (SubmissionStats, error) {
 type SubmissionStats struct {
 	Indirect []IndirectStats
 
+	// StagedAttachments is how many attachments the backend copied through a
+	// private texture instead of rendering into the caller's own bytes.
+	//
+	// It is not gated on [Recorder.CollectRunStats], because it is counted on
+	// the host while a pass is encoded rather than written by the device.
+	//
+	// Zero is the fast path. A backend that renders straight into the buffer
+	// the graph ordered every other node against pays no copies at all; one
+	// that cannot -- a depth attachment on Metal, or an attachment whose offset
+	// does not meet the device's linear-texture alignment -- pays a copy in and
+	// a copy out per pass. The two produce the same picture, which is why the
+	// count exists.
+	StagedAttachments int64
+
 	// Elapsed is how long the device took, and is zero unless the graph asked
 	// with [Recorder.CollectTimings] or the backend has no device clock.
 	//

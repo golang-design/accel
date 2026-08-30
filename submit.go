@@ -348,6 +348,12 @@ func (g *Graph) readStats() SubmissionStats {
 		}
 	}
 
+	// Counted on the host while the pass was encoded, so it costs nothing to
+	// read and is not part of the run-statistics opt-in.
+	if a, ok := g.exe.(driver.AttachmentStager); ok {
+		out.StagedAttachments = a.StagedAttachments()
+	}
+
 	if !g.collectStats {
 		return out
 	}

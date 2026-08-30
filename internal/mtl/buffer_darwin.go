@@ -37,8 +37,12 @@ func (m StorageMode) hostVisible() bool { return m == StorageShared }
 
 // Buffer is an MTLBuffer, retained.
 type Buffer struct {
-	id    objc.ID
-	size  int
+	id   objc.ID
+	size int
+
+	// mode is the storage mode the allocation was made with, kept because a
+	// texture aliased onto this buffer has to declare the same one.
+	mode  StorageMode
 	bytes []byte // nil for private storage
 }
 
@@ -55,7 +59,7 @@ func (d *Device) NewBuffer(size int, mode StorageMode) (*Buffer, error) {
 	if size <= 0 {
 		return nil, errSize(size)
 	}
-	b := &Buffer{size: size}
+	b := &Buffer{size: size, mode: mode}
 	withPool(func() {
 		b.id = d.id.Send(selNewBufferWithLength, uintptr(size), uintptr(mode))
 		if b.id == 0 {

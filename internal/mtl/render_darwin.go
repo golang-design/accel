@@ -65,6 +65,10 @@ const (
 
 	textureUsageShaderRead   = 1
 	textureUsageRenderTarget = 4
+
+	// Exported for a backend composing its own usage set for a linear texture.
+	TextureUsageShaderRead   = textureUsageShaderRead
+	TextureUsageRenderTarget = textureUsageRenderTarget
 	storageModePrivate       = 2
 
 	// The load and store actions, exported because a backend maps its own onto
@@ -121,6 +125,8 @@ func classes() {
 
 var (
 	selTexture2D      = objc.RegisterName("texture2DDescriptorWithPixelFormat:width:height:mipmapped:")
+	selNewTexFromBuf  = objc.RegisterName("newTextureWithDescriptor:offset:bytesPerRow:")
+	selLinearAlign    = objc.RegisterName("minimumLinearTextureAlignmentForPixelFormat:")
 	selSetTexUsage    = objc.RegisterName("setUsage:")
 	selSetTexStorage  = objc.RegisterName("setStorageMode:")
 	selNewTexture     = objc.RegisterName("newTextureWithDescriptor:")
@@ -232,6 +238,61 @@ func (d *Device) NewRenderTarget(format, w, h int) (*Texture, error) {
 // keeps them.
 func (d *Device) NewSampledTexture(format, w, h int) (*Texture, error) {
 	return d.newTexture2D(format, w, h, textureUsageShaderRead, "sampled texture")
+}
+
+// LinearTextureAlignment is the byte alignment a buffer-backed texture's offset
+// and row pitch must both meet for this format.
+//
+// Measured per device rather than assumed: it is 16 for RGBA32Float on the
+// machines this was written against, and it is a device property.
+func (d *Device) LinearTextureAlignment(format int) int {
+	classes()
+	n := 0
+	withPool(func() { n = int(d.id.Send(selLinearAlign, uintptr(format))) })
+	return n
+}
+
+// NewLinearTexture makes a texture that *is* a region of a buffer.
+//
+// No copy, in either direction: the texture and the buffer name the same bytes,
+// so a pass renders straight into the caller's allocation and a host read of
+// the buffer sees what the pass wrote. That is what lets specs/045 §8.1's
+// per-pass staging disappear rather than be optimised.
+//
+// offset and pitch must both be multiples of [Device.LinearTextureAlignment]
+// for the format; Metal returns nil otherwise, and so does this.
+func (b *Buffer) NewLinearTexture(d *Device, format, w, h, offset, pitch, usage int) (*Texture, error) {
+	classes()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("accel/mtl: a %dx%d linear texture", w, h)
+	}
+	bpp := bytesPerPixel(format)
+	if bpp == 0 {
+		return nil, fmt.Errorf("accel/mtl: pixel format %d has no known size", format)
+	}
+	if offset+pitch*h > b.size {
+		return nil, fmt.Errorf("accel/mtl: a %dx%d linear texture at offset %d with pitch "+
+			"%d needs %d bytes and the buffer is %d", w, h, offset, pitch,
+			offset+pitch*h, b.size)
+	}
+	t := &Texture{width: w, height: h, bpp: bpp}
+	withPool(func() {
+		desc := objc.ID(clsTextureDescriptor).Send(selTexture2D,
+			uintptr(format), uintptr(w), uintptr(h), uintptr(0))
+		if desc == 0 {
+			return
+		}
+		desc.Send(selSetTexUsage, uintptr(usage))
+		// The texture inherits the buffer's storage mode, and saying so keeps
+		// the descriptor from asking for a different one.
+		desc.Send(selSetTexStorage, uintptr(b.mode>>4))
+		t.id = b.id.Send(selNewTexFromBuf, desc, uintptr(offset), uintptr(pitch))
+	})
+	if t.id == 0 {
+		return nil, fmt.Errorf("accel/mtl: the device refused a %dx%d linear texture in "+
+			"pixel format %d at offset %d with pitch %d", w, h, format, offset, pitch)
+	}
+	return t, nil
 }
 
 // newTexture2D allocates one private 2D texture with the usage named.
