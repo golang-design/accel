@@ -668,6 +668,11 @@ produces a picture, and it is exactly the picture a caller gets when the
 technique they are building does nothing. It is
 [035](035-cpu-rasterizer.md) §7.1's last CPU-only entry until it lands.
 
+> **Closed 2026-08-30.** Option 1, planar, measured rather than chosen:
+> [045](045-texture-attachments.md) §12 records the round trip that decided it
+> and §12.2 the selectors that followed. The Metal half is built and 062's eight
+> stencil exclusions are deleted.
+>
 > **The layout question was predicted to dissolve and did not — 2026-08-30.**
 > [045](045-texture-attachments.md) §11 made a Metal colour attachment an alias
 > of the caller's buffer, on the argument that an attachment the graph owns

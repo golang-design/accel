@@ -699,3 +699,74 @@ read it:
 
 Forcing the aliasing off makes the first two fail and leaves every pixel
 comparison green, which is the whole argument for counting.
+
+## 12. Depth32FloatStencil8 is planar — 2026-08-30
+
+§11.3 said the layout question survived. This answers it, and the answer is
+[033](033-render-api.md) §10.5's option 1.
+
+**Measured, not chosen.** `internal/mtl`'s `TestOnlyOneAspectAtATimeRoundTrips`
+writes known bytes into a combined texture and reads them back:
+
+| copy | result |
+| --- | --- |
+| `DepthFromDepthStencil`, 4 bytes per texel | round-trips |
+| `StencilFromDepthStencil`, 1 byte per texel | round-trips |
+| no option, 8 bytes per texel | **does not** |
+
+Every one of the three *encodes* without complaint, which is why the encode test
+sits beside the round-trip one: Metal's validation layer is off, so surviving an
+encode says nothing about what the copy did.
+
+An interleaved layout has nowhere for two tightly packed planes to land. So the
+format is a depth plane of `float32` followed by a stencil plane of `uint8`,
+each with its own aligned row pitch:
+
+$$
+\text{size} = \big(\text{pitch}_{\text{depth}} + \text{pitch}_{\text{stencil}}\big)\cdot h,
+\qquad
+\text{stencil plane at } \text{offset} + \text{pitch}_{\text{depth}}\cdot h
+$$
+
+### 12.1 What the two pitches cost, and what they bought
+
+`Format.BytesPerPixel` is now the **depth plane's** 4, and `Format.Planar()` is
+what tells a caller to ask for the rest. `Device.StencilPlanePitch` gives the
+second, and `driver.RenderPass` carries both because a backend copying one
+aspect at a time needs each. That is the cost §10.5 named: this is the first
+format whose layout is not a texel stride.
+
+What it bought is that the CPU side got *simpler*. The interleaved version split
+and re-interleaved the aspects around a two-component texel codec; the planar
+one reads the depth plane through the ordinary single-component codec — bit for
+bit the same encoding as `Depth32Float` — and copies the stencil plane as bytes.
+There is no float round trip for the stencil aspect at all, so the clamp the
+interleaved encoding needed is gone with it.
+
+### 12.2 Metal's stencil half
+
+With the layout settled the rest was the selectors: the stencil attachment on
+the pass descriptor, `setStencilReferenceValue:` on the encoder, and front and
+back `MTLStencilDescriptor` on the depth-stencil state.
+
+**A combined format takes the same texture on both attachments** of the pass
+descriptor. A pass that set only the depth one runs with no stencil buffer,
+which is a stencil test that always passes rather than an error — the failure
+this project keeps recording, in a place a reader would not look for it.
+
+`metalStencilOp` is written out by name. Metal's order happens to match the
+plan's today; the colour write mask is why that is not a reason to cast.
+
+### 12.3 The parity surface closes
+
+All eight `StencilOp` members were excluded from
+[062](062-backend-parity.md)'s matrix with one reason — *"delete this entry when
+specs/033-render-api.md section 10.5's Metal half lands"*. It landed, the
+exclusion is deleted, and each operation now has a case.
+
+The operation is observed through a **second pass**, because a stencil buffer
+cannot be read back: the first pass marks with the operation under test, the
+second keeps only where the stencil equals what that operation should have left,
+and the second pass's coverage is the stencil buffer made into a picture the
+harness already compares. The clear is 3 and the reference 5, so `Keep`, `Zero`
+and `Decrement` are three different answers rather than two.
