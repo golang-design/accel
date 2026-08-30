@@ -1,6 +1,6 @@
 ---
 title: "Backend parity: an enumerated CPU/Metal agreement matrix, gated on every platform"
-status: drafted
+status: implemented
 layer: process
 depends_on:
   - 006-backends.md
@@ -208,9 +208,9 @@ is worse than an absent one, because it answers "is this covered" with a yes.
 | Test | What it actually does | Fix |
 | --- | --- | --- |
 | `TestEveryDTypeRoundTripsOnMetal` | enumerates 7 dtypes, checks Metal alone | §6.1 compares both |
-| `TestMetalRendersEachAttachmentFormat` | compares both backends over **2** of 9 colour formats, while named "each" | §6.2 covers the enumeration |
+| `TestMetalRendersEachAttachmentFormat` | compares both backends over **2** of 9 colour formats, while named "each" | superseded by §6.2, which covers all nine; the test is left in place |
 | `TestIndirectDispatchOnMetal` | clamp behaviour on Metal alone | compare the clamped count on both |
-| `TestContiguousRunsOnMetal` | Metal against a host reference | folded into §6.6 |
+| `TestContiguousRunsOnMetal` | Metal against a host reference | renamed to say so; the parity half is §6.6's |
 
 ## 7. Cost
 
@@ -244,3 +244,68 @@ costs pipeline compilation per combination.
 - Whether `Vulkan` joins as a third column here or gets its own spec. The
   registry is written with a device list rather than a pair, so the answer does
   not change the shape.
+
+## 10. Outcome — 2026-08-30
+
+Built, and it found four defects on its first runs. Three were fixed here; the
+fourth is the one this spec is about.
+
+**1. Five colour formats were renderable and refused.** The format table marks
+all nine renderable on every backend and `Device.FormatInfo` repeated it on
+Metal, but `R16Float`, `RG16Float`, `RGBA16Float`, `R32Float` and `RG32Float`
+had no `MTLPixelFormat` constant, so a pass declaring one was refused at
+submit. A device reporting a format renderable and then refusing it is a
+capability answer that is not true, which is what decision 6 exists to prevent.
+The two formats anyone had written a test for were the two that worked.
+
+**2. The CPU rasterizer applied blend factors to min and max.** Every target
+backend ignores them for those two operations; Vulkan states it outright. The
+rasterizer's own test asserted the factored form, so this was *checked* rather
+than merely unchecked -- a reference written from the implementation reproduces
+the implementation. **The oracle was wrong and the device was right**, which is
+the case a differential exists for and is not what one usually finds.
+[035](035-cpu-rasterizer.md) §5 now carries the exception.
+
+**3. A state read bound its producer's transient.** A tensor carrying both a
+node and a port is a read of a state some node advanced; `operand` took the
+node's transient, which is right only when that node's output *is* the state.
+`LinearAttention` writes the step's output to a transient and mutates the state
+beside it, so a reader of the advanced state was handed a buffer of a different
+size and read past the end of it -- a panic on the CPU backend and an
+out-of-bounds access with undefined results on a GPU. No test had ever read a
+linear-attention state back as a value.
+
+**4. The completeness gate was on one platform.** §6.7's move is done: the
+corpus table and its gate are out of the darwin file, so "which kernel has
+never been compared against Metal" is answerable on all three Tier 1 platforms.
+
+### What the gate holds today
+
+| Surface | Members | Cases | Excluded |
+| --- | --- | --- | --- |
+| `DType` | 7 | 7 | 0 |
+| `Format` | 13 | 10 | 3 |
+| `CompareFunc` | 8 | 8 | 0 |
+| `BlendFactor` | 10 | 10 | 0 |
+| `BlendOp` | 5 | 5 | 0 |
+| `ColorWriteMask` | 4 | 4 | 0 |
+| `Topology` | 5 | 2 | 3 |
+| `FrontFace` / `CullMode` | 2 / 3 | 2 / 3 | 0 |
+| `IndexFormat` | 2 | 2 | 0 |
+| `AttrFormat` | 5 | 3 | 2 |
+| `LoadOp` / `StoreOp` | 3 / 2 | 3 / 1 | 0 / 1 |
+| `StencilOp` | 8 | 0 | 8 |
+| tensor operators | 40 | 40 | 0 |
+
+The eight excluded stencil operations are the largest debt and they have one
+creditor: Metal does not lower stencil state. When
+[033](033-render-api.md) §10.5's Metal half lands, the eight entries go and the
+gate demands eight cases.
+
+### What is not done
+
+§6.8's texture-copy half. Metal lowers a buffer-to-texture copy, but the
+existing round trip in `texture_darwin_test.go` was written against a refusal
+and is another session's file at the time of writing. The colour formats are
+covered through the render path instead, which is the stronger comparison
+anyway -- it puts the encoding, not only the copy, in the result.
