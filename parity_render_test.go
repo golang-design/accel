@@ -5,6 +5,8 @@
 package accel_test
 
 import (
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"golang.design/x/accel"
@@ -138,6 +140,7 @@ func renderStateParityCases() []parityCase {
 	cases = append(cases, attachmentOpParityCases()...)
 	cases = append(cases, indexFormatParityCases()...)
 	cases = append(cases, attrFormatParityCases()...)
+	cases = append(cases, normalizedAttrParityCases()...)
 	return cases
 }
 
@@ -667,4 +670,173 @@ func attrFormatParityCases() []parityCase {
 			return append(readTargetBytes(t, d, albedo), readTargetBytes(t, d, normal)...)
 		},
 	}}
+}
+
+// normalizedAttrParityCases fetch each normalized integer attribute format.
+//
+// specs/033-render-api.md states the four conversions rather than leaving them
+// to a backend, and a stated conversion is one two backends can disagree about:
+// the divisor is exact, so a difference here is a backend using the wrong one
+// or reading the wrong width. Every case includes the extreme value -- 0 and
+// 255, or -128 and 127 -- because the signed clamp at -1 is one input value
+// wide and is invisible in a rendered normal.
+func normalizedAttrParityCases() []parityCase {
+	type spec struct {
+		name  string
+		f     accel.AttrFormat
+		size  int // bytes the attribute occupies
+		bytes func(vertex int) []byte
+	}
+
+	// Three vertices, and the per-vertex values walk the range so each case
+	// carries its own extremes.
+	u8 := func(v int, n int) []byte {
+		out := make([]byte, n)
+		for i := range out {
+			out[i] = []byte{0, 127, 255}[(v+i)%3]
+		}
+		return out
+	}
+	s8 := func(v int, n int) []byte {
+		out := make([]byte, n)
+		for i := range out {
+			out[i] = byte(int8([]int{-128, 0, 127}[(v+i)%3]))
+		}
+		return out
+	}
+	u16 := func(v int, n int) []byte {
+		out := make([]byte, n*2)
+		for i := range n {
+			binary.LittleEndian.PutUint16(out[i*2:],
+				[]uint16{0, 32767, 65535}[(v+i)%3])
+		}
+		return out
+	}
+	s16 := func(v int, n int) []byte {
+		out := make([]byte, n*2)
+		for i := range n {
+			binary.LittleEndian.PutUint16(out[i*2:],
+				uint16([]int16{-32768, 0, 32767}[(v+i)%3]))
+		}
+		return out
+	}
+
+	specs := []spec{
+		{"AttrUnorm8x2", accel.AttrUnorm8x2, 2, func(v int) []byte { return u8(v, 2) }},
+		{"AttrUnorm8x4", accel.AttrUnorm8x4, 4, func(v int) []byte { return u8(v, 4) }},
+		{"AttrSnorm8x2", accel.AttrSnorm8x2, 2, func(v int) []byte { return s8(v, 2) }},
+		{"AttrSnorm8x4", accel.AttrSnorm8x4, 4, func(v int) []byte { return s8(v, 4) }},
+		{"AttrUnorm16x2", accel.AttrUnorm16x2, 4, func(v int) []byte { return u16(v, 2) }},
+		{"AttrUnorm16x4", accel.AttrUnorm16x4, 8, func(v int) []byte { return u16(v, 4) }},
+		{"AttrSnorm16x2", accel.AttrSnorm16x2, 4, func(v int) []byte { return s16(v, 2) }},
+		{"AttrSnorm16x4", accel.AttrSnorm16x4, 8, func(v int) []byte { return s16(v, 4) }},
+	}
+
+	cases := make([]parityCase, 0, len(specs))
+	for _, sp := range specs {
+		cases = append(cases, parityCase{
+			name:   "a " + sp.name + " attribute fetched and interpolated",
+			covers: parity.Covers{"AttrFormat." + sp.name},
+			// The conversion itself is one exact division and must agree; what
+			// is bounded is the barycentric interpolation of the result, a sum
+			// of three products at values of at most one.
+			ceiling: parity.Ceiling{Abs: 4 * 1.1920929e-7,
+				Why: "the barycentric interpolation of the converted attribute; the conversion's divisor is exact"},
+			run: normalizedAttrRun(sp.name, sp.f, sp.size, sp.bytes),
+		})
+	}
+	return cases
+}
+
+// normalizedAttrRun draws one triangle whose second attribute is the format
+// under test, and reads the interpolated result back.
+//
+// Two- and four-component formats reach different stages, because a stage's
+// attribute parameter is [N]float32 and there is no stage that takes both
+// widths. The two-component path writes two attachments, which is what the
+// stage that reads a Vec2 attribute happens to do.
+func normalizedAttrRun(name string, f accel.AttrFormat, size int,
+	at func(int) []byte) func(*testing.T, *accel.Device) []byte {
+	// The attribute is padded to a four-byte boundary so the vertex buffer can
+	// be written as float32 words, which is the only width the queue takes.
+	stride := 12 + (size+3)/4*4
+	raw := make([]byte, 3*stride)
+	pos := [][3]float32{{-1, -1, 0.5}, {3, -1, 0.5}, {-1, 3, 0.5}}
+	for v := range 3 {
+		base := v * stride
+		for c := range 3 {
+			binary.LittleEndian.PutUint32(raw[base+c*4:], math.Float32bits(pos[v][c]))
+		}
+		copy(raw[base+12:], at(v))
+	}
+	verts := make([]float32, len(raw)/4)
+	for i := range verts {
+		verts[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+	}
+
+	layout := []accel.VertexBufferLayout{{
+		Stride: stride, StepMode: accel.StepVertex,
+		Attributes: []accel.VertexAttribute{
+			{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+			{Location: 1, Format: f, Offset: 12},
+		},
+	}}
+
+	return func(t *testing.T, d *accel.Device) []byte {
+		t.Helper()
+		desc := accel.RenderPipelineDescriptor{
+			VertexBuffers: layout, Label: "parity " + name,
+		}
+		targets := 1
+		if f.Components() == 4 {
+			desc.Vertex, desc.Fragment = &testkernels.AttributeVSStage, &testkernels.TintFSStage
+			desc.Targets = []accel.ColorTargetState{{Format: accel.RGBA32Float}}
+		} else {
+			desc.Vertex, desc.Fragment = &testkernels.GeometryVSStage, &testkernels.ShadeFSStage
+			desc.Targets = []accel.ColorTargetState{
+				{Format: accel.RGBA32Float}, {Format: accel.RGBA32Float},
+			}
+			targets = 2
+		}
+		pipe, err := d.NewRenderPipeline(desc)
+		if err != nil {
+			t.Fatalf("pipeline for %s: %v", name, err)
+		}
+		defer pipe.Close()
+
+		colour := make([]*accel.Texture, targets)
+		attachments := make([]accel.ColorAttachment, targets)
+		for i := range colour {
+			colour[i] = colourTarget(t, d, name, parityW, parityH)
+			attachments[i] = accel.ColorAttachment{
+				View: view(t, colour[i]), Load: accel.LoadClear, Clear: parityClear,
+			}
+		}
+		vb := newBuffer(t, d, "verts", len(verts),
+			accel.BufferStorage|accel.BufferCopyDst)
+		if err := d.Queue().WriteBuffer(vb, 0, verts); err != nil {
+			t.Fatalf("write verts for %s: %v", name, err)
+		}
+
+		r := d.NewRecorder()
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: attachments, Width: parityW, Height: parityH, Label: name,
+		})
+		p.SetPipeline(pipe)
+		p.SetVertexBuffer(0, whole(t, vb))
+		// AttributeVS takes no by-value parameter and GeometryVS does, and a
+		// uniform set for a stage that declares none is refused rather than
+		// ignored.
+		if f.Components() != 4 {
+			p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+		}
+		p.Draw(accel.Draw{VertexCount: 3})
+		submitOne(t, d, r)
+
+		var out []byte
+		for _, tex := range colour {
+			out = append(out, readTargetBytes(t, d, tex)...)
+		}
+		return out
+	}
 }
