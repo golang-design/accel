@@ -243,7 +243,7 @@ func TestTextureValidationRows(t *testing.T) {
 			func(d *accel.TextureDescriptor) { d.ArrayLayers = 1 << 20 }},
 		{"no usage", "declares no usage", false,
 			func(d *accel.TextureDescriptor) { d.Usage = 0 }},
-		{"storage on an sRGB format", "cannot be used as a storage image", false,
+		{"storage on an sRGB format", "not usable as a storage image", false,
 			func(d *accel.TextureDescriptor) {
 				d.Format = accel.RGBA8UnormSRGB
 				d.Usage = accel.TextureStorage

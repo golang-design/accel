@@ -1021,9 +1021,14 @@ func (g *Graph) uniformBuffers(n *recNode, p *RenderPass, draw int, s *Stage,
 		}
 		off, size := v.byteRange()
 		if align > 0 && off%align != 0 {
-			return nil, fmt.Errorf("%w: Build: render pass %q draw %d: the uniform buffer "+
-				"for %q begins at byte %d and %q aligns uniform offsets to %d",
-				ErrUsage, p.desc.Label, draw, u.Name, off, g.dev.info.Name, align)
+			// An *AlignmentError, because the number is the device's: Source
+			// names the Limits field so a caller strides by it rather than by
+			// what worked locally.
+			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the uniform buffer "+
+				"for %q: %w", p.desc.Label, draw, u.Name, &AlignmentError{
+				What: "uniform buffer offset", Resource: v.Buffer.desc.Label, Offset: off,
+				Required: align, Source: "MinUniformBufferOffsetAlignment",
+			})
 		}
 		if size < u.Size {
 			return nil, fmt.Errorf("accel: Build: render pass %q draw %d: the uniform "+

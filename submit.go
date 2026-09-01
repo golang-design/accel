@@ -59,7 +59,7 @@ func (g *Graph) checkBinding(b SlotBinding) (driver.SlotBinding, error) {
 			"elements and the view has %d", ErrTooSmall, d.Name, d.MinCount, v.Count)
 	}
 	// V6: the usage the access needs was declared when the buffer was created.
-	if err := g.checkUsage(d, v.Buffer); err != nil {
+	if err := g.checkUsage(d, b.Slot, v.Buffer); err != nil {
 		return driver.SlotBinding{}, err
 	}
 
@@ -72,7 +72,7 @@ func (g *Graph) checkBinding(b SlotBinding) (driver.SlotBinding, error) {
 	}, nil
 }
 
-func (g *Graph) checkUsage(d SlotDescriptor, b *Buffer) error {
+func (g *Graph) checkUsage(d SlotDescriptor, s Slot, b *Buffer) error {
 	var need BufferUsage
 	switch d.Kind {
 	case BindingUniformBuffer:
@@ -81,8 +81,11 @@ func (g *Graph) checkUsage(d SlotDescriptor, b *Buffer) error {
 		need = BufferStorage
 	}
 	if b.desc.Usage&need == 0 {
-		return fmt.Errorf("%w: accel: Bind %q: this slot needs %v and %q was created with %v",
-			ErrUsageMissing, d.Name, need, b.desc.Label, b.desc.Usage)
+		// Both classes hold: ErrUsageMissing is the taxonomy's V6, and the
+		// *UsageError carries the declaration a caller fixes and unwraps to
+		// ErrUsage. The node is not named, because a bind has none.
+		return fmt.Errorf("%w: Bind %q: this slot needs %v: %w", ErrUsageMissing, d.Name, need,
+			&UsageError{Resource: b.desc.Label, Slot: int(s), Declared: b.desc.Usage, Needed: need})
 	}
 	return nil
 }

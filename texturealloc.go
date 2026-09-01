@@ -87,19 +87,23 @@ func validateTexture(d *Device, desc TextureDescriptor) error {
 			"with it", ErrUsage, desc.Label)
 	}
 
+	// A *FormatError, so a caller can branch on the class and read which
+	// capability the format lacks; errors.Is on ErrFormat still holds through
+	// its Unwrap.
 	info := d.FormatInfo(desc.Format)
 	for _, c := range []struct {
 		usage TextureUsage
 		have  bool
-		what  string
+		want  string
 	}{
-		{TextureRenderTarget, info.Renderable, "used as a render target"},
-		{TextureSampled, info.Sampleable, "sampled"},
-		{TextureStorage, info.StorageRead || info.StorageWrite, "used as a storage image"},
+		{TextureRenderTarget, info.Renderable, "renderable"},
+		{TextureSampled, info.Sampleable, "sampleable"},
+		{TextureStorage, info.StorageRead || info.StorageWrite, "usable as a storage image"},
 	} {
 		if desc.Usage&c.usage != 0 && !c.have {
-			return fmt.Errorf("%w: texture %q: %v cannot be %s on %q",
-				ErrFormat, desc.Label, desc.Format, c.what, d.info.Name)
+			return &FormatError{
+				Format: desc.Format, Want: c.want, Device: d.info.Name, Resource: desc.Label,
+			}
 		}
 	}
 

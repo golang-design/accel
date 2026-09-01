@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/testkernels"
 )
 
 // TestErrorMessages pins the message surface of spec 001 section 9.
@@ -197,4 +198,107 @@ func TestTheTwoSelectionFailuresAreDistinct(t *testing.T) {
 	if errors.Is(err, accel.ErrPolicy) && errors.Is(err, accel.ErrNoAdapter) {
 		t.Errorf("the failure claims to be both selection classes: %v", err)
 	}
+}
+
+// The typed errors are produced where their documentation says they are.
+//
+// AlignmentError, UsageError and FormatError were documented as errors.As
+// targets and constructed nowhere: the sites wrapped the bare sentinel, so a
+// caller who followed the docs and asked for the Limits field, the declared
+// usage or the missing capability got nothing. errors.Is on the sentinels
+// keeps holding through each type's Unwrap, which is asserted beside errors.As
+// so the two cannot drift apart again.
+func TestTypedErrorsAreProducedWhereTheirDocsSay(t *testing.T) {
+	d := openDevice(t)
+
+	t.Run("AlignmentError from a misaligned uniform buffer offset", func(t *testing.T) {
+		align := d.Limits().MinUniformBufferOffsetAlignment
+		if align <= 1 {
+			t.Skip("every offset is aligned on this device")
+		}
+		codec := testkernels.StageTintCodec{}
+		// One byte in, which no device aligns to.
+		raw, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.U8, Count: 1 + codec.EncodedSize(),
+			Usage: accel.BufferUniform | accel.BufferCopyDst, Label: "tints",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer raw.Close()
+		view, err := raw.View(1, codec.EncodedSize())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+		pipe := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.TintedFSStage)
+		tex := renderTexture(t, d, "target", 4, 4)
+		r := d.NewRecorder()
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{View: whole2D(t, tex), Load: accel.LoadClear}},
+			Width: 4, Height: 4, Label: "misaligned",
+		})
+		p.SetPipeline(pipe)
+		p.SetFragmentUniformBuffer(0, view)
+		p.Draw(accel.Draw{VertexCount: 3})
+		_, err = r.Build()
+		if err == nil {
+			t.Fatal("a uniform buffer at byte 1 was accepted")
+		}
+		var ae *accel.AlignmentError
+		if !errors.As(err, &ae) {
+			t.Fatalf("Build returned %v, want an *AlignmentError", err)
+		}
+		if ae.Offset != 1 || ae.Required != align || ae.Source != "MinUniformBufferOffsetAlignment" ||
+			ae.Resource != "tints" {
+			t.Errorf("AlignmentError carries %+v; want byte 1 against %d from MinUniformBufferOffsetAlignment on \"tints\"", *ae, align)
+		}
+		if !errors.Is(err, accel.ErrAlignment) {
+			t.Errorf("the error does not unwrap to ErrAlignment: %v", err)
+		}
+	})
+
+	t.Run("UsageError from a bind without the slot's usage", func(t *testing.T) {
+		g, s := graphWithSlot(t, d, readSlot(4))
+		b := newBuffer(t, d, "b", 4, accel.BufferCopySrc)
+		err := g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)})
+		if err == nil {
+			t.Fatal("a buffer without BufferStorage was bound to a storage slot")
+		}
+		var ue *accel.UsageError
+		if !errors.As(err, &ue) {
+			t.Fatalf("Bind returned %v, want a *UsageError", err)
+		}
+		if ue.Resource != "b" || ue.Slot != int(s) || ue.Declared != accel.BufferCopySrc ||
+			ue.Needed != accel.BufferStorage {
+			t.Errorf("UsageError carries %+v; want \"b\" at slot %d declared %v needing %v",
+				*ue, s, accel.BufferCopySrc, accel.BufferStorage)
+		}
+		for _, sentinel := range []error{accel.ErrUsage, accel.ErrUsageMissing} {
+			if !errors.Is(err, sentinel) {
+				t.Errorf("the error does not unwrap to %v: %v", sentinel, err)
+			}
+		}
+	})
+
+	t.Run("FormatError from a usage the format cannot serve", func(t *testing.T) {
+		_, err := d.NewTexture(accel.TextureDescriptor{
+			Format: accel.RGBA8UnormSRGB, Size: accel.Extent{Width: 4, Height: 4},
+			Usage: accel.TextureStorage, Label: "srgb",
+		})
+		if err == nil {
+			t.Fatal("an sRGB storage image was created")
+		}
+		var fe *accel.FormatError
+		if !errors.As(err, &fe) {
+			t.Fatalf("NewTexture returned %v, want a *FormatError", err)
+		}
+		if fe.Format != accel.RGBA8UnormSRGB || fe.Device != d.Info().Name || fe.Resource != "srgb" ||
+			!strings.Contains(fe.Want, "storage") {
+			t.Errorf("FormatError carries %+v; want %v on %q for \"srgb\" about storage",
+				*fe, accel.RGBA8UnormSRGB, d.Info().Name)
+		}
+		if !errors.Is(err, accel.ErrFormat) {
+			t.Errorf("the error does not unwrap to ErrFormat: %v", err)
+		}
+	})
 }

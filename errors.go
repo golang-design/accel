@@ -193,8 +193,14 @@ type UsageError struct {
 func (e *UsageError) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "accel: ")
-	if e.Site != "" || e.Slot != 0 {
-		fmt.Fprintf(&b, "node %d slot %d ", e.Node, e.Slot)
+	// A node is named only with the call site that recorded it: a bind-time
+	// error knows the slot and not the node, and node 0 is a real node rather
+	// than "none".
+	if e.Site != "" {
+		fmt.Fprintf(&b, "node %d ", e.Node)
+	}
+	if e.Slot != 0 {
+		fmt.Fprintf(&b, "slot %d ", e.Slot)
 	}
 	fmt.Fprintf(&b, "binds buffer %q declared %v but needs %v", e.Resource, e.Declared, e.Needed)
 	if e.Site != "" {
@@ -207,12 +213,17 @@ func (e *UsageError) Unwrap() error { return ErrUsage }
 
 // FormatError reports a format the device cannot use as asked.
 type FormatError struct {
-	Format Format
-	Want   string // "renderable", "storage", "host copyable", "filterable"
-	Device string
+	Format   Format
+	Want     string // "renderable", "sampleable", "host copyable", "usable as a storage image"
+	Device   string
+	Resource string // the texture's label, when the format reached the device on one
 }
 
 func (e *FormatError) Error() string {
+	if e.Resource != "" {
+		return fmt.Sprintf("accel: texture %q: format %v is not %s on this device (%s)",
+			e.Resource, e.Format, e.Want, e.Device)
+	}
 	return fmt.Sprintf("accel: format %v is not %s on this device (%s)", e.Format, e.Want, e.Device)
 }
 
