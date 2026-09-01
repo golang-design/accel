@@ -344,15 +344,24 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 		// first, because picking one to write directly and copying to the rest
 		// would order the copies against a slot the graph already has a writer
 		// for, and a transient has exactly one.
-		v := r.Transient(accel.BufferDescriptor{
-			DType: n.out.dtype, Count: n.out.shape.Elements(),
-			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
-			Label: fmt.Sprintf("%s.%s.%d.fanout", p.label, n.op, i),
-		})
-		views[i] = v
-		result = accel.Binding{Buffer: v}
+		//
+		// Unless the node is in place: then its scratch is that one place, and
+		// the fan-out copies read it. See the in-place branch below.
+		if !n.inPlace {
+			v := r.Transient(accel.BufferDescriptor{
+				DType: n.out.dtype, Count: n.out.shape.Elements(),
+				Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+				Label: fmt.Sprintf("%s.%s.%d.fanout", p.label, n.op, i),
+			})
+			views[i] = v
+			result = accel.Binding{Buffer: v}
+		}
 		fanout = names
-	} else {
+	} else if !n.inPlace {
+		// An in-place node's result is its scratch. Allocating a transient
+		// here as well made a RoPE feeding another operator cost two
+		// intermediates for one value, and the second was bound by nothing:
+		// planned, aliased, and reported in Memory as if something read it.
 		v := r.Transient(accel.BufferDescriptor{
 			DType: n.out.dtype, Count: n.out.shape.Elements(),
 			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
@@ -443,10 +452,10 @@ func (p *Plan) lowerNode(r *accel.Recorder, n *node, views []accel.BufferView,
 	}
 
 	if inPlaceResult != nil {
-		// The scratch buffer holds the answer. If the caller named this value
-		// it has to reach their buffer; if not, the scratch *is* the value and
-		// the consumers read it.
-		if inPlaceResult.Buffer.Buffer == nil && inPlaceResult.Slot != 0 {
+		// The scratch buffer holds the answer. If exactly one port named this
+		// value it has to reach that slot; otherwise the scratch *is* the
+		// value, and the consumers -- or the fan-out copies below -- read it.
+		if inPlaceResult.Slot != 0 {
 			r.CopyToSlot(inPlaceResult.Slot, 0, inPlaceCount, inPlaceScratch)
 		}
 		views[i] = inPlaceScratch
