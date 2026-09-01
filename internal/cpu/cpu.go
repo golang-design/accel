@@ -167,12 +167,14 @@ func (d *device) Lost() error {
 	return d.lost
 }
 
-// beginSubmission counts a submission and reports the device lost once the
-// injected count is reached.
+// beginSubmission counts an accepted submission and reports the device lost
+// once the injected count is reached.
 //
-// The count is taken before the check so that LoseAtSubmission of one loses the
-// first submission rather than the second, which is what a test asking for
-// "lose immediately" means.
+// Accepted: an executable calls it after every refusal of its own, so a submit
+// turned away for a closed executable or an unbound slot does not advance the
+// count. The count is taken before the check so that LoseAtSubmission of one
+// loses the first submission rather than the second, which is what a test
+// asking for "lose immediately" means.
 func (d *device) beginSubmission() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()

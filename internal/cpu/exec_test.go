@@ -6,6 +6,7 @@ package cpu_test
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -398,6 +399,49 @@ func TestClosedExecutableRefusesEverything(t *testing.T) {
 	}
 	if err := exe.Rebind([]driver.SlotBinding{{Slot: 1, Block: dst, Size: 16}}); err == nil {
 		t.Error("rebind after close should fail")
+	}
+}
+
+// A refused submission does not count towards the injected loss.
+//
+// LoseAtSubmission counts submissions the device accepted: a caller asking to
+// lose the second submission means the second one that ran. A submit refused
+// for a closed executable, a busy one, or an unbound slot never reached the
+// device, and counting it would lose a different submission from the one the
+// test named.
+func TestARefusedSubmissionDoesNotAdvanceTheLossCounter(t *testing.T) {
+	dev, c := open(t, cpu.Options{LoseAtSubmission: 2})
+	dst := block(t, dev, driver.MemoryShared, 16)
+	plan := &driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpHostWrite, Dst: blockOperand(t, dst, 0, 4), Data: []byte{1, 2, 3, 4},
+	}}}
+
+	closed, err := c.Compile(plan)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := closed.Submit(); err == nil {
+		t.Fatal("submit after close should be refused")
+	}
+
+	exe, err := c.Compile(plan)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("the first accepted submission should run, got %v: the refused one "+
+			"was counted", err)
+	}
+	if err := f.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if _, err := exe.Submit(); !errors.Is(err, driver.ErrDeviceLost) {
+		t.Fatalf("the second accepted submission should report loss, got %v", err)
 	}
 }
 

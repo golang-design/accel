@@ -113,14 +113,6 @@ func (e *executable) Rebind(binds []driver.SlotBinding) error {
 }
 
 func (e *executable) Submit() (driver.Fence, error) {
-	if err := e.dev.beginSubmission(); err != nil {
-		// A lost device is reported here rather than through a fence that never
-		// signals. Spec 001 section 7.4: every subsequent call returns the loss,
-		// and every outstanding fence is signalled with it, so nothing waits
-		// forever.
-		return nil, err
-	}
-
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
@@ -135,6 +127,18 @@ func (e *executable) Submit() (driver.Fence, error) {
 	// no window in which half the plan sees the new binding.
 	nodes, err := e.resolve()
 	if err != nil {
+		e.mu.Unlock()
+		return nil, err
+	}
+	// The device counts this submission only once every refusal above is past:
+	// LoseAtSubmission names the n-th submission that ran, and a refused one
+	// never reached the device.
+	//
+	// A lost device is reported here rather than through a fence that never
+	// signals. Spec 001 section 7.4: every subsequent call returns the loss,
+	// and every outstanding fence is signalled with it, so nothing waits
+	// forever.
+	if err := e.dev.beginSubmission(); err != nil {
 		e.mu.Unlock()
 		return nil, err
 	}
