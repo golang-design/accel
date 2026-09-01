@@ -52,6 +52,10 @@ type executable struct {
 	// elapsed is the last timed submission's duration.
 	elapsed time.Duration
 
+	// stats is the last submission's indirect counters, when the plan asked for
+	// them. One slice reused, because only one submission runs at a time.
+	stats []driver.IndirectStat
+
 	// cur is the most recent submission, and "in flight" is derived from it
 	// rather than tracked alongside it.
 	//
@@ -61,10 +65,6 @@ type executable struct {
 	// refused by a flag nobody had got round to clearing. Deriving the answer
 	// from the fence removes the disagreement rather than ordering it, which is
 	// the difference between a fixed race and a narrower one.
-	// stats is the last submission's indirect counters, when the plan asked for
-	// them. One slice reused, because only one submission runs at a time.
-	stats []driver.IndirectStat
-
 	cur *fence
 
 	// scratch is the resolved node list, reused across submissions.
@@ -219,10 +219,11 @@ type resolvedNode struct {
 	// graph records what to run, not how the backend chooses to run it.
 	shuffleSeed uint64
 
-	// indirect is the count read from the device at submission, already
-	// clamped, or nil for a direct dispatch. indirectStats is where the actual
-	// and the clamp flag are recorded when a caller asked for them.
-	indirect      *kernel.ID3
+	// indirectSrc is the device memory the workgroup count is read from when
+	// the node runs, or nil for a direct dispatch. It is read then rather than
+	// at resolution because an earlier node of the same submission may write
+	// it. indirectStats is where the actual count and the clamp flag are
+	// recorded when a caller asked for them.
 	indirectSrc   []byte
 	indirectMax   kernel.ID3
 	indirectStats *driver.IndirectStat
@@ -564,12 +565,6 @@ func dispatch(n *resolvedNode) (err error) {
 	return kernel.Dispatch(k, count, n.args)
 }
 
-// IndirectStats reports the last completed submission's counts.
-//
-// It is a separate interface rather than a method every executable carries,
-// because a backend that cannot produce them should be discovered by assertion
-// rather than by a method that fails when called
-// (specs/006-backends.md section 1).
 // Elapsed reports how long the last timed submission took.
 //
 // See the note where it is measured: on this backend the device is a goroutine,
@@ -580,6 +575,12 @@ func (e *executable) Elapsed() time.Duration {
 	return e.elapsed
 }
 
+// IndirectStats reports the last completed submission's counts.
+//
+// It is a separate interface rather than a method every executable carries,
+// because a backend that cannot produce them should be discovered by assertion
+// rather than by a method that fails when called
+// (specs/006-backends.md section 1).
 func (e *executable) IndirectStats() []driver.IndirectStat {
 	e.mu.Lock()
 	defer e.mu.Unlock()
