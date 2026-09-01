@@ -5,6 +5,7 @@
 package accel
 
 import (
+	"slices"
 	"testing"
 
 	"golang.design/x/accel/internal/kernel"
@@ -233,5 +234,47 @@ func TestAFetchedTextureOrdersThePassAgainstItsWriter(t *testing.T) {
 	if !found {
 		t.Fatalf("the pass that fetches the texture does not depend on the pass that "+
 			"wrote it, so the two are free to run in either order; edges: %v", g.Edges())
+	}
+}
+
+// A barrier emitted for a texture hazard names the texture.
+//
+// The reason is what a caller asking why a graph does not overlap reads, and
+// labelOf knew buffers and slots only, so every texture hazard was "an unknown
+// resource". The same recording as the test above: the barrier before the
+// fetching pass exists for the write to src.
+func TestATextureHazardNamesTheTexture(t *testing.T) {
+	d := stageTestDevice(t)
+	fs := texturedStage("fetching", kernel.StageFragment, 0, true)
+
+	r := d.NewRecorder()
+	target := stageTestTarget(t, d, "target", 4, 4, RGBA32Float)
+	src := stageTestTarget(t, d, "src", 4, 4, RGBA32Float)
+	written := r.RenderPass(RenderPassDescriptor{
+		Color: []ColorAttachment{{View: src, Load: LoadClear}},
+		Width: 4, Height: 4, Label: "writer",
+	})
+	written.SetPipeline(stageTestPipeline(t, d))
+	written.SetVertexBuffer(0, stageTestBuffer(t, d, "wvb", 9))
+	written.Draw(Draw{VertexCount: 3})
+	p := texturePass(t, r, d, texturePipeline(t, d, &stageTestVS, &fs), target, src)
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+
+	b := g.barriersBefore[p.Node()]
+	if b == nil {
+		t.Fatal("no barrier before the pass that fetches what the previous pass wrote")
+	}
+	var labels []string
+	for _, reason := range b.reasons {
+		labels = append(labels, reason.label)
+	}
+	if !slices.Contains(labels, "src") {
+		t.Errorf("the barrier's reasons name %q, and none of them is the texture %q",
+			labels, "src")
 	}
 }

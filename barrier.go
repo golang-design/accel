@@ -198,6 +198,9 @@ func (g *Graph) labelOf(r resourceRef) string {
 	if r.buf != nil {
 		return r.buf.desc.Label
 	}
+	if r.tex != nil {
+		return r.tex.desc.Label
+	}
 	if int(r.slot) <= len(g.slots) && r.slot >= 1 {
 		return g.slots[r.slot-1].Name
 	}
