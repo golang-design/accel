@@ -69,7 +69,7 @@ func (Adapter) Open(opts any) (driver.Device, error) {
 		info:         info,
 		subgroupSize: subgroupSize,
 		shuffleSeed:  o.ShuffleSeed,
-		diagnostics:  o.Mode != Strict,
+		diagnostics:  !o.NoDiagnostics,
 		loseAt:       o.LoseAtSubmission,
 	}, nil
 }
@@ -80,10 +80,11 @@ type device struct {
 	subgroupSize int
 	shuffleSeed  uint64
 
-	// diagnostics is whether cooperative kernels are instrumented, which is what
-	// developer mode means: the checks are what make this backend an oracle
-	// rather than an executor, so they are on unless a caller asks for the
-	// speed. See specs/006-backends.md section 5.
+	// diagnostics is whether cooperative kernels are instrumented. The checks
+	// are what make this backend an oracle rather than an executor, so they
+	// are on in every mode unless a caller asks for the speed through
+	// [Options].NoDiagnostics. What they check is specs/006-backends.md
+	// section 5's list.
 	diagnostics bool
 
 	// loseAt is the submission number at which this device reports itself lost,

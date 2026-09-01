@@ -214,7 +214,8 @@ type resolvedNode struct {
 	rows         *driver.RowCopy
 
 	// subgroupSize and diagnostics come from the device's options, so a graph
-	// submitted in developer mode is checked and one in strict mode is not.
+	// submitted to a device opened with NoDiagnostics runs unchecked and one
+	// submitted to any other is checked.
 	subgroupSize uint32
 	diagnostics  bool
 

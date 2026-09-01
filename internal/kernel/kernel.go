@@ -529,9 +529,9 @@ type Frame struct {
 	// Done reports that this invocation has run to completion.
 	Done bool
 
-	// Shared is the workgroup's shared-memory tracker, or nil in strict mode
-	// where the instrumentation costs nothing because every call is a no-op the
-	// compiler removes.
+	// Shared is the workgroup's shared-memory tracker, or nil when diagnostics
+	// are off, where the instrumentation costs nothing because every call is a
+	// no-op the compiler removes.
 	Shared *SharedTracker
 
 	// Pass is a hand-written kernel's program counter, for the tests that drive

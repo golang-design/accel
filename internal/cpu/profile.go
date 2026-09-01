@@ -51,6 +51,18 @@ type Options struct {
 	// it, every error path behind ErrDeviceLost is code nobody runs until a
 	// caller's driver restarts in production.
 	LoseAtSubmission int
+
+	// NoDiagnostics turns the cooperative instrumentation off: the arrival
+	// check, the shared-memory definedness and conflict tracking, and the
+	// inactive-lane checks of specs/019-cooperative-diagnostics.md.
+	//
+	// Its own switch rather than a consequence of Mode. specs/006-backends.md
+	// section 5 defines Strict as a capability and limits profile and says
+	// nothing about instrumentation, and the checks are what make this backend
+	// an oracle: a kernel run under Strict to prove it portable is exactly the
+	// kernel whose barrier arrivals should be checked. The zero value keeps
+	// them on in every mode; a caller who wants the speed asks for it here.
+	NoDiagnostics bool
 }
 
 // backendNames are used in the errors this package reports. accel has its own

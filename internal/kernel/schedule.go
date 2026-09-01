@@ -48,10 +48,13 @@ type Options struct {
 	// boundary bug at v0 becomes a wrong answer on hardware nobody here owns.
 	SubgroupSize uint32
 
-	// Diagnostics turns the instrumentation on. It is the CPU backend's
-	// developer mode: the checks are what make this backend an oracle rather
-	// than an executor, so they are on by default and off only when a caller
-	// asks for the speed. See specs/006-backends.md section 5.
+	// Diagnostics turns the instrumentation on: the checks
+	// specs/006-backends.md section 5 lists under barriers, and
+	// specs/019-cooperative-diagnostics.md's shared-memory tracking. They are
+	// what make the CPU backend an oracle rather than an executor, so that
+	// backend sets this in every mode and clears it only when a caller asks
+	// for the speed through its own NoDiagnostics option. The mode a device
+	// was opened in is a capability profile and does not decide this.
 	Diagnostics bool
 
 	// ShuffleSeed varies the order invocations are advanced in within an epoch.
@@ -546,12 +549,11 @@ func laneRead(kernel string, threads []Thread, frames []Frame, op SubgroupOp, la
 		values[threads[i].SubgroupLane()] = frames[i].SubF32
 	}
 
-	// Both checks below belong to the developer mode: they are what make this
-	// backend an oracle rather than an executor, and specs/006-backends.md
-	// section 5 says the instrumentation is what a caller turns off when it
-	// wants the speed. Two sibling checks in one function that disagreed about
-	// which mode they live in would make the same kernel pass or fail on a
-	// switch neither of them names.
+	// Both checks below are diagnostics: they are what make this backend an
+	// oracle rather than an executor, and they are off only when a caller
+	// asked for the speed through Options.Diagnostics. Two sibling checks in
+	// one function that disagreed about which switch they live under would
+	// make the same kernel pass or fail on a switch neither of them names.
 	var ds Diagnostics
 	if diag && op == SubBroadcastF32 {
 		ds = append(ds, checkUniformLane(kernel, threads, frames, lanes)...)

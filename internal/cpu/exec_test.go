@@ -791,6 +791,94 @@ func TestADispatchFailureReachesTheFence(t *testing.T) {
 	}
 }
 
+// earlyReturn is a cooperative kernel in which one invocation returns without
+// reaching the barrier its peers wait at, and undefinedRead one that reads
+// shared memory nothing wrote. Each is a diagnostic in developer mode.
+func earlyReturn() *kernel.Kernel {
+	return &kernel.Kernel{
+		Name: "Early", WorkgroupSize: kernel.ID3{X: 4, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, Suspensions: 1,
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if th.LocalID().X == 1 {
+				return false
+			}
+			if f.Pass == 0 {
+				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:3:2"}
+				return true
+			}
+			return false
+		},
+	}
+}
+
+func undefinedRead() *kernel.Kernel {
+	return &kernel.Kernel{
+		Name: "Undefined", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, SharedSizes: []int{4},
+		NewShared: func() []any {
+			var sh [4]float32
+			return []any{&sh}
+		},
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			sh := kernel.SharedSlice[[4]float32](a, 0)
+			_ = sh[f.Shared.ReadAt(0, 2)]
+			return false
+		},
+	}
+}
+
+// dispatchOnce submits one dispatch of k and returns what the fence reports.
+func dispatchOnce(t *testing.T, o cpu.Options, k *kernel.Kernel) error {
+	t.Helper()
+	_, c := open(t, o)
+	exe, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
+		Op: driver.OpDispatch, Dispatch: &driver.Dispatch{Kernel: k, Count: kernel.ID3{X: 1}},
+	}}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	defer exe.Close()
+	f, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	return f.Wait()
+}
+
+// Strict mode keeps the cooperative diagnostics on.
+//
+// specs/006-backends.md section 5 defines Strict as a capability and limits
+// profile: the intersection of a target set. It says nothing about
+// instrumentation, and a kernel that is portable to Vulkan and Metal is one
+// whose barriers every invocation reaches, so the oracle's checks are the
+// point of running under Strict rather than a cost of it. Turning them off is
+// a separate request, made by NoDiagnostics.
+func TestStrictModeStillReportsDiagnostics(t *testing.T) {
+	strict := cpu.Options{Mode: cpu.Strict, StrictTargets: []driver.Backend{driver.BackendVulkan}}
+	for _, c := range []struct {
+		name string
+		k    *kernel.Kernel
+		says string
+	}{
+		{"an early return", earlyReturn(), "barrier arrival mismatch"},
+		{"an undefined read", undefinedRead(), "undefined shared memory"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := dispatchOnce(t, strict, c.k)
+			if err == nil || !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("under Strict %s should be reported as %q, got %v: Strict is a "+
+					"capability profile, not an instrumentation switch", c.name, c.says, err)
+			}
+			off := strict
+			off.NoDiagnostics = true
+			if err := dispatchOnce(t, off, c.k); err != nil {
+				t.Fatalf("with NoDiagnostics %s should run unchecked, got %v", c.name, err)
+			}
+		})
+	}
+}
+
 // A kernel that panics reports through the fence rather than taking the
 // process down. On a GPU an out-of-bounds access is clamped or undefined; here
 // it is a Go panic, and it would otherwise abort from inside a goroutine the

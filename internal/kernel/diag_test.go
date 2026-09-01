@@ -229,8 +229,8 @@ func TestABarrierSeparatesConflictingAccesses(t *testing.T) {
 	}
 }
 
-// A nil tracker is every call a no-op, which is how strict mode pays nothing
-// for a check developer mode wants.
+// A nil tracker is every call a no-op, which is how a dispatch with diagnostics
+// off pays nothing for a check the default wants.
 func TestANilTrackerIsInert(t *testing.T) {
 	var tr *kernel.SharedTracker
 	tr.Begin(kernel.ID3{})

@@ -180,9 +180,10 @@ func (d *definedBits) written(i int) bool {
 // rather than merely generated.
 //
 // A nil tracker makes every call a no-op that the compiler removes, which is
-// how strict mode pays nothing for a check developer mode wants. The
-// instrumentation is always emitted; whether it does anything is a runtime
-// decision, because a second lowering would be a second thing to keep correct.
+// how a dispatch with diagnostics off pays nothing for a check the default
+// wants. The instrumentation is always emitted; whether it does anything is a
+// runtime decision, because a second lowering would be a second thing to keep
+// correct.
 type SharedTracker struct {
 	kernel    string
 	workgroup ID3
