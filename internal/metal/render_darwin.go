@@ -194,11 +194,7 @@ func (e *executable) renderTargets(p *pass, rp *driver.RenderPass) (renderAttach
 		})
 	}
 	if rp.Depth != nil {
-		df := driver.Depth32Float
-		if rp.StencilPitch > 0 {
-			df = driver.Depth32FloatStencil8
-		}
-		t, staged, err := e.attachmentTexture(*rp.Depth, df,
+		t, staged, err := e.attachmentTexture(*rp.Depth, depthFormat(rp),
 			rp.Width, rp.Height, rp.DepthPitch)
 		if err != nil {
 			return fail(fmt.Errorf("depth attachment: %w", err))
@@ -218,6 +214,22 @@ func (e *executable) renderTargets(p *pass, rp *driver.RenderPass) (renderAttach
 		}
 	}
 	return out, nil
+}
+
+// depthFormat is the one place a pass's depth attachment format is decided,
+// for the texture and for the pipeline alike.
+//
+// It was decided twice: the texture from StencilPitch, and the pipeline as
+// Depth32Float unconditionally with no stencil format at all. A stencil pass
+// therefore drew into a Depth32FloatStencil8 texture through a pipeline that
+// declared neither that depth format nor any stencil format. Metal's
+// validation layer aborts on the mismatch; without it the draw ran and the
+// pictures happened to agree, which is why nothing noticed.
+func depthFormat(rp *driver.RenderPass) driver.Format {
+	if rp.StencilPitch > 0 {
+		return driver.Depth32FloatStencil8
+	}
+	return driver.Depth32Float
 }
 
 // attachmentTexture aliases the operand's bytes, or stages them when Metal's
@@ -699,7 +711,14 @@ func (e *executable) renderPipeline(rp *driver.RenderPass, d driver.RenderDraw) 
 		spec.Blends = append(spec.Blends, metalBlend(b))
 	}
 	if rp.Depth != nil {
-		spec.DepthFormat = mtl.PixelFormatDepth32Float
+		pf, err := metalPixelFormat(depthFormat(rp))
+		if err != nil {
+			return nil, fmt.Errorf("depth attachment: %w", err)
+		}
+		spec.DepthFormat = pf
+		if rp.StencilPitch > 0 {
+			spec.StencilFormat = pf
+		}
 	}
 	for _, l := range d.VertexLayouts {
 		vl := mtl.VertexLayoutSpec{Stride: l.Stride, PerInstance: l.PerInstance}

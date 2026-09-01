@@ -387,6 +387,14 @@ type RenderPipelineSpec struct {
 	// DepthFormat is 0 for a pipeline with no depth attachment.
 	DepthFormat int
 
+	// StencilFormat is 0 for a pipeline with no stencil attachment. For a
+	// combined format it is the same value as DepthFormat: Metal validates
+	// both attachments of the pipeline against the pass's textures at draw
+	// time, and a pipeline declaring a depth format but no stencil format
+	// against a Depth32FloatStencil8 texture is an assertion under the
+	// validation layer and undefined without it.
+	StencilFormat int
+
 	// VertexLayouts describes the buffers the vertex stage fetches from.
 	VertexLayouts []VertexLayoutSpec
 }
@@ -474,6 +482,9 @@ func (d *Device) NewRenderPipeline(s RenderPipelineSpec) (*RenderPipeline, error
 		desc.Send(selSetFragmentFunction, s.Fragment.fn)
 		if s.DepthFormat != 0 {
 			desc.Send(selSetDepthPixelFormat, uintptr(s.DepthFormat))
+		}
+		if s.StencilFormat != 0 {
+			desc.Send(selSetStencilFmt, uintptr(s.StencilFormat))
 		}
 
 		atts := desc.Send(selColorAttachments)
