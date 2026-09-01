@@ -68,17 +68,49 @@ func (s Stage) String() string {
 
 // Uniformity is what an intrinsic's result is uniform across.
 //
-// It exists here rather than being inferred later because it is a property of
-// the intrinsic and not of its use: GroupID is uniform across a workgroup and
-// LocalID is not, and the barrier analysis at M4 is built on that distinction.
+// It is here rather than in the uniformity analysis because it is a property
+// of the intrinsic and not of its use: GroupID is uniform across a workgroup
+// and LocalID is not, and the barrier analysis is built on that distinction.
+// This table is the only place the seed is stated. The analysis read its own
+// copy once, and the two disagreed on SubgroupIndex -- per-invocation here,
+// subgroup-uniform there -- with nothing to say which was right.
+//
+// The zero value states nothing, so an entry that forgets to say is caught by
+// the table's own test rather than read as one of the levels.
 type Uniformity int
 
 const (
-	// PerInvocation varies between invocations of one workgroup.
-	PerInvocation Uniformity = iota
+	unstated Uniformity = iota
+
+	// PerInvocation varies between invocations of one workgroup: an id, a
+	// load, an atomic's previous value, a subgroup operation's result.
+	PerInvocation
+
+	// PerSubgroup is the same within one subgroup and differs between them.
+	PerSubgroup
+
 	// PerWorkgroup is the same for every invocation of one workgroup.
 	PerWorkgroup
+
+	// OfOperands is as uniform as the least uniform operand, the receiver
+	// included: the intrinsic computes from what it is given and reads
+	// nothing per-invocation of its own. Sqrt of a uniform value is uniform.
+	OfOperands
 )
+
+func (u Uniformity) String() string {
+	switch u {
+	case PerInvocation:
+		return "per-invocation"
+	case PerSubgroup:
+		return "per-subgroup"
+	case PerWorkgroup:
+		return "per-workgroup"
+	case OfOperands:
+		return "of-operands"
+	}
+	return "unstated"
+}
 
 // Class is what an intrinsic's result may be compared as.
 //
@@ -267,40 +299,40 @@ var table = map[key]*Intrinsic{
 	// accel/kmath, the bounded scalar math. Free functions rather than methods,
 	// because they do not depend on the invocation, and in their own package so
 	// that the key rejects a same-named function from anywhere else.
-	{kmathPkg, "", "Sqrt"}:  {Authored: "accel/kmath.Sqrt", Op: ir.OpSqrt, Result: ir.F32, Params: 1, Class: ClassBounded},
-	{kmathPkg, "", "RSqrt"}: {Authored: "accel/kmath.RSqrt", Op: ir.OpRSqrt, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Sqrt"}:  {Authored: "accel/kmath.Sqrt", Op: ir.OpSqrt, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "RSqrt"}: {Authored: "accel/kmath.RSqrt", Op: ir.OpRSqrt, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
 	// Saturating float-to-integer, specs/051-float-to-int.md. Exact rather than
 	// bounded: the result is an integer and there is nothing to round, so the
 	// two backends must agree bit for bit.
-	{kmathPkg, "", "ToI32"}: {Authored: "accel/kmath.ToI32", Op: ir.OpToI32, Result: ir.I32, Params: 1, Class: ClassExact},
-	{kmathPkg, "", "ToU32"}: {Authored: "accel/kmath.ToU32", Op: ir.OpToU32, Result: ir.U32, Params: 1, Class: ClassExact},
-	{kmathPkg, "", "Exp"}:   {Authored: "accel/kmath.Exp", Op: ir.OpExp, Result: ir.F32, Params: 1, Class: ClassBounded},
-	{kmathPkg, "", "Log"}:   {Authored: "accel/kmath.Log", Op: ir.OpLog, Result: ir.F32, Params: 1, Class: ClassBounded},
-	{kmathPkg, "", "Sin"}:   {Authored: "accel/kmath.Sin", Op: ir.OpSin, Result: ir.F32, Params: 1, Class: ClassBounded},
-	{kmathPkg, "", "Cos"}:   {Authored: "accel/kmath.Cos", Op: ir.OpCos, Result: ir.F32, Params: 1, Class: ClassBounded},
-	{kmathPkg, "", "Tanh"}:  {Authored: "accel/kmath.Tanh", Op: ir.OpTanh, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "ToI32"}: {Authored: "accel/kmath.ToI32", Op: ir.OpToI32, Uniformity: OfOperands, Result: ir.I32, Params: 1, Class: ClassExact},
+	{kmathPkg, "", "ToU32"}: {Authored: "accel/kmath.ToU32", Op: ir.OpToU32, Uniformity: OfOperands, Result: ir.U32, Params: 1, Class: ClassExact},
+	{kmathPkg, "", "Exp"}:   {Authored: "accel/kmath.Exp", Op: ir.OpExp, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Log"}:   {Authored: "accel/kmath.Log", Op: ir.OpLog, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Sin"}:   {Authored: "accel/kmath.Sin", Op: ir.OpSin, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Cos"}:   {Authored: "accel/kmath.Cos", Op: ir.OpCos, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
+	{kmathPkg, "", "Tanh"}:  {Authored: "accel/kmath.Tanh", Op: ir.OpTanh, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassBounded},
 
 	// Exact rather than bounded: these move bits and do no arithmetic, so they
 	// have no error to bound. Recording the class is what keeps a test from
 	// asserting a tolerance where bits are guaranteed.
-	{kmathPkg, "", "Abs"}: {Authored: "accel/kmath.Abs", Op: ir.OpAbs, Result: ir.F32, Params: 1, Class: ClassExact},
-	{kmathPkg, "", "Min"}: {Authored: "accel/kmath.Min", Op: ir.OpMin, Result: ir.F32, Params: 2, Class: ClassExact},
-	{kmathPkg, "", "Max"}: {Authored: "accel/kmath.Max", Op: ir.OpMax, Result: ir.F32, Params: 2, Class: ClassExact},
+	{kmathPkg, "", "Abs"}: {Authored: "accel/kmath.Abs", Op: ir.OpAbs, Uniformity: OfOperands, Result: ir.F32, Params: 1, Class: ClassExact},
+	{kmathPkg, "", "Min"}: {Authored: "accel/kmath.Min", Op: ir.OpMin, Uniformity: OfOperands, Result: ir.F32, Params: 2, Class: ClassExact},
+	{kmathPkg, "", "Max"}: {Authored: "accel/kmath.Max", Op: ir.OpMax, Uniformity: OfOperands, Result: ir.F32, Params: 2, Class: ClassExact},
 
 	// Conversions between narrow storage and f32. Exact by spec 008 section 4:
 	// widening cannot round, and narrowing has a stated rule rather than a
 	// tolerance.
 	{kernelPkg, "Float16", "F32"}: {
-		Authored: "accel.Float16.F32", Op: ir.OpF16ToF32, Result: ir.F32, Class: ClassExact,
+		Authored: "accel.Float16.F32", Op: ir.OpF16ToF32, Uniformity: OfOperands, Result: ir.F32, Class: ClassExact,
 	},
 	{kernelPkg, "BFloat16", "F32"}: {
-		Authored: "accel.BFloat16.F32", Op: ir.OpBF16ToF32, Result: ir.F32, Class: ClassExact,
+		Authored: "accel.BFloat16.F32", Op: ir.OpBF16ToF32, Uniformity: OfOperands, Result: ir.F32, Class: ClassExact,
 	},
 	{accelPkg, "", "ToFloat16"}: {
-		Authored: "accel.ToFloat16", Op: ir.OpF32ToF16, Result: ir.F16, Params: 1, Class: ClassExact,
+		Authored: "accel.ToFloat16", Op: ir.OpF32ToF16, Uniformity: OfOperands, Result: ir.F16, Params: 1, Class: ClassExact,
 	},
 	{accelPkg, "", "ToBFloat16"}: {
-		Authored: "accel.ToBFloat16", Op: ir.OpF32ToBF16, Result: ir.BF16, Params: 1, Class: ClassExact,
+		Authored: "accel.ToBFloat16", Op: ir.OpF32ToBF16, Uniformity: OfOperands, Result: ir.BF16, Params: 1, Class: ClassExact,
 	},
 
 	// Atomics. Free functions on the root package taking a buffer and an index,
@@ -309,23 +341,23 @@ var table = map[key]*Intrinsic{
 	// case do one f32 addition whose rounding every target agrees on. What is
 	// not deterministic about a float atomic is the *order* several of them run
 	// in, which is a property of a reduction rather than of the operation.
-	{accelPkg, "", "AddU32"}: {Authored: "accel.AddU32", Op: ir.OpAtomicAddU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "AddI32"}: {Authored: "accel.AddI32", Op: ir.OpAtomicAddI32, Result: ir.I32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "SubU32"}: {Authored: "accel.SubU32", Op: ir.OpAtomicSubU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "SubI32"}: {Authored: "accel.SubI32", Op: ir.OpAtomicSubI32, Result: ir.I32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "MinU32"}: {Authored: "accel.MinU32", Op: ir.OpAtomicMinU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "MinI32"}: {Authored: "accel.MinI32", Op: ir.OpAtomicMinI32, Result: ir.I32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "MaxU32"}: {Authored: "accel.MaxU32", Op: ir.OpAtomicMaxU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "MaxI32"}: {Authored: "accel.MaxI32", Op: ir.OpAtomicMaxI32, Result: ir.I32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "AndU32"}: {Authored: "accel.AndU32", Op: ir.OpAtomicAndU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "OrU32"}:  {Authored: "accel.OrU32", Op: ir.OpAtomicOrU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "XorU32"}: {Authored: "accel.XorU32", Op: ir.OpAtomicXorU32, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "AddU32"}: {Authored: "accel.AddU32", Op: ir.OpAtomicAddU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "AddI32"}: {Authored: "accel.AddI32", Op: ir.OpAtomicAddI32, Uniformity: PerInvocation, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "SubU32"}: {Authored: "accel.SubU32", Op: ir.OpAtomicSubU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "SubI32"}: {Authored: "accel.SubI32", Op: ir.OpAtomicSubI32, Uniformity: PerInvocation, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MinU32"}: {Authored: "accel.MinU32", Op: ir.OpAtomicMinU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MinI32"}: {Authored: "accel.MinI32", Op: ir.OpAtomicMinI32, Uniformity: PerInvocation, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MaxU32"}: {Authored: "accel.MaxU32", Op: ir.OpAtomicMaxU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "MaxI32"}: {Authored: "accel.MaxI32", Op: ir.OpAtomicMaxI32, Uniformity: PerInvocation, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "AndU32"}: {Authored: "accel.AndU32", Op: ir.OpAtomicAndU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "OrU32"}:  {Authored: "accel.OrU32", Op: ir.OpAtomicOrU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "XorU32"}: {Authored: "accel.XorU32", Op: ir.OpAtomicXorU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
 
-	{accelPkg, "", "ExchangeU32"}: {Authored: "accel.ExchangeU32", Op: ir.OpAtomicExchangeU32, Result: ir.U32, Params: 3, Class: ClassExact},
-	{accelPkg, "", "ExchangeI32"}: {Authored: "accel.ExchangeI32", Op: ir.OpAtomicExchangeI32, Result: ir.I32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "ExchangeU32"}: {Authored: "accel.ExchangeU32", Op: ir.OpAtomicExchangeU32, Uniformity: PerInvocation, Result: ir.U32, Params: 3, Class: ClassExact},
+	{accelPkg, "", "ExchangeI32"}: {Authored: "accel.ExchangeI32", Op: ir.OpAtomicExchangeI32, Uniformity: PerInvocation, Result: ir.I32, Params: 3, Class: ClassExact},
 
-	{accelPkg, "", "CompareExchangeU32"}: {Authored: "accel.CompareExchangeU32", Op: ir.OpAtomicCompareExchangeU32, Result: ir.U32, Params: 4, Class: ClassExact},
-	{accelPkg, "", "CompareExchangeI32"}: {Authored: "accel.CompareExchangeI32", Op: ir.OpAtomicCompareExchangeI32, Result: ir.I32, Params: 4, Class: ClassExact},
+	{accelPkg, "", "CompareExchangeU32"}: {Authored: "accel.CompareExchangeU32", Op: ir.OpAtomicCompareExchangeU32, Uniformity: PerInvocation, Result: ir.U32, Params: 4, Class: ClassExact},
+	{accelPkg, "", "CompareExchangeI32"}: {Authored: "accel.CompareExchangeI32", Op: ir.OpAtomicCompareExchangeI32, Uniformity: PerInvocation, Result: ir.I32, Params: 4, Class: ClassExact},
 
 	// Ballot, specs/058-ballot.md. Its result is a mask rather than a scalar,
 	// which is the one new kind the kernel subset gains for it, and the five
@@ -336,27 +368,27 @@ var table = map[key]*Intrinsic{
 	// No capability on the methods: a mask cannot exist without the Ballot
 	// that produced it, and that carries CapSubgroupBallot.
 	{kernelPkg, "Thread", "SubgroupBallot"}: {
-		Authored: "accel.Thread.SubgroupBallot", Op: ir.OpBallot, Params: 1,
+		Authored: "accel.Thread.SubgroupBallot", Op: ir.OpBallot, Uniformity: PerInvocation, Params: 1,
 		Result: ir.MaskKind, Class: ClassExact, Cap: CapSubgroupBallot,
 	},
 	{kernelPkg, "Mask", "Count"}: {
-		Authored: "accel.KernelMask.Count", Op: ir.OpMaskCount,
+		Authored: "accel.KernelMask.Count", Op: ir.OpMaskCount, Uniformity: OfOperands,
 		Result: ir.I32, Class: ClassExact,
 	},
 	{kernelPkg, "Mask", "Bit"}: {
-		Authored: "accel.KernelMask.Bit", Op: ir.OpMaskBit, Params: 1,
+		Authored: "accel.KernelMask.Bit", Op: ir.OpMaskBit, Uniformity: OfOperands, Params: 1,
 		Result: ir.Bool, Class: ClassExact,
 	},
 	{kernelPkg, "Mask", "LowestSet"}: {
-		Authored: "accel.KernelMask.LowestSet", Op: ir.OpMaskLowestSet,
+		Authored: "accel.KernelMask.LowestSet", Op: ir.OpMaskLowestSet, Uniformity: OfOperands,
 		Result: ir.U32, Class: ClassExact,
 	},
 	{kernelPkg, "Mask", "CountLower"}: {
-		Authored: "accel.KernelMask.CountLower", Op: ir.OpMaskCountLower, Params: 1,
+		Authored: "accel.KernelMask.CountLower", Op: ir.OpMaskCountLower, Uniformity: OfOperands, Params: 1,
 		Result: ir.I32, Class: ClassExact,
 	},
 	{kernelPkg, "Mask", "Any"}: {
-		Authored: "accel.KernelMask.Any", Op: ir.OpMaskAny,
+		Authored: "accel.KernelMask.Any", Op: ir.OpMaskAny, Uniformity: OfOperands,
 		Result: ir.Bool, Class: ClassExact,
 	},
 
@@ -364,19 +396,23 @@ var table = map[key]*Intrinsic{
 	// using it is refused on a device that does rather than lowered to
 	// something else.
 	{accelPkg, "", "AddF32"}: {
-		Authored: "accel.AddF32", Op: ir.OpAtomicAddF32, Result: ir.F32, Params: 3,
+		Authored: "accel.AddF32", Op: ir.OpAtomicAddF32, Uniformity: PerInvocation, Result: ir.F32, Params: 3,
 		Class: ClassExact, Cap: CapAtomicFloatAddStorage,
 	},
 
-	// Subgroup operations. The id accessors combine nothing and are
-	// subgroup-uniform or not by their own definition; the rest are rendezvous.
+	// Subgroup operations. The id accessors combine nothing and are levelled by
+	// their own definition: the size is one number for the dispatch, the
+	// subgroup's index is shared by its lanes and differs between subgroups,
+	// and the lane is the lane's own. The rest are rendezvous, and their
+	// results are per-invocation even where the operation broadcasts, because
+	// the active set is not portable (specs/002-compute-model.md section 3.3).
 	{kernelPkg, "Thread", "SubgroupSize"}: {
 		Authored: "accel.Thread.SubgroupSize", Op: ir.OpSubgroupSize,
 		Uniformity: PerWorkgroup, Result: ir.U32, Cap: CapSubgroupBasic,
 	},
 	{kernelPkg, "Thread", "SubgroupIndex"}: {
 		Authored: "accel.Thread.SubgroupIndex", Op: ir.OpSubgroupID,
-		Uniformity: PerInvocation, Result: ir.U32, Cap: CapSubgroupBasic,
+		Uniformity: PerSubgroup, Result: ir.U32, Cap: CapSubgroupBasic,
 	},
 	{kernelPkg, "Thread", "SubgroupLane"}: {
 		Authored: "accel.Thread.SubgroupLane", Op: ir.OpSubgroupInvocationID,
@@ -384,52 +420,52 @@ var table = map[key]*Intrinsic{
 	},
 
 	{kernelPkg, "Thread", "SubgroupAddF32"}: {
-		Authored: "accel.Thread.SubgroupAddF32", Op: ir.OpSubgroupAddF32, Params: 1,
+		Authored: "accel.Thread.SubgroupAddF32", Op: ir.OpSubgroupAddF32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
 	},
 	// The integer minima and maxima, specs/059-subgroup-reductions.md. Exact
 	// rather than bounded: they select an input rather than computing one, so
 	// the two backends must agree bit for bit and there is no bound to derive.
 	{kernelPkg, "Thread", "SubgroupMinI32"}: {
-		Authored: "accel.Thread.SubgroupMinI32", Op: ir.OpSubgroupMinI32, Params: 1,
+		Authored: "accel.Thread.SubgroupMinI32", Op: ir.OpSubgroupMinI32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupMaxI32"}: {
-		Authored: "accel.Thread.SubgroupMaxI32", Op: ir.OpSubgroupMaxI32, Params: 1,
+		Authored: "accel.Thread.SubgroupMaxI32", Op: ir.OpSubgroupMaxI32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupMinU32"}: {
-		Authored: "accel.Thread.SubgroupMinU32", Op: ir.OpSubgroupMinU32, Params: 1,
+		Authored: "accel.Thread.SubgroupMinU32", Op: ir.OpSubgroupMinU32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupMaxU32"}: {
-		Authored: "accel.Thread.SubgroupMaxU32", Op: ir.OpSubgroupMaxU32, Params: 1,
+		Authored: "accel.Thread.SubgroupMaxU32", Op: ir.OpSubgroupMaxU32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 
 	// The bitwise family, specs/059-subgroup-reductions.md §6's second slice.
 	{kernelPkg, "Thread", "SubgroupAndI32"}: {
-		Authored: "accel.Thread.SubgroupAndI32", Op: ir.OpSubgroupAndI32, Params: 1,
+		Authored: "accel.Thread.SubgroupAndI32", Op: ir.OpSubgroupAndI32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupOrI32"}: {
-		Authored: "accel.Thread.SubgroupOrI32", Op: ir.OpSubgroupOrI32, Params: 1,
+		Authored: "accel.Thread.SubgroupOrI32", Op: ir.OpSubgroupOrI32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupXorI32"}: {
-		Authored: "accel.Thread.SubgroupXorI32", Op: ir.OpSubgroupXorI32, Params: 1,
+		Authored: "accel.Thread.SubgroupXorI32", Op: ir.OpSubgroupXorI32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupAndU32"}: {
-		Authored: "accel.Thread.SubgroupAndU32", Op: ir.OpSubgroupAndU32, Params: 1,
+		Authored: "accel.Thread.SubgroupAndU32", Op: ir.OpSubgroupAndU32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupOrU32"}: {
-		Authored: "accel.Thread.SubgroupOrU32", Op: ir.OpSubgroupOrU32, Params: 1,
+		Authored: "accel.Thread.SubgroupOrU32", Op: ir.OpSubgroupOrU32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupXorU32"}: {
-		Authored: "accel.Thread.SubgroupXorU32", Op: ir.OpSubgroupXorU32, Params: 1,
+		Authored: "accel.Thread.SubgroupXorU32", Op: ir.OpSubgroupXorU32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 
@@ -437,40 +473,40 @@ var table = map[key]*Intrinsic{
 	// one is Bounded rather than Exact -- specs/008-numerics.md §7.1 derives
 	// its budget -- and the integer ones are Exact because they wrap.
 	{kernelPkg, "Thread", "SubgroupMulF32"}: {
-		Authored: "accel.Thread.SubgroupMulF32", Op: ir.OpSubgroupMulF32, Params: 1,
+		Authored: "accel.Thread.SubgroupMulF32", Op: ir.OpSubgroupMulF32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupMulI32"}: {
-		Authored: "accel.Thread.SubgroupMulI32", Op: ir.OpSubgroupMulI32, Params: 1,
+		Authored: "accel.Thread.SubgroupMulI32", Op: ir.OpSubgroupMulI32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.I32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupMulU32"}: {
-		Authored: "accel.Thread.SubgroupMulU32", Op: ir.OpSubgroupMulU32, Params: 1,
+		Authored: "accel.Thread.SubgroupMulU32", Op: ir.OpSubgroupMulU32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.U32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 
 	{kernelPkg, "Thread", "SubgroupMinF32"}: {
-		Authored: "accel.Thread.SubgroupMinF32", Op: ir.OpSubgroupMinF32, Params: 1,
+		Authored: "accel.Thread.SubgroupMinF32", Op: ir.OpSubgroupMinF32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupMaxF32"}: {
-		Authored: "accel.Thread.SubgroupMaxF32", Op: ir.OpSubgroupMaxF32, Params: 1,
+		Authored: "accel.Thread.SubgroupMaxF32", Op: ir.OpSubgroupMaxF32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupBroadcastFirstF32"}: {
-		Authored: "accel.Thread.SubgroupBroadcastFirstF32", Op: ir.OpBroadcastFirstF32, Params: 1,
+		Authored: "accel.Thread.SubgroupBroadcastFirstF32", Op: ir.OpBroadcastFirstF32, Uniformity: PerInvocation, Params: 1,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupBallot,
 	},
 	{kernelPkg, "Thread", "SubgroupElect"}: {
-		Authored: "accel.Thread.SubgroupElect", Op: ir.OpElect,
+		Authored: "accel.Thread.SubgroupElect", Op: ir.OpElect, Uniformity: PerInvocation,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupBasic,
 	},
 	{kernelPkg, "Thread", "SubgroupAny"}: {
-		Authored: "accel.Thread.SubgroupAny", Op: ir.OpSubgroupAny, Params: 1,
+		Authored: "accel.Thread.SubgroupAny", Op: ir.OpSubgroupAny, Uniformity: PerInvocation, Params: 1,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},
 	{kernelPkg, "Thread", "SubgroupAll"}: {
-		Authored: "accel.Thread.SubgroupAll", Op: ir.OpSubgroupAll, Params: 1,
+		Authored: "accel.Thread.SubgroupAll", Op: ir.OpSubgroupAll, Uniformity: PerInvocation, Params: 1,
 		Result: ir.Bool, Class: ClassExact, Cap: CapSubgroupVote,
 	},
 
@@ -485,23 +521,23 @@ var table = map[key]*Intrinsic{
 	// a lane an operand names, and that is the shuffle bit. The deviation is
 	// recorded in specs/002-compute-model.md section 5.2.
 	{kernelPkg, "Thread", "SubgroupBroadcastF32"}: {
-		Authored: "accel.Thread.SubgroupBroadcastF32", Op: ir.OpBroadcastF32, Params: 2,
+		Authored: "accel.Thread.SubgroupBroadcastF32", Op: ir.OpBroadcastF32, Uniformity: PerInvocation, Params: 2,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
 	},
 	{kernelPkg, "Thread", "SubgroupShuffleF32"}: {
-		Authored: "accel.Thread.SubgroupShuffleF32", Op: ir.OpShuffleF32, Params: 2,
+		Authored: "accel.Thread.SubgroupShuffleF32", Op: ir.OpShuffleF32, Uniformity: PerInvocation, Params: 2,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
 	},
 	{kernelPkg, "Thread", "SubgroupShuffleXorF32"}: {
-		Authored: "accel.Thread.SubgroupShuffleXorF32", Op: ir.OpShuffleXorF32, Params: 2,
+		Authored: "accel.Thread.SubgroupShuffleXorF32", Op: ir.OpShuffleXorF32, Uniformity: PerInvocation, Params: 2,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
 	},
 	{kernelPkg, "Thread", "SubgroupShuffleUpF32"}: {
-		Authored: "accel.Thread.SubgroupShuffleUpF32", Op: ir.OpShuffleUpF32, Params: 2,
+		Authored: "accel.Thread.SubgroupShuffleUpF32", Op: ir.OpShuffleUpF32, Uniformity: PerInvocation, Params: 2,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
 	},
 	{kernelPkg, "Thread", "SubgroupShuffleDownF32"}: {
-		Authored: "accel.Thread.SubgroupShuffleDownF32", Op: ir.OpShuffleDownF32, Params: 2,
+		Authored: "accel.Thread.SubgroupShuffleDownF32", Op: ir.OpShuffleDownF32, Uniformity: PerInvocation, Params: 2,
 		Result: ir.F32, Class: ClassExact, Cap: CapSubgroupShuffle,
 	},
 
@@ -512,11 +548,11 @@ var table = map[key]*Intrinsic{
 	// active lane -- which is what makes a comparison against a fallback
 	// meaningful at all.
 	{kernelPkg, "Thread", "SubgroupInclusiveAddF32"}: {
-		Authored: "accel.Thread.SubgroupInclusiveAddF32", Op: ir.OpSubgroupInclusiveAddF32,
+		Authored: "accel.Thread.SubgroupInclusiveAddF32", Op: ir.OpSubgroupInclusiveAddF32, Uniformity: PerInvocation,
 		Params: 1, Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
 	},
 	{kernelPkg, "Thread", "SubgroupExclusiveAddF32"}: {
-		Authored: "accel.Thread.SubgroupExclusiveAddF32", Op: ir.OpSubgroupExclusiveAddF32,
+		Authored: "accel.Thread.SubgroupExclusiveAddF32", Op: ir.OpSubgroupExclusiveAddF32, Uniformity: PerInvocation,
 		Params: 1, Result: ir.F32, Class: ClassBounded, Cap: CapSubgroupArithmetic,
 	},
 
@@ -651,12 +687,33 @@ func Names() []string {
 // the compiler can emit and an author cannot call, which is the shape of a
 // half-landed operation.
 func HasOp(op ir.Opcode) bool {
+	_, ok := ByOp(op)
+	return ok
+}
+
+// ByOp resolves an opcode back to its table entry.
+//
+// It is what the uniformity analysis reads a seed through: the IR carries the
+// opcode and the table carries the level, and looking one up from the other is
+// what makes this table the only statement of it.
+func ByOp(op ir.Opcode) (*Intrinsic, bool) {
 	for _, in := range table {
 		if in.Op == op {
-			return true
+			return in, true
 		}
 	}
-	return false
+	return nil, false
+}
+
+// All lists every intrinsic, sorted by authored spelling, for a test that
+// asserts a property of the whole table rather than of the entries it names.
+func All() []*Intrinsic {
+	out := make([]*Intrinsic, 0, len(table))
+	for _, in := range table {
+		out = append(out, in)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Authored < out[j].Authored })
+	return out
 }
 
 // Digest is a stable summary of the table's contents.

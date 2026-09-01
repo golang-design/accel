@@ -109,6 +109,15 @@ func TestSeeds(t *testing.T) {
 		{"the global id", "t.GlobalID().X", uniform.Non},
 		{"the global index", "t.GlobalIndex()", uniform.Non},
 		{"a binding's length", "uint32(len(in))", uniform.Workgroup},
+		{"the workgroup size", "t.WorkgroupSize().X", uniform.Workgroup},
+		{"the group count", "t.NumGroups().X", uniform.Workgroup},
+		{"the global size", "t.GlobalSize().X", uniform.Workgroup},
+		{"the subgroup size", "t.SubgroupSize()", uniform.Workgroup},
+		{"the subgroup index", "t.SubgroupIndex()", uniform.Subgroup},
+		{"the subgroup lane", "t.SubgroupLane()", uniform.Non},
+		// A subgroup reduction returns the same value to every active lane,
+		// and is per-invocation anyway: the active set is not portable.
+		{"a subgroup reduction", "t.SubgroupAddF32(1)", uniform.Non},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -425,9 +434,30 @@ func K(t accel.Thread, p Params, in []float32, out []float32) {
 	}
 }
 
-// A helper's result is as uniform as its least uniform argument. Sound and
-// imprecise, and the imprecision is stated rather than discovered: a helper
-// ignoring its arguments returns something uniform and this calls it not.
+// An atomic's previous value is spec 002 section 3.3's own row, and it was
+// not what the analysis said before the seed came from the intrinsic table:
+// the analysis joined an atomic's arguments, which are a binding, an index and
+// a literal, and called the result workgroup-uniform.
+func TestAnAtomicsReturnValueIsNonUniform(t *testing.T) {
+	got := levelsOf(t, `package k
+
+import "golang.design/x/accel"
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, counter []uint32, out []uint32) {
+	prev := accel.AddU32(counter, 0, 1)
+	out[t.GlobalID().X] = prev
+}
+`)
+	if got["prev"] != uniform.Non {
+		t.Errorf("an atomic's return value is %v, want non-uniform: every invocation "+
+			"receives a different previous value", got["prev"])
+	}
+}
+
+// A helper's result is at least as non-uniform as its least uniform argument.
+// What its body reads on its own is joined in as well; join_test.go has that
+// half.
 func TestAHelperTakesItsLeastUniformArgument(t *testing.T) {
 	src := `package k
 

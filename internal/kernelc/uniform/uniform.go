@@ -28,7 +28,10 @@
 // families.
 package uniform
 
-import "golang.design/x/accel/internal/kernelc/ir"
+import (
+	"golang.design/x/accel/internal/kernelc/intrin"
+	"golang.design/x/accel/internal/kernelc/ir"
+)
 
 // Level is how widely a value is known to be equal.
 //
@@ -344,75 +347,44 @@ func (in *Info) compute(v ir.Value) Level {
 	return Non
 }
 
-// intrinsic is the seed table of specs/002-compute-model.md section 3.3.
+// intrinsic reads the seed table of specs/002-compute-model.md section 3.3,
+// which the intrinsic table states per entry.
+//
+// Read from the table rather than kept here, because this function used to
+// keep its own switch and the two disagreed: SubgroupIndex was per-invocation
+// in the table and subgroup-uniform here, and nothing read the table's column
+// at all. One statement of the seed, and a test over the table that every
+// entry makes one.
+//
+// The level of a result that is OfOperands is the join over the arguments and
+// the receiver. The receiver matters and was **wrong** once: a mask method
+// such as `m.Count()` takes no arguments, so a join over the arguments alone
+// is Workgroup, and a barrier under `if m.Count() > 1` was accepted while
+// different subgroups can take different branches of it. specs/058-ballot.md.
 func (in *Info) intrinsic(n *ir.IntrinsicCall) Level {
+	operands := Workgroup
 	if n.Recv != nil {
-		in.value(n.Recv)
+		operands = max(operands, in.value(n.Recv))
 	}
-	args := Workgroup
 	for _, a := range n.Args {
-		args = max(args, in.value(a))
+		operands = max(operands, in.value(a))
 	}
 
-	switch n.Op {
-	// Workgroup-uniform: the same for every invocation of one workgroup.
-	//
-	// The dispatch shape is here because it is uniform across more than the
-	// workgroup and the lattice has no level above it: specs/052.
-	case ir.OpGroupID, ir.OpGroupIndex,
-		ir.OpWorkgroupSize, ir.OpNumGroups, ir.OpGlobalSize,
-		ir.OpSubgroupSize:
+	entry, ok := intrin.ByOp(n.Op)
+	if !ok {
+		// An opcode no intrinsic lowers to is one this analysis does not
+		// understand, and Non is the direction that refuses rather than admits.
+		return Non
+	}
+	switch entry.Uniformity {
+	case intrin.PerWorkgroup:
 		return Workgroup
-
-	// Subgroup-uniform: equal within a subgroup and differing between them.
-	//
-	// The only seed at this level, and until it existed nothing produced one at
-	// all -- the lattice had three levels and the analysis could reach two, so
-	// every subgroup-scope rule was vacuous. specs/002-compute-model.md §3.3's
-	// seed table is where these rows come from.
-	case ir.OpSubgroupID:
+	case intrin.PerSubgroup:
 		return Subgroup
-
-	// Non-uniform: these are what distinguish one invocation from another, and
-	// a kernel with no non-uniform seed computes the same thing everywhere.
-	//
-	// SubgroupInvocationID is here rather than at Subgroup because it is the
-	// lane's own index: it differs *within* a subgroup, which is exactly what
-	// the level below means.
-	case ir.OpGlobalID, ir.OpLocalID, ir.OpGlobalIndex, ir.OpLocalIndex,
-		ir.OpSubgroupInvocationID:
-		return Non
+	case intrin.OfOperands:
+		return operands
 	}
-
-	// A subgroup operation's result is non-uniform, and §3.3 says so with the
-	// reason: conservative even when the operation broadcasts. A reduction does
-	// return the same value to every active lane, and the *active set* is not
-	// portable (§5.1), so a value that is uniform on one device is not on
-	// another. This is checked after the switch because the range predicate
-	// covers a family rather than a list.
-	if n.Op.IsSubgroupRendezvous() {
-		return Non
-	}
-
-	// A mask method's result carries the mask's own uniformity, which is the
-	// join of its arguments below -- and the mask came from a Ballot, so that
-	// join is already Non and the answer is right by construction.
-	//
-	// It is spelled out because it was **wrong** and passed: the methods lower
-	// to ordinary calls rather than rendezvous, so `IsSubgroupRendezvous` does
-	// not cover them, and `m.Count()` is a *nullary* method whose join over
-	// zero arguments is Workgroup. A workgroup barrier under `if m.Count() > 1`
-	// was accepted, and different subgroups can take different branches of it.
-	//
-	// The receiver is what carries the level, and `in.value(n.Recv)` above
-	// computes it without folding it in. specs/058-ballot.md.
-	if n.Op.IsMaskMethod() && n.Recv != nil {
-		return max(args, in.value(n.Recv))
-	}
-
-	// Everything else is arithmetic on its arguments: sqrt of a uniform value
-	// is uniform. Barriers have no result and their level is never read.
-	return args
+	return Non
 }
 
 // summary is how uniform a helper's result is when every argument is
