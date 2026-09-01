@@ -124,7 +124,10 @@ func (d *device) SupportsKernel(k *kernel.Kernel) error {
 // text twice would cost milliseconds inside the device compiler for an
 // identical result.
 //
-// The caller holds d.mu.
+// Called from Compile under d.mu and from every dispatch a submission encodes
+// under the executable's mutex alone, so the cache has its own lock: without
+// one, a Compile on one goroutine and a Submit on another were a concurrent
+// map write and read, which the runtime ends the process for.
 func (d *device) pipelineFor(k *kernel.Kernel) (*mtl.Pipeline, error) {
 	if k.MSL == "" {
 		// Never a fallback to the Go lowering. Running the CPU kernel on a
@@ -133,6 +136,8 @@ func (d *device) pipelineFor(k *kernel.Kernel) (*mtl.Pipeline, error) {
 		return nil, fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal; "+
 			"it is outside the subset specs/021-metal-bringup.md section 5 lowers", k.Name)
 	}
+	d.pipeMu.Lock()
+	defer d.pipeMu.Unlock()
 	if p, ok := d.pipelines[k.Digest]; ok {
 		return p, nil
 	}

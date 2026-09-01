@@ -100,6 +100,14 @@ type device struct {
 	// is a call into the device compiler and takes milliseconds, so a graph
 	// resubmitted a thousand times must not pay it a thousand times. The key is
 	// the record's digest, which is what identifies the generated source.
+	//
+	// Guarded by pipeMu rather than mu, because the cache is read from two
+	// places with different locks above them: Compile, under mu, and every
+	// dispatch a Submit encodes, under the executable's own mutex only. A
+	// separate lock is what lets a submission on one executable run while
+	// another is compiled. pipeMu is taken after mu where both are held and
+	// never before it.
+	pipeMu    sync.Mutex
 	pipelines map[string]*mtl.Pipeline
 }
 
@@ -224,10 +232,12 @@ func (d *device) Close() error {
 		return nil
 	}
 	d.closed = true
+	d.pipeMu.Lock()
 	for _, p := range d.pipelines {
 		p.Close()
 	}
 	d.pipelines = nil
+	d.pipeMu.Unlock()
 	d.queue.Close()
 	return nil
 }

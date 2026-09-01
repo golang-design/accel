@@ -76,9 +76,13 @@ type indirectSlot struct {
 
 // clampPipeline compiles the clamp kernel, once per device.
 //
-// The caller holds d.mu.
+// It shares the pipeline cache and its lock with pipelineFor, and is called
+// from the same two places: Compile under d.mu, and encodeClamp under the
+// executable's mutex.
 func (d *device) clampPipeline() (*mtl.Pipeline, error) {
 	const key = "accel:clamp"
+	d.pipeMu.Lock()
+	defer d.pipeMu.Unlock()
 	if p, ok := d.pipelines[key]; ok {
 		return p, nil
 	}
@@ -94,8 +98,6 @@ func (d *device) clampPipeline() (*mtl.Pipeline, error) {
 }
 
 // newIndirectSlot allocates one node's clamp buffers.
-//
-// The caller holds d.mu.
 func (d *device) newIndirectSlot(node int, max kernel.ID3) (*indirectSlot, error) {
 	if _, err := d.clampPipeline(); err != nil {
 		return nil, err
