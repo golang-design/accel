@@ -222,10 +222,22 @@ func (b *block) Bytes() []byte {
 	if !b.hostVisible {
 		return nil
 	}
-	return b.mem
+	return b.contents()
 }
 
-func (b *block) Size() int { return len(b.mem) }
+func (b *block) Size() int { return len(b.contents()) }
+
+// contents is the allocation, or nil once freed.
+//
+// Every read of mem goes through here, under the mutex Free writes it under.
+// The slice header is what the lock protects: Free sets it to nil, and a Size
+// or a resolve racing that read would see half of a two-word write. The bytes
+// the header names are the caller's to order, the way any mapping's are.
+func (b *block) contents() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.mem
+}
 
 func (b *block) Write(off int, src []byte) error {
 	b.mu.Lock()

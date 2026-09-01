@@ -425,10 +425,11 @@ func backing(b driver.Block) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("a %T was not allocated by the CPU backend", b)
 	}
-	if blk.mem == nil {
+	mem := blk.contents()
+	if mem == nil {
 		return nil, fmt.Errorf("the block has been freed")
 	}
-	return blk.mem, nil
+	return mem, nil
 }
 
 // run executes resolved nodes in order.

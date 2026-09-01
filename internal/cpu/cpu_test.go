@@ -7,6 +7,7 @@ package cpu
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.design/x/accel/internal/driver"
@@ -112,6 +113,37 @@ func TestBlockWriteRead(t *testing.T) {
 	}
 	if got[0] != 1 {
 		t.Error("the block aliased the caller's slice instead of copying out of it")
+	}
+}
+
+// Size and Bytes read the block under the same lock Free writes it under.
+//
+// Free sets mem to nil, and a Size or Bytes racing it read the field without
+// the mutex. The race detector is the assertion here: the test drives the two
+// from separate goroutines and passes only when every access is ordered.
+func TestBlockSizeAndBytesAreOrderedAgainstFree(t *testing.T) {
+	d := open(t, Options{})
+	defer d.Close()
+
+	for range 64 {
+		b, err := d.Alloc(driver.MemoryShared, 64, "racy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			b.Free()
+		}()
+		go func() {
+			defer wg.Done()
+			// Either answer is acceptable; what is not is reading mem while
+			// Free writes it.
+			_ = b.Size()
+			_ = b.Bytes()
+		}()
+		wg.Wait()
 	}
 }
 
