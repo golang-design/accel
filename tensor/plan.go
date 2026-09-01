@@ -210,6 +210,6 @@ func (p *Plan) Close() error {
 		return nil
 	}
 	p.closed = true
-	p.rt.plans--
+	p.rt.planClosed()
 	return p.graph.Close()
 }

@@ -287,7 +287,7 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		return nil, fmt.Errorf("accel/tensor: compiling %q: %w", label, err)
 	}
 	p.graph = g
-	rt.plans++
+	rt.planOpened()
 	return p, nil
 }
 

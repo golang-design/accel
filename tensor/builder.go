@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 
 	"golang.design/x/accel"
 )
@@ -22,7 +23,14 @@ import (
 // specs/007-tensor-layer.md puts that above this package, because a key that
 // looked only at shapes would be wrong in ways nobody could see.
 type Runtime struct {
-	dev   *accel.Device
+	dev *accel.Device
+
+	// mu guards pipes and plans. A runtime is shared the way a device is:
+	// a server compiles its prefill plan on one goroutine while a decode plan
+	// compiles on another, and both reach the pipeline cache and the count of
+	// open plans. Held across pipeline creation so one kernel compiles once
+	// rather than once per goroutine that asked first.
+	mu    sync.Mutex
 	pipes map[*accel.Kernel]*accel.ComputePipeline
 	plans int
 }
@@ -48,6 +56,8 @@ func (r *Runtime) NewBuilder(label string) *Builder {
 
 // pipeline returns the compiled form of a kernel, once per runtime.
 func (r *Runtime) pipeline(k *accel.Kernel, label string) (*accel.ComputePipeline, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if p, ok := r.pipes[k]; ok {
 		return p, nil
 	}
@@ -59,11 +69,28 @@ func (r *Runtime) pipeline(k *accel.Kernel, label string) (*accel.ComputePipelin
 	return p, nil
 }
 
+// planOpened counts a plan that Compile built, and planClosed one that Close
+// released. The count is what lets [Runtime.Close] refuse while a plan still
+// holds its pipelines.
+func (r *Runtime) planOpened() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plans++
+}
+
+func (r *Runtime) planClosed() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plans--
+}
+
 // Close releases the runtime's pipelines.
 //
 // Every plan built from it must be closed first, which is checked rather than
 // assumed: a plan outliving its runtime would hold a pipeline nobody owns.
 func (r *Runtime) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.plans != 0 {
 		return fmt.Errorf("accel/tensor: %d plan(s) are still open on this runtime", r.plans)
 	}
