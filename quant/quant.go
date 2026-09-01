@@ -154,6 +154,11 @@ func Int8Dequantize(quants []int8, scales []accel.Float16) []float32 {
 // bound, and this repository already worked around it by building a per-term
 // array and reimplementing the loop inline. Now the signature asks for what the
 // arithmetic needs, so the workaround is the call.
+//
+// Panics when len(termScales) differs from len(x). A mismatch is a caller
+// passing the per-block scales where per-term ones are required, which is the
+// mistake this signature exists to refuse, and the number it would otherwise
+// return is not a bound.
 func Int8ErrorBound(x []float32, termScales []accel.Float16) float64 {
 	if len(termScales) != len(x) {
 		panic(fmt.Sprintf("accel/quant: Int8ErrorBound has %d terms and %d scales; "+

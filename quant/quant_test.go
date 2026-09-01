@@ -130,6 +130,18 @@ func TestTheClampCatchesTheWrapAround(t *testing.T) {
 	}
 }
 
+// The bound refuses the per-block scales in place of per-term ones, which its
+// doc states as the contract.
+func TestInt8ErrorBoundNeedsOneScalePerTerm(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a bound over three terms with one scale was computed; the per-block " +
+				"scales are a bound only where the terms are contiguous in the array")
+		}
+	}()
+	quant.Int8ErrorBound([]float32{1, 2, 3}, []accel.Float16{accel.ToFloat16(1)})
+}
+
 // The bound is computed from the inputs rather than tuned, and it holds.
 //
 // Checked against the exact dot product over the *original* weights, which is
