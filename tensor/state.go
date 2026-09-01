@@ -161,11 +161,13 @@ func readState(b *Builder, s *State) *Tensor {
 		// every layer read look like a strided operand and be refused as one.
 		win: &window{s.desc.Name, s.offset, s.shape.Elements()},
 	}
-	// A version produced by a write reads that node's output; the initial
-	// version reads the bound buffer.
-	if s.producer >= 0 {
-		t.port = s.desc.Name
-	}
+	// Every version reads the caller's buffer, which is why port is set
+	// unconditionally: a write advances the state in place, so the bytes of
+	// version n+1 are the same binding as version 0's. What differs is node.
+	// The initial version has no producer and node is -1; a version some node
+	// wrote carries that node, and the lowering uses it only to order the read
+	// after the write. operand() in compile.go states the rule: the port
+	// decides where the value lives, and the node only orders.
 	return t
 }
 
