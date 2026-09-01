@@ -322,11 +322,6 @@ type SlotBinding struct {
 	Size int
 }
 
-// Executable is a compiled plan a backend can resubmit.
-//
-// It is separate from [Plan] because the plan is what the layer above computed
-// and the executable is what a backend made of it, and on Vulkan those are a
-// struct and a command buffer. See specs/006-backends.md section 4.
 // StatsReporter is the optional interface an executable implements when its
 // plan asked for run-time counters.
 //
@@ -357,6 +352,11 @@ type Timer interface {
 	Elapsed() time.Duration
 }
 
+// Executable is a compiled plan a backend can resubmit.
+//
+// It is separate from [Plan] because the plan is what the layer above computed
+// and the executable is what a backend made of it, and on Vulkan those are a
+// struct and a command buffer. See specs/006-backends.md section 4.
 type Executable interface {
 	// Rebind resolves slots. It applies the whole batch or none of it: a
 	// partially applied rebind leaves an executable whose slots disagree about

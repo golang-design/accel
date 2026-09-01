@@ -4,7 +4,10 @@
 
 package kernel
 
-import "fmt"
+import (
+	"fmt"
+	"math/bits"
+)
 
 // Subgroup operations, emulated.
 //
@@ -186,7 +189,7 @@ type Mask struct {
 func (m Mask) Count() int {
 	n := 0
 	for _, w := range m.bits {
-		n += popcount(w)
+		n += bits.OnesCount64(w)
 	}
 	return n
 }
@@ -243,15 +246,6 @@ func (m *Mask) set(lane uint32) {
 	if lane < 128 {
 		m.bits[lane/64] |= 1 << (lane % 64)
 	}
-}
-
-func popcount(w uint64) int {
-	n := 0
-	for w != 0 {
-		w &= w - 1
-		n++
-	}
-	return n
 }
 
 // SubgroupSize is how many lanes a subgroup has on this device.

@@ -217,13 +217,13 @@ func Rasterize(st State, tri [3]Vertex, emit func(Fragment)) bool {
 		return false
 	}
 
-	any := false
+	covered := false
 	for i := 1; i+1 < len(verts); i++ {
 		if rasterOne(st, [3]Vertex{verts[0], verts[i], verts[i+1]}, n, provoking, emit) {
-			any = true
+			covered = true
 		}
 	}
-	return any
+	return covered
 }
 
 // flatAt reports whether slot k takes the provoking vertex's value.
@@ -277,7 +277,7 @@ func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fr
 	}
 
 	vary := make([]float32, n)
-	any := false
+	covered := false
 	for y := lo.Y; y < hi.Y; y++ {
 		for x := lo.X; x < hi.X; x++ {
 			// The sample is the pixel centre, which is what makes the fill rule
@@ -319,7 +319,7 @@ func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fr
 				vary[k] = num / den
 			}
 
-			any = true
+			covered = true
 			emit(Fragment{
 				X: x, Y: y,
 				Depth:    depth,
@@ -330,7 +330,7 @@ func rasterOne(st State, tri [3]Vertex, n int, provoking []float32, emit func(Fr
 			})
 		}
 	}
-	return any
+	return covered
 }
 
 // edge is the edge function of the directed line a→b evaluated at (x, y).

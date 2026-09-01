@@ -340,12 +340,12 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 		}
 
 	case SubAny:
-		any := false
+		some := false
 		for _, i := range lanes {
-			any = any || frames[i].SubBool
+			some = some || frames[i].SubBool
 		}
 		for _, i := range lanes {
-			frames[i].SubBool = any
+			frames[i].SubBool = some
 		}
 
 	case SubAll:
