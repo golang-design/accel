@@ -416,6 +416,17 @@ func bounds(st State, w [3]window) (lo, hi Rect) {
 // [-1, 1] projection on a [0, 1] backend produces no coverage at all for near
 // geometry, which reads like a broken transform rather than a convention
 // mismatch.
+//
+// # The one point both planes admit and the divide cannot take
+//
+// The two half-spaces together imply w >= 0, and the only vertex with w = 0
+// inside both is the clip-space origin, z = w = 0: the projective point at
+// infinity, which an edge passing through the eye produces exactly. It has no
+// window position -- 1/w is infinite and x/w is NaN -- and a NaN reaching
+// [bounds] is turned into a pixel index by int(NaN), whose value differs
+// between arm64 and amd64. So such a vertex is dropped here, explicitly, and
+// the rest of the polygon is rasterized: that is the finite part of what a
+// clip against w > 0 would keep, and it is the same on every platform.
 func clipNearFar(tri [3]Vertex) ([]Vertex, bool) {
 	poly := tri[:]
 	poly = clipPlane(poly, func(v Vertex) float32 { return v.Pos.Z + v.Pos.W }) // z >= -w
@@ -426,7 +437,24 @@ func clipNearFar(tri [3]Vertex) ([]Vertex, bool) {
 	if len(poly) < 3 {
 		return nil, false
 	}
+	poly = dropWithoutWindowPosition(poly)
+	if len(poly) < 3 {
+		return nil, false
+	}
 	return poly, true
+}
+
+// dropWithoutWindowPosition removes every vertex the perspective divide cannot
+// take, which after the two plane clips is exactly a vertex at w = 0. In place,
+// since the polygon is this package's own.
+func dropWithoutWindowPosition(poly []Vertex) []Vertex {
+	kept := poly[:0]
+	for _, v := range poly {
+		if v.Pos.W > 0 {
+			kept = append(kept, v)
+		}
+	}
+	return kept
 }
 
 // clipPlane is one Sutherland-Hodgman pass against dist >= 0.

@@ -335,6 +335,40 @@ func TestNearPlaneStraddleKeepsTheNearHalf(t *testing.T) {
 	}
 }
 
+// A triangle whose edge passes through the eye still covers its finite part,
+// and every fragment it produces has a window position.
+//
+// The near clip of such an edge lands at z = w = 0, a vertex both plane tests
+// admit and the divide cannot take. Dropping it leaves the rest of the clipped
+// polygon, which is what is drawn; what must not happen is a NaN reaching the
+// pixel loop, where int(NaN) is a different number on each architecture.
+func TestAnEdgeThroughTheEyeCoversItsFinitePart(t *testing.T) {
+	st := state(16, 16)
+	tri := [3]raster.Vertex{
+		{Pos: raster.Clip{X: -1, Y: -1, Z: 1, W: 1}},
+		{Pos: raster.Clip{X: 1, Y: 2, Z: -1, W: -1}},
+		{Pos: raster.Clip{X: 1, Y: 0, Z: 0.5, W: 1}},
+	}
+	n := 0
+	ok := raster.Rasterize(st, tri, func(f raster.Fragment) {
+		n++
+		if math.IsNaN(float64(f.InvW)) || math.IsInf(float64(f.InvW), 0) || f.InvW <= 0 {
+			t.Fatalf("fragment (%d,%d) has 1/w = %v", f.X, f.Y, f.InvW)
+		}
+		if !(f.Depth >= 0 && f.Depth <= 1) {
+			t.Fatalf("fragment (%d,%d) has depth %v, outside [0,1]", f.X, f.Y, f.Depth)
+		}
+	})
+	if !ok || n == 0 {
+		t.Fatal("two vertices in front of the near plane cover something; the vertex at " +
+			"infinity should be dropped, not the primitive")
+	}
+	if got := cover(t, st, tri); len(got) != n {
+		t.Errorf("a second rasterization covered %d pixels against %d: coverage of a "+
+			"primitive through the eye is not deterministic", len(got), n)
+	}
+}
+
 // Reverse-Z, which specs/032-stage-abi.md section 2.5 claims needs no API
 // change: near maps to window 1.0 and far to 0.0 under the existing convention,
 // so a reversed projection is a clear value and a compare function.
