@@ -371,6 +371,46 @@ func TestLinearPoolResets(t *testing.T) {
 	}
 }
 
+// A linear texture pool resets its textures by the rule its buffers follow.
+//
+// Reset closed every buffer handle and forgot the textures, so a texture
+// allocated before the reset stayed open over bytes the next allocation would
+// reuse, and the pool counted it as a live child forever: Close refused a
+// pool that nothing could empty.
+func TestALinearTexturePoolResetsItsTextures(t *testing.T) {
+	d := openCPU(t, accel.CPUOptions{})
+	linear, err := d.NewPool(accel.PoolDescriptor{
+		Kind: accel.MemoryShared, Bytes: 1 << 20, Policy: accel.PoolLinear,
+		Textures: true, Label: "frames",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tex, err := linear.AllocTexture(accel.TextureDescriptor{
+		Format: accel.RGBA8Unorm, Size: accel.Extent{Width: 4, Height: 4},
+		Usage: accel.TextureCopySrc, Label: "frame",
+	})
+	if err != nil {
+		t.Fatalf("texture: %v", err)
+	}
+	if err := linear.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if s := linear.Stats(); s.Used != 0 || s.Allocations != 0 {
+		t.Errorf("after Reset: %+v, want an empty pool", s)
+	}
+	// The handle from before the reset is closed, as a buffer's would be.
+	if _, err := tex.Whole(); err == nil {
+		t.Error("a texture from before Reset is still usable")
+	} else if !errors.Is(err, accel.ErrLifetime) {
+		t.Errorf("stale texture returned %v, want a lifetime error", err)
+	}
+	// And the pool has no children left to refuse over.
+	if err := linear.Close(); err != nil {
+		t.Errorf("Close after Reset: %v", err)
+	}
+}
+
 // TestClosingIsOrderedNotRecursive is spec 001 section 7.2 at both levels:
 // closing a pool with live buffers is reported and frees nothing, and the
 // buffers still work afterwards.

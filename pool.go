@@ -335,10 +335,20 @@ func (p *Pool) Reset() error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Textures are children exactly as buffers are, and the rule is the same
+	// for both: a hold beyond the caller's handle refuses the reset, and a
+	// successful reset closes every handle. Handling only the buffers was the
+	// version that left a texture open over bytes the next allocation would
+	// reuse, and counted it as a live child no Close could get past.
 	for _, b := range p.live {
 		// At M1 the only hold on a buffer is a queue write waiting for a flush;
 		// a submission's retain set joins it at M3 and will need telling apart.
 		if n := b.state.holds() - 1; n > 0 {
+			return &LifetimeError{Op: "Reset", Resource: p.desc.Label, Reason: reasonPending, InFlight: n}
+		}
+	}
+	for _, t := range p.liveTextures {
+		if n := t.state.holds() - 1; n > 0 {
 			return &LifetimeError{Op: "Reset", Resource: p.desc.Label, Reason: reasonPending, InFlight: n}
 		}
 	}
@@ -348,7 +358,11 @@ func (p *Pool) Reset() error {
 	for _, b := range p.live {
 		b.state.beginClose()
 	}
+	for _, t := range p.liveTextures {
+		t.state.beginClose()
+	}
 	p.live = nil
+	p.liveTextures = nil
 	return p.alloc.Reset()
 }
 
