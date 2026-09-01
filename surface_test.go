@@ -459,6 +459,31 @@ func TestAWindowSurfaceNeedsAnExtent(t *testing.T) {
 	}
 }
 
+// A window surface with a negative image count is refused as a headless one
+// is, and before a backend is asked, for the reason the extent is.
+//
+// The headless constructor refused fewer than one image; the windowed one
+// went on to make a slice of that length, which is a panic for a negative
+// count and a slice of nothing for the value the headless one refuses.
+func TestAWindowSurfaceNeedsAnImageCount(t *testing.T) {
+	d := openDevice(t)
+	for _, images := range []int{-1, -8} {
+		_, err := d.NewWindowSurface(accel.NativeHandle{Kind: accel.NativeMetalLayer, Ptr: 1},
+			accel.SurfaceDescriptor{Width: 8, Height: 8, Images: images})
+		if err == nil {
+			t.Errorf("a window surface with %d images was accepted", images)
+			continue
+		}
+		if errors.Is(err, accel.ErrNoPresent) {
+			t.Errorf("%d images was reported as a missing present path, which sends "+
+				"the caller to the wrong place: %v", images, err)
+		}
+		if !strings.Contains(err.Error(), "images") {
+			t.Errorf("the refusal should say what is wrong: %v", err)
+		}
+	}
+}
+
 // A closed device hands out no surfaces of either kind.
 func TestAClosedDeviceMakesNoSurface(t *testing.T) {
 	d, err := accel.OpenCPU(accel.CPUOptions{})

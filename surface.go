@@ -607,6 +607,17 @@ func (d *Device) NewWindowSurface(h NativeHandle, desc SurfaceDescriptor) (*Surf
 		return nil, fmt.Errorf("accel: NewWindowSurface %q: the extent is %dx%d",
 			label, desc.Width, desc.Height)
 	}
+	// The image count belongs to the descriptor, as the extent does, so it is
+	// refused before the backend is asked and with the headless surface's
+	// rule. It was checked after, and only for zero: a negative count reached
+	// make and took the process down.
+	images := desc.Images
+	if images == 0 {
+		images = 2
+	}
+	if images < 1 {
+		return nil, fmt.Errorf("accel: NewWindowSurface %q: %d images", label, images)
+	}
 	p, ok := d.dev.(driver.Presenter)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrNoPresent, d.info.Name)
@@ -616,10 +627,6 @@ func (d *Device) NewWindowSurface(h NativeHandle, desc SurfaceDescriptor) (*Surf
 		return nil, fmt.Errorf("accel: NewWindowSurface %q: %w", label, err)
 	}
 
-	images := desc.Images
-	if images == 0 {
-		images = 2
-	}
 	// The rotating images are buffers, exactly as the headless surface's are,
 	// and presenting converts one into a drawable. specs/033-render-api.md
 	// makes an attachment a buffer view, so the graph renders into a buffer
