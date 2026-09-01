@@ -32,43 +32,72 @@ import (
 //
 // The shape it admits is the one that matters: a contiguous block repeated a
 // whole number of times. A gain vector broadcast across rows, a bias across a
-// batch. Anything else -- an interior axis expanding, a strided operand -- would
-// need a gather kernel with the strides in a uniform block, which the corpus
-// does not have and which specs/025-tensor-operators.md would have to add.
+// batch. Anything else -- an interior axis expanding, a permuted operand --
+// would need a gather kernel with the strides in a uniform block, which is what
+// [Contiguous] runs and what a caller inserts to ask for it.
 type repeats struct {
 	block int // elements in one contiguous run
 	times int // how many times it repeats
 }
 
 // broadcastRepeats reports how to build want from t with copies, if it can be.
+//
+// Decided by strides rather than by rank. A [width] operand against a
+// [rows, width] result and a Broadcast view of it -- shape [rows, width] with
+// strides [0, 1] -- are one read pattern: the trailing axes walk a contiguous
+// run and every axis outside them reads that run again. The first version
+// looked at rank alone and required a contiguous layout, so it took the first
+// spelling and refused the second, and every Broadcast result was refused
+// because every Broadcast result has a zero stride.
+//
+// The walk is from the innermost axis outward. Inside the run each stride is
+// the product of the extents inside it; once an axis repeats -- stride zero, or
+// absent from the operand -- every axis outside it must repeat too, because a
+// run inside a repeat inside a run is a strided pattern rather than a run. A
+// size-one axis has no stride to check and is skipped.
 func broadcastRepeats(t *Tensor, want Shape) (repeats, bool) {
-	if !t.contiguousLayout() {
-		return repeats{}, false
-	}
-	block := t.shape.Elements()
-	total := want.Elements()
-	if block == 0 || total%block != 0 {
-		return repeats{}, false
-	}
-	// The operand must be a *suffix* of the result: its axes align to the right
-	// and each is either equal or absent. An operand with a size-one axis in the
-	// middle would repeat with a stride and is not a run.
 	off := len(want) - len(t.shape)
 	if off < 0 {
 		return repeats{}, false
 	}
-	for i := range t.shape {
-		if t.shape[i] != want[off+i] {
+	block, times := 1, 1
+	repeating := false
+	for i := len(want) - 1; i >= 0; i-- {
+		extent := want[i]
+		if extent == 1 {
+			continue
+		}
+		stride := 0
+		if i >= off {
+			switch d := t.shape[i-off]; d {
+			case extent:
+				stride = t.strides[i-off]
+			case 1:
+				stride = 0
+			default:
+				return repeats{}, false
+			}
+		}
+		switch {
+		case stride == 0:
+			repeating = true
+			times *= extent
+		case repeating, stride != block:
 			return repeats{}, false
+		default:
+			block *= extent
 		}
 	}
-	return repeats{block: block, times: total / block}, true
+	return repeats{block: block, times: times}, true
 }
 
 // materialize records the copies that pack an operand into a transient.
 func (p *Plan) materialize(r *accel.Recorder, op string, t *Tensor, want Shape,
 	src accel.Binding, label string) (accel.Binding, error) {
 
+	// The operator ran this same check when it was recorded and refused at
+	// the caller's line, so this is the lowering's invariant rather than a
+	// diagnostic a caller is expected to see.
 	rep, ok := broadcastRepeats(t, want)
 	if !ok {
 		return accel.Binding{}, fmt.Errorf("an operand of shape %v against a result of %v "+
@@ -86,16 +115,22 @@ func (p *Plan) materialize(r *accel.Recorder, op string, t *Tensor, want Shape,
 	// same transient at a different offset. Written out rather than expressed
 	// as one strided copy, because a strided copy is a texture operation here
 	// and this is a buffer.
+	//
+	// The run starts at the operand's offset, which is nonzero for a slice
+	// taken along a leading axis: contiguous strides from a later element.
 	for i := range rep.times {
 		slice := accel.BufferView{
 			Buffer: dst.Buffer, DType: dst.DType,
 			Offset: dst.Offset + i*rep.block, Count: rep.block,
 		}
 		if src.Buffer.Buffer != nil {
-			r.CopyBuffer(slice, src.Buffer)
+			r.CopyBuffer(slice, accel.BufferView{
+				Buffer: src.Buffer.Buffer, DType: src.Buffer.DType,
+				Offset: src.Buffer.Offset + t.offset, Count: rep.block,
+			})
 			continue
 		}
-		r.CopyFromSlot(slice, src.Slot, 0, rep.block)
+		r.CopyFromSlot(slice, src.Slot, t.offset, rep.block)
 	}
 	p.selections = append(p.selections, KernelSelection{
 		Op:     op,

@@ -153,9 +153,11 @@ func Slice(b *Builder, x *Tensor, axis, start, end int) *Tensor {
 //
 // The expansion is a **zero stride**, which is the whole trick: every index
 // along that axis reads the same element, so nothing is materialized and
-// nothing is copied. A kernel that indexes contiguously cannot read it, which
-// is why lowering refuses a broadcast operand it cannot express as a repeated
-// contiguous run.
+// nothing is copied here. A kernel that indexes contiguously cannot read it,
+// so an elementwise operator materializes the view into a transient when it is
+// a repeated contiguous run -- a row across rows, a vector across a batch --
+// and reports the copies in [Plan.Selections]; any other expansion is refused
+// when that operator is recorded, and [Contiguous] is how a caller packs one.
 func Broadcast(b *Builder, x *Tensor, shape Shape) *Tensor {
 	if poisoned(x) {
 		return b.poison()

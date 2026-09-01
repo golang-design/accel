@@ -26,6 +26,29 @@ import (
 // among kernels; it does not author them, and it does not reach past the device
 // layer to run them. Every operator here becomes an ordinary Recorder dispatch.
 
+// elementwiseOperand refuses an operand the lowering cannot bring to the
+// result's shape, at the caller's line. It returns nil when the operand is
+// fine and the poisoned result otherwise.
+//
+// The elementwise kernels index their operands together, so an operand that is
+// not already the result's shape and layout is materialized into a transient
+// first (materialize.go), and the only layout that materializes with copies
+// alone is a contiguous run repeated a whole number of times. Anything else --
+// an interior axis expanding, a permuted operand -- was refused at Compile,
+// where a diagnostic has no source position and the line that wrote the
+// broadcast is long returned. This is the lowering's own check, run when the
+// operator is recorded so the refusal names the line.
+func (b *Builder) elementwiseOperand(skip int, op string, i int, t *Tensor, want Shape) *Tensor {
+	if _, ok := broadcastRepeats(t, want); ok {
+		return nil
+	}
+	return b.fail(skip+1, op, "operand %d is %v with strides %v at offset %d against a "+
+		"result of %v, which is not a contiguous run repeated a whole number of times -- "+
+		"the only broadcast an elementwise operand is materialized into: a vector across "+
+		"rows, a row across a batch. Insert Contiguous to pack it",
+		i, t.shape, t.strides, t.offset, want)
+}
+
 // binary is the shared body of Add and Mul.
 func binary(b *Builder, op string, k *accel.Kernel, x, y *Tensor, skip int) *Tensor {
 	if poisoned(x, y) {
@@ -44,6 +67,12 @@ func binary(b *Builder, op string, k *accel.Kernel, x, y *Tensor, skip int) *Ten
 	if !ok {
 		return b.fail(skip+1, op, "shapes %v and %v do not broadcast: axes are matched from "+
 			"the right, and only a size-one axis expands", x.shape, y.shape)
+	}
+	if bad := b.elementwiseOperand(skip+1, op, 0, x, shape); bad != nil {
+		return bad
+	}
+	if bad := b.elementwiseOperand(skip+1, op, 1, y, shape); bad != nil {
+		return bad
 	}
 	return b.record(node{
 		op: op, inputs: []*Tensor{x, y}, kernel: k, bcast: true,
@@ -86,6 +115,9 @@ func Scale(b *Builder, x *Tensor, scalarName string) *Tensor {
 	if kind != ScalarF32 {
 		return b.fail(1, "Scale", "%q is declared %v and Scale needs f32", scalarName, kind)
 	}
+	if bad := b.elementwiseOperand(1, "Scale", 0, x, x.shape); bad != nil {
+		return bad
+	}
 	return b.record(node{
 		op: "Scale", inputs: []*Tensor{x}, kernel: &testkernels.ElemScaleKernel, bcast: true,
 		reads: []string{scalarName},
@@ -108,6 +140,9 @@ func SiLU(b *Builder, x *Tensor) *Tensor {
 	}
 	if !elementwiseDType(x.dtype) {
 		return b.fail(1, "SiLU", "%v is not an elementwise dtype", x.dtype)
+	}
+	if bad := b.elementwiseOperand(1, "SiLU", 0, x, x.shape); bad != nil {
+		return bad
 	}
 	return b.record(node{
 		op: "SiLU", inputs: []*Tensor{x}, kernel: &testkernels.SiLUKernel, bcast: true,
@@ -137,6 +172,12 @@ func SwiGLU(b *Builder, gate, value *Tensor) *Tensor {
 		return b.fail(1, "SwiGLU", "shapes %v and %v differ; the fused kernel indexes both "+
 			"operands together, so broadcasting one would need the composed form",
 			gate.shape, value.shape)
+	}
+	if bad := b.elementwiseOperand(1, "SwiGLU", 0, gate, gate.shape); bad != nil {
+		return bad
+	}
+	if bad := b.elementwiseOperand(1, "SwiGLU", 1, value, gate.shape); bad != nil {
+		return bad
 	}
 	return b.record(node{
 		op: "SwiGLU", inputs: []*Tensor{gate, value}, kernel: &testkernels.SwiGLUKernel,

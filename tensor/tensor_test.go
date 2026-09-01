@@ -460,17 +460,19 @@ func TestPortsAreDiscoverable(t *testing.T) {
 
 // The refusals that belong to lowering rather than to inference.
 //
-// Broadcasting is inferred and not yet materialized, so a shape that infers
-// correctly can still fail to lower. Refusing by name is what keeps that
-// honest: the alternative is a kernel indexing operands of different extents,
-// which reads the wrong elements rather than repeating them.
+// A shape that infers correctly can still be one no kernel reads. Refusing by
+// name is what keeps that honest: the alternative is a kernel indexing operands
+// of different extents, which reads the wrong elements rather than repeating
+// them.
 func TestLoweringRefusals(t *testing.T) {
 	rt := newRuntime(t)
 
 	t.Run("a broadcast that is not a repeated run", func(t *testing.T) {
 		// A size-one axis in the *middle* of the result: expanding it repeats
 		// with a stride rather than as a run, so copies alone cannot build it
-		// and the refusal says which shape it can build.
+		// and the refusal says which shape it can build. Refused when Add is
+		// recorded, at this file's line, and Compile reports what recording
+		// refused.
 		b := rt.NewBuilder("bc")
 		x := tensor.Input(b, tensor.ValueDesc{
 			Name: "x", DType: accel.F32, Shape: tensor.Shape{4, 2, 8},
@@ -479,6 +481,11 @@ func TestLoweringRefusals(t *testing.T) {
 			Name: "y", DType: accel.F32, Shape: tensor.Shape{4, 1, 8},
 		})
 		tensor.Output(b, "z", tensor.Add(b, x, y))
+		if err := b.Err(); err == nil {
+			t.Fatal("a broadcast that is not a repeated run was recorded")
+		} else if !strings.Contains(err.Error(), "tensor_test.go:") {
+			t.Errorf("the refusal should name the line that wrote it: %v", err)
+		}
 		if _, err := b.Compile(rt, tensor.CompileOptions{}); err == nil {
 			t.Fatal("a broadcast that is not a repeated run lowered")
 		} else if !strings.Contains(err.Error(), "contiguous run repeated") {

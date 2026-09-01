@@ -122,10 +122,11 @@ func viewParityCase() tensorParityCase {
 
 			// A gather feeding an add, and a broadcast of one row feeding the
 			// same add: a contiguous run repeated whole, which is the shape
-			// this version materializes.
+			// the operator materializes on both backends. The view used to
+			// be wrapped in Contiguous here, because the lowering decided by
+			// rank and refused every zero-stride operand.
 			g := tensor.Add(b, tensor.GatherRows(b, tbl, idv), bv)
-			g = tensor.Add(b, g, tensor.Contiguous(b,
-				tensor.Broadcast(b, rv, tensor.Shape{rows, width})))
+			g = tensor.Add(b, g, tensor.Broadcast(b, rv, tensor.Shape{rows, width}))
 
 			// Reshaped into the [tokens, heads, dim] RoPE takes -- one head,
 			// because a position is per token and the operator refuses a
@@ -244,8 +245,8 @@ func int4ParityCase() tensorParityCase {
 			mat := tensor.Int4{Codes: cw, Scales: sw, Zeros: zw, Weights: K * N}
 			vec := tensor.Reshape(b, tensor.Int4MatVec(b, av, mat), tensor.Shape{1, N})
 			mm := tensor.Int4MatMul(b, mv, mat)
-			tensor.Output(b, "out", tensor.Add(b, tensor.Contiguous(b,
-				tensor.Broadcast(b, vec, tensor.Shape{2, N})), mm))
+			tensor.Output(b, "out", tensor.Add(b,
+				tensor.Broadcast(b, vec, tensor.Shape{2, N}), mm))
 
 			m := make([]float32, 2*K)
 			copy(m, a)
