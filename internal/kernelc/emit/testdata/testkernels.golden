@@ -1156,6 +1156,11 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct AttnDims {
     uint QHeads;
     uint KVHeads;
@@ -1209,12 +1214,12 @@ kernel void AttentionDecode(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
@@ -1494,6 +1499,11 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct AttnDims {
     uint QHeads;
     uint KVHeads;
@@ -1544,12 +1554,12 @@ kernel void AttentionDecodeF16(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
@@ -2323,6 +2333,11 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct BatchedDims {
     uint Batch;
     uint QHeads;
@@ -2384,12 +2399,12 @@ kernel void AttentionDecodeBatched(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
@@ -4013,9 +4028,9 @@ kernel void ElemBias(
     uint i = _gid.x;
     if ((i < uint(int(_lens[1])))) {
         if ((p.Offset < int(0))) {
-            out[i] = (in[i] - p.Offset);
+            out[i] = int(uint(in[i]) - uint(p.Offset));
         } else {
-            out[i] = (in[i] + p.Offset);
+            out[i] = int(uint(in[i]) + uint(p.Offset));
         }
     }
 }
@@ -7274,6 +7289,11 @@ var SoftmaxKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct RowDims {
     uint Rows;
     uint Width;
@@ -7300,13 +7320,13 @@ kernel void Softmax(
     float m = x[(base + (lid % d.Width))];
     for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
         float v = x[(base + i)];
-        m = max(m, v);
+        m = _accel_fmax(m, v);
     }
     sh[lid] = m;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
         if ((lid < stride)) {
-            sh[lid] = max(sh[lid], sh[(lid + stride)]);
+            sh[lid] = _accel_fmax(sh[lid], sh[(lid + stride)]);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
     }
@@ -7422,7 +7442,7 @@ kernel void Pack(
     if ((i < p.Count)) {
         uint rem = i;
         uint at = p.Offset;
-        for (int axis = int(7); (axis >= int(0)); axis = (axis - int(1))) {
+        for (int axis = int(7); (axis >= int(0)); axis = int(uint(axis) - uint(int(1)))) {
             uint a = uint(axis);
             if ((a < p.Rank)) {
                 uint e = p.Extent[a][0];
@@ -7675,6 +7695,11 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct PagedDims {
     uint QHeads;
     uint KVHeads;
@@ -7731,12 +7756,12 @@ kernel void AttentionDecodePaged(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
@@ -8023,6 +8048,11 @@ var AttentionDecodePagedF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct PagedDims {
     uint QHeads;
     uint KVHeads;
@@ -8079,12 +8109,12 @@ kernel void AttentionDecodePagedF16(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
@@ -8386,6 +8416,11 @@ var AttentionPrefillPagedF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct PagedPrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -8453,12 +8488,12 @@ kernel void AttentionPrefillPagedF16(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if (visible) {
@@ -8985,6 +9020,11 @@ var AttentionPrefillKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct PrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -9049,12 +9089,12 @@ kernel void AttentionPrefill(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if (visible) {
@@ -9350,6 +9390,11 @@ var AttentionPrefillF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct PrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -9414,12 +9459,12 @@ kernel void AttentionPrefillF16(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if (visible) {
@@ -9720,6 +9765,11 @@ var AttentionPrefillPagedKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct PagedPrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -9787,12 +9837,12 @@ kernel void AttentionPrefillPaged(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if (visible) {
@@ -10378,6 +10428,11 @@ var AttentionRaggedKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct RaggedDims {
     uint Batch;
     uint QHeads;
@@ -10466,12 +10521,12 @@ kernel void AttentionRagged(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if (visible) {
@@ -10801,6 +10856,11 @@ var AttentionRaggedF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+
 struct RaggedDims {
     uint Batch;
     uint QHeads;
@@ -10889,12 +10949,12 @@ kernel void AttentionRaggedF16(
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
             if ((lane < stride)) {
-                red[lane] = max(red[lane], red[(lane + stride)]);
+                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
             threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         }
         float blockMax = red[int(0)];
-        float next = max(m, blockMax);
+        float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if (visible) {
@@ -11100,7 +11160,7 @@ kernel void CountAbove(
         if ((in[j] <= float(0))) {
             continue;
         }
-        count = (count + int(1));
+        count = int(uint(count) + uint(int(1)));
     }
     uint j = uint(0);
     for (; (j < limit); ) {
@@ -12383,7 +12443,7 @@ fragment SampledFS_out SampledFS(
     int x = _accel_to_i32(in.Texel[int(0)]);
     int y = _accel_to_i32(in.Texel[int(1)]);
     float4 here = _accel_fetch2d(src, x, y);
-    float4 left = _accel_fetch2d(src, (x - int(1)), y);
+    float4 left = _accel_fetch2d(src, int(uint(x) - uint(int(1))), y);
     _out.Colour = float4(here[int(0)], here[int(1)], here[int(2)], left[int(0)]);
     return _out;
 }
@@ -12616,7 +12676,7 @@ vertex IndexedVS_out IndexedVS(
     }
     _out._pos = float4(x, y, as_type<float>(0x3F000000u) /* 0.5 */, float(1));
     _out.Tint = float4(float(0), float(1), float(0), float(1));
-    _out.ID = ((int(i) * int(100)) + int(7));
+    _out.ID = int(uint(int(uint(int(i)) * uint(int(100)))) + uint(int(7)));
     _out._pos.z = (_out._pos.z + _out._pos.w) * 0.5;
     return _out;
 }

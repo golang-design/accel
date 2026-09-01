@@ -212,6 +212,23 @@ var mslPrelude = []struct{ name, text string }{
     return uint(x);
 }
 `},
+
+	// NaN-propagating minimum and maximum, kmath.Min and kmath.Max's contract.
+	//
+	// The NaN test is x != x for the reason to_i32's is, and the result is the
+	// quiet NaN kmath returns, spelled by its bits so the differential can
+	// compare them exactly. Once neither operand is NaN, fmin and fmax are the
+	// ordinary minimum and maximum.
+	{"fmin", `static float _accel_fmin(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmin(a, b);
+}
+`},
+	{"fmax", `static float _accel_fmax(float a, float b) {
+    if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
+    return fmax(a, b);
+}
+`},
 	{"cas_u32", `static uint _accel_cas_u32(device atomic_uint *p, uint expected, uint desired) {
     uint e = expected;
     while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
@@ -989,11 +1006,33 @@ func (m *msl) binary(v *ir.Binary) {
 		m.printf(")")
 		return
 	}
+	// Signed add, subtract and multiply wrap, which specs/008-numerics.md
+	// section 3 makes exact and which Go's int32 does. MSL's int does not: an
+	// overflowing signed operation is undefined, and the compiler folds what
+	// it may assume never happens. Unsigned arithmetic is defined to wrap, so
+	// the operation goes through uint and the bits come back as int -- the
+	// same bits Go produces, on every input.
+	if v.Type() != nil && v.Type().Kind == ir.I32 && wrapsOnOverflow(v.Op) {
+		m.printf("int(uint(")
+		m.value(v.X)
+		m.printf(") %s uint(", v.Op)
+		m.value(v.Y)
+		m.printf("))")
+		return
+	}
 	m.printf("(")
 	m.value(v.X)
 	m.printf(" %s ", v.Op)
 	m.value(v.Y)
 	m.printf(")")
+}
+
+// wrapsOnOverflow reports whether an integer operator is one specs/008 defines
+// as wrapping. Shifts and division are not: the spec makes their excluded
+// cases build errors or strict-mode execution errors, and neither exists on
+// this target yet.
+func wrapsOnOverflow(op token.Token) bool {
+	return op == token.ADD || op == token.SUB || op == token.MUL
 }
 
 // constant emits a literal in its resolved type.
@@ -1114,6 +1153,26 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.value(v.Args[0])
 		m.printf(")")
 		return
+
+	// A float minimum or maximum propagates a NaN, which is kmath's contract
+	// and is not MSL's: min and max on float are fmin and fmax, which return
+	// the *other* operand when one is NaN. The oracle runs kmath, so a bare
+	// min here agreed with it on every input but the one the contract is
+	// about. The integer forms have no NaN and keep the built-in.
+	case ir.OpMin, ir.OpMax:
+		if len(v.Args) == 2 && v.Args[0].Type() != nil && v.Args[0].Type().Kind == ir.F32 {
+			name := "fmin"
+			if v.Op == ir.OpMax {
+				name = "fmax"
+			}
+			m.need[name] = true
+			m.printf("_accel_%s(", name)
+			m.value(v.Args[0])
+			m.printf(", ")
+			m.value(v.Args[1])
+			m.printf(")")
+			return
+		}
 
 	case ir.OpBarrier:
 		// Shared *and* storage, which is what Thread.Barrier means:
@@ -1448,6 +1507,10 @@ var mslLaneRead = map[ir.Opcode]string{
 //
 // abs is fabs because MSL's abs is the integer one, and the C rule that picks
 // between them silently returns an int for a float argument.
+//
+// min and max here are the integer forms only. A float minimum goes through
+// the NaN-propagating helper the intrinsic switch selects first, because
+// MSL's float min is fmin and fmin drops a NaN operand.
 var mslIntrinsic = map[ir.Opcode]string{
 	ir.OpSqrt:  "precise::sqrt",
 	ir.OpRSqrt: "rsqrt",
