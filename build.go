@@ -145,7 +145,7 @@ func (g *Graph) placeTransients() error {
 	for _, t := range g.transients {
 		g.memory.UnaliasedBytes += alignUp(t.bytes, align)
 	}
-	total := g.memory.UnaliasedBytes
+	var total int
 	if g.naive {
 		// No aliasing: consecutive placement, each transient its own bytes. This
 		// is half of what makes the naive plan an oracle, the other half being

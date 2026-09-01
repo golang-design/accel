@@ -6,7 +6,6 @@ package accel
 
 import (
 	"fmt"
-	"math/bits"
 	"strings"
 )
 
@@ -360,16 +359,4 @@ func (g *Graph) reaches(a, b NodeID) bool {
 	}
 	row := g.reach[int(a)*g.reachWords : (int(a)+1)*g.reachWords]
 	return row[int(b)/64]&(1<<(uint(b)%64)) != 0
-}
-
-// popcount reports how many nodes a node reaches, for statistics and tests.
-func (g *Graph) reachCount(a NodeID) int {
-	if g.reachWords == 0 {
-		return 0
-	}
-	n := 0
-	for _, w := range g.reach[int(a)*g.reachWords : (int(a)+1)*g.reachWords] {
-		n += bits.OnesCount64(w)
-	}
-	return n
 }
