@@ -156,20 +156,40 @@ func (t *Texture) Size() Extent { return t.desc.Size }
 func (t *Texture) Bytes() int { return t.bytes }
 
 // Close releases the texture.
+//
+// Closing while something using this texture is still outstanding is reported
+// rather than crashing, by the rule [Buffer.Close] follows: the texture stays
+// valid until every hold on it is gone, its memory comes back then, and the
+// caller learns that their teardown ordering was wrong. Returning nil here
+// was the version that forgot the texture and left the pool counting a child
+// nobody could reach.
 func (t *Texture) Close() error {
 	if !t.state.beginClose() {
 		return nil
 	}
 	if t.state.release() {
-		t.free()
+		return t.free()
 	}
-	if t.ownsPool {
-		return t.pool.Close()
+	return &LifetimeError{
+		Op:       "Close",
+		Resource: t.desc.Label,
+		Reason:   reasonPending,
+		InFlight: t.state.holds(),
 	}
-	return nil
 }
 
-func (t *Texture) free() {
+// release drops one hold, freeing the texture if it was the last.
+func (t *Texture) release() {
+	if t.state.release() {
+		_ = t.free()
+	}
+}
+
+// free returns the texture's memory to its pool, and closes the pool when the
+// texture owns it. It runs exactly once, when the last hold goes away, which
+// is either inside Close or inside the path that completes the work still
+// holding it.
+func (t *Texture) free() error {
 	p := t.pool
 	p.mu.Lock()
 	// A linear pool frees by Reset, so an individual free is a no-op against
@@ -185,4 +205,8 @@ func (t *Texture) free() {
 		}
 	}
 	p.mu.Unlock()
+	if t.ownsPool {
+		return p.Close()
+	}
+	return nil
 }
