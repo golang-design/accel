@@ -124,7 +124,11 @@ func (r *Recorder) CopyBuffer(dst, src BufferView) NodeID {
 // CopyFromSlot records a device-to-device copy whose source arrives before
 // submission.
 func (r *Recorder) CopyFromSlot(dst BufferView, src Slot, offset, count int) NodeID {
-	d, _ := r.slotDescriptor(src)
+	d, ok := r.slotDescriptor(src)
+	if !ok {
+		r.fail("CopyFromSlot: slot %d was not declared by this recorder", int(src))
+		return r.node(NodeCopyBuffer, "CopyFromSlot", nil, nil)
+	}
 	return r.copy("CopyFromSlot",
 		r.operandOf("CopyFromSlot", dst, AccessWrite),
 		r.slotOperand("CopyFromSlot", src, offset*d.DType.Size(), count*d.DType.Size(), AccessRead))
@@ -133,7 +137,11 @@ func (r *Recorder) CopyFromSlot(dst BufferView, src Slot, offset, count int) Nod
 // CopyToSlot records a device-to-device copy whose destination arrives before
 // submission.
 func (r *Recorder) CopyToSlot(dst Slot, offset, count int, src BufferView) NodeID {
-	d, _ := r.slotDescriptor(dst)
+	d, ok := r.slotDescriptor(dst)
+	if !ok {
+		r.fail("CopyToSlot: slot %d was not declared by this recorder", int(dst))
+		return r.node(NodeCopyBuffer, "CopyToSlot", nil, nil)
+	}
 	return r.copy("CopyToSlot",
 		r.slotOperand("CopyToSlot", dst, offset*d.DType.Size(), count*d.DType.Size(), AccessWrite),
 		r.operandOf("CopyToSlot", src, AccessRead))

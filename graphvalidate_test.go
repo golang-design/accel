@@ -65,6 +65,28 @@ func TestValidationRows(t *testing.T) {
 			return g.Bind(accel.SlotBinding{Slot: s, Buffer: whole(t, b)})
 		},
 	}, {
+		row:  "V1",
+		what: "a copy from a slot this recorder did not declare",
+		says: "CopyFromSlot: slot 99 was not declared by this recorder",
+		run: func(t *testing.T, d *accel.Device) error {
+			dst := newBuffer(t, d, "dst", 4, accel.BufferStorage|accel.BufferCopyDst)
+			r := d.NewRecorder()
+			r.CopyFromSlot(whole(t, dst), accel.Slot(99), 0, 4)
+			_, err := r.Build()
+			return err
+		},
+	}, {
+		row:  "V1",
+		what: "a copy to a slot this recorder did not declare",
+		says: "CopyToSlot: slot 99 was not declared by this recorder",
+		run: func(t *testing.T, d *accel.Device) error {
+			src := newBuffer(t, d, "src", 4, accel.BufferStorage|accel.BufferCopySrc)
+			r := d.NewRecorder()
+			r.CopyToSlot(accel.Slot(99), 0, 4, whole(t, src))
+			_, err := r.Build()
+			return err
+		},
+	}, {
 		row:  "V18",
 		what: "a copy whose ends are different sizes",
 		says: "the destination holds 16 bytes and the source 8",
