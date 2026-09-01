@@ -63,14 +63,12 @@ type State struct {
 	poison bool
 }
 
-// Persistent declares caller-owned mutable storage.
+// NewState declares caller-owned mutable storage.
 //
 // Never transient and never aliased by the planner: the caller owns the buffer
 // and its contents outlive the submission, which is the whole point of a cache.
 func NewState(b *Builder, d StateDesc) *State {
-	t := b.declare(1, "Persistent", ValueDesc{
-		Name: d.Name, DType: d.DType, Shape: d.Shape,
-	}, PortState)
+	t := b.declare(1, "NewState", ValueDesc(d), PortState)
 	if t.poison {
 		return &State{b: b, poison: true, producer: -1}
 	}

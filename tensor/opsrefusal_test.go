@@ -46,6 +46,15 @@ func TestTheOperatorDtypeAndShapeRefusals(t *testing.T) {
 		},
 		want: "a scalar is a shape of [1]",
 	}, {
+		// The diagnostic names the operator a caller wrote. It said
+		// "Persistent", an operator that no longer exists, so a reader
+		// searching for it found nothing.
+		name: "a state with no name",
+		build: func(b *tensor.Builder) {
+			tensor.NewState(b, tensor.StateDesc{DType: accel.F32, Shape: tensor.Shape{4}})
+		},
+		want: "NewState at",
+	}, {
 		name:  "an output with no name",
 		build: func(b *tensor.Builder) { tensor.Output(b, "", f32(b, "x", 4)) },
 		want:  "an output needs a name",
