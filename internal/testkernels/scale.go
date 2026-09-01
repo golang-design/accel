@@ -2,7 +2,18 @@
 // All rights reserved. Use of this source code is governed by
 // a BSD-style license that can be found in the LICENSE file.
 
-// Package testkernels is the kernel corpus the compiler is developed against.
+// Package testkernels is the kernel corpus: every compute kernel and render
+// stage the repository ships, authored in the Go subset and compiled by
+// cmd/accel-kernel.
+//
+// The name is older than the role. It began as the corpus the compiler was
+// developed against, and it is still that, but it is also the production
+// kernel set: package tensor imports it from thirteen non-test files and every
+// operator there lowers to a kernel registered here. Nothing else authors a
+// kernel. A change to a body in this package changes what a tensor plan
+// computes on every backend, which is why each kernel carries a differential
+// test against the CPU oracle and why the generated file is checked for
+// freshness.
 //
 // It is the authored source, not the generated output: the generated file sits
 // beside it and is committed, so freshness has something to compare and a
