@@ -288,6 +288,24 @@ func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding, us []Unifor
 
 func (r *Recorder) bindingAccess(p *ComputePipeline, b Binding, slot kernel.Binding) (access, bool) {
 	mode := publicAccess(slot.Access)
+	// Exactly one of the three is set, as Binding documents. Preferring one
+	// silently was the version that let a caller name a buffer and a slot
+	// and have the buffer ignored.
+	var set []string
+	if b.Buffer.Buffer != nil {
+		set = append(set, "Buffer")
+	}
+	if b.Texture != nil {
+		set = append(set, "Texture")
+	}
+	if b.Slot != 0 {
+		set = append(set, "Slot")
+	}
+	if len(set) > 1 {
+		r.fail("Dispatch %q: binding %q names %s; a binding names exactly one of "+
+			"Buffer, Texture and Slot", p.label, slot.Name, strings.Join(set, " and "))
+		return access{}, false
+	}
 	if b.Texture != nil {
 		r.fail("Dispatch %q: binding %q is a buffer and textures arrive with "+
 			"specs/001-device-resources.md section 4", p.label, slot.Name)

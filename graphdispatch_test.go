@@ -244,6 +244,28 @@ func TestDispatchValidationRows(t *testing.T) {
 			return err
 		},
 	}, {
+		// Binding's documentation makes several set fields a validation
+		// error; the code preferred Slot and silently ignored the buffer.
+		row:  "V1",
+		what: "a binding naming both a buffer and a slot",
+		says: `binding "a" names Buffer and Slot; a binding names exactly one`,
+		run: func(t *testing.T, d *accel.Device) error {
+			p := addPipeline(t, d)
+			in := newBuffer(t, d, "in", 64, storage)
+			r := d.NewRecorder()
+			a := r.Slot(accel.SlotDescriptor{
+				Name: "a", Kind: accel.BindingStorageBuffer,
+				DType: accel.F32, Access: accel.AccessRead, MinCount: 64,
+			})
+			r.Dispatch(p, []accel.Binding{
+				{Index: 0, Buffer: whole(t, in), Slot: a},
+				{Index: 1, Buffer: whole(t, in)},
+				{Index: 2, Buffer: whole(t, in)},
+			}, nil, accel.WorkgroupCount{X: 1})
+			_, err := r.Build()
+			return err
+		},
+	}, {
 		row:  "V3",
 		what: "a view whose dtype differs from the layout's",
 		says: "is f32 and the view is u32",

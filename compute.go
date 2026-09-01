@@ -337,8 +337,11 @@ type ComputePipeline struct {
 // inferred access, and requirements.
 func (p *ComputePipeline) Kernel() *Kernel { return p.kernel }
 
-// Close releases the pipeline. It fails while a graph still names it, because
-// a graph submitted afterwards would dispatch a kernel whose pipeline is gone.
+// Close releases the pipeline.
+//
+// A graph built with it is unaffected: Build lowered the kernel into the
+// graph's executable, which holds what it needs on its own, so the handle is
+// what Close retires. A dispatch recorded after Close is refused as closed.
 func (p *ComputePipeline) Close() error {
 	if !p.state.beginClose() {
 		return nil
@@ -420,8 +423,8 @@ type BindingSlot struct {
 // at a different resource of the same type, dtype, and access is allowed, and
 // anything more than that is a different graph.
 //
-// Exactly one of Buffer, Texture, Sampler and Slot is set, and setting none or
-// several is a validation error naming the binding. Slot is the indirection that
+// Exactly one of Buffer, Texture and Slot is set, and setting none or several
+// is a validation error naming the binding. Slot is the indirection that
 // makes a graph replayable: naming a [Slot] instead of a resource says the
 // resource arrives before submission rather than at record time, which is how a
 // swapchain image that does not exist yet, or one sequence's cache out of many,
@@ -447,7 +450,8 @@ type Binding struct {
 
 	// Slot supplies the resource before submission instead of at record time. Its
 	// zero value is not a slot, so a Binding that set none of the three is
-	// rejected rather than silently referring to the first one.
+	// rejected rather than silently referring to the first one, and one that
+	// set several is rejected rather than silently preferring one.
 	Slot Slot
 }
 
