@@ -435,7 +435,11 @@ func TestAStuckKernelIsReportedFromAWorker(t *testing.T) {
 		OrderIndependent: true,
 		Cooperative: func(t kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
 			// Never advances, which is what a generated program counter that
-			// does not move looks like.
+			// does not move looks like. It still names its barrier, as a
+			// generated lowering does: every invocation is at the same one
+			// every epoch, so the arrival check has nothing to report and the
+			// epoch bound is what catches it.
+			f.Barrier = kernel.BarrierID{Index: 0}
 			return true
 		},
 	}

@@ -133,8 +133,13 @@ type scheduler struct {
 
 	// tracker is one tracker for the whole workgroup, shared by every
 	// invocation, because what it checks is what the invocations did to each
-	// other. Nil in strict mode, where every call the generated code makes on
-	// it is a no-op the compiler removes.
+	// other. Nil when diagnostics are off, where every call the generated code
+	// makes on it is a no-op the compiler removes.
+	//
+	// It exists whenever diagnostics are on, whether or not the kernel declares
+	// shared arrays: a kernel whose barrier orders storage rather than shared
+	// memory still has arrivals to check, and it was that class of kernel that
+	// went unchecked while the tracker's existence was tied to SharedSizes.
 	tracker *SharedTracker
 
 	// args is this worker's own copy. The slices in it are the dispatch's
@@ -155,7 +160,7 @@ func newScheduler(k *Kernel, args Args, invocations int, opts Options) *schedule
 		args:    args,
 		order:   make([]int, invocations),
 	}
-	if opts.Diagnostics && len(k.SharedSizes) > 0 {
+	if opts.Diagnostics {
 		s.tracker = NewSharedTracker(k.Name, ID3{}, k.SharedSizes)
 	}
 	return s
@@ -660,12 +665,29 @@ func broadcastF32(frames []Frame, lanes []int, v float32) {
 // It is a detection rather than a timeout, so it is not flaky and it fires on
 // the first offending run. specs/002-compute-model.md section 3.4 says the CPU
 // backend catching this is a large part of why it is worth having.
-func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTracker) error {
-	if tracker == nil {
+//
+// It is gated on the diagnostics switch and on nothing else. It once returned
+// early on a nil tracker, and the tracker was nil for every kernel without
+// shared arrays, so a barrier that ordered storage rather than shared memory
+// had its arrivals unchecked in developer mode.
+//
+// # A subgroup operation is not a barrier
+//
+// An invocation suspended at a subgroup operation is at a rendezvous whose
+// participants are whoever reached it: specs/002-compute-model.md §5.3 makes
+// such an operation legal in divergent control flow, and §5.2 defines it over
+// the lanes that are there. So a lane that finished, or that is elsewhere,
+// while its peers wait at a subgroup operation is not a mismatch, and an epoch
+// in which every suspended invocation is at one has no barrier to check. The
+// expected barrier is taken from the first invocation suspended at a *barrier*,
+// and only when there is one are the finished and the elsewhere reported.
+func checkArrival(k *Kernel, threads []Thread, frames []Frame, diag bool) error {
+	if !diag {
 		return nil
 	}
-	// An invocation that suspended without saying where is a defect in the
-	// generated lowering, and it is reported as one rather than skipped.
+	// An invocation that suspended at a barrier without saying which is a
+	// defect in the generated lowering, and it is reported as one rather than
+	// skipped.
 	//
 	// Skipping is the tempting reading -- there is no id to compare against --
 	// and it is absence of evidence read as evidence of absence: with no
@@ -674,7 +696,7 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 	// silently, which is worse than the mismatch it exists to find.
 	var ds Diagnostics
 	for i := range frames {
-		if !frames[i].Done && frames[i].Barrier.Index < 0 {
+		if !frames[i].Done && frames[i].Sub == SubNone && frames[i].Barrier.Index < 0 {
 			ds = append(ds, Diagnostic{
 				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
 				Invocation: threads[i].LocalID(), Element: -1,
@@ -703,7 +725,7 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 	var expectBy ID3
 	found := false
 	for i := range frames {
-		if frames[i].Done {
+		if frames[i].Done || frames[i].Sub != SubNone {
 			continue
 		}
 		expect, expectBy, found = frames[i].Barrier, threads[i].LocalID(), true
@@ -729,11 +751,14 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 					", so that barrier can never be reached by every invocation",
 			})
 		case frames[i].Barrier != expect:
+			// At another barrier, or at a subgroup operation it will resume
+			// from into an epoch its peers have already left: either way it is
+			// not at this barrier when everyone must be.
 			ds = append(ds, Diagnostic{
 				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
 				Invocation: threads[i].LocalID(), Other: expectBy, HasOther: true,
 				Element: -1,
-				Detail: "it suspended at " + frames[i].Barrier.Describe() +
+				Detail: "it suspended at " + describeSuspension(frames[i]) +
 					" while its peer waits at " + expect.Describe(),
 			})
 		}
@@ -743,6 +768,15 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 	}
 	ds.sortStable()
 	return ds
+}
+
+// describeSuspension names where an invocation stopped: a barrier by its id,
+// a subgroup operation by its name and the id the lowering recorded for it.
+func describeSuspension(f Frame) string {
+	if f.Sub != SubNone {
+		return fmt.Sprintf("%v (%s)", f.Sub, f.Barrier.Describe())
+	}
+	return f.Barrier.Describe()
 }
 
 // checkSubgroupArrival is [checkArrival] with the scope narrowed to one
@@ -756,6 +790,10 @@ func checkArrival(k *Kernel, threads []Thread, frames []Frame, tracker *SharedTr
 // A workgroup barrier reached by only some subgroups is *not* this function's
 // case and is caught by the caller: the first active invocation's barrier is
 // then a workgroup one, so every invocation is compared against it.
+//
+// A subgroup whose suspended lanes are all at a subgroup operation has no
+// barrier expectation, for the reason [checkArrival] gives: the operation's
+// participants are whoever reached it.
 func checkSubgroupArrival(k *Kernel, threads []Thread, frames []Frame) error {
 	type expectation struct {
 		id BarrierID
@@ -764,46 +802,45 @@ func checkSubgroupArrival(k *Kernel, threads []Thread, frames []Frame) error {
 	expect := map[uint32]expectation{}
 	var ds Diagnostics
 
+	// The expectation for each subgroup is its first lane suspended at a
+	// barrier, found in one pass before anything is compared: a lane at a
+	// subgroup operation or a finished lane may precede it in lane order.
 	for i := range frames {
-		if frames[i].Done {
+		if frames[i].Done || frames[i].Sub != SubNone {
 			continue
 		}
 		sg := threads[i].SubgroupIndex()
-		e, seen := expect[sg]
-		if !seen {
+		if _, seen := expect[sg]; !seen {
 			expect[sg] = expectation{id: frames[i].Barrier, by: threads[i].LocalID()}
-			continue
-		}
-		if frames[i].Barrier != e.id {
-			ds = append(ds, Diagnostic{
-				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
-				Invocation: threads[i].LocalID(), Other: e.by, HasOther: true,
-				Element: -1,
-				Detail: "it suspended at " + frames[i].Barrier.Describe() +
-					" while a lane of its own subgroup waits at " + e.id.Describe(),
-			})
 		}
 	}
 
-	// A lane that returned while its subgroup waits. Separate from the loop
-	// above because a finished lane carries no barrier to compare, and the
-	// expectation for its subgroup may be discovered after it.
 	for i := range frames {
-		if !frames[i].Done {
-			continue
-		}
 		sg := threads[i].SubgroupIndex()
 		e, waiting := expect[sg]
 		if !waiting {
 			continue
 		}
-		ds = append(ds, Diagnostic{
-			Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
-			Invocation: threads[i].LocalID(), Other: e.by, HasOther: true,
-			Element: -1,
-			Detail: "it returned while a lane of its own subgroup waits at " +
-				e.id.Describe() + ", so that barrier can never be reached by every lane",
-		})
+		switch {
+		case frames[i].Done:
+			// A lane that returned while its subgroup waits: it can never
+			// arrive, for the reason one cannot at workgroup scope.
+			ds = append(ds, Diagnostic{
+				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+				Invocation: threads[i].LocalID(), Other: e.by, HasOther: true,
+				Element: -1,
+				Detail: "it returned while a lane of its own subgroup waits at " +
+					e.id.Describe() + ", so that barrier can never be reached by every lane",
+			})
+		case frames[i].Barrier != e.id:
+			ds = append(ds, Diagnostic{
+				Kind: DiagArrival, Kernel: k.Name, Workgroup: threads[i].GroupID(),
+				Invocation: threads[i].LocalID(), Other: e.by, HasOther: true,
+				Element: -1,
+				Detail: "it suspended at " + describeSuspension(frames[i]) +
+					" while a lane of its own subgroup waits at " + e.id.Describe(),
+			})
+		}
 	}
 
 	if len(ds) == 0 {
@@ -895,7 +932,7 @@ func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracke
 		if ds := combineSubgroups(k.Name, threads, frames, diag); len(ds) > 0 {
 			return ds
 		}
-		if err := checkArrival(k, threads, frames, tracker); err != nil {
+		if err := checkArrival(k, threads, frames, diag); err != nil {
 			return err
 		}
 		// The epoch ends here, which is what a barrier means and what bounds

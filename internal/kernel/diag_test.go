@@ -360,6 +360,45 @@ func TestBarrierArrivalMismatchesAreReported(t *testing.T) {
 	}
 }
 
+// Arrival is checked for a kernel with barriers and no shared arrays.
+//
+// The tracker used to exist only when a kernel declared shared memory, and the
+// arrival check was skipped without one, so a kernel synchronising storage
+// through a barrier -- PublishStorage, Ballot, every kernel whose barrier
+// orders global memory -- had a returning invocation go unreported in
+// developer mode. Every other arrival test declares SharedSizes, which is
+// why none of them caught it.
+func TestArrivalIsCheckedWithoutSharedArrays(t *testing.T) {
+	k := &kernel.Kernel{
+		Name: "NoShared", WorkgroupSize: kernel.ID3{X: 4, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion, Suspensions: 1,
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if th.LocalID().X == 2 {
+				return false // finishes without ever reaching the barrier
+			}
+			if f.Pass == 0 {
+				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0, Pos: "k.go:10:2"}
+				return true
+			}
+			return false
+		},
+	}
+	err := kernel.DispatchCooperative(k, kernel.ID3{X: 1}, kernel.Args{})
+	if err == nil {
+		t.Fatal("an invocation returned while its peers wait at a barrier and nothing " +
+			"reported it: the arrival check is gated on shared arrays rather than on " +
+			"diagnostics")
+	}
+	var ds kernel.Diagnostics
+	if !errors.As(err, &ds) || ds[0].Kind != kernel.DiagArrival {
+		t.Fatalf("got %v, want a barrier arrival mismatch", err)
+	}
+	if !strings.Contains(err.Error(), "it returned while its peers wait") {
+		t.Errorf("the message should name the returning invocation, got:\n%v", err)
+	}
+}
+
 // A workgroup where every invocation reaches the same barrier reports nothing,
 // or the checks above would be firing on every correct kernel.
 func TestUniformArrivalIsNotReported(t *testing.T) {
