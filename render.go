@@ -6,6 +6,7 @@ package accel
 
 import (
 	"fmt"
+	"strings"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
@@ -1016,11 +1017,8 @@ func (p *RenderPass) DrawIndexed(d DrawIndexed) {
 		p.failed = true
 		return
 	}
-	if d.FirstIndex < 0 || d.BaseVertex < 0 || d.FirstInstance < 0 {
-		p.r.fail("RenderPass %q: an indexed draw with a negative first index (%d), base "+
-			"vertex (%d) or first instance (%d)", p.desc.Label, d.FirstIndex,
-			d.BaseVertex, d.FirstInstance)
-		p.failed = true
+	if !p.nonNegative("an indexed draw", "first index", d.FirstIndex,
+		"base vertex", d.BaseVertex, "first instance", d.FirstInstance) {
 		return
 	}
 	p.record(drawCall{
@@ -1072,6 +1070,10 @@ func (p *RenderPass) DrawIndirect(args BufferView, bound Draw) {
 		p.failed = true
 		return
 	}
+	if !p.nonNegative("an indirect draw", "first vertex", bound.FirstVertex,
+		"first instance", bound.FirstInstance) {
+		return
+	}
 	d := drawCall{
 		vertices: bound.VertexCount, instances: max(bound.InstanceCount, 1),
 		first: bound.FirstVertex, firstInst: bound.FirstInstance,
@@ -1092,6 +1094,10 @@ func (p *RenderPass) Draw(d Draw) {
 	if d.VertexCount <= 0 {
 		p.r.fail("RenderPass %q: a draw of %d vertices", p.desc.Label, d.VertexCount)
 		p.failed = true
+		return
+	}
+	if !p.nonNegative("a draw", "first vertex", d.FirstVertex,
+		"first instance", d.FirstInstance) {
 		return
 	}
 	instances := d.InstanceCount
@@ -1127,6 +1133,29 @@ func (p *RenderPass) beginDraw(what string) bool {
 		return false
 	}
 	return true
+}
+
+// nonNegative refuses a draw whose start fields are negative, naming each one
+// that is. fields alternates a name and its value.
+//
+// A first vertex or instance below zero is a fetch before the start of the
+// buffer, and the build-time range check computes first+count, so a negative
+// start would pass it and reach the backend. The indexed form refused this
+// from the start; the other two did not, which is why the check is shared.
+func (p *RenderPass) nonNegative(what string, fields ...any) bool {
+	var bad []string
+	for i := 0; i+1 < len(fields); i += 2 {
+		if v := fields[i+1].(int); v < 0 {
+			bad = append(bad, fmt.Sprintf("%s (%d)", fields[i], v))
+		}
+	}
+	if len(bad) == 0 {
+		return true
+	}
+	p.r.fail("RenderPass %q: %s with a negative %s", p.desc.Label, what,
+		strings.Join(bad, ", "))
+	p.failed = true
+	return false
 }
 
 // record completes a draw with the pass state and appends it.

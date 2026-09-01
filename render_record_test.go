@@ -117,6 +117,32 @@ func TestRenderPassRefusals(t *testing.T) {
 		},
 		says: "a draw of 0 vertices",
 	}, {
+		// The indexed form refused a negative first index or instance and the
+		// other two forms did not, so a negative first vertex reached the
+		// backend as a fetch before the start of the buffer.
+		name: "a draw from a negative first vertex",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Width: 4, Height: 4, Label: "backwards",
+			})
+			p.SetPipeline(solidPipeline(t, d))
+			p.Draw(accel.Draw{VertexCount: 3, FirstVertex: -1})
+		},
+		says: "negative first vertex (-1)",
+	}, {
+		name: "an indirect draw bounded from a negative first instance",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Width: 4, Height: 4, Label: "backwards",
+			})
+			p.SetPipeline(solidPipeline(t, d))
+			args := newBuffer(t, d, "args", 4, accel.BufferStorage|accel.BufferIndirect)
+			p.DrawIndirect(whole(t, args), accel.Draw{VertexCount: 3, FirstInstance: -2})
+		},
+		says: "first instance (-2)",
+	}, {
 		name: "an attachment too small for the area",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{
