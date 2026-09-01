@@ -164,6 +164,21 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	qSeq, batch := 1, 1
 	prefill, batched := false, false
 	origShape := q.shape
+
+	// A strided q is refused here, at the caller's line, for every rank. The
+	// kernels index q contiguously and the lowering refuses a strided operand
+	// -- but the flattening below builds a fresh rank-2 tensor over the same
+	// storage, and a fresh tensor carries contiguous strides and offset zero.
+	// So a permuted or sliced rank-3 or rank-4 q lost its layout on the way,
+	// passed the lowering's check, and the kernel read the unpermuted,
+	// unsliced buffer: a plausible attention over the wrong rows, with no
+	// diagnostic. Checked before the flattening so the layout it discards is
+	// one that was already contiguous.
+	if !q.contiguousLayout() {
+		return b.fail(1, "Attention", "q is a strided view (strides %v, offset %d) and "+
+			"the registered kernels index it contiguously; insert Contiguous to pack it, "+
+			"or take the view before the operator that produced q", q.strides, q.offset)
+	}
 	flatten := func(from int) {
 		shape := Shape{q.shape[from], q.shape[from+1]}
 		q = &Tensor{

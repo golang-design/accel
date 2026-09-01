@@ -311,6 +311,46 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 		},
 		want: "one length per sequence",
 	}, {
+		// The three below are the cases that were accepted and computed a
+		// plausible wrong answer. A rank-3 or rank-4 q is flattened to rank 2
+		// before lowering, and the flattening built a fresh tensor with
+		// contiguous strides and offset zero -- so a permuted or sliced q
+		// passed the lowering's strided-view check and the kernel read the
+		// buffer as recorded, unpermuted and unsliced.
+		name: "a permuted prefill q",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+			o := opts(b)
+			o.BaseName = "base"
+			// [qHeads, qSeq, headDim] permuted into the [qSeq, qHeads, headDim]
+			// a prefill takes: the shape is right and the bytes are not.
+			q := tensor.Permute(b, f32(b, "q", 2, 4, 8), 1, 0, 2)
+			tensor.Attention(b, q, cache(b, "k", 8, 2, 8), cache(b, "v", 8, 2, 8), o)
+		},
+		want: "q is a strided view",
+	}, {
+		name: "a sliced prefill q",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			tensor.Scalar(b, tensor.ScalarDesc{Name: "base", Kind: tensor.ScalarU32})
+			o := opts(b)
+			o.BaseName = "base"
+			// The second and third tokens of three: contiguous strides at a
+			// nonzero offset, which the flattening dropped.
+			q := tensor.Slice(b, f32(b, "q", 3, 2, 8), 0, 1, 3)
+			tensor.Attention(b, q, cache(b, "k", 8, 2, 8), cache(b, "v", 8, 2, 8), o)
+		},
+		want: "q is a strided view",
+	}, {
+		name: "a transposed decode q",
+		build: func(b *tensor.Builder) {
+			scalars(b)
+			q := tensor.Transpose(b, f32(b, "q", 8, 2), 0, 1)
+			tensor.Attention(b, q, cache(b, "k", 8, 2, 8), cache(b, "v", 8, 2, 8), opts(b))
+		},
+		want: "q is a strided view",
+	}, {
 		name: "a batch with no page table",
 		build: func(b *tensor.Builder) {
 			scalars(b)
