@@ -240,15 +240,19 @@ func (i *presentImage) Present(src driver.Block, offset int) error {
 		return fmt.Errorf("accel: compiling the present conversion: %w", err)
 	}
 
+	// Released on every path out of here. Committing hands the buffer to the
+	// queue, which keeps it alive until it completes, so this retain has done
+	// its job once Commit returns; one that was never committed has nothing
+	// to wait for. Neither path kept a reference before, and a frame loop
+	// leaked one command buffer per frame.
 	cb := i.target.dev.queue.Begin()
+	defer cb.Close()
 	enc, err := cb.Render([]mtl.RenderAttachment{{
 		Texture: i.drawable.Texture(i.w, i.h),
 		Load:    mtl.LoadActionDontCare,
 		Store:   mtl.StoreActionStore,
 	}}, nil)
 	if err != nil {
-		cb.Commit()
-		cb.Wait()
 		return fmt.Errorf("accel: encoding the present pass: %w", err)
 	}
 	enc.SetPipeline(pipe)
