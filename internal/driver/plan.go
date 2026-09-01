@@ -100,6 +100,8 @@ func (o PlanOp) String() string {
 		return "host write"
 	case OpDispatch:
 		return "dispatch"
+	case OpRenderPass:
+		return "render pass"
 	case OpCopyRows:
 		return "row copy"
 	}

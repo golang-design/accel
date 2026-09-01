@@ -204,6 +204,24 @@ func TestOperandStringNamesItsCase(t *testing.T) {
 	}
 }
 
+// Every declared op names itself, and only the zero value is "invalid".
+//
+// The switch is written by hand, so an op added to the enumeration without a
+// case prints as the rejected zero value, and a diagnostic naming the node
+// then blames a malformed plan for a well-formed one. The loop stops at the
+// first value past the last declared op, which is what keeps this test honest
+// when the next op is added.
+func TestEveryPlanOpNamesItself(t *testing.T) {
+	for op := driver.OpCopy; op <= driver.OpCopyRows; op++ {
+		if got := op.String(); got == "invalid" {
+			t.Errorf("op %d prints as %q", int(op), got)
+		}
+	}
+	if got := driver.OpRenderPass.String(); got != "render pass" {
+		t.Errorf("OpRenderPass prints as %q, want %q", got, "render pass")
+	}
+}
+
 func TestErrDeviceLostIsSticky(t *testing.T) {
 	dev := openCPU(t, cpu.Options{LoseAtSubmission: 1})
 	if err := dev.Lost(); err != nil {
