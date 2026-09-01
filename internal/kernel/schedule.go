@@ -7,6 +7,8 @@ package kernel
 import (
 	"fmt"
 	"math"
+
+	"golang.design/x/accel/kmath"
 )
 
 // DispatchCooperative runs a cooperative kernel over a grid of workgroups.
@@ -219,6 +221,15 @@ func (s *scheduler) workgroup(k *Kernel, group, size, count ID3, opts Options) e
 // backend* determinism test is meaningful while a cross-backend exact one is
 // not.
 //
+// # NaN in a minimum or maximum
+//
+// The f32 minimum and maximum are the one place where the order must *not*
+// show: a NaN in any active lane makes the result NaN, whichever lane holds
+// it, which is kmath.Min and kmath.Max's contract and what the Metal emitter
+// produces for the same operation. A fixed order settles which bit of a sum
+// comes out; it is not licence for a NaN in lane 0 and a NaN in lane 3 to
+// give different answers.
+//
 // # The active set, and the lanes that are not in it
 //
 // A subgroup's active lanes at one rendezvous are the lanes suspended there.
@@ -287,21 +298,24 @@ func combineOne(kernel string, threads []Thread, frames []Frame, op SubgroupOp, 
 		}
 		broadcastF32(frames, lanes, acc)
 
+	// The f32 minimum and maximum are kmath.Min and kmath.Max folded over the
+	// active lanes, so they carry that contract: a NaN in any lane is the
+	// answer. A comparison loop does not give that on its own -- `v < acc` is
+	// false when v is NaN, so a NaN in the seeding lane would stick and one in
+	// any later lane would be dropped, and the answer would depend on which
+	// lane held it, which is the lane-position dependence the fixed order
+	// above exists to rule out.
 	case SubMinF32:
 		acc := frames[lanes[0]].SubF32
 		for _, i := range lanes[1:] {
-			if v := frames[i].SubF32; v < acc {
-				acc = v
-			}
+			acc = kmath.Min(acc, frames[i].SubF32)
 		}
 		broadcastF32(frames, lanes, acc)
 
 	case SubMaxF32:
 		acc := frames[lanes[0]].SubF32
 		for _, i := range lanes[1:] {
-			if v := frames[i].SubF32; v > acc {
-				acc = v
-			}
+			acc = kmath.Max(acc, frames[i].SubF32)
 		}
 		broadcastF32(frames, lanes, acc)
 

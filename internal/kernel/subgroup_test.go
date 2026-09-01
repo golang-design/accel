@@ -5,6 +5,7 @@
 package kernel_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -286,6 +287,58 @@ func TestTheRestOfTheSubgroupOperations(t *testing.T) {
 				t.Fatalf("dispatch: %v", err)
 			}
 		})
+	}
+}
+
+// A NaN in any lane makes a min or max reduction NaN, whichever lane holds it.
+//
+// kmath.Min and kmath.Max propagate a NaN from either operand, and the
+// subgroup reductions are the same operation over a subgroup. A comparison
+// loop seeded from lane 0 propagates a NaN only from lane 0: `v < acc` is
+// false for a NaN v, so a NaN in any later lane is dropped and the result
+// depends on which lane held it.
+func TestAMinOrMaxReductionPropagatesANaNFromAnyLane(t *testing.T) {
+	nan := float32(math.NaN())
+	for _, c := range []struct {
+		name string
+		op   kernel.SubgroupOp
+	}{{"min", kernel.SubMinF32}, {"max", kernel.SubMaxF32}} {
+		for nanLane := range uint32(4) {
+			t.Run(fmt.Sprintf("%s/nan in lane %d", c.name, nanLane), func(t *testing.T) {
+				out := make([]float32, 4)
+				k := &kernel.Kernel{
+					Name: "NaN", WorkgroupSize: kernel.ID3{X: 4, Y: 1, Z: 1},
+					Generator: kernel.ABIVersion, Suspensions: 1,
+					Bindings: []kernel.Binding{{Name: "out", DType: kernel.F32, Access: kernel.Write}},
+					Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+						lane := th.SubgroupLane()
+						if f.Pass == 0 {
+							f.Pass = 1
+							f.Sub = c.op
+							f.SubF32 = float32(lane) + 1
+							if lane == nanLane {
+								f.SubF32 = nan
+							}
+							f.Barrier = kernel.BarrierID{Index: 0}
+							return true
+						}
+						kernel.Slice[float32](a, 0)[lane] = f.SubF32
+						return false
+					},
+				}
+				if err := kernel.DispatchCooperative(k, kernel.ID3{X: 1},
+					kernel.Args{Slices: []any{out}}); err != nil {
+					t.Fatalf("dispatch: %v", err)
+				}
+				for lane, v := range out {
+					if !math.IsNaN(float64(v)) {
+						t.Errorf("lane %d got %v with a NaN in lane %d, want NaN: the "+
+							"reduction propagates a NaN only from the lane it is seeded from",
+							lane, v, nanLane)
+					}
+				}
+			})
+		}
 	}
 }
 
