@@ -68,7 +68,7 @@ func (b *Buffer) Access(fn func([]byte) error) error {
 		return fmt.Errorf("accel: Buffer.Access needs a function; the mapping is valid " +
 			"only for the duration of the call, so there is nothing to return")
 	}
-	if err := b.state.checkOpen("Buffer.Access"); err != nil {
+	if err := b.checkUsable("Buffer.Access"); err != nil {
 		return err
 	}
 	blk, base := blockFor(b)
@@ -213,15 +213,33 @@ func (v BufferView) check(op string) error {
 	if v.Buffer == nil {
 		return fmt.Errorf("accel: %s: the view names no buffer", op)
 	}
-	if v.Buffer.transient != nil {
-		return fmt.Errorf("accel: %s on %q: it is a graph transient, whose memory the builder "+
-			"owns and may reuse between nodes, so only the graph that declared it may touch it",
-			op, v.Buffer.desc.Label)
-	}
-	if err := v.Buffer.state.checkOpen(op); err != nil {
+	if err := v.Buffer.checkUsable(op); err != nil {
 		return err
 	}
 	return v.checkRange(op)
+}
+
+// checkUsable is the guard every entry point that touches a buffer's memory
+// from outside a graph starts with: the handle is open, and the buffer is not
+// a graph transient.
+//
+// A transient has no pool. Its memory belongs to the graph that declared it,
+// arrives at Build, and may be reused between nodes, so only that graph may
+// touch it. Every path that reaches for pool, alloc or block has to check this
+// first, and it is one function because each path that carried its own copy
+// was one that could lack it: Buffer.Access did, and dereferenced the nil
+// block before Build and the nil pool after. See
+// specs/001-device-resources.md section 7.3.
+func (b *Buffer) checkUsable(op string) error {
+	if err := b.state.checkOpen(op); err != nil {
+		return err
+	}
+	if b.transient != nil {
+		return fmt.Errorf("accel: %s on %q: it is a graph transient, whose memory the builder "+
+			"owns and may reuse between nodes, so only the graph that declared it may touch it",
+			op, b.desc.Label)
+	}
+	return nil
 }
 
 // checkRange is the half of [BufferView.check] that measures.

@@ -296,3 +296,44 @@ func TestClosingATransientsBufferIsRefusedRatherThanFatal(t *testing.T) {
 		t.Error("the second refusal succeeded, so the first one had a side effect")
 	}
 }
+
+// Accessing the *Buffer behind a graph transient's view is refused, not fatal.
+//
+// The same route as the Close case above, through the other method that takes
+// a bare *Buffer: Access reached for the transient's block, which is nil until
+// Build, and for its pool, which is nil always. Both before and after Build,
+// because the two dereferences are different ones.
+func TestAccessOnATransientsBufferIsRefusedRatherThanFatal(t *testing.T) {
+	d := openDevice(t)
+	r := d.NewRecorder()
+	v := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: 64,
+		Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "mid",
+	})
+	refuse := func(when string) {
+		t.Helper()
+		err := v.Buffer.Access(func([]byte) error {
+			t.Errorf("%s Build, the mapping of a graph transient was handed out", when)
+			return nil
+		})
+		if err == nil {
+			t.Fatalf("%s Build, Access on a graph transient's buffer was accepted", when)
+		}
+		if !strings.Contains(err.Error(), "graph transient") {
+			t.Errorf("%s Build, the refusal should say what the resource is: %v", when, err)
+		}
+	}
+	refuse("before")
+
+	// Written, so Build accepts the transient, and read through a copy so the
+	// graph is not empty.
+	r.UploadToBuffer(v, make([]float32, 64))
+	out := newBuffer(t, d, "out", 64, accel.BufferStorage|accel.BufferCopyDst)
+	r.CopyBuffer(whole(t, out), v)
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	refuse("after")
+}
