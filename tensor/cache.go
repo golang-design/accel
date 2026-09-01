@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 )
@@ -75,14 +76,29 @@ func (c *PlanCache) key(id Identity, opts CompileOptions) key {
 	token := c.rt.dev.Info().ID.String()
 	writeString(h, token)
 
-	// Every compile option that affects lowering. Label does not, and is
-	// excluded deliberately: two plans differing only in what they are called
-	// are the same plan, and including it would double the cache for nothing.
-	writeString(h, "opts v1")
+	writeOptions(h, opts)
 
 	var k key
 	copy(k[:], h.Sum(nil))
 	return k
+}
+
+// writeOptions hashes every compile option that affects lowering.
+//
+// Label is excluded deliberately: two plans differing only in what they are
+// called are the same plan, and including it would double the cache for
+// nothing (specs/029-plan-cache.md). Every other field of [CompileOptions] is
+// written here, by name, and TestThePlanKeyCoversEveryCompileOption walks the
+// struct by reflection to hold this function to that -- a field added there and
+// not here fails it, rather than being silently left out of the key and
+// answering one plan with another.
+//
+// The version tag is separate from the graph identity's so that adding a field
+// here cannot collide with a key an older build computed.
+func writeOptions(w io.Writer, opts CompileOptions) {
+	writeString(w, "opts v2")
+	// Label: excluded, see above. CompileOptions has no other field yet.
+	_ = opts.Label
 }
 
 // Compile returns the plan for a recorded graph, compiling it once.
