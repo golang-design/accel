@@ -535,14 +535,16 @@ func skipsDispatch(c kernel.ID3) bool { return c.X == 0 || c.Y == 0 || c.Z == 0 
 //
 // specs/006-backends.md section 5 makes this backend the oracle: its job is to
 // fail loudly where another backend would silently do something else. Loudly
-// means a reported error naming the kernel, not an abort.
+// means a reported error naming the kernel and the line that failed, not an
+// abort: the site is captured where the panic is first recovered, which is
+// here on the serial path and in the worker on the parallel one.
 func dispatch(n *resolvedNode) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("accel: kernel %q panicked at node %d: %v; on a GPU backend this "+
 				"would be an out-of-bounds access with undefined results rather than a "+
 				"crash, so it is a kernel bug either way",
-				n.dispatch.Kernel.Name, n.id, r)
+				n.dispatch.Kernel.Name, n.id, kernel.Recovered(r))
 		}
 	}()
 	// A kernel has exactly one entry point, chosen by whether its body reaches

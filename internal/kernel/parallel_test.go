@@ -6,6 +6,7 @@ package kernel_test
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -252,11 +253,16 @@ func TestAParallelDispatchIsRepeatable(t *testing.T) {
 // left inside a worker would abort from a goroutine nobody can recover in,
 // which is the thing that recover was put there to prevent.
 func TestAPanicInAWorkerReachesTheCaller(t *testing.T) {
+	// The panicking line, recorded from inside the kernel so the assertion on
+	// the site does not depend on where this test sits in the file.
+	var site string
 	k := &kernel.Kernel{
 		Name: "Overrun", Generator: kernel.ABIVersion,
 		WorkgroupSize:    kernel.ID3{X: 1, Y: 1, Z: 1},
 		OrderIndependent: true,
 		Flat: func(t kernel.Thread, a kernel.Args) {
+			_, file, line, _ := runtime.Caller(0)
+			site = fmt.Sprintf("%s:%d", file, line+2)
 			panic(fmt.Sprintf("workgroup %d", t.GroupID().X))
 		},
 	}
@@ -271,12 +277,27 @@ func TestAPanicInAWorkerReachesTheCaller(t *testing.T) {
 		t.Fatal("a panicking kernel did not panic on the calling goroutine: the CPU " +
 			"backend recovers there, so the process would have died instead")
 	}
+	// It arrives as a *Panic, because the worker's stack is gone by the time
+	// the caller sees it and the site is the only record of which line failed.
+	p, ok := got.(*kernel.Panic)
+	if !ok {
+		t.Fatalf("the panic reported is %T %v, want a *kernel.Panic carrying the site", got, got)
+	}
 	// Workgroup zero is claimed before any worker can have failed, so it is the
 	// lowest-numbered failure every time. That is what the serial loop would
 	// have reported.
-	if s, _ := got.(string); s != "workgroup 0" {
+	if s, _ := p.Value.(string); s != "workgroup 0" {
 		t.Fatalf("the panic reported is %v, and the serial loop would have stopped at "+
-			"workgroup 0", got)
+			"workgroup 0", p.Value)
+	}
+	if !strings.HasPrefix(p.Site, site) {
+		t.Errorf("the site is %q, want the panicking line %q", p.Site, site)
+	}
+	if !strings.Contains(string(p.Stack), "parallel_test.go") {
+		t.Errorf("the stack should be the worker's, naming this file; got:\n%s", p.Stack)
+	}
+	if !strings.Contains(p.Error(), site) {
+		t.Errorf("the error should name the site, got %q", p.Error())
 	}
 }
 

@@ -33,7 +33,7 @@ func renderPass(n *resolvedNode) (err error) {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("accel: render pass %q panicked at node %d: %v; on a GPU "+
 				"backend this would be undefined rather than a crash, so it is a stage "+
-				"bug either way", n.render.Label, n.id, r)
+				"bug either way", n.render.Label, n.id, kernel.Recovered(r))
 		}
 	}()
 

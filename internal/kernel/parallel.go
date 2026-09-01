@@ -122,7 +122,9 @@ func chunkSize(total, workers int) int {
 // abandoned half way: a worker checks for a stop between chunks and not inside
 // one, so every workgroup numbered below a failure has been claimed and run.
 //
-// A panic crosses back to the caller's goroutine and is re-raised there.
+// A panic crosses back to the caller's goroutine and is re-raised there as a
+// [*Panic] carrying the site and stack it was raised at, which the worker's
+// recovery captured while the panicking frames were still on the stack.
 // [internal/cpu] turns a panicking kernel into an error through the fence, and
 // it recovers on the goroutine that calls this; a panic left in a worker would
 // take the process down instead, which is the behaviour that recover exists to
@@ -152,7 +154,7 @@ func runGrid(count ID3, workers int, body func(worker int, group ID3) error) err
 		failedAt = total
 		failErr  error
 		panicAt  = total
-		panicVal any
+		panicVal *Panic
 	)
 	chunk := chunkSize(total, workers)
 
@@ -168,9 +170,12 @@ func runGrid(count ID3, workers int, body func(worker int, group ID3) error) err
 				if r == nil {
 					return
 				}
+				// Captured here, on the worker, because this is the last
+				// place the panicking frames exist.
+				p := Recovered(r)
 				mu.Lock()
 				if cur < panicAt {
-					panicAt, panicVal = cur, r
+					panicAt, panicVal = cur, p
 				}
 				mu.Unlock()
 				stopped.Store(true)

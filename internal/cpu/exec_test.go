@@ -7,6 +7,8 @@ package cpu_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -886,11 +888,16 @@ func TestStrictModeStillReportsDiagnostics(t *testing.T) {
 func TestAPanickingKernelReachesTheFence(t *testing.T) {
 	dev, c := open(t, cpu.Options{})
 	b := block(t, dev, driver.MemoryShared, 16)
+	// The line that overruns, recorded from inside the kernel so the
+	// assertion below does not depend on where this test sits in the file.
+	var site string
 	k := &kernel.Kernel{
 		Name: "Overrun", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1}, Generator: kernel.ABIVersion,
 		Bindings: []kernel.Binding{{Name: "b", DType: kernel.F32, Access: kernel.Write}},
 		Flat: func(_ kernel.Thread, a kernel.Args) {
 			s := a.Slices[0].([]float32)
+			_, file, line, _ := runtime.Caller(0)
+			site = fmt.Sprintf("%s:%d", file, line+2)
 			s[len(s)+1] = 1 // out of bounds, as a real kernel bug would be
 		},
 	}
@@ -914,7 +921,10 @@ func TestAPanickingKernelReachesTheFence(t *testing.T) {
 	if err == nil {
 		t.Fatal("a panicking kernel should report through the fence")
 	}
-	for _, want := range []string{"Overrun", "node 3", "out-of-bounds"} {
+	// The kernel's name and node, and the source line that failed: a panic
+	// recovered in a goroutine the caller did not start has no other way of
+	// telling them which statement it was.
+	for _, want := range []string{"Overrun", "node 3", "out-of-bounds", site} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message should say %q, got:\n%v", want, err)
 		}
