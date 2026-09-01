@@ -298,6 +298,14 @@ func (e *executable) Submit() (driver.Fence, error) {
 		return nil, fmt.Errorf("accel: submit %q: %w", e.plan.Label, err)
 	}
 
+	// The previous submission's command buffer is released here, not when its
+	// fence is dropped: busy() just said it completed, and a Go finalizer is
+	// not a place to release an Objective-C object. A fence the caller still
+	// holds keeps answering, from what close cached.
+	if e.cur != nil {
+		e.cur.close()
+	}
+
 	cb := e.dev.queue.Begin()
 	enc := &pass{cb: cb}
 	if err := e.encode(enc); err != nil {
@@ -307,7 +315,7 @@ func (e *executable) Submit() (driver.Fence, error) {
 	}
 	enc.end()
 	cb.Commit()
-	f := &fence{cb: cb, dev: e.dev}
+	f := newFence(cb, e.dev)
 	e.cur = f
 	return f, nil
 }
@@ -694,19 +702,45 @@ func (e *executable) IndirectStats() []driver.IndirectStat {
 }
 
 // fence reports one submission's completion.
+//
+// The command buffer is released as soon as the executable is done with it:
+// when the next submission replaces this one, or when the executable closes.
+// A caller may hold the fence past that point, so everything it answers for --
+// completion, the error, the device time -- is read from the command buffer
+// while it exists and from a cache afterwards. The two answers are the same,
+// because close reads the cache from a completed buffer.
 type fence struct {
-	mu     sync.Mutex
-	cb     *mtl.CommandBuffer
-	dev    *device
-	closed bool
+	dev *device
+
+	mu sync.Mutex
+
+	// cb is nil once close released it.
+	cb *mtl.CommandBuffer
+
+	// waiting counts the goroutines inside cb.Wait with mu released, and idle
+	// is signalled when it drops to zero. Wait releases mu across the GPU
+	// wait so that Done, and everything busy() gates, stays non-blocking; the
+	// count is what keeps close from releasing cb under a waiter.
+	waiting int
+	idle    sync.Cond
+
+	// What close read from the command buffer before releasing it.
+	err error
+	gpu time.Duration
+}
+
+func newFence(cb *mtl.CommandBuffer, dev *device) *fence {
+	f := &fence{cb: cb, dev: dev}
+	f.idle.L = &f.mu
+	return f
 }
 
 // gpuTime is the device time this submission took, or zero before it completes.
 func (f *fence) gpuTime() time.Duration {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.closed || f.cb == nil {
-		return 0
+	if f.cb == nil {
+		return f.gpu
 	}
 	return f.cb.GPUTime()
 }
@@ -717,14 +751,36 @@ func (f *fence) gpuTime() time.Duration {
 // only place Metal reports it and this is where that error is read. A caller
 // who never waits never finds out, which is the same as everywhere else: an
 // unobserved failure is indistinguishable from no failure.
+//
+// The mutex is not held across the GPU wait. It was, and every non-blocking
+// question about this fence -- Done, and through it Submit, Rebind and Close
+// on the executable -- blocked until the GPU finished.
 func (f *fence) Wait() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.closed {
-		return nil
+	cb := f.cb
+	if cb == nil {
+		err := f.err
+		f.mu.Unlock()
+		return f.report(err)
 	}
-	f.cb.Wait()
-	err := f.cb.Err()
+	f.waiting++
+	f.mu.Unlock()
+
+	cb.Wait()
+	err := cb.Err()
+
+	f.mu.Lock()
+	f.waiting--
+	if f.waiting == 0 {
+		f.idle.Broadcast()
+	}
+	f.mu.Unlock()
+	return f.report(err)
+}
+
+// report records what the submission said and answers with loss if there is
+// any, since loss explains every failure after it.
+func (f *fence) report(err error) error {
 	f.dev.noteSubmissionError(err)
 	if lost := f.dev.Lost(); lost != nil {
 		return lost
@@ -735,16 +791,27 @@ func (f *fence) Wait() error {
 func (f *fence) Done() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.closed || f.cb.Done()
+	return f.cb == nil || f.cb.Done()
 }
 
+// close releases the command buffer, keeping what a holder of the fence can
+// still ask for.
+//
+// It waits for the buffer first, so the cache is read from a completed
+// submission, and then for any goroutine still inside Wait, so the release
+// cannot happen under a message send to the object being released.
 func (f *fence) close() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.closed {
+	if f.cb == nil {
 		return
 	}
 	f.cb.Wait()
+	for f.waiting > 0 {
+		f.idle.Wait()
+	}
+	f.err = f.cb.Err()
+	f.gpu = f.cb.GPUTime()
 	f.cb.Close()
-	f.closed = true
+	f.cb = nil
 }

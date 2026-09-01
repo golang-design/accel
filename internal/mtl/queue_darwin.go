@@ -8,6 +8,7 @@ package mtl
 
 import (
 	"runtime"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -77,6 +78,20 @@ func (q *Queue) Close() {
 	q.id = 0
 }
 
+// liveCommandBuffers counts the command buffers this package holds a retain
+// on: incremented by [Queue.Begin] and decremented by [CommandBuffer.Close].
+//
+// A test hook. A retained command buffer that is never closed is a leak Metal
+// does not report and Go's heap does not show, because the object lives on the
+// Objective-C side; the only way to see one is to count what was retained
+// against what was released.
+var liveCommandBuffers atomic.Int64
+
+// LiveCommandBuffers reports how many command buffers are retained and not yet
+// closed. It exists for tests that check a submission path releases what it
+// began.
+func LiveCommandBuffers() int64 { return liveCommandBuffers.Load() }
+
 // Begin starts a submission.
 //
 // -commandBuffer returns an autoreleased object, so this retains it: the buffer
@@ -85,6 +100,9 @@ func (q *Queue) Close() {
 func (q *Queue) Begin() *CommandBuffer {
 	cb := &CommandBuffer{}
 	withPool(func() { cb.id = retain(send(q.id, selCommandBuffer)) })
+	if cb.id != 0 {
+		liveCommandBuffers.Add(1)
+	}
 	return cb
 }
 
@@ -198,8 +216,7 @@ func (cb *CommandBuffer) Wait() {
 // Done reports without blocking whether the submission has finished, either by
 // completing or by failing.
 func (cb *CommandBuffer) Done() bool {
-	var s int
-	s = int(send(cb.id, selStatus))
+	s := int(send(cb.id, selStatus))
 	return s == StatusCompleted || s == StatusError
 }
 
@@ -214,10 +231,14 @@ func (cb *CommandBuffer) Err() error {
 	return err
 }
 
-// Close releases the command buffer.
+// Close releases the command buffer. Closing twice releases once.
 func (cb *CommandBuffer) Close() {
+	if cb.id == 0 {
+		return
+	}
 	release(cb.id)
 	cb.id = 0
+	liveCommandBuffers.Add(-1)
 }
 
 var (

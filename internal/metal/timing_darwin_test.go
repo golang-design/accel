@@ -8,6 +8,7 @@ package metal
 
 import (
 	"testing"
+	"time"
 
 	"golang.design/x/accel/internal/driver"
 )
@@ -33,18 +34,18 @@ func TestElapsedHonoursTheOptInAndTheAbsentSubmission(t *testing.T) {
 	}
 }
 
-// A fence whose command buffer is gone reports no time rather than messaging a
-// released object.
+// A fence whose command buffer is gone answers from what close cached, rather
+// than messaging a released object.
 //
 // The timing is read from the command buffer, which the executable owns, so a
 // caller holding a fence past Close would otherwise send a message to freed
-// memory — a crash inside objc_msgSend with a stack pointing nowhere useful,
+// memory -- a crash inside objc_msgSend with a stack pointing nowhere useful,
 // which is the failure mode internal/mtl's ownership rule exists to prevent.
 func TestGPUTimeAfterTheCommandBufferIsGone(t *testing.T) {
-	if got := (&fence{closed: true}).gpuTime(); got != 0 {
-		t.Errorf("a closed fence reported %v", got)
-	}
 	if got := (&fence{}).gpuTime(); got != 0 {
 		t.Errorf("a fence with no command buffer reported %v", got)
+	}
+	if got := (&fence{gpu: 3 * time.Millisecond}).gpuTime(); got != 3*time.Millisecond {
+		t.Errorf("a closed fence reported %v, not what close cached", got)
 	}
 }
