@@ -120,7 +120,10 @@ func checkLogits(x *Tensor) string {
 			"a narrow head needs an explicit Cast, which specs/007-tensor-layer.md " +
 			"requires so the conversion is where you wrote it"
 	}
-	if len(x.shape) < 1 || x.shape.Elements() == 0 {
+	// Rank alone decides. A dimension is a positive concrete integer -- declare
+	// and Reshape both refuse anything else -- so a shape with an axis has
+	// elements, and only a rank-zero view has no axis to be the vocabulary.
+	if len(x.shape) < 1 {
 		return "logits are " + x.shape.String() + "; the last axis is the vocabulary and " +
 			"every axis before it is a sequence"
 	}
