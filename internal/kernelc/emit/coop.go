@@ -75,12 +75,15 @@ func renumber(segs []segment) []segment {
 	return out
 }
 
-// countSuspensions is how many states end at a barrier, which bounds the
-// scheduler's epoch loop.
+// countSuspensions is how many states end at a suspension point -- a barrier or
+// a subgroup operation -- which is what the kernel record carries as
+// Suspensions.
 //
-// The state count is not the answer: a loop's check and post states are states
-// that never suspend, so counting them would let a kernel that stopped
-// advancing run for extra epochs before being reported.
+// It is a static count and not an epoch bound: a suspension inside a loop is
+// reached once per iteration, and the scheduler bounds its epoch loop with a
+// constant backstop instead (see kernel.Kernel.Suspensions). The state count is
+// not the answer either: a loop's check and post states are states that never
+// suspend, so counting them would misreport what the transform produced.
 func countSuspensions(segs []segment) int {
 	n := 0
 	for _, s := range segs {

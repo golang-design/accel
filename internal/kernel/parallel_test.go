@@ -448,6 +448,44 @@ func TestAStuckKernelIsReportedFromAWorker(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "rendezvous epochs") {
 		t.Fatalf("a kernel that never finishes should be reported, got %v", err)
 	}
+	// The bound is the constant backstop, and the report names it, so a reader
+	// can tell a stuck machine from a loop that needed more epochs than the
+	// static suspension count.
+	if !strings.Contains(err.Error(), "1048576 rendezvous epochs") {
+		t.Errorf("the report should name the 1<<20 epoch bound, got %v", err)
+	}
+}
+
+// The epoch bound is not the kernel's static suspension count.
+//
+// Kernel.Suspensions counts the suspension points in the source, and a barrier
+// inside a loop is reached once per iteration with a data-dependent trip count.
+// A scheduler that bounded the epoch loop by that count would refuse this
+// kernel, which has one barrier and needs thousands of epochs.
+func TestTheEpochBoundIsNotTheSuspensionCount(t *testing.T) {
+	const rounds = 4096
+	k := &kernel.Kernel{
+		Name: "Loop", Generator: kernel.ABIVersion,
+		WorkgroupSize: kernel.ID3{X: 2, Y: 1, Z: 1},
+		Suspensions:   1,
+		Bindings:      []kernel.Binding{{Name: "out", DType: kernel.U32, Access: kernel.Write}},
+		Cooperative: func(th kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			if f.Pass < rounds {
+				f.Pass++
+				f.Barrier = kernel.BarrierID{Index: 0}
+				return true
+			}
+			kernel.Slice[uint32](a, 0)[th.LocalID().X] = uint32(f.Pass)
+			return false
+		},
+	}
+	out := make([]uint32, 2)
+	if err := kernel.DispatchCooperative(k, kernel.ID3{X: 1}, kernel.Args{Slices: []any{out}}); err != nil {
+		t.Fatalf("a barrier in a %d-round loop is correct and should finish: %v", rounds, err)
+	}
+	if out[0] != rounds || out[1] != rounds {
+		t.Fatalf("got %v rounds, want %d", out, rounds)
+	}
 }
 
 // A cooperative kernel that is not order-independent runs on one worker, for

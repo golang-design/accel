@@ -435,8 +435,16 @@ type Kernel struct {
 	// the device budget did not exist.
 	SharedBytes int
 
-	// Suspensions is how many barriers the body reaches, which is what the
-	// scheduler uses to size an epoch bound. Zero for a flat kernel.
+	// Suspensions is how many suspension points the body contains: barriers
+	// and subgroup operations, counted once each in the source. Zero for a
+	// flat kernel.
+	//
+	// It is a property of the lowering, not a bound on execution. A suspension
+	// point inside a loop is reached once per iteration and the trip count is
+	// data, so a kernel with one barrier in a thousand-round loop needs a
+	// thousand epochs and is correct. The scheduler's epoch bound is therefore
+	// a constant backstop against a program counter that stops advancing (see
+	// runWorkgroup), and this count is what a test of the transform asserts.
 	Suspensions int
 
 	// MSL is the generated Metal Shading Language source, and is empty when

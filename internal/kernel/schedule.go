@@ -882,24 +882,24 @@ func fill(threads []Thread, group, size, count ID3, subgroup uint32) {
 	}
 }
 
+// maxEpochs bounds a workgroup's epoch loop.
+//
+// It is a backstop against a generated program counter that does not advance,
+// and it is deliberately loose. A tight bound is not available: a barrier inside
+// a loop suspends once per iteration, and the trip count is data.
+// [Kernel.Suspensions] counts the suspension points in the *source*, so a
+// kernel with one barrier in a thousand-round loop needs a thousand epochs and
+// is perfectly correct. Anything derived from the static count would refuse it.
+//
+// So this catches a machine that is stuck rather than one that is slow, and the
+// number is large enough that no data-bounded loop reaches it. A stuck machine
+// spins to the cap and reports, which is fast and terminates; the alternative is
+// a hang, and a hang is what this whole backend exists to turn into a report.
+const maxEpochs = 1 << 20
+
 // runWorkgroup advances every invocation epoch by epoch until all have
 // finished.
 func runWorkgroup(k *Kernel, args Args, threads []Thread, frames []Frame, tracker *SharedTracker, order []int, shuffleSeed uint64, diag bool) error {
-	// The bound is a backstop against a generated program counter that does not
-	// advance, and it is deliberately loose.
-	//
-	// A tight bound is not available: a barrier inside a loop suspends once per
-	// iteration, and the trip count is data. Suspensions counts the barriers in
-	// the *source*, so a kernel with one barrier in a thousand-round loop needs
-	// a thousand epochs and is perfectly correct. Anything derived from the
-	// static count would refuse it.
-	//
-	// So this catches a machine that is stuck rather than one that is slow, and
-	// the number is large enough that no data-bounded loop reaches it. A stuck
-	// machine spins to the cap and reports, which is fast and terminates; the
-	// alternative is a hang, and a hang is what this whole backend exists to
-	// turn into a report.
-	const maxEpochs = 1 << 20
 	bound := maxEpochs
 	// The advance order within an epoch. Signature order unless a seed asks for
 	// a permutation; see Options.ShuffleSeed. The slice belongs to the worker
