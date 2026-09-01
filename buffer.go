@@ -220,8 +220,12 @@ func (v BufferView) check(op string) error {
 }
 
 // checkUsable is the guard every entry point that touches a buffer's memory
-// from outside a graph starts with: the handle is open, and the buffer is not
-// a graph transient.
+// from outside a graph starts with: there is a buffer, the handle is open, and
+// the buffer is not a graph transient.
+//
+// It runs before anything reads a field, so that a nil *Buffer is a named
+// error at the call rather than a fault inside the library: WriteBuffer and
+// ReadBuffer used to read the label and dtype first.
 //
 // A transient has no pool. Its memory belongs to the graph that declared it,
 // arrives at Build, and may be reused between nodes, so only that graph may
@@ -231,6 +235,9 @@ func (v BufferView) check(op string) error {
 // block before Build and the nil pool after. See
 // specs/001-device-resources.md section 7.3.
 func (b *Buffer) checkUsable(op string) error {
+	if b == nil {
+		return fmt.Errorf("accel: %s: no buffer", op)
+	}
 	if err := b.state.checkOpen(op); err != nil {
 		return err
 	}

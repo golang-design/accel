@@ -393,6 +393,23 @@ func TestTransferRangeChecking(t *testing.T) {
 		})
 	}
 
+	// No buffer at all is an error at both entry points, not a fault: both
+	// read the buffer's label and dtype before anything checked the pointer.
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"WriteBuffer", func() error { return q.WriteBuffer(nil, 0, []float32{1}) }},
+		{"ReadBuffer", func() error { return q.ReadBuffer(nil, 0, make([]float32, 1)) }},
+	} {
+		err := tc.call()
+		if err == nil {
+			t.Errorf("%s on a nil buffer was accepted", tc.name)
+		} else if !strings.Contains(err.Error(), "no buffer") {
+			t.Errorf("%s on a nil buffer should say so: %v", tc.name, err)
+		}
+	}
+
 	// A closed buffer is rejected at both entry points.
 	if err := b.Close(); err != nil {
 		t.Fatal(err)

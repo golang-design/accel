@@ -47,6 +47,9 @@ type pendingWrite struct {
 // flush is visible to that flush, so waiting on the returned fence proves the
 // bytes landed.
 func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
+	if err := dst.checkUsable("WriteBuffer"); err != nil {
+		return err
+	}
 	src, err := hostBytes("WriteBuffer", dst.desc.Label, dst.desc.DType, data)
 	if err != nil {
 		return err
@@ -108,6 +111,9 @@ func (q *Queue) WriteBuffer(dst *Buffer, offset int, data any) error {
 // write to the same resource, flush that queue first: an immediate read never
 // silently searches or drains unrelated queues.
 func (q *Queue) ReadBuffer(src *Buffer, offset int, into any) error {
+	if err := src.checkUsable("ReadBuffer"); err != nil {
+		return err
+	}
 	dst, err := hostBytes("ReadBuffer", src.desc.Label, src.desc.DType, into)
 	if err != nil {
 		return err
@@ -245,11 +251,9 @@ func (q *Queue) pendingCount() int {
 	return len(q.pending)
 }
 
-// checkRange validates a transfer endpoint and returns its byte offset.
+// checkRange measures a transfer against a buffer the caller has already
+// passed through checkUsable, and returns its byte offset.
 func (q *Queue) checkRange(op string, b *Buffer, offset, length int) (int, error) {
-	if err := b.checkUsable(op); err != nil {
-		return 0, err
-	}
 	if offset < 0 {
 		return 0, fmt.Errorf("accel: %s %q: element offset %d is negative", op, b.desc.Label, offset)
 	}
