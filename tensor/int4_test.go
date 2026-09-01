@@ -91,20 +91,15 @@ func TestAnInt4MatVecIsWithinItsBudget(t *testing.T) {
 
 	for n := range N {
 		var exact float64
-		ranges := make([]float32, K)
+		termScales := make([]accel.Float16, K)
+		termZeros := make([]accel.Float16, K)
 		for k := range K {
 			idx := k*N + n
 			exact += float64(a[k]) * float64(w[idx])
-			g := idx / quant.Int4Group
-			lo := g * quant.Int4Group
-			hi := min(lo+quant.Int4Group, len(w))
-			lowest, highest := w[lo], w[lo]
-			for _, v := range w[lo:hi] {
-				lowest, highest = min(lowest, v), max(highest, v)
-			}
-			ranges[k] = highest - lowest
+			termScales[k] = scales[idx/quant.Int4Group]
+			termZeros[k] = zeros[idx/quant.Int4Group]
 		}
-		budget := quant.Int4ErrorBound(a, ranges)
+		budget := quant.Int4ErrorBound(a, termScales, termZeros)
 		var mag float64
 		for k := range K {
 			mag += math.Abs(float64(a[k]) * float64(w[k*N+n]))

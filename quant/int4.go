@@ -175,26 +175,79 @@ func Int4Dequantize(packed []uint32, scales, zeros []accel.Float16, n int) []flo
 }
 
 // Int4ErrorBound is the quantization term of a dot product, over the inputs it
-// used.
+// used and the scale and zero point the quantizer stored.
 //
-// specs/048-int4.md §3. Derived, not observed: rounding to nearest gives at
-// most half a step, and the step is a group's *range* over fifteen where
-// [Int8ErrorBound]'s is a peak over 127.
+// Derived, not observed, and derived from what is *stored* rather than from the
+// range: the code is rounded against the f16 scale s and zero z the group
+// carries, so rounding the code costs at most s/2 -- but s and z are
+// themselves rounded from s* = range/15 and z* = -min/s, and a weight at
+// either end of the group can land outside [0, 15] by that rounding and be
+// clamped. Clamping is not a half-step error; it is the whole excess. Per
+// weight,
 //
-//	|sum (q-z)s x - sum w x|  <=  (1/30) sum |x_i| (max_g(i) - min_g(i))
+//	|w - (q-z)s|  <=  s/2 + 15|s* - s| + |z* - z| s
 //
-// termRanges is one group range per term, for [Int8ErrorBound]'s reason: a
-// per-group figure bounds a dot product only where the caller says which group
-// each term came from.
-func Int4ErrorBound(x []float32, termRanges []float32) float64 {
-	if len(termRanges) != len(x) {
-		panic(fmt.Sprintf("accel/quant: Int4ErrorBound has %d terms and %d ranges; "+
-			"it takes one range per term, because a per-group range is a bound only "+
-			"where the caller says which group each term came from", len(x), len(termRanges)))
+// and each rounding is at most half an ulp of the stored f16 plus the f32
+// arithmetic that produced the value being rounded. A group stored with a zero
+// scale is a constant carried in z, and its only error is z's own rounding.
+// Per dot product the terms are weighted by |x_i| and summed.
+//
+// specs/048-int4.md §3 states the bound as range over thirty, which is the
+// first term alone and is what this used to compute. It is exceeded where the
+// zero point is large: weights in [1000, 1001] store z = -15000, whose f16
+// spacing is 8, so the group is reconstructed with a bias of up to 4s = 0.27
+// against a claimed 0.033. That is what this bound covers and that did not.
+//
+// The stored scale and zero are taken per term rather than per group, for
+// [Int8ErrorBound]'s reason: a per-group figure bounds a dot product only
+// where the caller says which group each term came from.
+//
+// **This covers quantization only.** The products are summed in f32, so
+// specs/008-numerics.md section 7's reduction bound applies to the sum on top,
+// and a caller comparing against an exact reference adds the two.
+//
+// Panics when len(termScales) or len(termZeros) differs from len(x). A
+// mismatch is a caller passing per-group figures where per-term ones are
+// required, which is the mistake this signature exists to refuse, and the
+// number it would otherwise return is not a bound.
+func Int4ErrorBound(x []float32, termScales, termZeros []accel.Float16) float64 {
+	if len(termScales) != len(x) || len(termZeros) != len(x) {
+		panic(fmt.Sprintf("accel/quant: Int4ErrorBound has %d terms, %d scales and %d "+
+			"zeros; it takes one scale and one zero per term, because a per-group figure "+
+			"is a bound only where the caller says which group each term came from",
+			len(x), len(termScales), len(termZeros)))
 	}
+	// f32 unit roundoff, for the divisions the quantizer performs before
+	// rounding to f16: s* = range/15 is a subtraction and a division, z* =
+	// -min/s is a division, each within u of exact relative to its result.
+	const u = 1.0 / (1 << 24)
 	var sum float64
 	for i, xi := range x {
-		sum += math.Abs(float64(xi)) * float64(termRanges[i]) / 30
+		s := float64(termScales[i].F32())
+		z := float64(termZeros[i].F32())
+		var e float64
+		if s == 0 {
+			e = ulp16(termZeros[i]) / 2
+		} else {
+			ds := ulp16(termScales[i])/2 + 2*u*s
+			dz := ulp16(termZeros[i])/2 + u*math.Abs(z)
+			e = s/2 + 15*ds + dz*s
+		}
+		sum += math.Abs(float64(xi)) * e
 	}
 	return sum
+}
+
+// ulp16 is the spacing of f16 values at f, so half of it bounds the rounding
+// that produced f. Infinite for a non-finite f: a group whose zero point
+// overflowed f16 reconstructs nothing, and a bound on it is not a number.
+func ulp16(f accel.Float16) float64 {
+	exp := int(f.Bits()>>10) & 0x1f
+	switch exp {
+	case 0x1f:
+		return math.Inf(1)
+	case 0:
+		return math.Ldexp(1, -24)
+	}
+	return math.Ldexp(1, exp-25)
 }

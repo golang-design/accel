@@ -55,23 +55,18 @@ func TestTheInt4KernelReadsWhatTheQuantizerWrote(t *testing.T) {
 	}
 
 	for n := range N {
-		// The exact product, and the group range of each term, which is what
-		// the bound is stated over.
+		// The exact product, and the stored scale and zero of each term's
+		// group, which is what the bound is stated over.
 		var exact float64
-		ranges := make([]float32, K)
+		termScales := make([]accel.Float16, K)
+		termZeros := make([]accel.Float16, K)
 		for k := range K {
 			idx := k*N + n
 			exact += float64(a[k]) * float64(w[idx])
-			g := idx / quant.Int4Group
-			lo := g * quant.Int4Group
-			hi := min(lo+quant.Int4Group, len(w))
-			lowest, highest := w[lo], w[lo]
-			for _, v := range w[lo:hi] {
-				lowest, highest = min(lowest, v), max(highest, v)
-			}
-			ranges[k] = highest - lowest
+			termScales[k] = scales[idx/quant.Int4Group]
+			termZeros[k] = zeros[idx/quant.Int4Group]
 		}
-		bound := quant.Int4ErrorBound(a, ranges)
+		bound := quant.Int4ErrorBound(a, termScales, termZeros)
 
 		// Plus the accumulation term: the products are summed in f32, so 008
 		// section 7's reduction bound applies on top of the quantization one.

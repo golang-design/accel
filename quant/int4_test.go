@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"testing"
 
+	"golang.design/x/accel"
 	"golang.design/x/accel/quant"
 )
 
@@ -34,11 +35,14 @@ func TestAConstantInt4GroupReconstructsExactly(t *testing.T) {
 	}
 }
 
-// The reconstruction is inside the bound the spec derives.
+// The reconstruction is inside the bound the package derives.
 //
-// Against (max-min)/30 per weight, not a tolerance: specs/048-int4.md §3
-// derives it from rounding to nearest, and a test that measured what a run
-// produced would pass for a quantizer that got worse.
+// Per weight, against Int4ErrorBound over a single unit term, not a tolerance:
+// a test that measured what a run produced would pass for a quantizer that got
+// worse. The spans include two far from zero, where the stored zero point is
+// large enough that its f16 rounding is the dominant error and the range over
+// thirty specs/048-int4.md §3 states is exceeded -- which is why the bound is
+// over the stored scale and zero rather than over the range.
 func TestInt4ReconstructionIsInsideItsDerivedBound(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 11))
 	for _, span := range []struct {
@@ -49,38 +53,105 @@ func TestInt4ReconstructionIsInsideItsDerivedBound(t *testing.T) {
 		{"clustered away from zero", 0.9, 1.0},
 		{"all negative", -3, -2.75},
 		{"asymmetric about zero", -0.25, 4},
+		{"near a thousand", 1000, 1001},
+		{"negative and far from zero", -2000, -1999},
 	} {
 		t.Run(span.name, func(t *testing.T) {
 			w := make([]float32, 3*quant.Int4Group+17)
 			for i := range w {
 				w[i] = span.lo + rng.Float32()*(span.hi-span.lo)
 			}
+			// The ends of every group are present, so the clamp the bound
+			// accounts for is reached rather than only allowed for.
+			for g := 0; g*quant.Int4Group < len(w); g++ {
+				w[g*quant.Int4Group] = span.lo
+				w[min(g*quant.Int4Group+1, len(w)-1)] = span.hi
+			}
 			packed, scales, zeros := quant.Int4Quantize(w)
 			got := quant.Int4Dequantize(packed, scales, zeros, len(w))
 
+			one := []float32{1}
+			for i := range w {
+				g := i / quant.Int4Group
+				// The code is rounded against the stored f16 scale and zero,
+				// so rounding it costs half a step exactly. What is left is
+				// the rounding of those two, which lands on the weights at
+				// the ends of the group as a clamp, and the bound carries it.
+				bound := quant.Int4ErrorBound(one, scales[g:g+1], zeros[g:g+1])
+				if e := math.Abs(float64(w[i] - got[i])); e > bound {
+					t.Fatalf("weight %d is off by %v against a bound of %v (scale %v, "+
+						"zero %v)", i, e, bound, scales[g].F32(), zeros[g].F32())
+				}
+			}
+		})
+	}
+}
+
+// The dot-product bound holds where the zero point's rounding dominates, and
+// the range-over-thirty figure it replaced does not.
+//
+// Weights in [1000, 1001] store z = -15000 for a z* of -15003.7: the f16
+// spacing there is 8. The codes are rounded against the stored z, so a weight
+// in the middle of the group is still within half a step -- but the group's
+// largest weight computes to code 18.7, is clamped to 15, and reconstructs
+// 0.25 low against a claimed 0.033. The activations are one on each group's
+// two ends and zero elsewhere, so the product is exactly the clamped terms and
+// the excess does not average away over the terms that were fine. A typical
+// group is checked beside it, so the bound is seen to hold where the old one
+// was right as well.
+func TestInt4ErrorBoundHoldsWhereTheZeroPointRounds(t *testing.T) {
+	rng := rand.New(rand.NewPCG(13, 17))
+	for _, span := range []struct {
+		name          string
+		lo, hi        float32
+		exceedsOldOne bool
+	}{
+		{"near a thousand", 1000, 1001, true},
+		{"a typical group", 0.9, 1.0, false},
+	} {
+		t.Run(span.name, func(t *testing.T) {
+			w := make([]float32, 2*quant.Int4Group+17)
+			for i := range w {
+				w[i] = span.lo + rng.Float32()*(span.hi-span.lo)
+			}
+			x := make([]float32, len(w))
 			for g := 0; g*quant.Int4Group < len(w); g++ {
-				lo := g * quant.Int4Group
-				hi := min(lo+quant.Int4Group, len(w))
-				lowest, highest := w[lo], w[lo]
-				for _, v := range w[lo:hi] {
-					lowest, highest = min(lowest, v), max(highest, v)
-				}
-				// Half a step, exactly, with no slack for the f16 rounding of
-				// the scale and the zero point -- and that is not luck. The
-				// quantizer stores both as f16 and reads them *back* before
-				// quantizing against them, so the reconstruction uses the same
-				// two numbers the quantizer used and the only error left is
-				// rounding the code. A quantizer that used the f32 scale and
-				// stored a rounded one would need slack here, which is the
-				// second error Int8Quantize's comment says nobody accounted
-				// for. This assertion is what would notice.
-				bound := float64(highest-lowest) / 30
-				for i := lo; i < hi; i++ {
-					if e := math.Abs(float64(w[i] - got[i])); e > bound {
-						t.Fatalf("weight %d in [%v, %v] is off by %v, and the bound "+
-							"over that range is %v", i, lowest, highest, e, bound)
-					}
-				}
+				lo, hi := g*quant.Int4Group, min(g*quant.Int4Group+1, len(w)-1)
+				w[lo], w[hi] = span.lo, span.hi
+				x[lo], x[hi] = 1, 1
+			}
+			packed, scales, zeros := quant.Int4Quantize(w)
+			back := quant.Int4Dequantize(packed, scales, zeros, len(w))
+
+			var exact, quantized, old float64
+			termScales := make([]accel.Float16, len(x))
+			termZeros := make([]accel.Float16, len(x))
+			for i := range w {
+				exact += float64(w[i]) * float64(x[i])
+				quantized += float64(back[i]) * float64(x[i])
+				old += math.Abs(float64(x[i])) * float64(span.hi-span.lo) / 30
+				termScales[i] = scales[i/quant.Int4Group]
+				termZeros[i] = zeros[i/quant.Int4Group]
+			}
+			bound := quant.Int4ErrorBound(x, termScales, termZeros)
+			err := math.Abs(quantized - exact)
+			if err > bound {
+				t.Fatalf("the quantized product is %v from the exact one, and the derived "+
+					"bound is %v", err, bound)
+			}
+			if span.exceedsOldOne && err <= old {
+				t.Fatalf("the product is off by %v, inside the range-over-thirty figure "+
+					"of %v; this span was chosen to exceed it, so the fixture does not "+
+					"reach the rounding the bound exists to cover", err, old)
+			}
+			// And not vacuous: no weight is off by more than its group's
+			// range, so a bound past that would be saying nothing.
+			var ceiling float64
+			for i := range x {
+				ceiling += math.Abs(float64(x[i])) * float64(span.hi-span.lo)
+			}
+			if bound > ceiling {
+				t.Fatalf("the bound %v exceeds the sum of every term's range %v", bound, ceiling)
 			}
 		})
 	}
@@ -214,14 +285,26 @@ func TestInt4PacksLowNibbleFirst(t *testing.T) {
 	}
 }
 
-// The bound refuses a term count that does not match.
-func TestInt4ErrorBoundNeedsOneRangePerTerm(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("a bound over three terms with two ranges was computed; a per-group " +
-				"range bounds a dot product only where the caller says which group " +
-				"each term came from")
-		}
-	}()
-	quant.Int4ErrorBound([]float32{1, 2, 3}, []float32{1, 2})
+// The bound refuses a term count that does not match, which its doc states as
+// the contract: a per-group figure is not a per-term one, and the number a
+// mismatched call would return is not a bound.
+func TestInt4ErrorBoundNeedsOneScaleAndZeroPerTerm(t *testing.T) {
+	three := []accel.Float16{accel.ToFloat16(1), accel.ToFloat16(1), accel.ToFloat16(1)}
+	two := three[:2]
+	for _, c := range []struct {
+		name          string
+		scales, zeros []accel.Float16
+	}{
+		{"two scales for three terms", two, three},
+		{"two zeros for three terms", three, two},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("a bound over three terms was computed from " + c.name)
+				}
+			}()
+			quant.Int4ErrorBound([]float32{1, 2, 3}, c.scales, c.zeros)
+		})
+	}
 }
