@@ -275,15 +275,19 @@ func TestUniformsAreCapturedPerDraw(t *testing.T) {
 func TestAVertexSlotOutsideTheLayoutIsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		slot int
+		slot func(limit int) int
 		says string
 	}{
-		{"negative", -1, "cannot be negative"},
-		{"at the ceiling", 16, "is the ceiling"},
-		{"far past the ceiling", 4096, "is the ceiling"},
+		{"negative", func(int) int { return -1 }, "cannot be negative"},
+		{"at the ceiling", func(limit int) int { return limit }, "reports a limit"},
+		{"far past the ceiling", func(int) int { return 4096 }, "reports a limit"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
+			// The ceiling is the device's Limits.MaxVertexBuffers, which
+			// TestAVertexBufferSlotIsRefusedAgainstTheDevicesLimit pins on
+			// both sides; here it only has to be a diagnostic.
+			slot := c.slot(d.Info().Limits.MaxVertexBuffers)
 			target := colourTarget(t, d, "colour", 4, 4)
 			vb := newBuffer(t, d, "vb", 9*4, accel.BufferVertex|accel.BufferCopyDst)
 
@@ -294,18 +298,18 @@ func TestAVertexSlotOutsideTheLayoutIsRefused(t *testing.T) {
 			})
 			// No recover(): a panic here fails the test by taking it down, which
 			// is the behaviour being fixed.
-			p.SetVertexBuffer(c.slot, whole(t, vb))
+			p.SetVertexBuffer(slot, whole(t, vb))
 
 			_, err := r.Build()
 			if err == nil {
-				t.Fatalf("slot %d was accepted", c.slot)
+				t.Fatalf("slot %d was accepted", slot)
 			}
 			if !strings.Contains(err.Error(), c.says) {
 				t.Fatalf("the refusal should say %q, got %v", c.says, err)
 			}
 			// And it names the slot, so a caller with several knows which.
-			if !strings.Contains(err.Error(), fmt.Sprint(c.slot)) {
-				t.Errorf("the refusal should name slot %d: %v", c.slot, err)
+			if !strings.Contains(err.Error(), fmt.Sprint(slot)) {
+				t.Errorf("the refusal should name slot %d: %v", slot, err)
 			}
 		})
 	}

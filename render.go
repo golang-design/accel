@@ -802,10 +802,15 @@ func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
 		p.failed = true
 		return
 	}
-	if slot >= mslabi.StageVertexBufferLimit {
-		p.r.fail("RenderPass %q: SetVertexBuffer at slot %d; %d is the ceiling, because "+
-			"a stage's uniforms begin there on Metal (specs/032-stage-abi.md section 2.2)",
-			p.desc.Label, slot, mslabi.StageVertexBufferLimit)
+	// The ceiling is the device's, as it is for the layout in
+	// checkVertexLayout, and it names the device. It was
+	// mslabi.StageVertexBufferLimit here after Limits.MaxVertexBuffers had
+	// replaced that constant for the layout, so a device reporting a larger
+	// limit accepted a layout its passes could not bind.
+	dev := p.r.state.dev
+	if limit := dev.info.Limits.MaxVertexBuffers; limit > 0 && slot >= limit {
+		p.r.fail("RenderPass %q: SetVertexBuffer at slot %d; %q reports a limit of %d "+
+			"vertex buffers (Limits.MaxVertexBuffers)", p.desc.Label, slot, dev.info.Name, limit)
 		p.failed = true
 		return
 	}

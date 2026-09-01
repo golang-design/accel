@@ -161,3 +161,50 @@ func TestAVertexLayoutIsRefusedAgainstTheDevicesLimit(t *testing.T) {
 		t.Errorf("the refusal is not ErrUnsupported: %v", err)
 	}
 }
+
+// A vertex buffer slot is refused against the device's limit, not Metal's.
+//
+// The same rule as the layout check above, at the other place a slot is named:
+// SetVertexBuffer refused every slot at or past mslabi.StageVertexBufferLimit
+// on every device after Limits.MaxVertexBuffers had replaced that constant for
+// the layout, so a device reporting a larger limit accepted a layout its passes
+// could not bind. One below the limit is accepted and the limit itself is
+// refused naming the device, so an off-by-one shows on either side.
+func TestAVertexBufferSlotIsRefusedAgainstTheDevicesLimit(t *testing.T) {
+	d := openDevice(t)
+	limit := d.Info().Limits.MaxVertexBuffers
+	if limit <= 0 {
+		t.Fatal("the device reports no vertex-buffer limit, so nothing constrains a slot")
+	}
+	record := func(slot int) error {
+		target := colourTarget(t, d, "target", 4, 4)
+		vb := newBuffer(t, d, "vb", 12, accel.BufferStorage)
+		r := d.NewRecorder()
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{View: view(t, target), Load: accel.LoadClear}},
+			Width: 4, Height: 4, Label: "slots",
+		})
+		p.SetPipeline(solidPipeline(t, d))
+		p.SetVertexBuffer(slot, whole(t, vb))
+		p.Draw(accel.Draw{VertexCount: 3})
+		g, err := r.Build()
+		if err == nil {
+			_ = g.Close()
+		}
+		return err
+	}
+
+	if err := record(limit - 1); err != nil {
+		t.Errorf("slot %d is below the device's limit of %d and was refused: %v",
+			limit-1, limit, err)
+	}
+	err := record(limit)
+	if err == nil {
+		t.Fatalf("slot %d is the device's limit and was accepted", limit)
+	}
+	for _, want := range []string{d.Info().Name, "limit"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
