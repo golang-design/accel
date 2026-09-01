@@ -308,8 +308,6 @@ func kName(l int) string    { return "k" + itoa(l) }
 func vName(l int) string    { return "v" + itoa(l) }
 func kInName(l int) string  { return "kin" + itoa(l) }
 func vInName(l int) string  { return "vin" + itoa(l) }
-func qInName(l int) string  { return "qin" + itoa(l) }
-func aInName(l int) string  { return "ain" + itoa(l) }
 func itoa(n int) string     { return strconv.Itoa(n) }
 
 // layerKV generates deterministic per-step values, so both backends see the

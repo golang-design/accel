@@ -12102,7 +12102,7 @@ fragment TintedFS_out TintedFS(
     return _out;
 }
 `,
-	Digest:    "002c01aaf4ab24673616c1595945b452",
+	Digest:    "fe8fc4b9f7c5daef3b52a289f6999347",
 	Generator: kernelabi.Version,
 }
 

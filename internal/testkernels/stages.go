@@ -151,6 +151,10 @@ func ScaledVS(v accel.Vertex, xf StageTransform, pos accel.Vec3) (accel.Clip, ac
 //
 //accel:fragment
 func TintedFS(f accel.Fragment, in accel.NoVaryings, tint StageTint) Solid {
+	// A literal rather than the conversion Solid(tint) staticcheck suggests:
+	// the kernel subset has no struct conversion, and the generator refuses
+	// one by name.
+	//lint:ignore S1016 the kernel subset has no struct conversion
 	return Solid{Colour: tint.Colour}
 }
 
