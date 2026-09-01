@@ -5082,17 +5082,18 @@ kernel void GroupedMatMul(
 // is a superset of the right answer and therefore correct, and a liveness
 // analysis can shrink it later without changing anything a caller sees.
 type quantMatVecInt4Frame struct {
-	pc      int
-	col0    uint32
-	lid1    uint32
-	acc2    float32
-	k3      uint32
-	w4      uint32
-	code5   uint32
-	g6      uint32
-	s7      float32
-	z8      float32
-	stride9 uint32
+	pc       int
+	col0     uint32
+	lid1     uint32
+	acc2     float32
+	k3       uint32
+	w4       uint32
+	code5    uint32
+	g6       uint32
+	s7       float32
+	z8       float32
+	wv9      float32
+	stride10 uint32
 }
 
 // quantMatVecInt4Coop runs one invocation of QuantMatVecInt4 to its next suspension point.
@@ -5117,7 +5118,11 @@ func quantMatVecInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 						f.g6 = (f.w4 / uint32(128))
 						f.s7 = bs[f.g6].F32()
 						f.z8 = bz[f.g6].F32()
-						f.acc2 = float32(f.acc2 + float32(a[f.k3]*float32(float32(float32(f.code5)-f.z8)*f.s7)))
+						f.wv9 = (float32(float32(f.code5)-f.z8) * f.s7)
+						if f.s7 == float32(0) {
+							f.wv9 = f.z8
+						}
+						f.acc2 = float32(f.acc2 + float32(a[f.k3]*f.wv9))
 					}
 				}
 			}
@@ -5127,29 +5132,29 @@ func quantMatVecInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 			continue
 		case 1:
 			f.pc = 2
-			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "int4.go:74:2"}
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "int4.go:87:2"}
 			return true
 		case 2:
-			f.stride9 = uint32(64)
+			f.stride10 = uint32(64)
 			f.pc = 6
 			continue
 		case 3:
-			if f.lid1 < f.stride9 {
+			if f.lid1 < f.stride10 {
 				tr.Write(0, int(f.lid1))
-				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride9)))])
+				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride10)))])
 			}
 			f.pc = 4
 			continue
 		case 4:
 			f.pc = 5
-			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "int4.go:80:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "int4.go:93:3"}
 			return true
 		case 5:
-			f.stride9 = (f.stride9 / uint32(2))
+			f.stride10 = (f.stride10 / uint32(2))
 			f.pc = 6
 			continue
 		case 6:
-			if f.stride9 > uint32(0) {
+			if f.stride10 > uint32(0) {
 				f.pc = 3
 				continue
 			}
@@ -5176,7 +5181,7 @@ var QuantMatVecInt4Kernel = kernelabi.Kernel{
 		{Name: "bz", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "d98539a9f3a34d6c4408375e62e22129",
+	Digest:    "9806c98d8de6b267d3d722a2167a1b5d",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5215,7 +5220,11 @@ kernel void QuantMatVecInt4(
             uint g = (w / uint(128));
             float s = float(bs[g]);
             float z = float(bz[g]);
-            acc = (acc + (a[k] * ((float(code) - z) * s)));
+            float wv = ((float(code) - z) * s);
+            if ((s == float(0))) {
+                wv = z;
+            }
+            acc = (acc + (a[k] * wv));
         }
     }
     sh[lid] = acc;
@@ -5275,13 +5284,19 @@ type quantMatMulInt4Frame struct {
 	w10    uint32
 	code11 uint32
 	g12    uint32
-	kk213  uint32
-	w14    uint32
-	code15 uint32
-	g16    uint32
-	k17    uint32
-	av18   float32
-	bv19   float32
+	s13    float32
+	z14    float32
+	wv15   float32
+	kk216  uint32
+	w17    uint32
+	code18 uint32
+	g19    uint32
+	s220   float32
+	z221   float32
+	wv222  float32
+	k23    uint32
+	av24   float32
+	bv25   float32
 }
 
 // quantMatMulInt4Coop runs one invocation of QuantMatMulInt4 to its next suspension point.
@@ -5321,19 +5336,31 @@ func quantMatMulInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 				f.w10 = ((((f.k07 + f.kk8) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)
 				f.code11 = ((bq[(f.w10/uint32(8))] >> (uint32(4) * (f.w10 % uint32(8)))) & uint32(15))
 				f.g12 = (f.w10 / uint32(128))
+				f.s13 = bs[f.g12].F32()
+				f.z14 = bz[f.g12].F32()
+				f.wv15 = (float32(float32(f.code11)-f.z14) * f.s13)
+				if f.s13 == float32(0) {
+					f.wv15 = f.z14
+				}
 				tr.Write(1, int(f.tid2))
-				tileB[f.tid2] = float32(float32(float32(f.code11)-bz[f.g12].F32()) * bs[f.g12].F32())
+				tileB[f.tid2] = f.wv15
 			} else {
 				tr.Write(1, int(f.tid2))
 				tileB[f.tid2] = f.zero6
 			}
-			f.kk213 = (f.kk8 + uint32(8))
-			if ((f.k07 + f.kk213) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
-				f.w14 = ((((f.k07 + f.kk213) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)
-				f.code15 = ((bq[(f.w14/uint32(8))] >> (uint32(4) * (f.w14 % uint32(8)))) & uint32(15))
-				f.g16 = (f.w14 / uint32(128))
+			f.kk216 = (f.kk8 + uint32(8))
+			if ((f.k07 + f.kk216) < d.K) && (((t.GroupID().X * uint32(16)) + f.nn9) < d.N) {
+				f.w17 = ((((f.k07 + f.kk216) * d.N) + (t.GroupID().X * uint32(16))) + f.nn9)
+				f.code18 = ((bq[(f.w17/uint32(8))] >> (uint32(4) * (f.w17 % uint32(8)))) & uint32(15))
+				f.g19 = (f.w17 / uint32(128))
+				f.s220 = bs[f.g19].F32()
+				f.z221 = bz[f.g19].F32()
+				f.wv222 = (float32(float32(f.code18)-f.z221) * f.s220)
+				if f.s220 == float32(0) {
+					f.wv222 = f.z221
+				}
 				tr.Write(1, int((f.tid2 + uint32(128))))
-				tileB[(f.tid2 + uint32(128))] = float32(float32(float32(f.code15)-bz[f.g16].F32()) * bs[f.g16].F32())
+				tileB[(f.tid2 + uint32(128))] = f.wv222
 			} else {
 				tr.Write(1, int((f.tid2 + uint32(128))))
 				tileB[(f.tid2 + uint32(128))] = f.zero6
@@ -5342,22 +5369,22 @@ func quantMatMulInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "int4tiled.go:109:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "int4tiled.go:123:3"}
 			return true
 		case 4:
 			{
-				f.k17 = uint32(0)
-				for ; f.k17 < uint32(16); f.k17 = (f.k17 + uint32(1)) {
-					f.av18 = tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k17)))]
-					f.bv19 = tileB[tr.ReadAt(1, int(((f.k17*uint32(16))+f.lx0)))]
-					f.acc5 = float32(f.acc5 + float32(f.av18*f.bv19))
+				f.k23 = uint32(0)
+				for ; f.k23 < uint32(16); f.k23 = (f.k23 + uint32(1)) {
+					f.av24 = tileA[tr.ReadAt(0, int(((f.ly1*uint32(16))+f.k23)))]
+					f.bv25 = tileB[tr.ReadAt(1, int(((f.k23*uint32(16))+f.lx0)))]
+					f.acc5 = float32(f.acc5 + float32(f.av24*f.bv25))
 				}
 			}
 			f.pc = 5
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "int4tiled.go:117:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "int4tiled.go:131:3"}
 			return true
 		case 6:
 			f.k07 = (f.k07 + uint32(16))
@@ -5391,7 +5418,7 @@ var QuantMatMulInt4Kernel = kernelabi.Kernel{
 		{Name: "bz", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "eb92f08d9e7450049e0469ea9ab4d91f",
+	Digest:    "f775c00a971cede4c2c77e9344eef4e3",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5440,7 +5467,13 @@ kernel void QuantMatMulInt4(
             uint w = ((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn);
             uint code = ((bq[(w / uint(8))] >> (uint(4) * (w % uint(8)))) & uint(15));
             uint g = (w / uint(128));
-            tileB[tid] = ((float(code) - float(bz[g])) * float(bs[g]));
+            float s = float(bs[g]);
+            float z = float(bz[g]);
+            float wv = ((float(code) - z) * s);
+            if ((s == float(0))) {
+                wv = z;
+            }
+            tileB[tid] = wv;
         } else {
             tileB[tid] = zero;
         }
@@ -5449,7 +5482,13 @@ kernel void QuantMatMulInt4(
             uint w = ((((k0 + kk2) * d.N) + (_wid.x * uint(16))) + nn);
             uint code = ((bq[(w / uint(8))] >> (uint(4) * (w % uint(8)))) & uint(15));
             uint g = (w / uint(128));
-            tileB[(tid + uint(128))] = ((float(code) - float(bz[g])) * float(bs[g]));
+            float s2 = float(bs[g]);
+            float z2 = float(bz[g]);
+            float wv2 = ((float(code) - z2) * s2);
+            if ((s2 == float(0))) {
+                wv2 = z2;
+            }
+            tileB[(tid + uint(128))] = wv2;
         } else {
             tileB[(tid + uint(128))] = zero;
         }

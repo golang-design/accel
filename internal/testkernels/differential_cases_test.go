@@ -1136,6 +1136,35 @@ func diffCases() []diffCase {
 			ulp: 8,
 		},
 		{
+			// The same matvec with a constant group: quant.Int4Quantize stores
+			// one as a zero scale with the value in the zero point, and the
+			// kernel selects the zero point when the scale is zero. Group 0
+			// takes that path and group 1 the ordinary one, so the select is
+			// lowered and compared on both backends rather than only read.
+			//
+			// Groups are over the flat weight index k*N+n, so K=256 by N=2 is
+			// four of them.
+			kernel:   &testkernels.QuantMatVecInt4Kernel,
+			counts:   []int{256, 256 * 2 / 8, 4, 4, 2},
+			uniforms: []any{testkernels.GEMMDims{K: 256, N: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i%251 + 1)
+				case 2: // group 0 is constant, the rest are not
+					return []float32{0, 0.25, 0.25, 0.25}[i]
+				case 3: // the constant, then ordinary zero points
+					return []float32{0.75, 4, 4, 4}[i]
+				case 4:
+					return 0
+				}
+				return defaultSeed(b, i)
+			},
+			why: "a sum of products, per section 7's reduction bound",
+			ulp: 8,
+		},
+		{
 			// The tiled 4-bit product: the same unpacking as the matvec above,
 			// moved into a shared-tile load, plus two barriers. K is not a
 			// multiple of TileK, so the edge guards run on both backends and a

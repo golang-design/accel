@@ -92,7 +92,15 @@ func QuantMatMulInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
 			w := (k0+kk)*d.N + t.GroupID().X*TileN + nn
 			code := bq[w/8] >> (4 * (w % 8)) & 0xF
 			g := w / Int4Group
-			tileB[tid] = (float32(code) - bz[g].F32()) * bs[g].F32()
+			s := bs[g].F32()
+			z := bz[g].F32()
+			// A zero scale is a constant group and the zero point carries
+			// it; [QuantMatVecInt4] says why, and this is the same reading.
+			wv := (float32(code) - z) * s
+			if s == 0 {
+				wv = z
+			}
+			tileB[tid] = wv
 		} else {
 			tileB[tid] = zero
 		}
@@ -101,7 +109,13 @@ func QuantMatMulInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
 			w := (k0+kk2)*d.N + t.GroupID().X*TileN + nn
 			code := bq[w/8] >> (4 * (w % 8)) & 0xF
 			g := w / Int4Group
-			tileB[tid+128] = (float32(code) - bz[g].F32()) * bs[g].F32()
+			s2 := bs[g].F32()
+			z2 := bz[g].F32()
+			wv2 := (float32(code) - z2) * s2
+			if s2 == 0 {
+				wv2 = z2
+			}
+			tileB[tid+128] = wv2
 		} else {
 			tileB[tid+128] = zero
 		}

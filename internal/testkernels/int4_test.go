@@ -89,6 +89,103 @@ func TestTheInt4KernelReadsWhatTheQuantizerWrote(t *testing.T) {
 	}
 }
 
+// Both kernels read a constant group the way the quantizer wrote it.
+//
+// quant.Int4Quantize stores a group of one repeated value as a zero scale with
+// the value in the zero point, and quant.Int4Dequantize -- the host reference
+// -- reads a zero scale as exactly that. The kernels computed (q - z) * s,
+// which is zero for every weight of such a group, so a pruned or padded matrix
+// multiplied differently on the device than on the host and nothing said so.
+//
+// The constant is nonzero and the activations are all one, so the group's
+// contribution to each column is 128 times the constant: an answer of zero is
+// the defect and not a rounding difference. Both kernels are checked because
+// each decodes the representation in its own place.
+func TestTheInt4KernelsReadAConstantGroupAsTheQuantizerWroteIt(t *testing.T) {
+	const K, N, M = 2 * quant.Int4Group, 2, 3
+	const c = 0.75
+	rng := rand.New(rand.NewPCG(53, 59))
+
+	// Group 0 is the constant; group 1 is ordinary, so the test also says the
+	// select does not disturb a group with a real scale.
+	w := make([]float32, K*N)
+	for i := range w {
+		if i < quant.Int4Group {
+			w[i] = c
+		} else {
+			w[i] = rng.Float32()*2 - 1
+		}
+	}
+	packed, scales, zeros := quant.Int4Quantize(w)
+	if scales[0].F32() != 0 || zeros[0].F32() != c {
+		t.Fatalf("the quantizer stored the constant group as s=%v z=%v; this test is "+
+			"about the zero-scale encoding and needs it", scales[0].F32(), zeros[0].F32())
+	}
+	back := quant.Int4Dequantize(packed, scales, zeros, len(w))
+
+	a := make([]float32, M*K)
+	for i := range a {
+		a[i] = 1
+	}
+	// The host reference, over the dequantized weights the kernel is meant to
+	// read, in f64 so the only slack is the kernel's own f32 accumulation.
+	want := make([]float64, M*N)
+	mag := make([]float64, M*N)
+	for m := range M {
+		for n := range N {
+			for k := range K {
+				want[m*N+n] += float64(a[m*K+k]) * float64(back[k*N+n])
+				mag[m*N+n] += math.Abs(float64(a[m*K+k]) * float64(back[k*N+n]))
+			}
+		}
+	}
+
+	row := make([]float32, N)
+	if err := kernel.DispatchCooperative(&testkernels.QuantMatVecInt4Kernel,
+		accel.ID3{X: N},
+		kernelabi.Args{
+			Uniforms: []any{testkernels.GEMMDims{K: K, N: N}},
+			Slices:   []any{a[:K], packed, scales, zeros, row},
+		}); err != nil {
+		t.Fatalf("row dispatch: %v", err)
+	}
+	tiled := make([]float32, M*N)
+	if err := kernel.DispatchCooperative(&testkernels.QuantMatMulInt4Kernel,
+		accel.ID3{
+			X: (N + testkernels.TileN - 1) / testkernels.TileN,
+			Y: (M + testkernels.TileM - 1) / testkernels.TileM,
+		},
+		kernelabi.Args{
+			Uniforms: []any{testkernels.GEMMDims{M: M, K: K, N: N}},
+			Slices:   []any{a, packed, scales, zeros, tiled},
+		}); err != nil {
+		t.Fatalf("tiled dispatch: %v", err)
+	}
+
+	// specs/008-numerics.md section 7's sequential bound, gamma(K-1) times the
+	// sum of the terms' magnitudes, and nothing for the quantization: the
+	// reference is over the dequantized weights. The sequential figure rather
+	// than the row kernel's tree depth because it covers both kernels, and the
+	// constant group makes the running sum large against the terms -- 96 from
+	// 128 terms of 0.75 -- so a bound that looked proportionate for a
+	// sign-mixed sum is too small here by an order of magnitude.
+	nu := float64(K-1) * math.Ldexp(1, -24)
+	gamma := nu / (1 - nu)
+	for n := range N {
+		if e := math.Abs(float64(row[n]) - want[n]); e > gamma*mag[n] {
+			t.Fatalf("row kernel column %d is %v, want %v: the constant group of %v "+
+				"contributes %v and the kernel read it as (q-z)*s with s = 0",
+				n, row[n], want[n], c, c*quant.Int4Group)
+		}
+	}
+	for i := range tiled {
+		if e := math.Abs(float64(tiled[i]) - want[i]); e > gamma*mag[i] {
+			t.Fatalf("tiled kernel element %d is %v, want %v: the constant group of %v "+
+				"was read as (q-z)*s with s = 0", i, tiled[i], want[i], c)
+		}
+	}
+}
+
 // The kernel's nibble order is the quantizer's.
 //
 // The sharpest form of the test above, and the one that fails loudly rather

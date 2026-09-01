@@ -47,6 +47,15 @@ const Int4Group = 128
 // would sum codes that mean different things. specs/048-int4.md §3's bound is
 // stated against this evaluation.
 //
+// # A zero scale carries the constant in the zero point
+//
+// quant.Int4Quantize stores a group whose weights are all one value as a zero
+// scale with the value in the zero point, because a range of zero has no step
+// to divide by. (q − z)·s annihilates that: every weight of the group became
+// zero on the device while quant.Int4Dequantize, the host reference, read it
+// as z. A pruned or padded matrix really has such a group, and the two
+// disagreed about it silently. The select below is the host's reading.
+//
 //accel:kernel workgroup=128
 func QuantMatVecInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
 	bs []accel.Float16, bz []accel.Float16, out []float32, sh *[128]float32) {
@@ -67,7 +76,11 @@ func QuantMatVecInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
 			g := w / Int4Group
 			s := bs[g].F32()
 			z := bz[g].F32()
-			acc = acc + a[k]*((float32(code)-z)*s)
+			wv := (float32(code) - z) * s
+			if s == 0 {
+				wv = z
+			}
+			acc = acc + a[k]*wv
 		}
 	}
 	sh[lid] = acc
