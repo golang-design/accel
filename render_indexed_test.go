@@ -244,6 +244,32 @@ func TestIndexedDrawRefusals(t *testing.T) {
 			p.DrawIndexed(accel.DrawIndexed{IndexCount: 99})
 		},
 		says: "the draw reads 99 uint32 indices",
+	}, {
+		// The range check measured a view by the buffer's dtype rather than
+		// the view's own, so a reinterpreting view at a narrower width was
+		// sized wide by the ratio: six bytes of u8 counted as twenty-four.
+		name: "a draw past the end of a narrower index view",
+		record: func(t *testing.T, d *accel.Device, p *accel.RenderPass, ib accel.BufferView) {
+			narrow, err := ib.Buffer.ViewAs(accel.U8, 0, 6)
+			if err != nil {
+				t.Fatalf("view: %v", err)
+			}
+			p.SetIndexBuffer(narrow, accel.Index16)
+			p.DrawIndexed(accel.DrawIndexed{IndexCount: 6})
+		},
+		says: "the index buffer is 6 bytes and the draw reads 6 uint16 indices",
+	}, {
+		name: "a draw past the end of a narrower vertex view",
+		record: func(t *testing.T, d *accel.Device, p *accel.RenderPass, ib accel.BufferView) {
+			vb := newBuffer(t, d, "narrow", 28, accel.BufferStorage)
+			narrow, err := vb.ViewAs(accel.U8, 0, 28)
+			if err != nil {
+				t.Fatalf("view: %v", err)
+			}
+			p.SetVertexBuffer(0, narrow)
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: "vertex buffer 0 is 28 bytes and the draw reads 3 elements",
 	}} {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)

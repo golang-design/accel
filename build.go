@@ -624,7 +624,7 @@ func (g *Graph) indexOperand(n *recNode, p *RenderPass, draw int, d drawCall) (d
 		return driver.Operand{}, fmt.Errorf("accel: Build: render pass %q draw %d index "+
 			"buffer: %w", p.desc.Label, draw, err)
 	}
-	size := v.Count * v.Buffer.DType().Size()
+	_, size := v.byteRange()
 	if need := (d.first + d.vertices) * d.indexFmt.size(); need > size {
 		return driver.Operand{}, fmt.Errorf("accel: Build: render pass %q draw %d: the "+
 			"index buffer is %d bytes and the draw reads %d %s starting at %d, which "+
@@ -653,7 +653,7 @@ func (g *Graph) vertexOperands(n *recNode, p *RenderPass, draw int, pipe *Render
 			return fmt.Errorf("accel: Build: render pass %q draw %d vertex buffer %d: %w",
 				p.desc.Label, draw, slot, err)
 		}
-		size := v.Count * v.Buffer.DType().Size()
+		_, size := v.byteRange()
 
 		// The elements the draw reaches must be inside the view. Checked
 		// against the draw's own counts rather than against the buffer, because
