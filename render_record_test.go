@@ -81,6 +81,35 @@ func TestRenderPassRefusals(t *testing.T) {
 		},
 		says: "SetPipeline with no pipeline",
 	}, {
+		// Both are what a dispatch refuses of a compute pipeline. Accepted, a
+		// closed pipeline would be lowered at build, and a foreign one would
+		// hand another device's compiled stages to this one's backend.
+		name: "SetPipeline with a closed pipeline",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Width: 4, Height: 4, Label: "stale",
+			})
+			pipe := solidPipeline(t, d)
+			if err := pipe.Close(); err != nil {
+				t.Fatalf("close pipeline: %v", err)
+			}
+			p.SetPipeline(pipe)
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: `SetPipeline "solid": resource is closed`,
+	}, {
+		name: "SetPipeline with another device's pipeline",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Width: 4, Height: 4, Label: "foreign",
+			})
+			p.SetPipeline(solidPipeline(t, openDevice(t)))
+			p.Draw(accel.Draw{VertexCount: 3})
+		},
+		says: "belongs to a different device",
+	}, {
 		name: "a draw before a pipeline",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{

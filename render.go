@@ -762,9 +762,25 @@ func either(hasTexture, hasSlot bool) string {
 }
 
 // SetPipeline selects the pipeline subsequent draws use.
+//
+// A closed pipeline and one from another device are refused here, as a
+// dispatch refuses them of a compute pipeline: accepted, the first is lowered
+// at build after its handle is gone, and the second hands another device's
+// compiled stages to this one's backend.
 func (p *RenderPass) SetPipeline(pipe *RenderPipeline) {
 	if pipe == nil {
 		p.r.fail("RenderPass %q: SetPipeline with no pipeline", p.desc.Label)
+		p.failed = true
+		return
+	}
+	if err := pipe.state.checkOpen("SetPipeline"); err != nil {
+		p.r.state.errs = append(p.r.state.errs, err)
+		p.failed = true
+		return
+	}
+	if pipe.dev != p.r.state.dev {
+		p.r.fail("RenderPass %q: SetPipeline %q: the pipeline belongs to a different device",
+			p.desc.Label, pipe.label)
 		p.failed = true
 		return
 	}
