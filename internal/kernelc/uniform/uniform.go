@@ -69,6 +69,21 @@ type Info struct {
 	// control is the level of the control flow reaching each statement: the
 	// least-uniform predicate any enclosing conditional or loop depends on.
 	control map[ir.Stmt]Level
+
+	// escapes is, per loop, the least uniform control any break in its body
+	// sits under. A break some invocations take and others do not gives the
+	// loop a different trip count for each of them, so every definition in the
+	// body is control-dependent on that break's predicate -- the ones before it
+	// in the body included, since they run once more for the invocations that
+	// stayed. It is found on one pass and applied on the next, which is what
+	// the fixed point is for.
+	escapes map[*ir.For]Level
+
+	// summaries is, per helper, how uniform its result is when every argument
+	// is workgroup-uniform. A call's level is the join of this and its
+	// arguments: the summary carries what the body reads on its own -- an id, a
+	// load -- and the arguments carry what the call site supplies.
+	summaries map[*ir.Func]Level
 }
 
 // Of computes uniformity for a function.
@@ -81,16 +96,17 @@ type Info struct {
 // toward Non.
 func Of(fn *ir.Func) *Info {
 	in := &Info{
-		values:  map[ir.Value]Level{},
-		control: map[ir.Stmt]Level{},
+		values:    map[ir.Value]Level{},
+		control:   map[ir.Stmt]Level{},
+		escapes:   map[*ir.For]Level{},
+		summaries: map[*ir.Func]Level{},
 	}
-	// Iterate to a fixed point. A value only ever becomes less uniform, so this
-	// terminates in at most three passes over the tree; the loop bound is
-	// generous rather than tight because a wrong bound here is a wrong answer.
-	for range 8 {
-		before := len(in.values)
-		changed := in.walkBlock(fn.Body, Workgroup)
-		if !changed && len(in.values) == before {
+	// Iterate to a fixed point. Every recorded level only ever rises and the
+	// lattice is finite, so a pass that changes nothing is the last one and
+	// the loop needs no bound: a bound that was too small would be a wrong
+	// answer rather than a slow one.
+	for {
+		if changed, _ := in.walkBlock(fn.Body, Workgroup, nil); !changed {
 			break
 		}
 	}
@@ -123,40 +139,54 @@ func (in *Info) set(v ir.Value, l Level) bool {
 	return true
 }
 
-// walkBlock walks a block under a control level, returning whether anything
-// became less uniform.
-func (in *Info) walkBlock(b *ir.Block, ctrl Level) bool {
+// walkBlock walks a block under a control level inside a loop, or none.
+//
+// It returns whether anything became less uniform, and the least uniform
+// control any break or continue in the block sits under. A statement after
+// such an escape runs only for the invocations that did not take it, so it is
+// control-dependent on the escape's predicate exactly as if it sat inside the
+// conditional -- which is what stops
+//
+//	for i := 0; i < 8; i++ { if lane > i { break }; last = i }
+//
+// from calling last uniform because i is.
+func (in *Info) walkBlock(b *ir.Block, ctrl Level, loop *ir.For) (changed bool, esc Level) {
 	if b == nil {
-		return false
+		return false, Workgroup
 	}
-	changed := false
+	esc = Workgroup
 	for _, s := range b.List {
-		changed = in.walkStmt(s, ctrl) || changed
+		c, e := in.walkStmt(s, max(ctrl, esc), loop)
+		changed = c || changed
+		esc = max(esc, e)
 	}
-	return changed
+	return changed, esc
 }
 
-func (in *Info) walkStmt(s ir.Stmt, ctrl Level) bool {
+func (in *Info) walkStmt(s ir.Stmt, ctrl Level, loop *ir.For) (changed bool, esc Level) {
 	if old, ok := in.control[s]; !ok || ctrl > old {
 		in.control[s] = ctrl
+		changed = true
 	}
-	changed := false
+	esc = Workgroup
 
 	switch n := s.(type) {
 	case *ir.Block:
-		changed = in.walkBlock(n, ctrl)
+		c, e := in.walkBlock(n, ctrl, loop)
+		changed = c || changed
+		esc = e
 
 	case *ir.Declare:
 		l := in.value(n.Init)
 		// A definition inherits the control flow it sits under. This is the
 		// clause that stops `if l < 4 { x = 1 } else { x = 2 }` from being
 		// called uniform because both 1 and 2 are literals.
-		changed = in.set(n.Local, max(l, ctrl))
+		changed = in.set(n.Local, max(l, ctrl)) || changed
 
 	case *ir.Assign:
 		l := max(in.value(n.RHS), ctrl)
 		if lhs, ok := n.LHS.(*ir.Local); ok {
-			changed = in.set(lhs, l)
+			changed = in.set(lhs, l) || changed
 		} else {
 			// A store into a binding or shared memory. The location's contents
 			// become non-uniform, which the load rule already assumes, so
@@ -169,37 +199,68 @@ func (in *Info) walkStmt(s ir.Stmt, ctrl Level) bool {
 
 	case *ir.If:
 		cond := max(in.value(n.Cond), ctrl)
-		changed = in.walkBlock(n.Then, cond) || changed
+		c, e := in.walkBlock(n.Then, cond, loop)
+		changed = c || changed
+		esc = e
 		if n.Else != nil {
-			changed = in.walkStmt(n.Else, cond) || changed
+			c, e := in.walkStmt(n.Else, cond, loop)
+			changed = c || changed
+			esc = max(esc, e)
 		}
 
 	case *ir.For:
-		// A loop's body is control-dependent on its condition, and on anything
-		// its init or post computes.
+		// A loop's body is control-dependent on its condition, on anything its
+		// init or post computes, and on any break some invocations take: those
+		// invocations run fewer iterations than the rest, so every definition
+		// in the body -- before the break as much as after it -- is one they
+		// may or may not have executed a last time.
 		inner := ctrl
 		if n.Init != nil {
-			changed = in.walkStmt(n.Init, ctrl) || changed
+			c, _ := in.walkStmt(n.Init, ctrl, loop)
+			changed = c || changed
 		}
 		if n.Cond != nil {
 			inner = max(inner, in.value(n.Cond))
 		}
-		changed = in.walkBlock(n.Body, inner) || changed
+		inner = max(inner, in.escapes[n])
+		c, _ := in.walkBlock(n.Body, inner, n)
+		changed = c || changed
 		if n.Post != nil {
-			changed = in.walkStmt(n.Post, inner) || changed
+			c, _ := in.walkStmt(n.Post, inner, n)
+			changed = c || changed
 		}
+		// The loop absorbs its own escapes: after it, every invocation is out
+		// of it, whichever way it left.
 
 	case *ir.Return:
 		if n.Value != nil {
 			in.value(n.Value)
 		}
+		// A return is an escape from the function rather than from a loop,
+		// and it is [AcceptBarriers] that reads its control level: the
+		// invocations that took it never arrive at a barrier after it. The
+		// values of the ones that stayed are unaffected, so it raises nothing
+		// here.
 
-	case *ir.Break, *ir.Continue:
-		// No values, and their control level is what [AcceptBarriers] reads to
-		// enforce the rule's third clause: a uniform loop that some invocations
-		// leave early does not have uniform arrival inside it.
+	case *ir.Break:
+		esc = ctrl
+		if loop != nil && ctrl > in.escapes[loop] {
+			in.escapes[loop] = ctrl
+			changed = true
+		}
+
+	case *ir.Continue:
+		// What follows in the iteration is skipped by the invocations that took
+		// it; the trip count is unchanged, so only what follows is raised.
+		esc = ctrl
 	}
-	return changed
+	return changed, esc
+}
+
+// LoopEscape reports the least uniform control any break in a loop's body
+// sits under, or Workgroup when every invocation leaves the loop together.
+func (in *Info) LoopEscape(loop *ir.For) Level {
+	return in.escapes[loop]
 }
 
 // value computes and records a value's level.
@@ -264,12 +325,14 @@ func (in *Info) compute(v ir.Value) Level {
 		return in.value(n.X)
 
 	case *ir.Call:
-		// A helper's result is as uniform as its least uniform argument. That is
-		// sound and imprecise: a helper ignoring its arguments returns something
-		// uniform, and this calls it non-uniform. Precision here needs an
-		// interprocedural summary, which is more machinery than the subset's
-		// helper depth justifies.
-		l := Workgroup
+		// A helper's result is the join of its least uniform argument and what
+		// its body reads on its own. The arguments alone are not enough, and
+		// this was wrong before it was written down: a helper returning
+		// t.LocalIndex() or in[0] takes no non-uniform argument, so the join
+		// over its arguments called its result workgroup-uniform, and a
+		// barrier under `if lane(t) > 2` was admitted while the same predicate
+		// spelled inline was refused.
+		l := in.summary(n.Callee)
 		for _, a := range n.Args {
 			l = max(l, in.value(a))
 		}
@@ -350,4 +413,54 @@ func (in *Info) intrinsic(n *ir.IntrinsicCall) Level {
 	// Everything else is arithmetic on its arguments: sqrt of a uniform value
 	// is uniform. Barriers have no result and their level is never read.
 	return args
+}
+
+// summary is how uniform a helper's result is when every argument is
+// workgroup-uniform: the level its body reaches on its own.
+//
+// The body is analysed with its parameters seeded at Workgroup, and the result
+// is the join over every return of the returned value and the control it sits
+// under -- a literal returned under `if t.LocalIndex() > 2` is as non-uniform
+// as the id, because which literal an invocation gets depends on it. What the
+// arguments contribute is joined in at the call site, so the summary is
+// computed once per callee rather than once per call.
+//
+// A helper reached through another helper is summarised by the callee's own
+// analysis, which is what makes the level two helpers deep the same as the
+// level one deep. The front end refuses recursion, and a cycle would still
+// terminate here: a callee already being summarised answers Non.
+func (in *Info) summary(fn *ir.Func) Level {
+	if fn == nil || fn.Result == nil {
+		return Workgroup
+	}
+	if l, ok := in.summaries[fn]; ok {
+		return l
+	}
+	in.summaries[fn] = Non
+	body := Of(fn)
+	l := Workgroup
+	var walk func(s ir.Stmt)
+	walk = func(s ir.Stmt) {
+		switch n := s.(type) {
+		case *ir.Block:
+			for _, st := range n.List {
+				walk(st)
+			}
+		case *ir.If:
+			walk(n.Then)
+			if n.Else != nil {
+				walk(n.Else)
+			}
+		case *ir.For:
+			walk(n.Body)
+		case *ir.Return:
+			l = max(l, body.Control(n))
+			if n.Value != nil {
+				l = max(l, body.Level(n.Value))
+			}
+		}
+	}
+	walk(fn.Body)
+	in.summaries[fn] = l
+	return l
 }
