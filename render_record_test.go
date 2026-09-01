@@ -91,6 +91,21 @@ func TestRenderPassRefusals(t *testing.T) {
 		},
 		says: "a draw with no pipeline",
 	}, {
+		// The indexed form took the same recording and then dereferenced the
+		// missing pipeline inside Build, which took the process down where the
+		// direct and indirect forms reported.
+		name: "an indexed draw before a pipeline",
+		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: view(t, b)}},
+				Width: 4, Height: 4, Label: "early",
+			})
+			ib := newBuffer(t, d, "indices", 3, accel.BufferStorage)
+			p.SetIndexBuffer(whole(t, ib), accel.Index32)
+			p.DrawIndexed(accel.DrawIndexed{IndexCount: 3})
+		},
+		says: "an indexed draw with no pipeline",
+	}, {
 		name: "a draw of no vertices",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			p := r.RenderPass(accel.RenderPassDescriptor{

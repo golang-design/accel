@@ -1002,7 +1002,7 @@ type DrawIndexed struct {
 
 // DrawIndexed records one indexed draw. See [RenderPass.Draw].
 func (p *RenderPass) DrawIndexed(d DrawIndexed) {
-	if p.failed {
+	if !p.beginDraw("an indexed draw") {
 		return
 	}
 	if p.indexBuf.Buffer == nil {
@@ -1051,13 +1051,7 @@ func (p *RenderPass) DrawIndexed(d DrawIndexed) {
 // use, so a caller filling it from a compute kernel writes the same four values
 // whatever the backend.
 func (p *RenderPass) DrawIndirect(args BufferView, bound Draw) {
-	if p.failed {
-		return
-	}
-	if p.pipeline == nil {
-		p.r.fail("RenderPass %q: an indirect draw with no pipeline; call SetPipeline "+
-			"first", p.desc.Label)
-		p.failed = true
+	if !p.beginDraw("an indirect draw") {
 		return
 	}
 	if args.Buffer == nil {
@@ -1092,13 +1086,7 @@ func (p *RenderPass) DrawIndirect(args BufferView, bound Draw) {
 // It executes in the order recorded, and the builder never reorders it: blending
 // is order dependent, and so is any reasoning about overdraw.
 func (p *RenderPass) Draw(d Draw) {
-	if p.failed {
-		return
-	}
-	if p.pipeline == nil {
-		p.r.fail("RenderPass %q: a draw with no pipeline; call SetPipeline first",
-			p.desc.Label)
-		p.failed = true
+	if !p.beginDraw("a draw") {
 		return
 	}
 	if d.VertexCount <= 0 {
@@ -1119,6 +1107,26 @@ func (p *RenderPass) Draw(d Draw) {
 		vertices: d.VertexCount, instances: instances,
 		first: d.FirstVertex, firstInst: d.FirstInstance,
 	})
+}
+
+// beginDraw is the check every draw form starts with: a pass that has already
+// failed records nothing more, and a draw needs a pipeline.
+//
+// One function rather than a copy per form, because the indexed form once
+// lacked the pipeline check the other two had and Build dereferenced the nil
+// pipeline instead of reporting it. A rule three entry points share is a rule
+// one of them forgets.
+func (p *RenderPass) beginDraw(what string) bool {
+	if p.failed {
+		return false
+	}
+	if p.pipeline == nil {
+		p.r.fail("RenderPass %q: %s with no pipeline; call SetPipeline first",
+			p.desc.Label, what)
+		p.failed = true
+		return false
+	}
+	return true
 }
 
 // record completes a draw with the pass state and appends it.
