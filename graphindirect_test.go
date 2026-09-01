@@ -436,3 +436,83 @@ func TestSubmitAfterWaitsForItsDependencies(t *testing.T) {
 			"running as though it had succeeded")
 	}
 }
+
+// Every indirect node's counters are reported, not only the last one's.
+//
+// The backend records each node's counters through a pointer taken when the
+// node is resolved. With two or more indirect nodes the slice those pointers
+// address grows between the first and the second, and the first node's
+// counters land in the array the growth abandoned: the report then shows the
+// device's count as zero and the clamp as never having happened.
+func TestEveryIndirectNodeReportsItsCounters(t *testing.T) {
+	d := openDevice(t)
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &testkernels.CountWorkgroupsKernel, Label: "count",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	const nodes = 3
+	r := d.NewRecorder()
+	r.CollectRunStats(true)
+	for i := range nodes {
+		counts, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.U32, Count: 1, Label: "counts",
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+		})
+		if err != nil {
+			t.Fatalf("counts: %v", err)
+		}
+		t.Cleanup(func() { _ = counts.Close() })
+		countBuf, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.U32, Count: 3, Label: "indirect",
+			Usage: accel.BufferIndirect | accel.BufferCopyDst,
+		})
+		if err != nil {
+			t.Fatalf("indirect: %v", err)
+		}
+		t.Cleanup(func() { _ = countBuf.Close() })
+		// Each node asks for a different count over the maximum, so the
+		// report for one node cannot be mistaken for another's.
+		if err := d.Queue().WriteBuffer(countBuf, 0, []uint32{uint32(100 + i), 1, 1}); err != nil {
+			t.Fatalf("write count: %v", err)
+		}
+		cv, err := countBuf.View(0, 3)
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+		r.DispatchIndirect(p, []accel.Binding{{Index: 0, Buffer: whole(t, counts)}}, nil, cv,
+			accel.WorkgroupCount{X: 2})
+	}
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	s, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if len(s.Indirect) != nodes {
+		t.Fatalf("got %d indirect nodes, want %d", len(s.Indirect), nodes)
+	}
+	for i, got := range s.Indirect {
+		if !got.Clamped {
+			t.Errorf("node %d: a count of %d against a maximum of 2 was not reported as "+
+				"clamped", i, 100+i)
+		}
+		if got.Actual[0] != uint32(100+i) {
+			t.Errorf("node %d: the actual count is %d, want %d", i, got.Actual[0], 100+i)
+		}
+		if got.Max[0] != 2 {
+			t.Errorf("node %d: the maximum is %d, want 2", i, got.Max[0])
+		}
+	}
+}

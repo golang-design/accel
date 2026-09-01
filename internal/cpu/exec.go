@@ -133,7 +133,6 @@ func (e *executable) Submit() (driver.Fence, error) {
 	// Resolve every operand under the same lock that records the fence, so a
 	// rebind racing a submit either fully precedes it or is rejected. There is
 	// no window in which half the plan sees the new binding.
-	e.stats = e.stats[:0]
 	nodes, err := e.resolve()
 	if err != nil {
 		e.mu.Unlock()
@@ -234,6 +233,25 @@ func (e *executable) resolve() ([]resolvedNode, error) {
 		e.scratch = make([]resolvedNode, len(e.plan.Nodes))
 	}
 	out := e.scratch[:len(e.plan.Nodes)]
+
+	// The counters are sized before any node takes a pointer into them. Each
+	// indirect node records through a pointer, and a slice that grows after the
+	// first pointer is taken leaves that pointer addressing the array the growth
+	// abandoned: the node then writes its counters where nothing reads them and
+	// the report shows zeros for every node but the last.
+	e.stats = e.stats[:0]
+	if e.plan.CollectStats {
+		indirect := 0
+		for i := range e.plan.Nodes {
+			if n := &e.plan.Nodes[i]; n.Op == driver.OpDispatch && n.Dispatch.Indirect != nil {
+				indirect++
+			}
+		}
+		if cap(e.stats) < indirect {
+			e.stats = make([]driver.IndirectStat, 0, indirect)
+		}
+	}
+
 	for i := range e.plan.Nodes {
 		n := &e.plan.Nodes[i]
 		var dst []byte
