@@ -485,8 +485,12 @@ func run(nodes []resolvedNode) error {
 // buffer are the device's, and specs/003-command-graph.md says a zero in any of
 // them skips the dispatch. Normalizing here would turn a deliberate skip into a
 // single workgroup.
-func readIndirect(src []byte, max kernel.ID3) (count kernel.ID3, clamped bool) {
-	raw := kernel.ID3{
+//
+// It returns the device's count as well as the clamped one, because the
+// statistics report both and decoding the bytes a second time at the call site
+// would be a second definition of the layout.
+func readIndirect(src []byte, max kernel.ID3) (raw, count kernel.ID3, clamped bool) {
+	raw = kernel.ID3{
 		X: le32(src[0:4]),
 		Y: le32(src[4:8]),
 		Z: le32(src[8:12]),
@@ -501,7 +505,7 @@ func readIndirect(src []byte, max kernel.ID3) (count kernel.ID3, clamped bool) {
 			clamped = true
 		}
 	}
-	return count, clamped
+	return raw, count, clamped
 }
 
 // le32 reads a little-endian uint32, which is the layout every target writes an
@@ -541,13 +545,9 @@ func dispatch(n *resolvedNode) (err error) {
 	k := n.dispatch.Kernel
 	count := n.dispatch.Count
 	if n.indirectSrc != nil {
+		var raw kernel.ID3
 		var clamped bool
-		raw := kernel.ID3{
-			X: le32(n.indirectSrc[0:4]),
-			Y: le32(n.indirectSrc[4:8]),
-			Z: le32(n.indirectSrc[8:12]),
-		}
-		count, clamped = readIndirect(n.indirectSrc, n.indirectMax)
+		raw, count, clamped = readIndirect(n.indirectSrc, n.indirectMax)
 		if n.indirectStats != nil {
 			n.indirectStats.Actual = raw
 			n.indirectStats.Max = n.indirectMax
