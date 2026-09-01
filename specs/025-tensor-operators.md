@@ -60,8 +60,23 @@ which is the same argument that makes kernel choice a report.
 **What can be materialized is a contiguous run repeated a whole number of
 times** — a gain across rows, a bias across a batch. An interior axis expanding
 repeats with a *stride* rather than as a run, and building that needs a gather
-kernel with the strides in a uniform block, which the corpus does not have. It
-is refused with the shape it can build named in the message.
+kernel with the strides in a uniform block, which is what `Contiguous` runs and
+what a caller inserts to ask for it. It is refused with the shape it can build
+named in the message.
+
+**The run is decided by strides, not by rank.** A `[width]` operand against a
+`[rows, width]` result and `Broadcast(g, [rows, width])` — shape `[rows, width]`,
+strides `[0, 1]` — are one read pattern: the trailing axes walk a contiguous run
+and every axis outside them reads that run again. The first lowering looked at
+rank and required a contiguous layout, so it took the first spelling and refused
+the second, and every `Broadcast` result was refused because every `Broadcast`
+result has a zero stride. Walking the strides from the innermost axis outward
+admits both: inside the run each stride is the product of the extents inside
+it, and once an axis repeats every axis outside it must repeat too.
+
+**The refusal is at record time**, at the line that wrote the operator, rather
+than at `Compile`. The check is the lowering's own, run when the elementwise
+operator is recorded; `Compile` keeps it as an invariant.
 
 ## 3. The operators, and the kernels under them
 
@@ -147,10 +162,13 @@ views through `Reshape`, `Transpose`, `Slice` and `Contiguous`. Composed into on
 graph on purpose: each alone is a shape the corpus already covers, and what this
 adds is a view feeding a kernel and a kernel feeding a view surviving the trip.
 
-**`Broadcast` is deliberately not in it.** This version materializes only a
-contiguous run repeated a whole number of times, so broadcasting `[width]` to
-`[rows, width]` is refused — which is this spec's own boundary to state and not
-something to work around inside a backend-agreement test.
+**`Broadcast` is in it since 2026-09-01.** `Add(g, Broadcast(row, [rows, width]))`
+materializes the row across rows on both backends. Before that the case wrapped
+the view in `Contiguous`, because the lowering decided by rank and refused every
+zero-stride view: broadcasting `[width]` to `[rows, width]` worked when the
+operand *was* `[width]` and failed when it was `Broadcast([width])`, two
+spellings of one read pattern, and this text said the second was refused by
+design. §2 states the rule the code now follows.
 
 - every operator above builds, infers, lowers, and runs on both backends;
 - the refusals are checked by a table, including every view rule; and

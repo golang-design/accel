@@ -262,7 +262,12 @@ rejected.
 
 NumPy right-aligned broadcasting applies to elementwise binary operators.
 Ranks are left-padded with one, a dimension of one expands, and any other
-mismatch is a build error. Broadcasting is read-only and never materialized.
+mismatch is a build error. Broadcasting is read-only. An elementwise operator
+materializes a broadcast operand into a transient when it is a contiguous run
+repeated a whole number of times — a vector across rows, a row across a batch —
+and reports the copies in `Plan.Selections`; any other broadcast is refused when
+the operator is recorded, and `Contiguous` is how a caller packs one
+([025](025-tensor-operators.md) §2).
 
 A contiguous subrange lowers to a layer-1 `BufferView`. Any other legal layout
 uses a generated layout descriptor and a strided kernel variant. Selection is at
