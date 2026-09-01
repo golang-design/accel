@@ -659,6 +659,12 @@ func (e *executable) uniformBytes(s *kernel.Stage, i int, v any) ([]byte, error)
 	if u.Encode == nil {
 		return nil, fmt.Errorf("parameter %q carries no encoder", u.Name)
 	}
+	// The same refusal checkUniforms makes for a compute kernel. A zero-size
+	// block has no bytes to bind, and a record that declares one is a record
+	// that was generated wrong, not a parameter to bind as nothing.
+	if u.Size <= 0 {
+		return nil, fmt.Errorf("parameter %q has an encoded size of %d", u.Name, u.Size)
+	}
 	b := make([]byte, u.Size)
 	if err := u.Encode(b, v); err != nil {
 		return nil, err

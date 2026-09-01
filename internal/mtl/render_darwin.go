@@ -817,7 +817,13 @@ func copyTextureToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset, rowByte
 // limit. Larger than that needs a buffer, which the stage uniform path does not
 // reach: a std140 block that big is a design mistake rather than a case to
 // support.
+//
+// An empty slice binds nothing, as [ComputeEncoder.SetBytes] does: there is no
+// first byte to take the address of, and Metal rejects a zero length anyway.
 func (e *RenderEncoder) SetVertexBytes(b []byte, index int) {
+	if len(b) == 0 {
+		return
+	}
 	withPool(func() {
 		e.id.Send(selSetVertexBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
 	})
@@ -825,6 +831,9 @@ func (e *RenderEncoder) SetVertexBytes(b []byte, index int) {
 
 // SetFragmentBytes is the fragment stage's half. See [RenderEncoder.SetVertexBytes].
 func (e *RenderEncoder) SetFragmentBytes(b []byte, index int) {
+	if len(b) == 0 {
+		return
+	}
 	withPool(func() {
 		e.id.Send(selSetFragmentBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
 	})

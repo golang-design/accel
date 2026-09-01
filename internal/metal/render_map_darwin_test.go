@@ -222,6 +222,21 @@ func TestUniformBytesRefusals(t *testing.T) {
 	if _, err := e.uniformBytes(s, 0, 1); err == nil {
 		t.Error("a parameter carrying no encoder was accepted")
 	}
+
+	// A zero-size block encodes to nothing, and nothing is what the encoder
+	// would then take the address of. It is the refusal checkUniforms makes
+	// for a compute kernel, and it was missing here.
+	empty := &kernel.Stage{
+		Name: "S",
+		Uniforms: []kernel.StageUniform{{
+			Name: "u", Size: 0, Encode: func([]byte, any) error { return nil },
+		}},
+	}
+	if _, err := e.uniformBytes(empty, 0, 1); err == nil {
+		t.Error("a zero-size parameter was accepted, and its empty slice would panic the encoder")
+	} else if !strings.Contains(err.Error(), "size") {
+		t.Errorf("the refusal should name the size, got %v", err)
+	}
 }
 
 // The fallbacks each mapping takes for a value it does not know.
