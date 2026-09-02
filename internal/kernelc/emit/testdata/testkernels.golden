@@ -7672,7 +7672,7 @@ var PackKernel = kernelabi.Kernel{
 		{Name: "src", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "dst", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:           "bf679f3039539c7fec7c3180ecb3889d",
+	Digest:           "068b2d9d7acc78a6aa430c784cd7fbc8",
 	Generator:        kernelabi.Version,
 	OrderIndependent: true,
 	MSL: `#include <metal_stdlib>

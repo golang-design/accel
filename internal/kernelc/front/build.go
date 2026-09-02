@@ -173,10 +173,42 @@ func (c *checker) declare(name *ast.Ident, init ast.Expr) ir.Stmt {
 		c.errorf(name.Pos(), "a discarded local has no lowering: remove the statement instead")
 		return nil
 	}
+	// The local's type is the one Go gave it, not the initializer's IR type.
+	// The two differ where the initializer is an untyped constant or a len:
+	// `n := 0` declares n as int and `n := len(out)` does too, while the IR
+	// carries the constant as i32 and len as i32. Typing the local from the IR
+	// lowered the kernel as int32 while the authored function ran as int, and
+	// the platform-width refusal that `n + 1` gets did not apply to `n++`.
+	if err := c.localType(obj.Type()); err != nil {
+		c.errorf(name.Pos(), "%s is declared as %s, the type its initializer defaults to: %s",
+			name.Name, obj.Type(), err)
+		return nil
+	}
 	l := ir.NewLocal(name.Pos(), v.Type(), c.nextID, name.Name, obj)
 	c.nextID++
 	c.locals[obj] = l
 	return ir.NewDeclare(name.Pos(), l, v)
+}
+
+// localType refuses a local whose Go type has no device layout.
+//
+// Only a basic type is checked: a struct local is a stage's composite and a
+// packed narrow float is a named struct, and both are admitted by the value
+// that initializes them. What a basic type has to satisfy is irType's rule,
+// with float64 named for what it is rather than as a binding element.
+func (c *checker) localType(t types.Type) error {
+	b, ok := types.Unalias(t).Underlying().(*types.Basic)
+	if !ok {
+		return nil
+	}
+	if b.Kind() == types.Float64 {
+		return errType{"there is no f64 dtype in the compute model (specs/002-compute-model.md): " +
+			"write float32(...) in the initializer"}
+	}
+	if _, err := c.irType(t); err != nil {
+		return err
+	}
+	return nil
 }
 
 // assign builds `x = e`, `x := e`, and the compound forms.

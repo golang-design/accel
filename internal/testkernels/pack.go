@@ -64,7 +64,7 @@ func Pack(t accel.Thread, p PackParams, src []float32, dst []float32) {
 	if i < p.Count {
 		rem := i
 		at := p.Offset
-		for axis := PackRank - 1; axis >= 0; axis-- {
+		for axis := int32(PackRank - 1); axis >= 0; axis-- {
 			a := uint32(axis)
 			if a < p.Rank {
 				e := p.Extent[a]

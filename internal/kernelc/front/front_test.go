@@ -126,6 +126,53 @@ func TestRejections(t *testing.T) {
 		want string // substring of the message
 	}{
 		{
+			// `n := 0` declares n as int: the untyped constant defaults to Go's
+			// platform-width int, and the local was typed from the constant's
+			// IR type instead, so the lowering ran as int32 while the authored
+			// function ran as int. The refusal is the one `n + 1` already got,
+			// now at the declaration, where `n++` cannot slip past it.
+			name: "local typed int by an untyped constant",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	n := 0
+	for n < 4 {
+		out[uint32(n)] = 1
+		n++
+	}
+}`,
+			line: 3, want: "platform-width",
+		},
+		{
+			name: "local typed float64 by an untyped constant",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	x := 1.5
+	out[0] = float32(x)
+}`,
+			line: 3, want: "float64",
+		},
+		{
+			name: "loop variable typed int by an untyped constant",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	for n := 0; n < 4; n++ {
+		out[uint32(n)] = 1
+	}
+}`,
+			line: 3, want: "platform-width",
+		},
+		{
+			// len is int in Go and i32 in the IR, and a local taking its type
+			// from the IR ran as int32 while the authored function ran as int.
+			name: "local typed int by len",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	n := len(out)
+	out[uint32(n)-1] = 1
+}`,
+			line: 3, want: "platform-width",
+		},
+		{
 			// specs/051-float-to-int.md. Go leaves a float-to-integer conversion
 			// undefined for a value the destination cannot hold, and so do MSL
 			// and SPIR-V -- three targets, three ways to be wrong, one source.
