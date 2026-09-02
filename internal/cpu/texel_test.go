@@ -100,7 +100,13 @@ func TestSRGBMatchesIEC61966(t *testing.T) {
 	// The two thresholds are the same point on the curve. They are written as
 	// different constants -- 0.04045 encoded and 0.0031308 linear -- and a
 	// transposed pair is a discontinuity at the darkest values a display shows.
-	if a, b := srgbToLinear(0.04045), float32(0.0031308); math.Abs(float64(a-b)) > 1e-7 {
+	//
+	// The two are IEC 61966-2-1's figures as printed, to five significant
+	// digits each, so they agree to half a unit in the last printed digit of
+	// the linear one: that is the bound, derived from the standard's own
+	// precision rather than chosen.
+	const halfLastPrintedDigit = 0.5e-7
+	if a, b := srgbToLinear(0.04045), float32(0.0031308); math.Abs(float64(a-b)) > halfLastPrintedDigit {
 		t.Errorf("the encoded threshold 0.04045 decodes to %v and the linear threshold "+
 			"is %v; the two segments do not meet", a, b)
 	}
