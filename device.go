@@ -82,6 +82,9 @@ func Enumerate() Enumeration {
 // It never falls back to another adapter or backend. Use [OpenBest] to ask for
 // automatic selection explicitly.
 func OpenDevice(id AdapterID) (*Device, error) {
+	if err := hostByteOrder("OpenDevice"); err != nil {
+		return nil, err
+	}
 	all, _ := adapters()
 	for _, a := range all {
 		if a.Token() != id.token {
@@ -101,6 +104,9 @@ func OpenDevice(id AdapterID) (*Device, error) {
 
 // OpenCPU opens the CPU backend with an explicit oracle profile.
 func OpenCPU(opts CPUOptions) (*Device, error) {
+	if err := hostByteOrder("OpenCPU"); err != nil {
+		return nil, err
+	}
 	o := cpu.Options{
 		Mode:             cpu.Mode(opts.Mode),
 		SubgroupSize:     opts.SubgroupSize,

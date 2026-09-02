@@ -6,6 +6,7 @@ package accel
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -21,6 +22,20 @@ var hostIsLittleEndian = func() bool {
 	x := uint16(1)
 	return *(*byte)(unsafe.Pointer(&x)) == 1
 }()
+
+// hostByteOrder is the refusal specs/001-device-resources.md section 3.5
+// places at open: a big-endian host fails to open a device, naming the
+// architecture, rather than opening one and failing at the first transfer
+// after a caller has built and submitted graphs against it. The transfer
+// path keeps its own check as the second line.
+func hostByteOrder(op string) error {
+	if hostIsLittleEndian {
+		return nil
+	}
+	return fmt.Errorf("%w: %s: %s/%s is big-endian, which accel does not support: host "+
+		"and device must share byte order (specs/001-device-resources.md section 3.5)",
+		ErrUnsupported, op, runtime.GOOS, runtime.GOARCH)
+}
 
 // pendingWrite is one staged transfer waiting for a flush.
 //
