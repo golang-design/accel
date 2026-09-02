@@ -10,8 +10,6 @@ import (
 	"math"
 	"runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"golang.design/x/accel"
@@ -475,83 +473,82 @@ func TestARecorderIsUsedOnce(t *testing.T) {
 	}
 }
 
+// A graph submitted again while it is running is ordered after itself on the
+// queue, and never overlaps itself.
+//
+// The queue is serial, so the second submission is not refused: it waits.
+// That is the guarantee a caller replaying a frame graph relies on, and it is
+// checked in the state that matters -- the first run held inside its kernel
+// -- rather than by hammering the queue and hoping two runs collide. The
+// earlier form of this test did that and could only log when the machine
+// serialized them all, which it always did.
 func TestAGraphIsSubmittedOneAtATime(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 1<<14, accel.BufferStorage|accel.BufferCopyDst)
-	src := newBuffer(t, d, "src", 1<<14, accel.BufferStorage|accel.BufferCopySrc)
-
-	want := make([]float32, 1<<14)
+	dst := newBuffer(t, d, "dst", 64, accel.BufferStorage|accel.BufferCopyDst)
+	src := newBuffer(t, d, "src", 64, accel.BufferStorage|accel.BufferCopySrc)
+	want := make([]float32, 64)
 	for i := range want {
-		want[i] = float32(i)
+		want[i] = float32(i) + 1
 	}
 	if err := d.Queue().WriteBuffer(src, 0, want); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
+	b := newBlocker()
 	r := d.NewRecorder()
-	for range 32 {
-		r.CopyBuffer(whole(t, dst), whole(t, src))
-	}
+	r.Dispatch(b.pipeline(t, d), nil, nil, accel.WorkgroupCount{X: 1})
+	r.CopyBuffer(whole(t, dst), whole(t, src))
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	defer g.Close()
 
-	// Hammer it. Whatever the interleaving, a refused submission must be refused
-	// as in-flight and never half-run: two overlapping submissions would write
-	// each other's transients, so silently queueing the second is the bug.
-	var wg sync.WaitGroup
-	var refusals atomic.Int64
-	var wrong atomic.Int64
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 25 {
-				err := d.Queue().Submit(g).Wait()
-				switch {
-				case err == nil:
-				case errors.Is(err, accel.ErrGraphInFlight):
-					refusals.Add(1)
-				default:
-					wrong.Add(1)
-					t.Error(err)
-				}
-			}
-		}()
+	first := d.Queue().Submit(g)
+	<-b.started
+	if first.Done() {
+		t.Fatal("the fence signalled while the kernel was still inside its body")
 	}
-	wg.Wait()
+	second := d.Queue().Submit(g)
+	if second.Done() {
+		t.Fatal("a second submission of a running graph completed while the first " +
+			"was still inside its kernel: the two overlapped")
+	}
 
-	if n := wrong.Load(); n != 0 {
-		t.Errorf("%d submissions failed for a reason other than being in flight", n)
+	close(b.release)
+	if err := first.Wait(); err != nil {
+		t.Fatalf("first: %v", err)
 	}
-	if refusals.Load() == 0 {
-		t.Log("no submission was refused; the machine serialized them all")
+	if err := second.Wait(); err != nil {
+		t.Fatalf("a second submission of a running graph on the same queue is ordered "+
+			"after it, not refused: %v", err)
 	}
-	got := readback(t, d, dst)
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("element %d is %v, want %v", i, got[i], want[i])
-		}
+	if got := readback(t, d, dst); got[63] != want[63] {
+		t.Fatalf("element 63 is %v, want %v", got[63], want[63])
 	}
 }
 
-// Rebinding while a submission is in flight is refused for the same reason:
-// half the graph would see one resource and half the other.
+// Rebinding while a submission is running is refused: half the graph would
+// see one resource and half the other.
+//
+// Refused every time, not most of the time. The graph is held inside its
+// kernel when Bind is called, so the refusal is the only legal answer; an
+// earlier version of this test raced a rebinding goroutine against twenty
+// submissions and accepted whatever happened.
 func TestRebindDuringASubmissionIsRefused(t *testing.T) {
 	d := openDevice(t)
-	dst := newBuffer(t, d, "dst", 1<<14, accel.BufferStorage|accel.BufferCopyDst)
-	src := newBuffer(t, d, "src", 1<<14, accel.BufferStorage|accel.BufferCopySrc)
+	dst := newBuffer(t, d, "dst", 64, accel.BufferStorage|accel.BufferCopyDst)
+	src := newBuffer(t, d, "src", 64, accel.BufferStorage|accel.BufferCopySrc)
+	other := newBuffer(t, d, "other", 64, accel.BufferStorage|accel.BufferCopySrc)
 
+	b := newBlocker()
 	r := d.NewRecorder()
 	in := r.Slot(accel.SlotDescriptor{
 		Name: "in", Kind: accel.BindingStorageBuffer,
-		DType: accel.F32, Access: accel.AccessRead, MinCount: 1 << 14,
+		DType: accel.F32, Access: accel.AccessRead, MinCount: 64,
 	})
-	for range 64 {
-		r.CopyFromSlot(whole(t, dst), in, 0, 1<<14)
-	}
+	r.Dispatch(b.pipeline(t, d), nil, nil, accel.WorkgroupCount{X: 1})
+	r.CopyFromSlot(whole(t, dst), in, 0, 64)
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -561,26 +558,21 @@ func TestRebindDuringASubmissionIsRefused(t *testing.T) {
 		t.Fatalf("bind: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	var wrong atomic.Int64
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for range 50 {
-			err := g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, src)})
-			if err != nil && !errors.Is(err, accel.ErrGraphInFlight) {
-				wrong.Add(1)
-			}
-		}
-	}()
-	for range 20 {
-		if err := d.Queue().Submit(g).Wait(); err != nil && !errors.Is(err, accel.ErrGraphInFlight) {
-			t.Errorf("submit: %v", err)
-		}
+	f := d.Queue().Submit(g)
+	<-b.started
+	err = g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, other)})
+	if !errors.Is(err, accel.ErrGraphInFlight) {
+		t.Fatalf("a rebind while the graph was inside its kernel returned %v, want "+
+			"ErrGraphInFlight", err)
 	}
-	wg.Wait()
-	if n := wrong.Load(); n != 0 {
-		t.Errorf("%d rebinds failed for a reason other than being in flight", n)
+
+	close(b.release)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	// And once the run is over the rebind is ordinary again.
+	if err := g.Bind(accel.SlotBinding{Slot: in, Buffer: whole(t, other)}); err != nil {
+		t.Fatalf("a rebind after the submission completed: %v", err)
 	}
 }
 

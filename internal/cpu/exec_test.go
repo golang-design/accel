@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 
 	"golang.design/x/accel/internal/cpu"
@@ -340,42 +339,71 @@ func TestAFreedBlockIsReported(t *testing.T) {
 	}
 }
 
+// One submission at a time: a second Submit and a Rebind are refused while
+// a submission is running, and accepted once it has finished.
+//
+// Held in the running state rather than raced into it. The dispatch below
+// does not return until the test releases it, so "while a submission is
+// running" is a state the test is in when it calls Submit and Rebind, and
+// the refusal is the only legal answer. The earlier form of this test
+// hammered Submit from eight goroutines and discarded every error, so it
+// could not fail on an executable that never refused anything.
 func TestOneSubmissionAtATime(t *testing.T) {
 	dev, c := open(t, cpu.Options{})
-	dst := block(t, dev, driver.MemoryShared, 1<<16)
-	nodes := make([]driver.PlanNode, 256)
-	payload := make([]byte, 256)
-	for i := range nodes {
-		nodes[i] = driver.PlanNode{ID: i, Op: driver.OpHostWrite,
-			Dst: blockOperand(t, dst, i*256, 256), Data: payload}
+	b := block(t, dev, driver.MemoryShared, 16)
+	started := make(chan struct{}, 8)
+	release := make(chan struct{})
+	k := &kernel.Kernel{
+		Name: "Block", WorkgroupSize: kernel.ID3{X: 1, Y: 1, Z: 1},
+		Generator: kernel.ABIVersion,
+		Bindings:  []kernel.Binding{{Name: "b", DType: kernel.U32, Access: kernel.Write}},
+		Flat: func(kernel.Thread, kernel.Args) {
+			started <- struct{}{}
+			<-release
+		},
 	}
-	exe, err := c.Compile(&driver.Plan{Nodes: nodes})
+	exe, err := c.Compile(&driver.Plan{Slots: 1, Nodes: []driver.PlanNode{{
+		Op: driver.OpDispatch,
+		Dispatch: &driver.Dispatch{
+			Kernel: k, Count: kernel.ID3{X: 1},
+			Bindings: []driver.Operand{slotOperand(t, 1, 0, 16)},
+		},
+	}}})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 	defer exe.Close()
-
-	// Hammer submit and rebind concurrently. Whatever the interleaving, no
-	// submission may start while another is running and nothing may race.
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 20 {
-				if f, err := exe.Submit(); err == nil {
-					_ = f.Wait()
-				}
-			}
-		}()
+	bind := []driver.SlotBinding{{Slot: 1, Block: b, Offset: 0, Size: 16}}
+	if err := exe.Rebind(bind); err != nil {
+		t.Fatalf("rebind before any submission: %v", err)
 	}
-	wg.Wait()
 
 	f, err := exe.Submit()
 	if err != nil {
-		t.Fatalf("a submission should be possible once the others finished: %v", err)
+		t.Fatalf("submit: %v", err)
 	}
+	<-started
+	if _, err := exe.Submit(); err == nil || !strings.Contains(err.Error(), "in flight") {
+		t.Fatalf("a second Submit while the first was inside its kernel returned %v, "+
+			"want an in-flight refusal", err)
+	}
+	if err := exe.Rebind(bind); err == nil || !strings.Contains(err.Error(), "in flight") {
+		t.Fatalf("a Rebind while a submission was inside its kernel returned %v, want "+
+			"an in-flight refusal", err)
+	}
+
+	close(release)
 	if err := f.Wait(); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if err := exe.Rebind(bind); err != nil {
+		t.Fatalf("a rebind once the submission finished: %v", err)
+	}
+	again, err := exe.Submit()
+	if err != nil {
+		t.Fatalf("a submission once the first finished: %v", err)
+	}
+	if err := again.Wait(); err != nil {
 		t.Fatalf("wait: %v", err)
 	}
 }
