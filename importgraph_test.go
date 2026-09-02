@@ -169,6 +169,7 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 		// below, added when 052 built them.
 		"CountWorkgroups":            "003's indirect-clamp proof",
 		"DispatchShape":              "052's three accessors",
+		"IndexShape":                 "002's three flat indices, lowered to MSL",
 		"ShapeBoundedSum":            "052's compile-time-uniform loop bound",
 		"PublishStorage":             "050's storage-scope barrier",
 		"PublishShared":              "050's shared-scope barrier",

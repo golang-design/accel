@@ -1134,6 +1134,23 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 		m.printf("_wid")
 		return
 
+	// The flat indices, x-fastest, which is internal/kernel's linearization
+	// and what the oracle computes. LocalIndex and GlobalIndex fold the
+	// workgroup extent in as literals for OpWorkgroupSize's reason below;
+	// GroupIndex reads the grid's group count.
+	case ir.OpLocalIndex:
+		w := m.fn.Workgroup
+		m.printf("(_lid.x + %du * (_lid.y + %du * _lid.z))", w[0], w[1])
+		return
+	case ir.OpGroupIndex:
+		m.printf("(_wid.x + _ngroups.x * (_wid.y + _ngroups.y * _wid.z))")
+		return
+	case ir.OpGlobalIndex:
+		w := m.fn.Workgroup
+		m.printf("((_wid.x + _ngroups.x * (_wid.y + _ngroups.y * _wid.z)) * %du + "+
+			"(_lid.x + %du * (_lid.y + %du * _lid.z)))", w[0]*w[1]*w[2], w[0], w[1])
+		return
+
 	// The dispatch shape, specs/052-dispatch-shape.md §2.
 	//
 	// WorkgroupSize is a **literal**, not a read: it is the accel:kernel

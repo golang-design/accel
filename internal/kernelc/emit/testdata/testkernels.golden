@@ -5336,6 +5336,59 @@ kernel void GroupedMatMul(
 	},
 }
 
+// indexShapeFlat is the generated flat lowering of IndexShape.
+//
+// It is what the CPU backend runs. The authored IndexShape is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func indexShapeFlat(t accel.Thread, out []uint32) {
+	var g uint32 = t.GlobalIndex()
+	var i uint32 = (uint32(3) * g)
+	if (i + uint32(2)) < uint32(int32(len(out))) {
+		out[i] = g
+		out[(i + uint32(1))] = t.LocalIndex()
+		out[(i + uint32(2))] = t.GroupIndex()
+	}
+}
+
+// IndexShapeKernel is the compiled form of IndexShape.
+var IndexShapeKernel = kernelabi.Kernel{
+	Name:          "IndexShape",
+	WorkgroupSize: accel.ID3{X: 4, Y: 2, Z: 2},
+	Bindings: []kernelabi.Binding{
+		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
+	},
+	Digest:           "ab70d5723059fefb02904b9637bd3857",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void IndexShape(
+    device uint *out [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint g = ((_wid.x + _ngroups.x * (_wid.y + _ngroups.y * _wid.z)) * 16u + (_lid.x + 4u * (_lid.y + 2u * _lid.z)));
+    uint i = (uint(3) * g);
+    if (((i + uint(2)) < uint(int(_lens[0])))) {
+        out[i] = g;
+        out[(i + uint(1))] = (_lid.x + 4u * (_lid.y + 2u * _lid.z));
+        out[(i + uint(2))] = (_wid.x + _ngroups.x * (_wid.y + _ngroups.y * _wid.z));
+    }
+}
+`,
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		indexShapeFlat(t, kernelabi.Slice[uint32](a, 0))
+	},
+}
+
 // quantMatVecInt4Frame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -14827,6 +14880,7 @@ var Kernels = []*kernelabi.Kernel{
 	&MatMulTiledF32F16Kernel,
 	&GroupedMatVecKernel,
 	&GroupedMatMulKernel,
+	&IndexShapeKernel,
 	&QuantMatVecInt4Kernel,
 	&QuantMatMulInt4Kernel,
 	&IntReduceKernel,

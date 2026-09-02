@@ -111,6 +111,18 @@ func diffCases() []diffCase {
 			why:      "the dispatch shape is three integers per accessor, so this is exact",
 		},
 		{
+			// The three flat indices over a 4x2x2 workgroup and a 3x2x2
+			// grid: 16 invocations per group, 12 groups, three values each.
+			// The Metal lowering folds the workgroup extent in as literals
+			// and reads the group count from the grid, and this is the case
+			// that says the two linearizations agree.
+			kernel: &testkernels.IndexShapeKernel,
+			counts: []int{3 * 16 * 12},
+			groups: accel.WorkgroupCount{X: 3, Y: 2, Z: 2},
+			seed:   func(b, i int) float32 { return 0 },
+			why:    "a flat index is an integer, so this is exact",
+		},
+		{
 			// The workgroup-bounded loop with a barrier in it, which on Metal
 			// is a real barrier inside a loop whose bound is a literal, and on
 			// the CPU is the resumable state machine.
