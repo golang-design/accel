@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"golang.design/x/accel/tensor"
 )
 
@@ -81,6 +82,11 @@ func TestMaxInFlightRunsSubmissionsSideBySide(t *testing.T) {
 		t.Fatalf("second: %v", err)
 	}
 	silu := func(x float64) float32 { return float32(x / (1 + math.Exp(-x))) }
+	// SiLU is exp and a division: 4 ULP each way from correctly rounded plus
+	// the division, rounded up to 16 the way specs/022-msl-target.md derives
+	// its ceilings. What matters here is which input each output saw, and
+	// silu(1) and silu(-2) are 0.73 and -0.24 apart.
+	const siluULPs = 16
 	for _, c := range []struct {
 		name string
 		y    accel.BufferView
@@ -90,9 +96,13 @@ func TestMaxInFlightRunsSubmissionsSideBySide(t *testing.T) {
 		if err := d.Queue().ReadBuffer(c.y.Buffer, 0, got); err != nil {
 			t.Fatalf("%s readback: %v", c.name, err)
 		}
-		if math.Abs(float64(got[0]-c.want)) > 1e-5 || math.Abs(float64(got[n-1]-c.want)) > 1e-5 {
-			t.Errorf("the %s submission's output is %v, want %v: its slots were rebound "+
-				"underneath it", c.name, got[0], c.want)
+		want := make([]float32, n)
+		for i := range want {
+			want[i] = c.want
+		}
+		if r := numeq.WithinULP(got, want, siluULPs); !r.Equal {
+			t.Errorf("the %s submission's output is not silu of its own input: its slots "+
+				"were rebound underneath it: %v", c.name, r)
 		}
 	}
 
