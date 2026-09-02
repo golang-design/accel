@@ -5,8 +5,11 @@
 package accel_test
 
 import (
-	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math/bits"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -533,8 +536,45 @@ func TestErrNotImplementedHasNoReachableUser(t *testing.T) {
 	if accel.ErrNotImplemented == nil {
 		t.Fatal("ErrNotImplemented was removed; if that is deliberate, this test goes with it")
 	}
-	if !errors.Is(accel.ErrNotImplemented, accel.ErrNotImplemented) {
-		t.Error("ErrNotImplemented does not match itself")
+	// Read from the source rather than probed through the API: a stub is a
+	// function nobody can reach *because* it panics, so the only way to count
+	// them is to look. Every mention of the identifier in the package's
+	// non-test files, other than its own declaration, is a use.
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var uses []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.ValueSpec:
+				// The declaration itself: var ErrNotImplemented = ...
+				for _, id := range x.Names {
+					if id.Name == "ErrNotImplemented" {
+						return false
+					}
+				}
+			case *ast.Ident:
+				if x.Name == "ErrNotImplemented" {
+					uses = append(uses, fset.Position(x.Pos()).String())
+				}
+			}
+			return true
+		})
+	}
+	if len(uses) > 0 {
+		t.Errorf("ErrNotImplemented is used at %s; the design-stage boundary is meant "+
+			"to be empty, so a new stub is a deliberate act that starts by editing this "+
+			"test", strings.Join(uses, ", "))
 	}
 }
 

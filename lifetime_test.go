@@ -32,10 +32,6 @@ func TestClosedReceiverIsReportedEverywhere(t *testing.T) {
 			_, err := f.dev.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
 			return err
 		}},
-		{"Device.NewPoolWith", closeDevice, func(f *fixtureT) error {
-			_, err := f.dev.NewPool(accel.PoolDescriptor{Kind: accel.MemoryDevice, Bytes: 1 << 20})
-			return err
-		}},
 		{"Device.NewBuffer", closeDevice, func(f *fixtureT) error {
 			_, err := f.dev.NewBuffer(accel.BufferDescriptor{DType: accel.F32, Count: 4})
 			return err
