@@ -5,6 +5,10 @@
 package accel_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,20 @@ import (
 	"strings"
 	"testing"
 )
+
+// deps lists the root package's transitive imports.
+//
+// A failure of go list is a failure here, not a skip: every rule in this file
+// is checked through it, and a skip would let all of them pass on a machine
+// where the tool was missing or the module was broken.
+func deps(t *testing.T) []string {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-deps", "golang.design/x/accel").Output()
+	if err != nil {
+		t.Fatalf("go list -deps: %v", err)
+	}
+	return strings.Fields(string(out))
+}
 
 // The root package must not depend on the compiler's toolchain.
 //
@@ -28,12 +46,8 @@ import (
 // internal/kernel that reaches for go/packages is the plausible mistake, not an
 // import written at the top of a file here.
 func TestRootPackageDoesNotDependOnTheToolchain(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "golang.design/x/accel").Output()
-	if err != nil {
-		t.Skipf("go list unavailable: %v", err)
-	}
 	var bad []string
-	for _, dep := range strings.Fields(string(out)) {
+	for _, dep := range deps(t) {
 		switch {
 		case strings.HasPrefix(dep, "golang.org/x/tools"),
 			dep == "go/packages", dep == "go/types", dep == "go/parser", dep == "go/ast":
@@ -67,11 +81,7 @@ func TestTheLayeringRulesHold(t *testing.T) {
 	// decorative — and would pull a whole inference stack into a program that
 	// only wanted to dispatch a kernel.
 	t.Run("layer 1 does not import layer 2", func(t *testing.T) {
-		out, err := exec.Command("go", "list", "-deps", "golang.design/x/accel").Output()
-		if err != nil {
-			t.Skipf("go list unavailable: %v", err)
-		}
-		for _, dep := range strings.Fields(string(out)) {
+		for _, dep := range deps(t) {
 			if strings.HasPrefix(dep, "golang.design/x/accel/tensor") {
 				t.Errorf("the root package transitively depends on %s, so layer 1 "+
 					"imports layer 2 and 000's rule 1 is broken", dep)
@@ -83,12 +93,8 @@ func TestTheLayeringRulesHold(t *testing.T) {
 	// no public API. Checked as the property that makes it true — the interface
 	// lives in an internal package, which the language then enforces.
 	t.Run("the backend interface is unexported", func(t *testing.T) {
-		out, err := exec.Command("go", "list", "-deps", "golang.design/x/accel").Output()
-		if err != nil {
-			t.Skipf("go list unavailable: %v", err)
-		}
 		found := false
-		for _, dep := range strings.Fields(string(out)) {
+		for _, dep := range deps(t) {
 			if dep == "golang.design/x/accel/internal/driver" {
 				found = true
 			}
@@ -197,44 +203,44 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 		"SubgroupShuffleMixFallback": "020's subgroup sweep",
 	}
 
-	src, err := os.ReadFile("internal/testkernels/accel_kernels.go")
-	if err != nil {
-		t.Fatalf("read corpus: %v", err)
-	}
-	var names []string
-	for _, line := range strings.Split(string(src), "\n") {
-		const p = "var "
-		if !strings.HasPrefix(line, p) || !strings.Contains(line, "Kernel = kernelabi.Kernel{") {
-			continue
-		}
-		names = append(names, strings.TrimSuffix(
-			strings.Fields(strings.TrimPrefix(line, p))[0], "Kernel"))
-	}
+	names := corpusKernelNames(t)
 	if len(names) < 50 {
 		t.Fatalf("found %d kernels in the corpus, too few to be reading it correctly",
 			len(names))
 	}
 
+	// What the tensor package reaches, as identifiers rather than as text: a
+	// kernel named in a comment is not reached, and an earlier version of this
+	// test counted it.
 	operators, err := filepath.Glob("tensor/*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var reached strings.Builder
+	reached := map[string]bool{}
+	fset := token.NewFileSet()
 	for _, f := range operators {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		b, err := os.ReadFile(f)
+		file, err := parser.ParseFile(fset, f, nil, 0)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("parse %s: %v", f, err)
 		}
-		reached.Write(b)
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "testkernels" {
+				reached[strings.TrimSuffix(sel.Sel.Name, "Kernel")] = true
+			}
+			return true
+		})
 	}
-	body := reached.String()
 
 	seen := map[string]bool{}
 	for _, n := range names {
-		if strings.Contains(body, "testkernels."+n+"Kernel") {
+		if reached[n] {
 			continue
 		}
 		// Graphics stages are 032's and are identified by their ABI suffix
@@ -287,15 +293,30 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 // any one site.
 func TestNoNewAdHocFloatComparisons(t *testing.T) {
 	// The count when the ratchet was installed. Lower it, never raise it.
-	const budget = 74
+	const budget = 73
 
+	// Every test file in the module, however deep: the earlier three-level
+	// glob stopped above internal/kernelc/*/ and internal/conformance/*/, so
+	// a site added there was never counted.
 	var files []string
-	for _, pat := range []string{"*_test.go", "*/*_test.go", "*/*/*_test.go"} {
-		m, err := filepath.Glob(pat)
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
-		files = append(files, m...)
+		if d.IsDir() {
+			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") ||
+				name == "testdata" || name == "worktrees") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(files) < 20 {
 		t.Fatalf("found %d test files, too few to be scanning the tree", len(files))
@@ -309,9 +330,6 @@ func TestNoNewAdHocFloatComparisons(t *testing.T) {
 	found := 0
 	perFile := map[string]int{}
 	for _, f := range files {
-		if strings.Contains(f, "worktrees") {
-			continue
-		}
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -343,4 +361,38 @@ func TestNoNewAdHocFloatComparisons(t *testing.T) {
 		t.Logf("%d ad hoc comparisons, under the budget of %d — lower the constant "+
 			"in this test to hold the ground", found, budget)
 	}
+}
+
+// corpusKernelNames is every kernel the generated corpus declares, read from
+// the declarations rather than from the text of the file.
+func corpusKernelNames(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "internal/testkernels/accel_kernels.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse corpus: %v", err)
+	}
+	var names []string
+	for _, d := range file.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			for i, id := range vs.Names {
+				if i >= len(vs.Values) || !strings.HasSuffix(id.Name, "Kernel") {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				if sel, ok := lit.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Kernel" {
+					names = append(names, strings.TrimSuffix(id.Name, "Kernel"))
+				}
+			}
+		}
+	}
+	return names
 }
