@@ -6,6 +6,7 @@ package accel_test
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"golang.design/x/accel"
@@ -28,6 +29,12 @@ func TestCapabilitiesAgreeWithWhatTheDeviceAccepts(t *testing.T) {
 		t.Run(info.Name, func(t *testing.T) {
 			d, err := accel.OpenDevice(info.ID)
 			if err != nil {
+				// specs/006-backends.md section 7: under the Tier 2 promise a
+				// device that enumerates and will not open is a failure, and a
+				// skip here would let the capability claim rot unchecked.
+				if os.Getenv("ACCEL_REQUIRE_METAL") != "" {
+					t.Fatalf("this job promises Metal and cannot open %s: %v", info.Name, err)
+				}
 				t.Skipf("cannot open %s: %v", info.Name, err)
 			}
 			defer d.Close()
