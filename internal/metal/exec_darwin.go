@@ -198,6 +198,20 @@ type executable struct {
 	pipelines   map[string]*mtl.RenderPipeline
 	depthStates map[string]*mtl.DepthState
 
+	// The render path's per-submission scratch, reused for the reason
+	// uniformBufs is: a pass of a few dozen draws is replayed every frame, and
+	// each of these was an allocation per draw. keyBuf holds a cache key while
+	// it is looked up, boundBuf marks the uniform indices a buffer covered,
+	// and stageUniformBuf holds one encoded by-value block until the encoder
+	// has copied it.
+	keyBuf          []byte
+	boundBuf        []bool
+	stageUniformBuf []byte
+
+	// clampMax is the limit triple one indirect clamp binds, reused so that
+	// each indirect dispatch does not allocate it.
+	clampMax [3]uint32
+
 	// indirect is one slot per indirect node, in plan order.
 	indirect []*indirectSlot
 

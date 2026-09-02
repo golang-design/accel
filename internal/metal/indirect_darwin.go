@@ -143,7 +143,8 @@ func (e *executable) encodeClamp(p *pass, s *indirectSlot, count resolved) error
 	enc.SetBuffer(count.buf, count.off, 0)
 	enc.SetBuffer(s.clamped, 0, 1)
 	enc.SetBuffer(s.stats, 0, 2)
-	enc.SetBytes(u32Bytes([]uint32{s.max.X, s.max.Y, s.max.Z}), 3)
+	e.clampMax = [3]uint32{s.max.X, s.max.Y, s.max.Z}
+	enc.SetBytes(u32Bytes(e.clampMax[:]), 3)
 	one := mtl.Size{Width: 1, Height: 1, Depth: 1}
 	enc.Dispatch(one, one)
 	// End it here rather than letting the next node's encoder switch do it: the

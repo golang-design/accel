@@ -8,6 +8,7 @@ package metal
 
 import (
 	"fmt"
+	"strconv"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
@@ -603,7 +604,7 @@ func (e *executable) bindStageUniforms(enc *mtl.RenderEncoder, d driver.RenderDr
 	// expression as on every target. It is bound *first* so a parameter that
 	// also has a pass-state value is overwritten by neither -- the by-value
 	// loop below skips an index the buffer covered.
-	bound := map[int]bool{}
+	bound := e.boundFlags(len(d.VertexUniformBuffers), len(d.VertexUniforms))
 	for i, o := range d.VertexUniformBuffers {
 		if o.Kind() == driver.OperandUnset {
 			continue
@@ -625,7 +626,7 @@ func (e *executable) bindStageUniforms(enc *mtl.RenderEncoder, d driver.RenderDr
 		}
 		enc.SetVertexBytes(b, mslabi.StageUniformIndex(i))
 	}
-	clear(bound)
+	bound = e.boundFlags(len(d.FragmentUniformBuffers), len(d.FragmentUniforms))
 	for i, o := range d.FragmentUniformBuffers {
 		if o.Kind() == driver.OperandUnset {
 			continue
@@ -650,7 +651,26 @@ func (e *executable) bindStageUniforms(enc *mtl.RenderEncoder, d driver.RenderDr
 	return nil
 }
 
+// boundFlags is a cleared flag per uniform index, wide enough for both lists.
+//
+// A slice on the executable rather than a map per draw: the map was an
+// allocation per stage per draw on a path replayed every frame, for what is a
+// handful of booleans.
+func (e *executable) boundFlags(buffers, values int) []bool {
+	n := max(buffers, values)
+	if cap(e.boundBuf) < n {
+		e.boundBuf = make([]bool, n)
+	}
+	e.boundBuf = e.boundBuf[:n]
+	clear(e.boundBuf)
+	return e.boundBuf
+}
+
 // uniformBytes encodes one by-value parameter through the generated codec.
+//
+// Into scratch the executable owns, valid until the next call: the encoder
+// copies the bytes at bind time, and every caller binds before encoding the
+// next parameter, so one buffer serves the whole pass.
 func (e *executable) uniformBytes(s *kernel.Stage, i int, v any) ([]byte, error) {
 	if s == nil || i >= len(s.Uniforms) {
 		return nil, fmt.Errorf("the stage declares no parameter at index %d", i)
@@ -665,7 +685,11 @@ func (e *executable) uniformBytes(s *kernel.Stage, i int, v any) ([]byte, error)
 	if u.Size <= 0 {
 		return nil, fmt.Errorf("parameter %q has an encoded size of %d", u.Name, u.Size)
 	}
-	b := make([]byte, u.Size)
+	if cap(e.stageUniformBuf) < u.Size {
+		e.stageUniformBuf = make([]byte, u.Size)
+	}
+	b := e.stageUniformBuf[:u.Size]
+	clear(b)
 	if err := u.Encode(b, v); err != nil {
 		return nil, err
 	}
@@ -680,10 +704,11 @@ func (e *executable) uniformBytes(s *kernel.Stage, i int, v any) ([]byte, error)
 // vertex layout. Those are fixed for a plan, so one entry per draw is the
 // smallest key that is correct, and a plan replayed compiles nothing.
 func (e *executable) renderPipeline(rp *driver.RenderPass, d driver.RenderDraw) (*mtl.RenderPipeline, error) {
-	key := renderKey(rp, d)
-	if p, ok := e.pipelines[key]; ok {
+	e.keyBuf = renderKey(e.keyBuf[:0], rp, d)
+	if p, ok := e.pipelines[string(e.keyBuf)]; ok {
 		return p, nil
 	}
+	key := string(e.keyBuf)
 	if e.pipelines == nil {
 		e.pipelines = map[string]*mtl.RenderPipeline{}
 	}
@@ -822,8 +847,24 @@ func (e *executable) depthState(d driver.RenderDraw) (*mtl.DepthState, error) {
 			Back:  metalStencilFace(d.Stencil.Back),
 		}
 	}
-	key := fmt.Sprintf("%d/%v/%+v", compare, d.DepthWrite, spec)
-	if s, ok := e.depthStates[key]; ok {
+	// The key is built into scratch and looked up as a string conversion the
+	// compiler does not allocate for; only a miss makes a string. This was a
+	// Sprintf with %+v of the spec, an allocation per draw on a replayed pass.
+	k := e.keyBuf[:0]
+	k = appendInt(k, compare)
+	k = appendBool(k, d.DepthWrite)
+	if spec != nil {
+		for _, f := range []mtl.StencilFace{spec.Front, spec.Back} {
+			k = appendInt(k, f.Compare)
+			k = appendInt(k, int(f.ReadMask))
+			k = appendInt(k, int(f.WriteMask))
+			k = appendInt(k, f.Fail)
+			k = appendInt(k, f.DepthFail)
+			k = appendInt(k, f.Pass)
+		}
+	}
+	e.keyBuf = k
+	if s, ok := e.depthStates[string(k)]; ok {
 		return s, nil
 	}
 	if e.depthStates == nil {
@@ -833,22 +874,71 @@ func (e *executable) depthState(d driver.RenderDraw) (*mtl.DepthState, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.depthStates[key] = s
+	e.depthStates[string(k)] = s
 	return s, nil
 }
 
-// renderKey identifies a pipeline state within one plan.
+// appendInt and appendBool build a cache key: each value followed by a
+// separator, so two adjacent values cannot run together into a third.
+func appendInt(b []byte, v int) []byte { return append(strconv.AppendInt(b, int64(v), 10), '/') }
+
+func appendBool(b []byte, v bool) []byte { return append(strconv.AppendBool(b, v), '/') }
+
+func appendString(b []byte, s string) []byte { return append(append(b, s...), '/') }
+
+// renderKey identifies a pipeline state within one plan, appended to b.
 //
 // The attachment formats are part of it, and were not when every attachment was
 // RGBA32Float. Metal validates a pipeline's colour formats against the pass's
 // attachments at draw time, so two passes differing only in format would share
 // a cached pipeline and the second would be rejected by the device -- a failure
 // that appears only when a plan happens to hold both, which is the kind a cache
-// key omission produces and a test rarely finds.
-func renderKey(rp *driver.RenderPass, d driver.RenderDraw) string {
-	return fmt.Sprintf("%s|%s|%d|%t|%v|%v|%v|%v|%v", d.Vertex.Name, d.Fragment.Name,
-		len(rp.Color), rp.Depth != nil, d.Masks, d.Blends, d.VertexLayouts,
-		rp.ColorFormat, rp.DepthFormat)
+// key omission produces and a test rarely finds. Whether the pass has a
+// stencil plane is part of it for the same reason: it decides the pipeline's
+// depth and stencil formats.
+//
+// Hand-built rather than a Sprintf with %v of the slices, which allocated per
+// draw on a path replayed every frame.
+func renderKey(b []byte, rp *driver.RenderPass, d driver.RenderDraw) []byte {
+	b = appendString(b, d.Vertex.Name)
+	b = appendString(b, d.Fragment.Name)
+	b = appendInt(b, len(rp.Color))
+	b = appendBool(b, rp.Depth != nil)
+	b = appendBool(b, rp.StencilPitch > 0)
+	for _, m := range d.Masks {
+		b = appendInt(b, int(m))
+	}
+	b = append(b, '|')
+	for _, bl := range d.Blends {
+		b = appendBool(b, bl.Enabled)
+		b = appendInt(b, int(bl.SrcColor))
+		b = appendInt(b, int(bl.DstColor))
+		b = appendInt(b, int(bl.ColorOp))
+		b = appendInt(b, int(bl.SrcAlpha))
+		b = appendInt(b, int(bl.DstAlpha))
+		b = appendInt(b, int(bl.AlphaOp))
+	}
+	b = append(b, '|')
+	for _, l := range d.VertexLayouts {
+		b = appendInt(b, l.Stride)
+		b = appendBool(b, l.PerInstance)
+		for _, a := range l.Attributes {
+			b = appendInt(b, a.Location)
+			b = appendInt(b, a.Offset)
+			b = appendInt(b, a.Components)
+			b = appendInt(b, a.Bytes)
+			b = appendBool(b, a.Signed)
+			b = appendBool(b, a.Normalized)
+		}
+		b = append(b, ';')
+	}
+	b = append(b, '|')
+	for _, f := range rp.ColorFormat {
+		b = appendInt(b, int(f))
+	}
+	b = append(b, '|')
+	b = appendInt(b, int(rp.DepthFormat))
+	return b
 }
 
 // metalVertexFormat maps a plan's attribute shape onto MTLVertexFormat.
