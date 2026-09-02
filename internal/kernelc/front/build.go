@@ -7,9 +7,11 @@ package front
 import (
 	"go/ast"
 	"go/constant"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"slices"
+	"strings"
 
 	"golang.design/x/accel/internal/kernelc/intrin"
 	"golang.design/x/accel/internal/kernelc/ir"
@@ -830,7 +832,29 @@ func (c *checker) binary(e *ast.BinaryExpr) ir.Value {
 			"and convert to f32 on load", t)
 		return nil
 	}
+	// == and != are the two operators Go defines on the packed narrow floats,
+	// and they compare bit patterns there: -0 and +0 differ, and a NaN equals
+	// itself. Metal compares them as IEEE halves, where neither holds. That
+	// is a silent divergence between the oracle and the device, which spec
+	// 008 rules out, so the comparison is refused with the spelling that is
+	// IEEE on every target.
+	if k := x.Type().Kind; k == ir.F16 || k == ir.BF16 {
+		c.errorf(e.Pos(), "%s on %v compares bit patterns in Go and IEEE values on a GPU, "+
+			"where -0 == +0 and NaN != NaN: compare %s.F32() %s %s.F32(), which is IEEE on "+
+			"every target (specs/008-numerics.md)", e.Op, x.Type(), exprText(e.X), e.Op, exprText(e.Y))
+		return nil
+	}
 	return ir.NewBinary(e.Pos(), t, e.Op, x, y)
+}
+
+// exprText spells an expression the way its author did, for a message that
+// shows the fix rather than describing it.
+func exprText(e ast.Expr) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, token.NewFileSet(), e); err != nil {
+		return "x"
+	}
+	return b.String()
 }
 
 // unary builds negation and complement.

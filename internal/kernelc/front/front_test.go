@@ -126,6 +126,31 @@ func TestRejections(t *testing.T) {
 		want string // substring of the message
 	}{
 		{
+			// == on the packed types is a comparison of bit patterns in Go and
+			// of IEEE halves on Metal: -0 == +0 there and not here, NaN != NaN
+			// there and not here. Spec 008 wants no silent divergence, so it is
+			// refused with the spelling that is IEEE on every target.
+			name: "equality on Float16",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, in []accel.Float16, out []float32) {
+	if in[0] == in[1] {
+		out[0] = 1
+	}
+}`,
+			line: 3, want: "compare in[0].F32() == in[1].F32()",
+		},
+		{
+			name: "inequality on BFloat16",
+			body: `//accel:kernel workgroup=64
+func K(t accel.Thread, in []accel.BFloat16, out []float32) {
+	a := in[0]
+	if a != in[1] {
+		out[0] = 1
+	}
+}`,
+			line: 4, want: "IEEE",
+		},
+		{
 			// `n := 0` declares n as int: the untyped constant defaults to Go's
 			// platform-width int, and the local was typed from the constant's
 			// IR type instead, so the lowering ran as int32 while the authored
