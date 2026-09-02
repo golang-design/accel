@@ -5566,18 +5566,20 @@ kernel void IndexShape(
 // is a superset of the right answer and therefore correct, and a liveness
 // analysis can shrink it later without changing anything a caller sees.
 type quantMatVecInt4Frame struct {
-	pc       int
-	col0     uint32
-	lid1     uint32
-	acc2     float32
-	k3       uint32
-	w4       uint32
-	code5    uint32
-	g6       uint32
-	s7       float32
-	z8       float32
-	wv9      float32
-	stride10 uint32
+	pc    int
+	lx0   uint32
+	ly1   uint32
+	col2  uint32
+	acc3  float32
+	k4    uint32
+	w5    uint32
+	code6 uint32
+	g7    uint32
+	s8    float32
+	z9    float32
+	wv10  float32
+	sum11 float32
+	p12   uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -5594,28 +5596,29 @@ func quantMatVecInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 	for {
 		switch f.pc {
 		case 0:
-			f.col0 = t.GroupID().X
-			f.lid1 = t.LocalID().X
-			f.acc2 = float32(0)
-			if f.col0 < d.N {
+			f.lx0 = t.LocalID().X
+			f.ly1 = t.LocalID().Y
+			f.col2 = ((t.GroupID().X * uint32(32)) + f.lx0)
+			f.acc3 = float32(0)
+			if f.col2 < d.N {
 				{
-					f.k3 = f.lid1
-					for ; f.k3 < d.K; f.k3 = (f.k3 + uint32(128)) {
-						f.w4 = ((f.k3 * d.N) + f.col0)
-						f.code5 = ((bq[(f.w4/uint32(8))] >> (uint32(4) * (f.w4 % uint32(8)))) & uint32(15))
-						f.g6 = (f.w4 / uint32(128))
-						f.s7 = bs[f.g6].F32()
-						f.z8 = bz[f.g6].F32()
-						f.wv9 = (float32(float32(f.code5)-f.z8) * f.s7)
-						if f.s7 == float32(0) {
-							f.wv9 = f.z8
+					f.k4 = f.ly1
+					for ; f.k4 < d.K; f.k4 = (f.k4 + uint32(4)) {
+						f.w5 = ((f.k4 * d.N) + f.col2)
+						f.code6 = ((bq[(f.w5/uint32(8))] >> (uint32(4) * (f.w5 % uint32(8)))) & uint32(15))
+						f.g7 = (f.w5 / uint32(128))
+						f.s8 = bs[f.g7].F32()
+						f.z9 = bz[f.g7].F32()
+						f.wv10 = (float32(float32(f.code6)-f.z9) * f.s8)
+						if f.s8 == float32(0) {
+							f.wv10 = f.z9
 						}
-						f.acc2 = float32(f.acc2 + float32(a[f.k3]*f.wv9))
+						f.acc3 = float32(f.acc3 + float32(a[f.k4]*f.wv10))
 					}
 				}
 			}
-			tr.Write(0, int(f.lid1))
-			sh[f.lid1] = f.acc2
+			tr.Write(0, int(((f.ly1 * uint32(32)) + f.lx0)))
+			sh[((f.ly1 * uint32(32)) + f.lx0)] = f.acc3
 			f.pc = 1
 			continue
 		case 1:
@@ -5623,34 +5626,15 @@ func quantMatVecInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: ""}
 			return true
 		case 2:
-			f.stride10 = uint32(64)
-			f.pc = 6
-			continue
-		case 3:
-			if f.lid1 < f.stride10 {
-				tr.Write(0, int(f.lid1))
-				sh[f.lid1] = float32(sh[tr.ReadAt(0, int(f.lid1))] + sh[tr.ReadAt(0, int((f.lid1+f.stride10)))])
-			}
-			f.pc = 4
-			continue
-		case 4:
-			f.pc = 5
-			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: ""}
-			return true
-		case 5:
-			f.stride10 = (f.stride10 / uint32(2))
-			f.pc = 6
-			continue
-		case 6:
-			if f.stride10 > uint32(0) {
-				f.pc = 3
-				continue
-			}
-			f.pc = 7
-			continue
-		case 7:
-			if (f.lid1 == uint32(0)) && (f.col0 < d.N) {
-				out[f.col0] = sh[tr.ReadAt(0, int(int32(0)))]
+			if (f.ly1 == uint32(0)) && (f.col2 < d.N) {
+				f.sum11 = float32(0)
+				{
+					f.p12 = uint32(0)
+					for ; f.p12 < uint32(4); f.p12 = (f.p12 + uint32(1)) {
+						f.sum11 = float32(f.sum11 + sh[tr.ReadAt(0, int(((f.p12*uint32(32))+f.lx0)))])
+					}
+				}
+				out[f.col2] = f.sum11
 			}
 			return false
 		}
@@ -5661,7 +5645,7 @@ func quantMatVecInt4Coop(t accel.Thread, d GEMMDims, a []float32, bq []uint32, b
 // QuantMatVecInt4Kernel is the compiled form of QuantMatVecInt4.
 var QuantMatVecInt4Kernel = kernelabi.Kernel{
 	Name:          "QuantMatVecInt4",
-	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	WorkgroupSize: accel.ID3{X: 32, Y: 4, Z: 1},
 	Bindings: []kernelabi.Binding{
 		{Name: "a", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "bq", DType: kernelabi.U32, Access: kernelabi.Read},
@@ -5669,7 +5653,7 @@ var QuantMatVecInt4Kernel = kernelabi.Kernel{
 		{Name: "bz", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ed89335011aad8dece0dde683ae73efd",
+	Digest:    "5ef07d818e80197810043ede7397c345",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -5711,11 +5695,12 @@ kernel void QuantMatVecInt4(
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     threadgroup float sh[128];
-    uint col = _wid.x;
-    uint lid = _lid.x;
+    uint lx = _lid.x;
+    uint ly = _lid.y;
+    uint col = ((_wid.x * uint(32)) + lx);
     float acc = float(0);
     if ((col < d.N)) {
-        for (uint k = lid; (k < d.K); k = (k + uint(128))) {
+        for (uint k = ly; (k < d.K); k = (k + uint(4))) {
             uint w = ((k * d.N) + col);
             uint code = (_accel_shr_u32(bq[_accel_div_u32(w, uint(8), _fault)], uint((uint(4) * _accel_rem_u32(w, uint(8), _fault)))) & uint(15));
             uint g = _accel_div_u32(w, uint(128), _fault);
@@ -5728,21 +5713,19 @@ kernel void QuantMatVecInt4(
             acc = (acc + (a[k] * wv));
         }
     }
-    sh[lid] = acc;
+    sh[((ly * uint(32)) + lx)] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-        if ((lid < stride)) {
-            sh[lid] = (sh[lid] + sh[(lid + stride)]);
+    if (((ly == uint(0)) && (col < d.N))) {
+        float sum = float(0);
+        for (uint p = uint(0); (p < uint(4)); p = (p + uint(1))) {
+            sum = (sum + sh[((p * uint(32)) + lx)]);
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    }
-    if (((lid == uint(0)) && (col < d.N))) {
-        out[col] = sh[int(0)];
+        out[col] = sum;
     }
 }
 `,
 	OrderIndependent: true,
-	Suspensions:      2,
+	Suspensions:      1,
 	SharedSizes:      []int{128},
 	SharedBytes:      512,
 	NewShared: func() []any {

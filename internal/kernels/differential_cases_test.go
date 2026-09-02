@@ -1215,7 +1215,7 @@ func diffCases() []diffCase {
 			kernel:   &kernels.QuantMatVecInt4Kernel,
 			counts:   []int{128, 128 / 8 * 2, 2, 2, 2},
 			uniforms: []any{kernels.GEMMDims{K: 128, N: 2}},
-			groups:   accel.WorkgroupCount{X: 2},
+			groups:   accel.WorkgroupCount{X: 1},
 			seed: func(b, i int) float32 {
 				switch b {
 				case 1: // the packed codes, as u32 words
@@ -1244,7 +1244,7 @@ func diffCases() []diffCase {
 			kernel:   &kernels.QuantMatVecInt4Kernel,
 			counts:   []int{256, 256 * 2 / 8, 4, 4, 2},
 			uniforms: []any{kernels.GEMMDims{K: 256, N: 2}},
-			groups:   accel.WorkgroupCount{X: 2},
+			groups:   accel.WorkgroupCount{X: 1},
 			seed: func(b, i int) float32 {
 				switch b {
 				case 1:

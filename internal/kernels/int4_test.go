@@ -46,7 +46,7 @@ func TestTheInt4KernelReadsWhatTheQuantizerWrote(t *testing.T) {
 	packed, scales, zeros := quant.Int4Quantize(w)
 	out := make([]float32, N)
 	if err := kernel.DispatchCooperative(&kernels.QuantMatVecInt4Kernel,
-		accel.ID3{X: N},
+		accel.ID3{X: (N + kernels.MatVecCols - 1) / kernels.MatVecCols},
 		kernelabi.Args{
 			Uniforms: []any{kernels.GEMMDims{K: K, N: N}},
 			Slices:   []any{a, packed, scales, zeros, out},
@@ -247,7 +247,7 @@ func TestTheAuthoredInt4KernelMatchesItsLowering(t *testing.T) {
 	dims := kernels.GEMMDims{K: K, N: N}
 
 	authored := make([]float32, N)
-	groups := kernel.ID3{X: N, Y: 1, Z: 1}
+	groups := kernel.ID3{X: (N + kernels.MatVecCols - 1) / kernels.MatVecCols, Y: 1, Z: 1}
 	for g := range groups.X {
 		var sh [128]float32
 		kernel.RunAuthored(&kernels.QuantMatVecInt4Kernel, kernel.ID3{X: g},

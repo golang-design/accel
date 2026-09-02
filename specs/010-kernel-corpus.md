@@ -599,6 +599,7 @@ a step's latency including the host's part.
 | decode, `[1,2048] x [2048,2048]`, f32 x f16 | 1.15 ms (tile, 7 rows idle) | 0.68 ms | `MatVecF32F16` |
 | decode, `[1,2048] x [2048,2048]`, f32 x int8 | 2.16 ms | 0.60 ms | `QuantMatVecF32` |
 | prefill, `[64,1024] x [1024,1024]`, f32 x int8 | 2.45 ms (per element) | 1.22 ms | `QuantMatMulTiledF32` |
+| decode, `[2048] x [2048,2048]`, f32 x int4 (later the same day) | 1.84 ms | 0.76 ms | `QuantMatVecInt4` |
 
 Three things changed, and the first is the one that mattered.
 

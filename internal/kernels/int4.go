@@ -56,16 +56,21 @@ const Int4Group = 128
 // as z. A pruned or padded matrix really has such a group, and the two
 // disagreed about it silently. The select below is the host's reading.
 //
-//accel:kernel workgroup=128
+//accel:kernel workgroup=32,4
 func QuantMatVecInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
 	bs []accel.Float16, bz []accel.Float16, out []float32, sh *[128]float32) {
 
-	col := t.GroupID().X
-	lid := t.LocalID().X
+	// The block layout of [MatVec]: a workgroup covers MatVecCols adjacent
+	// columns, its lanes are columns by K phases, and a phase's lanes read
+	// adjacent nibbles of one packed row segment. The per-column form read
+	// the matrix with adjacent lanes N words apart.
+	lx := t.LocalID().X
+	ly := t.LocalID().Y
+	col := t.GroupID().X*MatVecCols + lx
 
 	acc := float32(0)
 	if col < d.N {
-		for k := lid; k < d.K; k += RowWidth {
+		for k := ly; k < d.K; k += MatVecPhases {
 			w := k*d.N + col
 
 			// Weight w is in word w/8 at nibble w%8, low first. The same
@@ -83,17 +88,14 @@ func QuantMatVecInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
 			acc = acc + a[k]*wv
 		}
 	}
-	sh[lid] = acc
+	sh[ly*MatVecCols+lx] = acc
 	t.Barrier()
 
-	for stride := uint32(RowWidth / 2); stride > 0; stride /= 2 {
-		if lid < stride {
-			sh[lid] = sh[lid] + sh[lid+stride]
+	if ly == 0 && col < d.N {
+		sum := float32(0)
+		for p := uint32(0); p < MatVecPhases; p++ {
+			sum = sum + sh[p*MatVecCols+lx]
 		}
-		t.Barrier()
-	}
-
-	if lid == 0 && col < d.N {
-		out[col] = sh[0]
+		out[col] = sum
 	}
 }

@@ -144,3 +144,46 @@ func BenchmarkDecodeQuantMatMulOnMetal(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDecodeInt4MatMulOnMetal(b *testing.B) {
+	const k, n = 2048, 2048
+	d := openMetalBenchDevice(b)
+	rt, err := tensor.NewRuntime(d)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer rt.Close()
+	ws := make([]float32, k*n)
+	for i := range ws {
+		ws[i] = float32(i%13)*0.125 - 0.75
+	}
+	codes, scales, zeros := quant.Int4Quantize(ws)
+	bd := rt.NewBuilder("decode-int4")
+	x := tensor.Input(bd, tensor.ValueDesc{Name: "x", DType: accel.F32, Shape: tensor.Shape{k}})
+	cw := tensor.Weight(bd, tensor.ValueDesc{Name: "codes", DType: accel.U32, Shape: tensor.Shape{len(codes)}})
+	sw := tensor.Weight(bd, tensor.ValueDesc{Name: "scales", DType: accel.F16, Shape: tensor.Shape{len(scales)}})
+	zw := tensor.Weight(bd, tensor.ValueDesc{Name: "zeros", DType: accel.F16, Shape: tensor.Shape{len(zeros)}})
+	tensor.Output(bd, "y", tensor.Int4MatVec(bd, x, tensor.Int4{Codes: cw, Scales: sw, Zeros: zw, Weights: k * n}))
+	plan, err := bd.Compile(rt, tensor.CompileOptions{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer plan.Close()
+	b.Logf("kernel: %s", plan.Selections()[0].Kernel)
+	xs := make([]float32, k)
+	for i := range xs {
+		xs[i] = float32(i%7) * 0.25
+	}
+	tb := &testing.T{}
+	bind := tensor.Bindings{Buffers: map[string]accel.BufferView{
+		"x": f32Buffer(tb, d, "x", xs), "codes": u32Buffer(tb, d, "codes", codes),
+		"scales": f16BitsBuffer(tb, d, "scales", scales), "zeros": f16BitsBuffer(tb, d, "zeros", zeros),
+		"y": f32Buffer(tb, d, "y", make([]float32, n)),
+	}}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := plan.Submit(d.Queue(), bind).Wait(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

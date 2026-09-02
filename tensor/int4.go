@@ -136,7 +136,7 @@ func Int4MatVec(b *Builder, a *Tensor, w Int4) *Tensor {
 			// One workgroup per output column, each reducing over K. The row
 			// kernels' shape, and the reason Int4Group is 128: a group is
 			// exactly one workgroup's width.
-			return accel.WorkgroupCount{X: n}
+			return accel.WorkgroupCount{X: (n + kernels.MatVecCols - 1) / kernels.MatVecCols}
 		},
 		reason: fmt.Sprintf("the 4-bit row kernel: %d columns over %d weights, "+
 			"unpacked eight per word with a scale and a zero per %d",
