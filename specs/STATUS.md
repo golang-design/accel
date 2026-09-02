@@ -1099,5 +1099,8 @@ public contract and was not decided inside an autonomous session:
    per-submission render-target and sampled-texture allocation, one blit per
    row in `OpCopyRows`, private storage forcing a staging copy and a wait per
    host transfer, the CPU rasterizer's per-fragment slice allocation
-   (`FragmentFn` returns `[][4]float32`), the f32×f16 decode fast path at
-   M = 1, and `QuantMatMul` at M > 1 untiled.
+   (`FragmentFn` returns `[][4]float32`). **Closed 2026-09-02,
+   [010](010-kernel-corpus.md)'s outcome of that date:** the f32×f16 decode
+   fast path at M = 1 and `QuantMatMul` at M > 1 untiled, and with them the
+   matrix-vector kernels' uncoalesced column layout, which was the larger
+   cost.

@@ -588,3 +588,41 @@ stable IDs. Additional tiles, native f16 arithmetic, cooperative matrices,
 sampling primitives, production prefill attention, generic Go kernels,
 autotuning, and runtime-generated fusion are separate scoped specs. They do not
 change a v0 variant's semantics or identity.
+
+## Outcome — 2026-09-02: the decode and int8 prefill shapes
+
+Measured on an M2, one plan submitted and waited per step, so the figures are
+a step's latency including the host's part.
+
+| Shape | Before | After | Kernel |
+| --- | --- | --- | --- |
+| decode, `[1,2048] x [2048,2048]`, f32 x f16 | 1.15 ms (tile, 7 rows idle) | 0.68 ms | `MatVecF32F16` |
+| decode, `[1,2048] x [2048,2048]`, f32 x int8 | 2.16 ms | 0.60 ms | `QuantMatVecF32` |
+| prefill, `[64,1024] x [1024,1024]`, f32 x int8 | 2.45 ms (per element) | 1.22 ms | `QuantMatMulTiledF32` |
+
+Three things changed, and the first is the one that mattered.
+
+1. **The matrix-vector kernels own adjacent columns.** `MatVec`, `QuantMatVec`
+   and their f32 forms gave each workgroup one output column and strode K
+   across the lanes, so for one k adjacent lanes read rows N apart: the
+   decode step read the weight matrix through the worst access pattern the
+   hardware has, and the first `MatVecF32F16` written in that layout ran at
+   2.4 ms, *slower* than the tile it replaced. A workgroup now covers
+   `MatVecCols` (32) adjacent columns with `MatVecPhases` (4) K phases, so a
+   phase's lanes read one coalesced row segment, and the partials meet in
+   shared memory in phase order.
+2. **The M=1 selection covers every admitted pair.** `MatVecF32F16` and
+   `MatVecF32` join `MatVec`; the mixed pair a transformer decodes with no
+   longer takes the tile with seven rows idle, which §3's table recorded as a
+   reported gap.
+3. **The int8 GEMM is tiled at M > 1.** `QuantMatMulTiled` and its f32 form
+   dequantize B into the tile on load and accumulate in the per-element
+   kernel's K order; the per-element `QuantMatMul` and `QuantMatMulF32` stay as
+   the reference the tiled forms are checked against and reach no operator.
+
+The differential compares every new kernel's two lowerings, the tiled int8
+cases over an output that is not a whole number of tiles in either axis. The
+authored-form comparison of the quantized matrix-vector kernels now uses
+activations with few significant bits, because with several products per lane
+Go on arm64 may fuse the authored multiply-add where the generated lowering
+never does, and the ULP that costs is fusion's, not the lowering's.
