@@ -366,19 +366,34 @@ func TestLinearReset(t *testing.T) {
 }
 
 // TestLinearPoolCannotFragment is the other half of why a bump is right for a
-// graph's transients: Free and LargestFree never diverge.
+// graph's transients: the whole of what is free is one block.
+//
+// Both numbers are checked against a total the test keeps itself. Comparing
+// Free to LargestFree, or Free to Size-Used, compares two fields the allocator
+// derives from one counter, and holds for an allocator that counted nothing.
 func TestLinearPoolCannotFragment(t *testing.T) {
-	a, err := alloc.NewBump(1<<20, granularity)
+	const size = 1 << 20
+	a, err := alloc.NewBump(size, granularity)
 	if err != nil {
 		t.Fatal(err)
 	}
+	live := 0
 	for range 100 {
-		if _, err := a.Alloc(granularity, 4); err != nil {
+		al, err := a.Alloc(granularity, 4)
+		if err != nil {
 			t.Fatal(err)
 		}
+		live += al.Size
 		s := a.Stats()
-		if s.LargestFree != s.Free {
-			t.Fatalf("a bump fragmented: LargestFree = %d, Free = %d", s.LargestFree, s.Free)
+		if s.Used != live {
+			t.Fatalf("Used = %d after handing out %d bytes", s.Used, live)
+		}
+		if s.Free != size-live {
+			t.Fatalf("Free = %d with %d of %d bytes handed out", s.Free, live, size)
+		}
+		if s.LargestFree != size-live {
+			t.Fatalf("a bump fragmented: LargestFree = %d, and everything free is one "+
+				"block of %d", s.LargestFree, size-live)
 		}
 	}
 }

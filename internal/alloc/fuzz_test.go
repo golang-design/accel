@@ -43,6 +43,10 @@ func FuzzTLSF(f *testing.F) {
 		}
 		var held []live
 		var next byte = 1
+		// The bytes the test believes are allocated, kept independently of
+		// the allocator's own counter so the statistics are checked against
+		// something other than themselves.
+		liveBytes := 0
 
 		for range ops {
 			if len(held) > 0 && rng.IntN(3) == 0 {
@@ -61,6 +65,10 @@ func FuzzTLSF(f *testing.F) {
 				clear(memory[h.al.Offset : h.al.Offset+h.al.Size])
 				if err := a.Free(h.al); err != nil {
 					t.Fatalf("Free: %v", err)
+				}
+				liveBytes -= h.al.Size
+				if s := a.Stats(); s.Used != liveBytes || s.Free != size-liveBytes {
+					t.Fatalf("after a free with %d bytes live, stats are %+v", liveBytes, s)
 				}
 				continue
 			}
@@ -99,9 +107,12 @@ func FuzzTLSF(f *testing.F) {
 				memory[i] = pattern
 			}
 			held = append(held, live{al: al, pattern: pattern})
+			liveBytes += al.Size
 
-			if s := a.Stats(); s.Used > s.Size || s.Free != s.Size-s.Used {
-				t.Fatalf("stats are inconsistent: %+v", s)
+			if s := a.Stats(); s.Used != liveBytes || s.Free != size-liveBytes ||
+				s.LargestFree > s.Free || s.Allocations != len(held) {
+				t.Fatalf("with %d bytes in %d allocations live, stats are %+v",
+					liveBytes, len(held), s)
 			}
 		}
 
@@ -148,7 +159,7 @@ func FuzzBump(f *testing.F) {
 				held, end = held[:0], 0
 				continue
 			}
-			al, err := a.Alloc(1+rng.IntN(size), 1<<rng.IntN(6))
+			al, err := a.Alloc(1+rng.IntN(size), 1<<rng.IntN(13)) // 1 .. 4096, above the granularity too, so padding happens
 			if err != nil {
 				continue
 			}
@@ -161,8 +172,14 @@ func FuzzBump(f *testing.F) {
 			end = al.Offset + al.Size
 			held = append(held, al)
 
-			if s := a.Stats(); s.Used > s.Size || s.Free != s.Size-s.Used {
-				t.Fatalf("stats are inconsistent: %+v", s)
+			// A bump charges alignment padding to Used, so what is used is
+			// exactly where the cursor is, and everything past it is one free
+			// block. The cursor is the test's own, advanced from the offsets
+			// the allocator returned.
+			if s := a.Stats(); s.Used != end || s.Free != size-end ||
+				s.LargestFree != size-end || s.Allocations != len(held) {
+				t.Fatalf("with the cursor at %d of %d after %d allocations, stats are %+v",
+					end, size, len(held), s)
 			}
 		}
 
