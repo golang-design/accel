@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"golang.design/x/accel/internal/kernel"
 )
@@ -19,18 +18,19 @@ import (
 // gauge records how many workgroups were inside a kernel body at once.
 //
 // It is how "this dispatch ran in parallel" is asserted by observation rather
-// than by inference from a clock: a timing comparison would be a machine test,
-// and a rendezvous that only completes when two workgroups meet would hang
-// forever the day the pool is switched off. So each workgroup announces itself,
-// waits a bounded time for company, and leaves. The wait is what makes an
-// overlap observable; the bound is what keeps a serial run a fast test rather
-// than a hang.
+// than by inference from a clock. Each workgroup announces itself and, when
+// the test expects company, waits for it by yielding the processor a bounded
+// number of times rather than by sleeping: on a pool the others arrive within
+// a few turns whatever the machine, and on a serial loop the bound is what
+// turns "they never came" into a fast failure rather than a hang. A test that
+// expects a serial run asks for no company and never waits, since one
+// workgroup inside the body is the most a serial loop can show at any moment.
 type gauge struct {
 	live atomic.Int64
 	most atomic.Int64
 }
 
-func (g *gauge) visit(want int64, wait time.Duration) {
+func (g *gauge) visit(want int64) {
 	n := g.live.Add(1)
 	for {
 		most := g.most.Load()
@@ -38,22 +38,22 @@ func (g *gauge) visit(want int64, wait time.Duration) {
 			break
 		}
 	}
-	deadline := time.Now().Add(wait)
-	for g.most.Load() < want && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	for turn := 0; turn < 1<<20 && g.most.Load() < want; turn++ {
+		runtime.Gosched()
 	}
 	g.live.Add(-1)
 }
 
-// gaugeKernel announces every workgroup on entry, once per workgroup.
-func gaugeKernel(g *gauge, orderIndependent bool, size uint32) *kernel.Kernel {
+// gaugeKernel announces every workgroup on entry, once per workgroup, and
+// waits for want of them to be inside the body together.
+func gaugeKernel(g *gauge, orderIndependent bool, size uint32, want int64) *kernel.Kernel {
 	return &kernel.Kernel{
 		Name: "Gauge", Generator: kernel.ABIVersion,
 		WorkgroupSize:    kernel.ID3{X: size, Y: 1, Z: 1},
 		OrderIndependent: orderIndependent,
 		Flat: func(t kernel.Thread, a kernel.Args) {
 			if t.LocalID().X == 0 {
-				g.visit(2, 25*time.Millisecond)
+				g.visit(want)
 			}
 		},
 	}
@@ -63,17 +63,19 @@ func gaugeKernel(g *gauge, orderIndependent bool, size uint32) *kernel.Kernel {
 //
 // Observed rather than timed: the gauge reports the largest number of
 // workgroups that were inside the body together, and one is what the old
-// single-goroutine loop reported.
+// single-goroutine loop reported. Eight workers over eight workgroups, and
+// every workgroup waits for all eight, so the number is eight or the wait
+// ran out.
 func TestAnOrderIndependentDispatchRunsWorkgroupsAtOnce(t *testing.T) {
 	var g gauge
-	k := gaugeKernel(&g, true, 1)
+	k := gaugeKernel(&g, true, 1, 8)
 	if err := kernel.DispatchWith(k, kernel.ID3{X: 8}, kernel.Args{},
 		kernel.Options{Workers: 8}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if got := g.most.Load(); got < 2 {
-		t.Fatalf("at most %d workgroups were running together: the pool is not running "+
-			"anything at once, so the dispatch is still the one-goroutine loop", got)
+	if got := g.most.Load(); got != 8 {
+		t.Fatalf("at most %d of 8 workgroups were running together on 8 workers: the "+
+			"pool is not running them at once", got)
 	}
 }
 
@@ -141,7 +143,7 @@ func TestASmallDispatchRunsOnOneWorker(t *testing.T) {
 	// Eight workgroups of one invocation, which is three orders of magnitude
 	// below the threshold and two workgroups above the one-workgroup case, so
 	// it is the size rule being tested and not the count rule.
-	k := gaugeKernel(&g, true, 1)
+	k := gaugeKernel(&g, true, 1, 1)
 	if err := kernel.Dispatch(k, kernel.ID3{X: 8}, kernel.Args{}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestASmallDispatchRunsOnOneWorker(t *testing.T) {
 // workgroup is a goroutine and a join around the loop that was going to run.
 func TestOneWorkgroupRunsOnOneWorker(t *testing.T) {
 	var g gauge
-	k := gaugeKernel(&g, true, 1)
+	k := gaugeKernel(&g, true, 1, 1)
 	if err := kernel.DispatchWith(k, kernel.ID3{X: 1}, kernel.Args{},
 		kernel.Options{Workers: 8}); err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -586,7 +588,7 @@ func TestAnOrderDependentCooperativeDispatchRunsOnOneWorker(t *testing.T) {
 		WorkgroupSize:    kernel.ID3{X: 1, Y: 1, Z: 1},
 		OrderIndependent: false,
 		Cooperative: func(t kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
-			g.visit(2, 25*time.Millisecond)
+			g.visit(1)
 			return false
 		},
 	}
