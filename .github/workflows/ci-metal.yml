@@ -87,3 +87,20 @@ jobs:
       with:
         name: coverage-profile-darwin
         path: cover-darwin.out
+
+    # The Metal figures the specs cite -- the decode and prefill kernels and
+    # the replay cost per node -- published per commit for the reason ci.yml's
+    # bench job gives. The runner's device is a paravirtual one, so the
+    # numbers are the runner's; the trend across commits is what they are for.
+    - name: Benchmarks (published, not gated)
+      env:
+        BENCH_COUNT: '3'
+      run: |
+        echo "## Metal benchmarks (min of 3, macos-15)" >> "$GITHUB_STEP_SUMMARY"
+        scripts/bench.sh metal >> "$GITHUB_STEP_SUMMARY"
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bench-metal
+        path: bench-metal.txt

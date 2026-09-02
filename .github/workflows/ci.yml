@@ -148,6 +148,34 @@ jobs:
         name: coverage-profile
         path: cover.out
 
+  bench:
+    name: benchmarks (published, not gated)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.x'
+        check-latest: true
+
+    # The figures the specs cite, next to the commit that produced them. A
+    # shared runner's timing measures the runner as much as the code, so the
+    # table is published in the job summary and the raw output kept as an
+    # artifact rather than compared against a threshold that would go red
+    # for the runner's reasons.
+    - name: Run and publish
+      env:
+        BENCH_COUNT: '3'
+      run: |
+        echo "## CPU benchmarks (min of 3, ubuntu-latest)" >> "$GITHUB_STEP_SUMMARY"
+        scripts/bench.sh cpu >> "$GITHUB_STEP_SUMMARY"
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bench-cpu
+        path: bench-cpu.txt
+
   cgo-free:
     name: no cgo anywhere
     runs-on: ubuntu-latest
