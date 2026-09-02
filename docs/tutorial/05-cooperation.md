@@ -53,6 +53,15 @@ reach the same barrier, or the ones that do wait forever. Notice the barrier
 above is *outside* the `if lid < stride` — inside, half the workgroup would skip
 it. The compiler rejects the divergent form by name.
 
+The compiler decides "divergent" conservatively: a value loaded from a buffer
+counts as per-invocation even when every invocation loads the same element,
+because another invocation could have written it. A kernel that routes on a
+table the host wrote — an offsets array read at `t.GroupID().X`, say — declares
+that table with `//accel:uniform offsets` above the kernel. The declaration is
+a promise that nothing in the dispatch writes it, the compiler then treats a
+load from it at a uniform index as uniform, and the graph refuses a dispatch
+that binds a writer over the same bytes.
+
 **Every invocation must write its shared memory before anything reads it.** On
 real hardware, reading uninitialised shared memory gives you whatever was there,
 which is often zero, which often looks right.

@@ -303,12 +303,33 @@ storage mode, because unified memory means the allocation genuinely is
 addressable and only the API contract says otherwise. Measured, not remembered:
 a buffer created at mode 2 reports `storageMode = 2` and a non-nil `contents`.
 
-**Guarantee.** The requested storage mode decides host visibility, and
-`-contents` is consulted only for modes already known to be mappable. Asking
-the object instead would make every buffer mappable on Apple silicon and not on
-an Intel Mac, which turns a portability rule into a machine-specific one, and
+**Guarantee.** The requested memory kind decides host visibility, and
+`-contents` is consulted only for kinds the contract maps. Asking the object
+instead would make every buffer mappable on Apple silicon and not on an Intel
+Mac, which turns a portability rule into a machine-specific one, and
 `Block.Bytes()` is the one place [`006`](../specs/006-backends.md) §1 puts that
-rule.
+rule. Since 2026-09-02 `MemoryDevice` *is* shared storage on a unified-memory
+device, so that the immediate `Write` and `Read` are a memcpy rather than a
+staged blit and a wait; `Block.Bytes()` answers nil for it all the same, which
+is the rule holding while the storage mode is the backend's own business.
+
+### Integer division by zero has no trap on the GPU
+
+**Divergence.** Go panics on an integer division by zero and defines a shift by
+a count at or above the width (zero, or the sign for a signed right shift). MSL
+leaves both undefined, and a GPU has no way to raise an error from inside a
+kernel. [`008`](../specs/008-numerics.md) §3 puts a zero divisor and an
+out-of-range shift outside the exact domain and calls them errors, not values.
+
+**Guarantee.** A shift lowers to a helper that spells Go's result on every
+count, so the two backends agree on counts above 31 rather than diverge. A
+constant count outside `[0, 31]` is a build error. Integer division lowers to a
+helper that takes the kernel's **fault word**, one `uint` per graph node the
+backend clears before each submission and reads after it: a zero divisor
+records a fault and yields zero, `Wait` reports the node and the kernel, and the
+device stays usable. On the CPU the same division is Go's panic, reported
+through the fence. `MinInt32 / -1` is Go's `MinInt32` on both. A vertex or
+fragment stage has no fault word and yields zero on a zero divisor.
 
 ### Objective-C object lifetime across completion handlers
 

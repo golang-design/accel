@@ -111,6 +111,15 @@ sequence 2 (now 13 long): [3 30 22 30 24 12 8]
 Three lengths, three page tables, one plan, six submissions. The sequences never
 see each other's blocks, and none of them paid for the longest.
 
+Those six ran one after another. A plan binds its buffers when you submit it
+and runs when the queue reaches it, so a second submission before the first
+completes would rebind the first one's slots, and by default the plan refuses
+it. A server that keeps several requests in flight compiles with
+`CompileOptions{MaxInFlight: n}`: the plan then holds up to `n` graph
+instances, each with its own transient memory, and runs that many submissions
+at once. The plan cache keys on the option, so a plan compiled for one and one
+for four are different plans.
+
 ## Where this stops today
 
 A batched **prefill** is not built. The shape has room for it — `qSeq` is that
