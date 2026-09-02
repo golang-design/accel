@@ -471,6 +471,11 @@ func TestCompileOptionsFieldsAreAccountedForInTheKey(t *testing.T) {
 		// Excluded by 029 §2: two plans differing only in what they are called
 		// are the same plan, and including it would double the cache for nothing.
 		"Label": false,
+		// MaxInFlight: in the key. A plan compiled for one submission in
+		// flight and one for four lower differently on demand, and handing
+		// the first to a caller who asked for the second would refuse the
+		// concurrency they asked for.
+		"MaxInFlight": true,
 	}
 
 	ty := reflect.TypeOf(tensor.CompileOptions{})

@@ -75,24 +75,62 @@ func (p *Plan) Submit(q *accel.Queue, bindings Bindings) *accel.Fence {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if f := p.inFlight; f != nil && !f.Done() {
-		return accel.FailedFence(fmt.Errorf("accel/tensor: Submit %q while a submission is "+
-			"in flight; a plan binds when you submit and runs when the queue reaches it, so "+
-			"a second submission would rebind the first one's resources. Wait on the fence, "+
-			"or compile a second plan", p.label))
+	g, ok := p.freeGraph()
+	if !ok {
+		if len(p.instances)+1 < p.maxInFlight {
+			spare, err := p.spare()
+			if err != nil {
+				return accel.FailedFence(err)
+			}
+			p.instances = append(p.instances, &planInstance{graph: spare})
+			g = spare
+		} else {
+			return accel.FailedFence(fmt.Errorf("accel/tensor: Submit %q while %d submissions are "+
+				"in flight; a plan binds when you submit and runs when the queue reaches it, so "+
+				"a second submission would rebind the first one's resources. Wait on a fence, "+
+				"compile with a larger CompileOptions.MaxInFlight, or compile a second plan",
+				p.label, p.maxInFlight))
+		}
 	}
-	if err := p.bind(bindings); err != nil {
+	if err := p.bind(g, bindings); err != nil {
 		return accel.FailedFence(err)
 	}
-	f := q.Submit(p.graph)
-	p.inFlight = f
+	f := q.Submit(g)
+	p.noteInFlight(g, f)
 	return f
+}
+
+// freeGraph is the first instance with no submission in flight. The caller
+// holds p.mu.
+func (p *Plan) freeGraph() (*accel.Graph, bool) {
+	if f := p.inFlight; f == nil || f.Done() {
+		return p.graph, true
+	}
+	for _, in := range p.instances {
+		if f := in.inFlight; f == nil || f.Done() {
+			return in.graph, true
+		}
+	}
+	return nil, false
+}
+
+// noteInFlight records g's latest fence. The caller holds p.mu.
+func (p *Plan) noteInFlight(g *accel.Graph, f *accel.Fence) {
+	if g == p.graph {
+		p.inFlight = f
+		return
+	}
+	for _, in := range p.instances {
+		if in.graph == g {
+			in.inFlight = f
+		}
+	}
 }
 
 // bind validates and applies the whole binding set.
 //
 // The caller holds p.mu.
-func (p *Plan) bind(bindings Bindings) error {
+func (p *Plan) bind(g *accel.Graph, bindings Bindings) error {
 	if p.closed {
 		return errors.New("accel/tensor: Submit: the plan is closed")
 	}
@@ -171,7 +209,7 @@ func (p *Plan) bind(bindings Bindings) error {
 		}
 		batch = append(batch, accel.SlotBinding{Slot: p.slots[w], Buffer: v})
 	}
-	if err := p.graph.Bind(batch...); err != nil {
+	if err := g.Bind(batch...); err != nil {
 		return err
 	}
 
@@ -179,7 +217,7 @@ func (p *Plan) bind(bindings Bindings) error {
 	// only what changed would compute with the placeholder on its first
 	// submission.
 	for _, u := range p.uniformNodes {
-		if err := p.graph.SetUniform(u.node, 0, u.build(bindings.Scalars)); err != nil {
+		if err := g.SetUniform(u.node, 0, u.build(bindings.Scalars)); err != nil {
 			return err
 		}
 	}
@@ -211,5 +249,15 @@ func (p *Plan) Close() error {
 	}
 	p.closed = true
 	p.rt.planClosed()
-	return p.graph.Close()
+	var errs []error
+	for _, in := range p.instances {
+		if err := in.graph.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	p.instances = nil
+	if err := p.graph.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }

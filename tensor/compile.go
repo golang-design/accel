@@ -15,6 +15,16 @@ import (
 // CompileOptions carries what a plan needs beyond the graph.
 type CompileOptions struct {
 	Label string
+
+	// MaxInFlight is how many submissions of the plan may be in flight at
+	// once. Zero means one, which refuses a second Submit until the first
+	// has completed. Above one, the plan lowers itself again into a spare
+	// graph the first time a submission finds every instance busy, up to
+	// this many, each with its own transient memory; a serving loop that
+	// batches requests into one bucket sets it to the number of buckets it
+	// keeps in flight. The plan cache keys on it. specs/029-plan-cache.md
+	// section 5.
+	MaxInFlight int
 }
 
 // KernelSelection reports which kernel an operator became, and why.
@@ -92,6 +102,13 @@ type Plan struct {
 	// session with a natural owner.
 	mu sync.Mutex
 
+	// maxInFlight and spare are CompileOptions.MaxInFlight's machinery:
+	// instances holds every graph beyond the first with its last fence, and
+	// spare lowers one more. The first instance is graph and inFlight.
+	maxInFlight int
+	spare       func() (*accel.Graph, error)
+	instances   []*planInstance
+
 	// inFlight is the fence of the most recent submission. "In flight" is
 	// derived from it rather than tracked beside it, which is the same choice
 	// the CPU backend's executable makes and for the same reason: two pieces
@@ -141,6 +158,50 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		scalars: b.scalars, scalarPos: b.scalarPos,
 	}
 
+	g, err := b.lowerInto(rt, p, label)
+	if err != nil {
+		return nil, err
+	}
+	p.graph = g
+	p.maxInFlight = max(opts.MaxInFlight, 1)
+	// A spare is the same lowering again into a graph of its own: the slot
+	// and node numbering is a function of the record, so the plan's tables
+	// serve every instance, and the check below is what says so.
+	p.spare = func() (*accel.Graph, error) {
+		q := &Plan{
+			rt: rt, label: label, ports: b.ports, slots: map[window]accel.Slot{},
+			scalars: b.scalars, scalarPos: b.scalarPos,
+		}
+		g, err := b.lowerInto(rt, q, label)
+		if err != nil {
+			return nil, err
+		}
+		if len(q.slots) != len(p.slots) || len(q.uniformNodes) != len(p.uniformNodes) {
+			_ = g.Close()
+			return nil, fmt.Errorf("accel/tensor: a second lowering of %q did not match the "+
+				"first (%d slots and %d scalar nodes against %d and %d)", label,
+				len(q.slots), len(q.uniformNodes), len(p.slots), len(p.uniformNodes))
+		}
+		for w, slot := range q.slots {
+			if p.slots[w] != slot {
+				_ = g.Close()
+				return nil, fmt.Errorf("accel/tensor: a second lowering of %q numbered a slot "+
+					"differently", label)
+			}
+		}
+		return g, nil
+	}
+	rt.planOpened()
+	return p, nil
+}
+
+// lowerInto records the builder's nodes into a fresh graph, filling p's slot,
+// window, selection and scalar-node tables as it goes, and builds it.
+//
+// Separate from Compile so a plan can lower itself again: a second graph
+// instance for a second submission in flight (specs/029-plan-cache.md
+// section 5) is this function run once more.
+func (b *Builder) lowerInto(rt *Runtime, p *Plan, label string) (*accel.Graph, error) {
 	r := rt.dev.NewRecorder()
 
 	// Every external port is a slot, so one plan serves many submissions with
@@ -286,9 +347,7 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("accel/tensor: compiling %q: %w", label, err)
 	}
-	p.graph = g
-	rt.planOpened()
-	return p, nil
+	return g, nil
 }
 
 // lowerNode turns one operator into a dispatch.
@@ -568,4 +627,11 @@ func (p *Plan) operand(t *Tensor, views []accel.BufferView,
 		return accel.Binding{Slot: slot}, nil
 	}
 	return accel.Binding{}, fmt.Errorf("it reads a value that was written nowhere")
+}
+
+// planInstance is one spare graph of a plan and the fence of its last
+// submission.
+type planInstance struct {
+	graph    *accel.Graph
+	inFlight *accel.Fence
 }

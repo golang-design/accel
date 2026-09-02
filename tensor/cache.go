@@ -96,9 +96,12 @@ func (c *PlanCache) key(id Identity, opts CompileOptions) key {
 // The version tag is separate from the graph identity's so that adding a field
 // here cannot collide with a key an older build computed.
 func writeOptions(w io.Writer, opts CompileOptions) {
-	writeString(w, "opts v2")
-	// Label: excluded, see above. CompileOptions has no other field yet.
+	writeString(w, "opts v3")
+	// Label: excluded, see above.
 	_ = opts.Label
+	// MaxInFlight: a plan compiled for one submission in flight and one for
+	// four are different plans, since the second lowers spares on demand.
+	writeString(w, fmt.Sprintf("max-in-flight=%d", opts.MaxInFlight))
 }
 
 // Compile returns the plan for a recorded graph, compiling it once.
