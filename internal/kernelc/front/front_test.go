@@ -777,6 +777,18 @@ func K(t accel.Thread, out []float32) { out[0] = 1 }`,
 		line: 2, want: "multiple helper results are out of scope for v0",
 	},
 	{
+		// Two names in one field is one field and two results. Counting
+		// fields let this signature through, and it was refused only at the
+		// return, with a message about the return rather than the signature.
+		name: "helper with two named results in one field",
+		body: `//accel:helper
+func f(x float32) (a, b float32) { return x, x }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) { out[0] = 1 }`,
+		line: 2, want: "multiple helper results are out of scope for v0",
+	},
+	{
 		name: "helper as a method",
 		body: `type R struct{}
 

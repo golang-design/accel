@@ -629,9 +629,13 @@ func (c *checker) helper(fn *ast.FuncDecl) *ir.Func {
 	// One result or none. Multiple results are sequencing rather than a wall:
 	// no target spells a tuple return, and the workaround is an out parameter,
 	// which the subset has no pointer to express yet.
-	if fn.Type.Results != nil && len(fn.Type.Results.List) > 1 {
+	//
+	// Counted as names rather than fields: `(a, b float32)` is one field and
+	// two results, and counting fields let it through the signature to be
+	// refused at a return, with a message about the return.
+	if fn.Type.Results != nil && fn.Type.Results.NumFields() > 1 {
 		c.errorf(fn.Type.Results.Pos(), "helper %s returns %d values: multiple helper results "+
-			"are out of scope for v0 (specs/004-kernel-authoring.md)", name, len(fn.Type.Results.List))
+			"are out of scope for v0 (specs/004-kernel-authoring.md)", name, fn.Type.Results.NumFields())
 		return nil
 	}
 
