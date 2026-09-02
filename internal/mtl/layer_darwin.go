@@ -41,7 +41,6 @@ var (
 	selSetDevice   objc.SEL
 	selSetPixFmt   objc.SEL
 	selSetDrawSize objc.SEL
-	selDrawSize    objc.SEL
 	selNextDraw    objc.SEL
 	selDrawTexture objc.SEL
 	selPresentDraw objc.SEL
@@ -57,7 +56,6 @@ func layerSelectors() {
 		selSetDevice = objc.RegisterName("setDevice:")
 		selSetPixFmt = objc.RegisterName("setPixelFormat:")
 		selSetDrawSize = objc.RegisterName("setDrawableSize:")
-		selDrawSize = objc.RegisterName("drawableSize")
 		selNextDraw = objc.RegisterName("nextDrawable")
 		selDrawTexture = objc.RegisterName("texture")
 		selPresentDraw = objc.RegisterName("presentDrawable:")
