@@ -38,6 +38,7 @@ import (
 // kernel's numeric bound is the f32 kernel's, and the two are compared against
 // each other on values f16 holds exactly.
 //
+//accel:uniform offsets, lengths
 //accel:kernel workgroup=128
 func AttentionRaggedF16(t accel.Thread, d RaggedDims, q []float32, k []accel.Float16,
 	v []accel.Float16, pages []uint32, lengths []uint32, offsets []uint32, out []float32,

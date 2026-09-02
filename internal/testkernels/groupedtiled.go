@@ -72,6 +72,7 @@ type GroupedTiledDims struct {
 // instead of a stray write, which is the same trade §1 property 3 records for
 // the other direction.
 //
+//accel:uniform offsets
 //accel:kernel workgroup=16,8
 func GroupedMatMul(t accel.Thread, d GroupedTiledDims, x []float32, w []float32,
 	offsets []uint32, out []float32, tileA *[128]float32, tileB *[256]float32) {

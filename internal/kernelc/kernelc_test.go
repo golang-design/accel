@@ -287,3 +287,73 @@ func TestTheWholeModuleChecks(t *testing.T) {
 		t.Error("no package in the module reported a kernel, so this checked nothing")
 	}
 }
+
+// A barrier under divergent control flow is refused at generation, with the
+// barrier's position and the predicate's.
+//
+// specs/019-cooperative-diagnostics.md. The analysis existed and had no caller
+// in the build, so the only gate was the cooperative lowering's structural
+// one, which sees a barrier inside an if and not one inside a loop bounded by
+// a lane. Two shapes: a loop the lane index bounds, and the corpus's ragged
+// attention with its //accel:uniform declaration removed, which is the routing
+// table case the declaration exists for (specs/063-uniform-loads.md).
+func TestADivergentBarrierIsRefusedAtGeneration(t *testing.T) {
+	t.Run("a loop bounded by the lane", func(t *testing.T) {
+		dir := copyCorpus(t)
+		src := filepath.Join(dir, "kernels", "scale.go")
+		b, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		broken := strings.Replace(string(b),
+			"i := t.GlobalID().X",
+			"i := t.GlobalID().X\n\tfor n := uint32(0); n < t.LocalIndex(); n++ {\n\t\tt.Barrier()\n\t}", 1)
+		if err := os.WriteFile(src, []byte(broken), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = kernelc.Run(kernelc.Options{Dir: dir, Patterns: []string{"./kernels"}})
+		if err == nil {
+			t.Fatal("a barrier in a lane-bounded loop generated")
+		}
+		for _, want := range []string{"workgroup-uniform", "diverges at", "scale.go:"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not carry %q: %v", want, err)
+			}
+		}
+	})
+	t.Run("a routing table, with and without its declaration", func(t *testing.T) {
+		kernel := func(directive string) string {
+			return "package kernels\n\nimport \"golang.design/x/accel\"\n\n" +
+				"//accel:kernel workgroup=64\n" + directive +
+				"func Routed(t accel.Thread, offsets []uint32, in []float32, out []float32, sh *[64]float32) {\n" +
+				"\tlane := t.LocalID().X\n\tsh[lane] = in[t.GlobalID().X]\n" +
+				"\tfor i := uint32(0); i < offsets[t.GroupIndex()]; i++ {\n\t\tt.Barrier()\n\t\tsh[lane] = sh[lane] + 1\n\t}\n" +
+				"\tout[t.GlobalID().X] = sh[lane]\n}\n"
+		}
+		for _, c := range []struct {
+			name, directive string
+			accepted        bool
+		}{
+			{"declared", "//accel:uniform offsets\n", true},
+			{"undeclared", "", false},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				dir := copyCorpus(t)
+				write(t, filepath.Join(dir, "kernels", "routed.go"), kernel(c.directive))
+				_, err := kernelc.Run(kernelc.Options{Dir: dir, Patterns: []string{"./kernels"}})
+				if c.accepted && err != nil {
+					t.Fatalf("declared uniform and refused: %v", err)
+				}
+				if !c.accepted {
+					if err == nil {
+						t.Fatal("generated without //accel:uniform: the routing table's load bounds " +
+							"the barrier loop and nothing declared it uniform")
+					}
+					if !strings.Contains(err.Error(), "diverges at") {
+						t.Errorf("the refusal is not the uniformity analysis's: %v", err)
+					}
+				}
+			})
+		}
+	})
+}

@@ -4950,7 +4950,7 @@ func groupedMatVecCoop(t accel.Thread, d GroupedDims, x []float32, w []float32, 
 			continue
 		case 1:
 			f.pc = 2
-			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "grouped.go:84:2"}
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "grouped.go:85:2"}
 			return true
 		case 2:
 			f.stride9 = uint32(64)
@@ -4965,7 +4965,7 @@ func groupedMatVecCoop(t accel.Thread, d GroupedDims, x []float32, w []float32, 
 			continue
 		case 4:
 			f.pc = 5
-			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "grouped.go:90:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "grouped.go:91:3"}
 			return true
 		case 5:
 			f.stride9 = (f.stride9 / uint32(2))
@@ -4995,7 +4995,7 @@ var GroupedMatVecKernel = kernelabi.Kernel{
 	Bindings: []kernelabi.Binding{
 		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "w", DType: kernelabi.F32, Access: kernelabi.Read},
-		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
 	Digest:    "2fc4ad415bd79172aea979934d38acb8",
@@ -5180,7 +5180,7 @@ func groupedMatMulCoop(t accel.Thread, d GroupedTiledDims, x []float32, w []floa
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "groupedtiled.go:120:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "groupedtiled.go:121:4"}
 			return true
 		case 6:
 			{
@@ -5193,7 +5193,7 @@ func groupedMatMulCoop(t accel.Thread, d GroupedTiledDims, x []float32, w []floa
 			continue
 		case 7:
 			f.pc = 8
-			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "groupedtiled.go:126:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "groupedtiled.go:127:4"}
 			return true
 		case 8:
 			f.k012 = (f.k012 + uint32(16))
@@ -5234,7 +5234,7 @@ var GroupedMatMulKernel = kernelabi.Kernel{
 	Bindings: []kernelabi.Binding{
 		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "w", DType: kernelabi.F32, Access: kernelabi.Read},
-		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
 	Digest:    "88a81de4f7443a368dc60a34c6ed3303",
@@ -10598,7 +10598,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "ragged.go:192:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "ragged.go:193:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane1))
@@ -10609,7 +10609,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "ragged.go:195:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "ragged.go:196:3"}
 			return true
 		case 6:
 			f.stride25 = uint32(64)
@@ -10624,7 +10624,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "ragged.go:201:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "ragged.go:202:4"}
 			return true
 		case 9:
 			f.stride25 = (f.stride25 / uint32(2))
@@ -10649,7 +10649,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "ragged.go:212:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "ragged.go:213:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane1))
@@ -10660,7 +10660,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "ragged.go:215:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "ragged.go:216:3"}
 			return true
 		case 15:
 			f.stride30 = uint32(64)
@@ -10675,7 +10675,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "ragged.go:221:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "ragged.go:222:4"}
 			return true
 		case 18:
 			f.stride30 = (f.stride30 / uint32(2))
@@ -10735,8 +10735,8 @@ var AttentionRaggedKernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
 	Digest:    "4b5f23bdb9d1864cde7f3fc0862aa9a7",
@@ -11026,7 +11026,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "raggedf16.go:150:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "raggedf16.go:151:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane1))
@@ -11037,7 +11037,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "raggedf16.go:153:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "raggedf16.go:154:3"}
 			return true
 		case 6:
 			f.stride25 = uint32(64)
@@ -11052,7 +11052,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "raggedf16.go:159:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "raggedf16.go:160:4"}
 			return true
 		case 9:
 			f.stride25 = (f.stride25 / uint32(2))
@@ -11077,7 +11077,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "raggedf16.go:170:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "raggedf16.go:171:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane1))
@@ -11088,7 +11088,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "raggedf16.go:173:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "raggedf16.go:174:3"}
 			return true
 		case 15:
 			f.stride30 = uint32(64)
@@ -11103,7 +11103,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "raggedf16.go:179:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "raggedf16.go:180:4"}
 			return true
 		case 18:
 			f.stride30 = (f.stride30 / uint32(2))
@@ -11163,8 +11163,8 @@ var AttentionRaggedF16Kernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
+		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
 	Digest:    "c02c54baf94a9c0cc6095dd38811e5a4",

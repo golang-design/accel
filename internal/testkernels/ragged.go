@@ -56,6 +56,7 @@ type RaggedDims struct {
 // the block loop below hold barriers at all
 // (specs/002-compute-model.md §3.3).
 //
+//accel:uniform offsets, lengths
 //accel:kernel workgroup=128
 func AttentionRagged(t accel.Thread, d RaggedDims, q []float32, k []float32,
 	v []float32, pages []uint32, lengths []uint32, offsets []uint32, out []float32,

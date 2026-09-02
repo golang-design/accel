@@ -25,6 +25,7 @@ import (
 	"golang.design/x/accel/internal/kernelc/emit"
 	"golang.design/x/accel/internal/kernelc/front"
 	"golang.design/x/accel/internal/kernelc/ir"
+	"golang.design/x/accel/internal/kernelc/uniform"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -110,6 +111,26 @@ func Run(opts Options) ([]Result, error) {
 func compile(pkg *packages.Package, name string, check bool) (*Result, front.Diagnostics, error) {
 	kernels, diags := front.Check(pkg)
 	if len(diags) > 0 {
+		return nil, diags, nil
+	}
+	// A barrier in divergent control flow is refused here, with the barrier's
+	// position and the predicate's, specs/019-cooperative-diagnostics.md. The
+	// analysis is uniform.AcceptBarriers; front.Check does not run it because
+	// the front end's job is the subset and this is a property of the program
+	// in it. Until this call existed the analysis had no caller, and the only
+	// gate was the cooperative lowering's structural one, which sees a barrier
+	// inside an if and not one inside a loop bounded by a lane.
+	for _, k := range kernels {
+		for _, r := range uniform.AcceptBarriers(k) {
+			diags = append(diags, front.Diagnostic{
+				Pos: pkg.Fset.Position(r.Pos),
+				Msg: fmt.Sprintf("%s (the control flow diverges at %v)",
+					r.Msg, pkg.Fset.Position(r.Because)),
+			})
+		}
+	}
+	if len(diags) > 0 {
+		sort.Slice(diags, func(i, j int) bool { return diags[i].Pos.Offset < diags[j].Pos.Offset })
 		return nil, diags, nil
 	}
 	if len(kernels) == 0 {

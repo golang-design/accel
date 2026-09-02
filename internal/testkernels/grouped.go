@@ -44,6 +44,7 @@ type GroupedDims struct {
 // to k experts and reads those k matrices rather than all E. The tiled form is
 // what a prefill wants, over this same extent, and is not this kernel.
 //
+//accel:uniform offsets
 //accel:kernel workgroup=128
 func GroupedMatVec(t accel.Thread, d GroupedDims, x []float32, w []float32,
 	offsets []uint32, out []float32, sh *[128]float32) {
