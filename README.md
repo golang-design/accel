@@ -36,9 +36,10 @@ it on whichever backend the machine has — today the CPU or Metal — with
 >
 > The one change that was going to break callers has landed: an attachment names
 > a texture view rather than a buffer view, so it can carry a format, a mip
-> level and an array layer. What is left is **additive**: mip levels above one,
-> and rejecting a subresource used as an attachment and read by a stage at once.
-> `specs/045-texture-attachments.md` §8 is the ledger. Treat the graphics API as
+> level and an array layer. Mip levels above one allocate, bind and hazard-track
+> per subresource. What is left is **additive**: a host copy of a level above
+> the base, and rejecting a subresource used as an attachment and read by a
+> stage at once. `specs/045-texture-attachments.md` §8 and §10 are the ledger. Treat the graphics API as
 > settling rather than settled: it is outside the freeze record below, and a
 > name here may still move where one in the compute half will not.
 >
@@ -241,8 +242,10 @@ position.
 | Use Vulkan, D3D12, OpenGL or WebGPU | not yet |
 
 Every "yes" has tests that fail without it and an end-to-end case through the
-public API. Every kernel in the corpus runs on both backends and the two are
-compared, most of them bit for bit.
+public API. Every kernel in the corpus that lowers to Metal runs on both
+backends and the two are compared, most of them bit for bit; the two that do
+not (the ballot and the float atomic) carry the emitter's refusal in the
+generated record, and a test fails if a third loses its lowering silently.
 
 That sentence is the standard this table is held to, and it has been wrong
 twice: two rows here claimed a capability whose *kernels* existed while no
@@ -274,7 +277,7 @@ runs anywhere.
 
 | | |
 | --- | --- |
-| [**Tutorials**](docs/tutorial/) | Eight short pages, one idea each. Start here |
+| [**Tutorials**](docs/tutorial/) | Eleven short pages, one idea each. Start here |
 | [Architecture](docs/architecture.md) | How it fits together, and the decisions behind it |
 | [Backend conventions](docs/conventions.md) | Where GPU backends actually disagree. Useful even if you never use accel |
 | [Specs](specs/) | Internal design documents, full reasoning, open questions |
