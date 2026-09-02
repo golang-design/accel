@@ -179,8 +179,13 @@ type executable struct {
 	staging []*mtl.Buffer
 
 	// faults holds one uint per plan node; see Compile.
-	faults  *mtl.Buffer
-	stageAt []stagedWrite
+	faults *mtl.Buffer
+
+	// textures is the render path's texture cache and texGen the submission
+	// it is swept against; see render_darwin.go.
+	textures map[texKey]*texEntry
+	texGen   uint64
+	stageAt  []stagedWrite
 
 	// stagedAttachments counts the attachments that could not alias the
 	// caller's bytes and were copied through a private texture instead.
@@ -348,6 +353,7 @@ func (e *executable) Submit() (driver.Fence, error) {
 		return nil, err
 	}
 	enc.end()
+	e.sweepTextures()
 	cb.Commit()
 	f := newFence(cb, e.dev)
 	f.faults = e.faultReport
@@ -402,10 +408,10 @@ func (e *executable) encode(p *pass) error {
 			p.blit().Copy(dst.buf, dst.off, src.buf, src.off, src.size)
 
 		case driver.OpCopyRows:
-			// A rectangle whose two sides step by different pitches. Metal's
-			// blit encoder copies a contiguous range, so this is that copy once
-			// per row -- the same encoder and no new API, which is why it costs
-			// a loop rather than a texture path.
+			// A rectangle whose two sides step by different pitches: one
+			// dispatch of the row-copy kernel, a thread per element, rather
+			// than one blit per row. A frame's worth of rows was a frame's
+			// worth of blit commands, encoded and dispatched one at a time.
 			dst, err := e.operand(n.Dst)
 			if err != nil {
 				return fmt.Errorf("accel: node %d destination: %w", n.ID, err)
@@ -414,13 +420,9 @@ func (e *executable) encode(p *pass) error {
 			if err != nil {
 				return fmt.Errorf("accel: node %d source: %w", n.ID, err)
 			}
-			r := n.Rows
-			blit := p.blit()
-			for row := 0; row < r.Rows; row++ {
-				blit.Copy(dst.buf, dst.off+row*r.DstPitch,
-					src.buf, src.off+row*r.SrcPitch, r.RowBytes)
+			if err := e.copyRows(p, n.ID, src, dst, n.Rows); err != nil {
+				return err
 			}
-
 		case driver.OpDispatch:
 			if err := e.dispatch(p, n); err != nil {
 				return err
@@ -677,6 +679,7 @@ func (e *executable) Close() error {
 		e.faults.Close()
 		e.faults = nil
 	}
+	e.closeTextures()
 	for _, s := range e.indirect {
 		s.close()
 	}
@@ -913,5 +916,71 @@ func (e *executable) faultReport() error {
 		}
 		return fmt.Errorf("accel: node %d: kernel %s recorded fault %d on the device", n.ID, name, code)
 	}
+	return nil
+}
+
+// rowCopySource is the kernel a rows copy dispatches: a thread per element of
+// the rectangle, in bytes, or in 4-byte words when every offset, pitch and row
+// length allows it. The parameters are {rowBytes, srcPitch, dstPitch, rows},
+// in the element's unit.
+const rowCopySource = `#include <metal_stdlib>
+using namespace metal;
+kernel void copy_rows_u8(device const uchar *src [[buffer(0)]], device uchar *dst [[buffer(1)]],
+    constant uint4 &p [[buffer(2)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= p.x || gid.y >= p.w) { return; }
+    dst[gid.y * p.z + gid.x] = src[gid.y * p.y + gid.x];
+}
+kernel void copy_rows_u32(device const uint *src [[buffer(0)]], device uint *dst [[buffer(1)]],
+    constant uint4 &p [[buffer(2)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= p.x || gid.y >= p.w) { return; }
+    dst[gid.y * p.z + gid.x] = src[gid.y * p.y + gid.x];
+}
+`
+
+// rowCopyPipeline compiles the row-copy kernel once per device, for the
+// element width the copy allows.
+func (d *device) rowCopyPipeline(wide bool) (*mtl.Pipeline, error) {
+	d.pipeMu.Lock()
+	defer d.pipeMu.Unlock()
+	name := "copy_rows_u8"
+	if wide {
+		name = "copy_rows_u32"
+	}
+	if d.pipelines == nil {
+		d.pipelines = map[string]*mtl.Pipeline{}
+	}
+	if p, ok := d.pipelines["rows:"+name]; ok {
+		return p, nil
+	}
+	p, err := d.dev.Compile(rowCopySource, name)
+	if err != nil {
+		return nil, fmt.Errorf("accel: the row-copy kernel: %w", err)
+	}
+	d.pipelines["rows:"+name] = p
+	return p, nil
+}
+
+// copyRows encodes one rows copy as a dispatch.
+func (e *executable) copyRows(p *pass, id int, src, dst resolved, r *driver.RowCopy) error {
+	if r == nil || r.Rows == 0 || r.RowBytes == 0 {
+		return nil
+	}
+	unit := 1
+	if r.RowBytes%4 == 0 && r.SrcPitch%4 == 0 && r.DstPitch%4 == 0 && src.off%4 == 0 && dst.off%4 == 0 {
+		unit = 4
+	}
+	pipe, err := e.dev.rowCopyPipeline(unit == 4)
+	if err != nil {
+		return fmt.Errorf("accel: node %d: %w", id, err)
+	}
+	params := [4]uint32{uint32(r.RowBytes / unit), uint32(r.SrcPitch / unit), uint32(r.DstPitch / unit), uint32(r.Rows)}
+	enc := p.compute()
+	enc.SetPipeline(pipe)
+	enc.SetBuffer(src.buf, src.off, 0)
+	enc.SetBuffer(dst.buf, dst.off, 1)
+	enc.SetBytes(u32Bytes(params[:]), 2)
+	const w = 64
+	enc.Dispatch(mtl.Size{Width: uint64((int(params[0]) + w - 1) / w), Height: uint64(r.Rows), Depth: 1},
+		mtl.Size{Width: w, Height: 1, Depth: 1})
 	return nil
 }

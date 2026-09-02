@@ -9,6 +9,7 @@ package mtl
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -331,6 +332,7 @@ func (b *Buffer) NewLinearTexture(d *Device, format, w, h, offset, pitch, usage 
 		return nil, fmt.Errorf("accel/mtl: the device refused a %dx%d linear texture in "+
 			"pixel format %d at offset %d with pitch %d", w, h, format, offset, pitch)
 	}
+	liveTextures.Add(1)
 	return t, nil
 }
 
@@ -361,14 +363,26 @@ func (d *Device) newTexture2D(format, w, h, usage int, what string) (*Texture, e
 		return nil, fmt.Errorf("accel/mtl: the device refused a %dx%d %s in "+
 			"pixel format %d", w, h, what, format)
 	}
+	liveTextures.Add(1)
 	return t, nil
 }
 
 // Close releases the texture.
 func (t *Texture) Close() {
+	if t.id != 0 {
+		liveTextures.Add(-1)
+	}
 	release(t.id)
 	t.id = 0
 }
+
+// liveTextures counts the textures this package holds a retain on, for the
+// tests that check a replayed pass reuses its textures rather than allocating
+// them per submission.
+var liveTextures atomic.Int64
+
+// LiveTextures reports how many textures are created and not yet closed.
+func LiveTextures() int64 { return liveTextures.Load() }
 
 // RenderPipelineSpec is everything a render pipeline state is compiled from.
 //

@@ -163,15 +163,23 @@ func (d *device) Supports(kind driver.MemoryKind) bool {
 
 // storageFor maps a memory kind to a Metal storage mode.
 //
-// MemoryDevice is private even though unified memory would let it be shared and
-// faster. specs/006-backends.md section 1 makes Block.Bytes the authority on
-// mappability, and a backend that maps device memory on an Apple GPU and not on
-// an Intel one turns a portability bug into a machine-specific one. The cost is
-// a blit in Block.Write and Block.Read, which is the immediate transfer path
-// and is allowed to be slow.
-func storageFor(kind driver.MemoryKind) (mtl.StorageMode, error) {
+// MemoryDevice is shared storage on a unified-memory device and private
+// elsewhere. specs/006-backends.md section 1 makes Block.Bytes the authority
+// on mappability, and a backend that mapped device memory on an Apple GPU and
+// not on an Intel one would turn a portability bug into a machine-specific
+// one -- so [block.Bytes] answers nil for MemoryDevice whatever the storage,
+// and the storage mode is the backend's own business. What shared storage
+// buys is the immediate transfer path: Block.Write and Block.Read are a memcpy
+// into the mapping rather than a staging buffer, a blit and a wait per call,
+// which on every Apple-silicon device was a cost with no mappability behind
+// it. The root layer forbids a transfer on a buffer a submission is using, so
+// the memcpy needs no ordering against the GPU.
+func storageFor(kind driver.MemoryKind, unified bool) (mtl.StorageMode, error) {
 	switch kind {
 	case driver.MemoryDevice:
+		if unified {
+			return mtl.StorageShared, nil
+		}
 		return mtl.StoragePrivate, nil
 	case driver.MemoryUpload, driver.MemoryReadback, driver.MemoryShared:
 		return mtl.StorageShared, nil
@@ -180,7 +188,7 @@ func storageFor(kind driver.MemoryKind) (mtl.StorageMode, error) {
 }
 
 func (d *device) Alloc(kind driver.MemoryKind, bytes int, label string) (driver.Block, error) {
-	mode, err := storageFor(kind)
+	mode, err := storageFor(kind, d.dev.UnifiedMemory)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +206,7 @@ func (d *device) Alloc(kind driver.MemoryKind, bytes int, label string) (driver.
 	d.mu.Lock()
 	d.blocks++
 	d.mu.Unlock()
-	return &block{dev: d, buf: buf, label: label}, nil
+	return &block{dev: d, buf: buf, label: label, mappable: kind != driver.MemoryDevice}, nil
 }
 
 // Lost reports device loss, stickily.
@@ -296,10 +304,22 @@ type block struct {
 	dev   *device
 	buf   *mtl.Buffer
 	label string
+
+	// mappable is whether Bytes answers: false for MemoryDevice even when the
+	// storage is shared, see storageFor.
+	mappable bool
 }
 
-func (b *block) Bytes() []byte { return b.buf.Bytes() }
-func (b *block) Size() int     { return b.buf.Size() }
+// Bytes is the mapping for a kind the contract maps, and nil for MemoryDevice
+// whatever the storage mode, so a caller cannot come to depend on a mapping
+// one device happens to have.
+func (b *block) Bytes() []byte {
+	if !b.mappable {
+		return nil
+	}
+	return b.buf.Bytes()
+}
+func (b *block) Size() int { return b.buf.Size() }
 
 func (b *block) Free() {
 	b.buf.Close()

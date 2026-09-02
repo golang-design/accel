@@ -61,23 +61,13 @@ func (e *executable) renderPass(p *pass, n *driver.PlanNode) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		for _, t := range targets.textures {
-			t.Close()
-		}
-	}()
 
 	// The textures the stages fetch, materialized and filled before the render
 	// encoder opens. A blit cannot be encoded inside a render encoder, so this
 	// is the only place it can happen, and it has to be here rather than at
 	// plan time: a pass that fetches what an earlier pass drew would otherwise
 	// copy the buffer as it was before that pass ran.
-	bound, owned, err := e.stageTextures(p, rp)
-	defer func() {
-		for _, t := range owned {
-			t.Close()
-		}
-	}()
+	bound, err := e.stageTextures(p, rp)
 	if err != nil {
 		return fmt.Errorf("accel: node %d: %w", n.ID, err)
 	}
@@ -170,10 +160,8 @@ type renderAttachments struct {
 // fall back, so the pass knows which ones need copies around it.
 func (e *executable) renderTargets(p *pass, rp *driver.RenderPass) (renderAttachments, error) {
 	var out renderAttachments
+	// The textures are the cache's; a failure leaves them for the sweep.
 	fail := func(err error) (renderAttachments, error) {
-		for _, done := range out.textures {
-			done.Close()
-		}
 		return renderAttachments{}, err
 	}
 	for i := range rp.Color {
@@ -258,9 +246,14 @@ func (e *executable) attachmentTexture(o driver.Operand, f driver.Format, w, h, 
 		align = e.dev.dev.LinearTextureAlignment(pf)
 	}
 	if align > 0 && op.off%align == 0 && pitch%align == 0 {
+		key := texKey{kind: texLinear, buf: op.buf, off: op.off, w: w, h: h, pitch: pitch, pf: pf}
+		if t := e.cachedTexture(key); t != nil {
+			return t, false, nil
+		}
 		t, err := op.buf.NewLinearTexture(e.dev.dev, pf, w, h, op.off, pitch,
 			mtl.TextureUsageRenderTarget|mtl.TextureUsageShaderRead)
 		if err == nil {
+			e.cacheTexture(key, t)
 			return t, false, nil
 		}
 		// Metal accepted the alignment and refused the texture anyway, which
@@ -268,12 +261,88 @@ func (e *executable) attachmentTexture(o driver.Operand, f driver.Format, w, h, 
 		// than fail: the picture is the same either way and the count says the
 		// fast path was not taken.
 	}
+	key := texKey{kind: texTarget, buf: op.buf, off: op.off, w: w, h: h, pf: pf}
+	if t := e.cachedTexture(key); t != nil {
+		e.stagedAttachments.Add(1)
+		return t, true, nil
+	}
 	t, err := e.dev.dev.NewRenderTarget(pf, w, h)
 	if err != nil {
 		return nil, false, err
 	}
+	e.cacheTexture(key, t)
 	e.stagedAttachments.Add(1)
 	return t, true, nil
+}
+
+// The texture cache.
+//
+// A pass used to allocate every attachment and sampled texture per
+// submission and close it at the pass's end, so a replayed frame paid an
+// allocation per texture per frame. The executable now owns them: a texture
+// is keyed by what it is a view of -- the buffer, offset, extent, pitch and
+// format -- so a rebind to another buffer is a different key, and every entry
+// carries the submission that last used it. After a submission is encoded
+// the entries it did not touch are closed, which is what keeps a rebound-away
+// buffer's texture from living on and keeps a steady frame's textures alive.
+// A sampled texture's *contents* are still copied in per pass, since the
+// buffer may have been written by an earlier node; what is reused is the
+// object.
+
+type texKind uint8
+
+const (
+	texLinear texKind = iota + 1
+	texTarget
+	texSampled
+)
+
+type texKey struct {
+	kind  texKind
+	buf   *mtl.Buffer
+	off   int
+	w, h  int
+	pitch int
+	pf    int
+}
+
+type texEntry struct {
+	tex *mtl.Texture
+	gen uint64
+}
+
+func (e *executable) cachedTexture(k texKey) *mtl.Texture {
+	if ent, ok := e.textures[k]; ok {
+		ent.gen = e.texGen
+		return ent.tex
+	}
+	return nil
+}
+
+func (e *executable) cacheTexture(k texKey, t *mtl.Texture) {
+	if e.textures == nil {
+		e.textures = map[texKey]*texEntry{}
+	}
+	e.textures[k] = &texEntry{tex: t, gen: e.texGen}
+}
+
+// sweepTextures closes every cached texture the submission just encoded did
+// not use, and advances the generation for the next one.
+func (e *executable) sweepTextures() {
+	for k, ent := range e.textures {
+		if ent.gen != e.texGen {
+			ent.tex.Close()
+			delete(e.textures, k)
+		}
+	}
+	e.texGen++
+}
+
+func (e *executable) closeTextures() {
+	for k, ent := range e.textures {
+		ent.tex.Close()
+		delete(e.textures, k)
+	}
 }
 
 // isDepthFormat reports whether a plan format carries a depth or stencil
@@ -445,11 +514,10 @@ type drawTextures struct {
 // optimisation with no test behind it, and the lifetime would become this
 // backend's rather than the graph's.
 //
-// The second return is every texture allocated, including those from a failed
-// call, so the caller closes them whether this succeeds or not.
-func (e *executable) stageTextures(p *pass, rp *driver.RenderPass) ([]drawTextures, []*mtl.Texture, error) {
+// The textures are the executable's cache's, so a failed call leaves nothing
+// to close here.
+func (e *executable) stageTextures(p *pass, rp *driver.RenderPass) ([]drawTextures, error) {
 	out := make([]drawTextures, len(rp.Draws))
-	var owned []*mtl.Texture
 	for i, d := range rp.Draws {
 		for _, s := range []struct {
 			in   []driver.RenderTexture
@@ -469,14 +537,13 @@ func (e *executable) stageTextures(p *pass, rp *driver.RenderPass) ([]drawTextur
 				}
 				t, err := e.stageTexture(p, rt)
 				if err != nil {
-					return out, owned, fmt.Errorf("draw %d %s texture %d: %w", i, s.what, j, err)
+					return out, fmt.Errorf("draw %d %s texture %d: %w", i, s.what, j, err)
 				}
-				owned = append(owned, t)
 				(*s.out)[j] = t
 			}
 		}
 	}
-	return out, owned, nil
+	return out, nil
 }
 
 // stageTexture allocates one fetched texture and copies the caller's bytes in.
@@ -485,14 +552,18 @@ func (e *executable) stageTexture(p *pass, rt driver.RenderTexture) (*mtl.Textur
 	if err != nil {
 		return nil, err
 	}
-	t, err := e.dev.dev.NewSampledTexture(pf, rt.Width, rt.Height)
+	op, err := e.operand(rt.Operand)
 	if err != nil {
 		return nil, err
 	}
-	op, err := e.operand(rt.Operand)
-	if err != nil {
-		t.Close()
-		return nil, err
+	key := texKey{kind: texSampled, buf: op.buf, off: op.off, w: rt.Width, h: rt.Height, pitch: rt.Pitch, pf: pf}
+	t := e.cachedTexture(key)
+	if t == nil {
+		t, err = e.dev.dev.NewSampledTexture(pf, rt.Width, rt.Height)
+		if err != nil {
+			return nil, err
+		}
+		e.cacheTexture(key, t)
 	}
 	// The *source's* pitch, which the plan computed from the device's copy
 	// alignment. The texture's rows are tight and the buffer's are padded, so
