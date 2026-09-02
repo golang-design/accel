@@ -392,6 +392,19 @@ layering.
 4. The CPU backend is always buildable on every platform and is never build-tagged
    away.
 
+*Rule 3, amended 2026-09-02.* The CPU backend is not "a backend" in rule 3's
+sense: rule 4 makes it the one implementation every build carries, and
+[006](006-backends.md) §5 makes it the oracle whose modes (Developer, Strict,
+Mimic) are a public contract about *portability*, not about one device.
+`OpenCPU`, `CPUOptions` and `CPUMode` are therefore the reference backend's
+surface and stay public; [036](036-documentation.md) §5 froze them on
+2026-08-24. What rule 3 continues to forbid is a type of a *device* backend --
+Metal, Vulkan, and the rest -- in a public signature, and the two constants
+that violated it (`mslabi.StageVertexBufferLimit`, `StageTextureLimit`) became
+per-device `Limits` fields on 2026-08-30 and 2026-09-02. A test pins the rule:
+no public declaration names a type from `internal/metal`, `internal/mtl` or
+`internal/mslabi`.
+
 ## Revising a decision
 
 These are locked, not permanent. Locked means the burden is on the change, and
