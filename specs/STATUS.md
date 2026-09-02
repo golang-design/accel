@@ -1073,13 +1073,19 @@ public contract and was not decided inside an autonomous session:
    alternative is a declared-uniform-load directive enforced at Bind (003's
    V23, narrowed to the declared bindings). Until one is chosen the CPU
    oracle's arrival diagnostic is the only gate, which is 002 §3.4's role.
-2. **[029](029-plan-cache.md)** — `PlanCache.Compile` returns one `*Plan` per
-   key and a Plan refuses a second Submit in flight, so two requests in one
-   bucket cannot run concurrently.
-3. **[010](010-kernel-corpus.md)** — `internal/kernels` is the production
+2. **Closed 2026-09-02, [029](029-plan-cache.md) §5**: `CompileOptions.MaxInFlight`
+   lets a plan hold that many graph instances and run that many submissions at
+   once. Was: **[029](029-plan-cache.md)** — `PlanCache.Compile` returns one
+   `*Plan` per key and a Plan refuses a second Submit in flight, so two
+   requests in one bucket cannot run concurrently.
+3. **Closed 2026-09-02**: the corpus is `internal/kernels`. Was:
+   **[010](010-kernel-corpus.md)** — `internal/testkernels` is the production
    corpus (thirteen `tensor` files import it) under a test's name.
-4. **[000](000-decisions.md) rule 3** — `OpenCPU`, `CPUOptions`, `CPUMode` are
-   backend-specific public types.
+4. **Decided 2026-09-02, rule 3 amended in 000**: the CPU backend is the
+   reference implementation rule 4 requires, not a device backend, and its
+   modes are a portability contract 036 froze; the rule forbids device-backend
+   types, and a test pins that. Was: **[000](000-decisions.md) rule 3** --
+   `OpenCPU`, `CPUOptions`, `CPUMode` are backend-specific public types.
 5. **Closed 2026-09-02, [022](022-msl-target.md) §5.1**: shifts give Go's result
    on every count, a constant count outside the range is a build error, and a
    zero divisor records a fault word `Wait` reports. Was: **[008](008-numerics.md)

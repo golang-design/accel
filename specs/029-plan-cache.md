@@ -135,3 +135,27 @@ for nothing.
   and
 - closing the cache closes every plan it holds, and a runtime refuses to close
   while any remain open.
+
+## 5. Submissions in flight — 2026-09-02
+
+A plan bound when it was submitted and ran when the queue reached it, so a
+second `Submit` before the first completed would have rebound the first's
+slots underneath it; `Plan.Submit` refused it. The cache hands one plan to
+every request in a bucket, so a server could run one request per bucket at a
+time, and "compile a second plan" was the only way around it, which defeats
+the cache.
+
+`CompileOptions.MaxInFlight` is the answer, and it is an option rather than a
+default because each instance costs its own transient memory. Zero means one
+and keeps the refusal. Above one, a plan lowers itself again into a spare
+graph the first time a submission finds every instance busy, up to the limit:
+the slot and node numbering is a function of the record, so the plan's slot,
+window and scalar-node tables serve every instance, and the second lowering
+is checked against the first. A submission past the limit is refused naming
+the option. The key hashes the field: a plan compiled for one in flight and
+one for four are different plans.
+
+What does not change: binding and submitting still happen under one lock, so
+two callers cannot interleave a bind and a submit on one instance, and each
+submission writes its own output, which is the property the refusal
+protected.

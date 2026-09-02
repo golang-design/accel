@@ -344,6 +344,9 @@ so a second submission rebound the first one's slots before it ran. Two
 submissions with different inputs and outputs produced one result and both
 fences reported success. A lifetime rule enforced where a resource is owned does
 not automatically hold where it is bound on someone else's behalf.
+*2026-09-02:* the restriction is per graph instance; a plan compiled with
+`CompileOptions.MaxInFlight` above one holds that many instances and runs
+that many submissions at once ([029](029-plan-cache.md) §5).
 
 ## v0 operator contracts
 
