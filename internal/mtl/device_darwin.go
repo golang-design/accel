@@ -15,11 +15,13 @@ import (
 
 // Size is MTLSize: three unsigned lengths, passed and returned by value.
 //
-// By value is the detail that matters. objc_msgSend is variadic in C and is not
-// variadic in the ABI, so an MTLSize argument is passed as three registers
-// rather than as a pointer. Passing a pointer compiles and runs, and dispatches
-// a grid nobody asked for, which is why specs/021-metal-bringup.md section 2
-// puts a test on the grid rather than a comment on the call.
+// By value is the detail that matters. A struct argument is laid out however
+// the platform ABI says -- on AAPCS64 a 24-byte struct goes through a copy the
+// callee is handed a pointer to, on SysV it is split into registers -- and
+// purego's reflected Send does that from the Go type. A *pointer* passed in
+// its place is a different argument: it compiles, runs, and dispatches a grid
+// nobody asked for, which is why specs/021-metal-bringup.md section 2 puts a
+// test on the grid rather than a comment on the call.
 type Size struct{ Width, Height, Depth uint64 }
 
 // Device is an open MTLDevice, retained.

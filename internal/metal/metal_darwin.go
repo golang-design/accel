@@ -481,9 +481,11 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			MinUniformBufferOffsetAlignment: 256,
 			MinBufferCopyOffsetAlignment:    16,
 
-			// Reported rather than used: textures are not in this milestone.
 			// MTLBlitCommandEncoder requires a 256-byte row pitch for
-			// buffer-to-texture copies on macOS.
+			// buffer-to-texture copies on macOS. The render path relies on it:
+			// every attachment row is aligned to this, which is a multiple of
+			// the linear-texture alignment, so an attachment can alias the
+			// caller's buffer (render_darwin.go).
 			MinBufferCopyRowPitchAlignment: 256,
 			MinTexturePlacementAlignment:   65536,
 			MaxTextureExtent2D:             16384,
@@ -542,10 +544,11 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			// device that varied would report the range it varies over, and
 			// this is the number that would have to change.
 			//
-			// Reported even though Capabilities.Subgroups is false. The two
-			// answer different questions: the width is a fact about the
-			// hardware, and the capability is whether this backend can lower a
-			// kernel that uses it.
+			// Reported independently of Capabilities.Subgroups. The two answer
+			// different questions: the width is a fact about the hardware,
+			// and the capability is whether this backend can lower a kernel
+			// that uses it -- which it can, since the MSL target does, and
+			// the width was reported before that was true.
 			MinSubgroupSize: width,
 			MaxSubgroupSize: width,
 		},

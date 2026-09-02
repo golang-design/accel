@@ -667,13 +667,6 @@ func (e *executable) Close() error {
 	return nil
 }
 
-// IndirectStats reports the last completed submission's counts, in node order.
-//
-// Read from the device buffers rather than from anything recorded during
-// encoding, because the counts are the device's: the host never saw them. A
-// caller who has not waited on the fence gets whatever the buffers hold, which
-// is why this is documented on driver.StatsReporter as being about the last
-// *completed* submission.
 // Elapsed reports how long the device spent on the last completed submission.
 //
 // Read from the command buffer's own GPU timestamps rather than measured
@@ -689,6 +682,13 @@ func (e *executable) Elapsed() time.Duration {
 	return e.cur.gpuTime()
 }
 
+// IndirectStats reports the last completed submission's counts, in node order.
+//
+// Read from the device buffers rather than from anything recorded during
+// encoding, because the counts are the device's: the host never saw them. A
+// caller who has not waited on the fence gets whatever the buffers hold, which
+// is why this is documented on driver.StatsReporter as being about the last
+// *completed* submission.
 func (e *executable) IndirectStats() []driver.IndirectStat {
 	e.mu.Lock()
 	defer e.mu.Unlock()

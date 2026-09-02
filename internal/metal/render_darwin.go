@@ -768,7 +768,6 @@ func (e *executable) stageFunction(s *kernel.Stage) (*mtl.Function, error) {
 	return f, nil
 }
 
-// depthState compiles a draw's depth rule, once per distinct rule.
 // metalStencilFace maps one face onto Metal's own numbering, by name.
 //
 // MTLStencilOperation is Keep, Zero, Replace, IncrementClamp, DecrementClamp,
@@ -806,6 +805,7 @@ func metalStencilOp(op driver.StencilOp) int {
 	return 0 // MTLStencilOperationKeep
 }
 
+// depthState compiles a draw's depth and stencil rule, once per distinct rule.
 func (e *executable) depthState(d driver.RenderDraw) (*mtl.DepthState, error) {
 	compare := metalCompare(d.DepthCompare)
 	if !d.DepthTest {
@@ -851,15 +851,12 @@ func renderKey(rp *driver.RenderPass, d driver.RenderDraw) string {
 		rp.ColorFormat, rp.DepthFormat)
 }
 
-// metalVertexFormat maps a component count onto MTLVertexFormat.
-//
-// float is 28 and the vector widths follow it, which is the one place this
-// backend relies on an enumeration being contiguous -- stated here so a reader
-// can check it against the header rather than infer it from arithmetic.
 // metalVertexFormat maps a plan's attribute shape onto MTLVertexFormat.
 //
 // Written out by name for the normalized forms rather than computed. The float
-// formats are contiguous from MTLVertexFormatFloat and stay arithmetic; the
+// formats are contiguous from MTLVertexFormatFloat, which is 28, and stay
+// arithmetic -- the one place this backend relies on an enumeration being
+// contiguous, stated so a reader can check it against the header; the
 // normalized ones are not -- MTLVertexFormat interleaves the plain and
 // normalized integer families and the two- and three- and four-wide members of
 // each, so any expression over them is a coincidence waiting to stop holding.

@@ -837,14 +837,13 @@ func (e *RenderEncoder) SetFragmentBytes(b []byte, index int) {
 	e.id.Send(selSetFragmentBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
 }
 
-// CopyBufferToTexture blits a tightly packed buffer into a whole texture.
-//
-// This is what LoadKeep costs on this backend: keeping prior contents means the
-// texture must start as what the buffer holds. Clear and DontCare skip it.
 // CopyBufferToTexture blits a buffer into a whole texture at a row pitch.
 //
-// Zero means the texture's own tight pitch. See [BlitEncoder.CopyTextureToBuffer]
-// for why the caller's pitch and the texture's are not the same number.
+// This is what LoadKeep costs on a staged attachment: keeping prior contents
+// means the texture must start as what the buffer holds. Clear and DontCare
+// skip it. A zero pitch means the texture's own tight pitch; see
+// [BlitEncoder.CopyTextureToBuffer] for why the caller's pitch and the
+// texture's are not the same number.
 func (b *BlitEncoder) CopyBufferToTexture(src *Buffer, offset int, dst *Texture, rowBytes int) {
 	copyBufferToTexture(b.id, src, offset, dst, rowBytes)
 }
@@ -878,6 +877,10 @@ func copyBufferToTexture(enc objc.ID, src *Buffer, offset int, dst *Texture, row
 //
 // Zero means the texture's own tight pitch, which is what a copy between a
 // tightly packed buffer and a texture wants.
+func (b *BlitEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, offset, rowBytes int) {
+	copyTextureToBuffer(b.id, src, dst, offset, rowBytes)
+}
+
 // CopyAspectToBuffer copies one aspect of a combined depth/stencil texture.
 //
 // bpp is that aspect's bytes per texel -- four for depth, one for stencil --
@@ -911,8 +914,4 @@ func copyAspectToBuffer(enc objc.ID, src *Texture, dst *Buffer, offset, rowBytes
 			dst.id, uintptr(offset), uintptr(rowBytes),
 			uintptr(rowBytes*src.height), uintptr(option))
 	})
-}
-
-func (b *BlitEncoder) CopyTextureToBuffer(src *Texture, dst *Buffer, offset, rowBytes int) {
-	copyTextureToBuffer(b.id, src, dst, offset, rowBytes)
 }
