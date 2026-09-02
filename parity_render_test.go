@@ -808,118 +808,142 @@ func normalizedAttrCase(name string, f accel.AttrFormat, raw []byte, pos []float
 //
 // specs/033-render-api.md section 10 built the CPU half and section 10.5's
 // Metal half landed with specs/045-texture-attachments.md section 12's planar
-// layout, so the whole surface is comparable for the first time.
+// layout, so the whole surface is comparable.
 //
-// # The operation is observed through a second pass
+// # The operation is observed through two test passes
 //
 // A stencil buffer cannot be read back -- Queue.ReadTexture refuses every depth
-// format -- so each case marks with the operation under test and then draws a
-// full-screen pass that keeps only where the stencil equals the value that
-// operation should have left. The coverage of the second pass *is* the stencil
-// buffer, and it is a picture the harness already knows how to compare.
+// format -- so each case seeds the buffer, applies the operation, and then
+// draws two full-screen passes that keep only where the stencil equals the
+// value the operation should have left in each region. The coverage of those
+// passes *is* the stencil buffer, and it is a picture the harness already
+// knows how to compare.
+//
+// # Two regions, two seeds, and the operation applied more than once
+//
+// The attachment has no stencil clear value and both backends clear to zero,
+// so the seeds are drawn: a full-screen Replace and then a lower-left one.
+// From a single seed several operations agree -- IncrementClamp and
+// IncrementWrap from 3 are both 4, DecrementClamp at zero and Zero are both
+// zero -- so each case picks the two seeds and the repeat count under which
+// the operation's pair of results is unlike every other operation's pair.
+// That is what makes a backend mapping one member to another visible as a
+// different picture. The earlier form of this file assumed a clear of 3 that
+// nothing set, so six of eight members left the buffer untouched on both
+// backends and every case agreed on the clear colour.
+//
+// The seeding and the operation draw into a scratch colour target, so the
+// observed target holds only what the two test passes drew; the earlier form
+// drew the seed and the test into one target with one solid colour and could
+// not tell them apart either.
 func stencilOpParityCases() []parityCase {
-	// The marking pass covers the lower-left half, so an operation that wrote
-	// everywhere and one that wrote nowhere are different pictures.
-	face := func(op accel.StencilOp, compare accel.CompareFunc) accel.StencilFace {
+	face := func(op accel.StencilOp, compare accel.CompareFunc, write uint8) accel.StencilFace {
 		return accel.StencilFace{
-			Compare: compare, ReadMask: 0xff, WriteMask: 0xff,
+			Compare: compare, ReadMask: 0xff, WriteMask: write,
 			Fail: accel.StencilKeep, DepthFail: accel.StencilKeep, Pass: op,
 		}
 	}
 	var cases []parityCase
 	for _, c := range []struct {
-		name string
-		op   accel.StencilOp
-		// want is what the buffer holds where the marking pass covered, given a
-		// clear of 3 and a reference of 5.
-		want uint8
+		name    string
+		op      accel.StencilOp
+		outside uint8    // the full-screen seed
+		inside  uint8    // the lower-left seed, drawn over it
+		times   int      // how many times the operation is applied, full screen
+		want    [2]uint8 // what outside and inside hold afterwards
 	}{
-		{"StencilKeep", accel.StencilKeep, 3},
-		{"StencilZero", accel.StencilZero, 0},
-		{"StencilReplace", accel.StencilReplace, 5},
-		{"StencilIncrementClamp", accel.StencilIncrementClamp, 4},
-		{"StencilDecrementClamp", accel.StencilDecrementClamp, 2},
-		{"StencilInvert", accel.StencilInvert, 0xfc},
-		{"StencilIncrementWrap", accel.StencilIncrementWrap, 4},
-		{"StencilDecrementWrap", accel.StencilDecrementWrap, 2},
+		// From 5 and 3 once: Keep 5,3; Zero 0,0; Replace 9,9; Invert 250,252;
+		// the increments 6,4 and the decrements 4,2.
+		{"StencilKeep", accel.StencilKeep, 5, 3, 1, [2]uint8{5, 3}},
+		{"StencilZero", accel.StencilZero, 5, 3, 1, [2]uint8{0, 0}},
+		{"StencilReplace", accel.StencilReplace, 5, 3, 1, [2]uint8{9, 9}},
+		{"StencilInvert", accel.StencilInvert, 5, 3, 1, [2]uint8{250, 252}},
+		// From 5 and 254 three times, the clamp and the wrap part at 255:
+		// 8,255 against 8,1. Invert gives 250,1 and shares only the inside.
+		{"StencilIncrementClamp", accel.StencilIncrementClamp, 5, 254, 3, [2]uint8{8, 255}},
+		{"StencilIncrementWrap", accel.StencilIncrementWrap, 5, 254, 3, [2]uint8{8, 1}},
+		// From 5 and 1 three times, they part at zero: 2,0 against 2,254.
+		// Zero gives 0,0 and Invert 250,254, each sharing one region at most.
+		{"StencilDecrementClamp", accel.StencilDecrementClamp, 5, 1, 3, [2]uint8{2, 0}},
+		{"StencilDecrementWrap", accel.StencilDecrementWrap, 5, 1, 3, [2]uint8{2, 254}},
 	} {
-		cases = append(cases, stencilOpCase(c.name, c.op, c.want, face))
+		cases = append(cases, stencilOpCase(c.name, c.op, c.outside, c.inside, c.times, c.want, face))
 	}
 	return cases
 }
 
-func stencilOpCase(name string, op accel.StencilOp, want uint8,
-	face func(accel.StencilOp, accel.CompareFunc) accel.StencilFace) parityCase {
+func stencilOpCase(name string, op accel.StencilOp, outside, inside uint8, times int,
+	want [2]uint8, face func(accel.StencilOp, accel.CompareFunc, uint8) accel.StencilFace) parityCase {
 	return parityCase{
 		name:   "the stencil operation " + name,
 		covers: parity.Covers{"StencilOp." + name},
 		run: func(t *testing.T, d *accel.Device) []byte {
 			t.Helper()
-			mark := stencilPipeline(t, d, &testkernels.HalfTriangleVSStage,
-				face(op, accel.CompareAlways), true, name+" mark")
-			defer mark.Close()
+			replace := face(accel.StencilReplace, accel.CompareAlways, 0xff)
+			seedAll := stencilPipeline(t, d, &testkernels.FullScreenVSStage, replace, name+" seed all")
+			defer seedAll.Close()
+			seedHalf := stencilPipeline(t, d, &testkernels.HalfTriangleVSStage, replace, name+" seed half")
+			defer seedHalf.Close()
+			apply := stencilPipeline(t, d, &testkernels.FullScreenVSStage,
+				face(op, accel.CompareAlways, 0xff), name+" apply")
+			defer apply.Close()
 			// Equal against the value the operation should have left, with the
-			// reference supplied per pass.
+			// reference supplied per pass and nothing written back.
 			test := stencilPipeline(t, d, &testkernels.FullScreenVSStage,
-				face(accel.StencilKeep, accel.CompareEqual), false, name+" test")
+				face(accel.StencilKeep, accel.CompareEqual, 0), name+" test")
 			defer test.Close()
 
+			scratch := colourTarget(t, d, "scratch", parityW, parityH)
 			colour := colourTarget(t, d, "colour", parityW, parityH)
-			depth, err := d.NewTexture(accel.TextureDescriptor{
-				Format: accel.Depth32FloatStencil8,
-				Size:   accel.Extent{Width: parityW, Height: parityH},
-				Usage: accel.TextureRenderTarget | accel.TextureCopySrc |
-					accel.TextureCopyDst,
-				Kind: accel.MemoryDevice, Label: "stencil",
-			})
-			if err != nil {
-				t.Fatalf("depth: %v", err)
-			}
-			defer depth.Close()
-			dv, err := depth.Whole()
-			if err != nil {
-				t.Fatalf("depth view: %v", err)
-			}
+			depth := newTexture(t, d, "stencil", parityW, parityH, accel.Depth32FloatStencil8,
+				accel.TextureRenderTarget|accel.TextureCopySrc|accel.TextureCopyDst,
+				accel.MemoryDevice)
+			dv := view(t, depth)
 
 			r := d.NewRecorder()
-			p1 := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{
-					View: view(t, colour), Load: accel.LoadClear, Clear: parityClear,
-				}},
-				Depth: &accel.DepthAttachment{View: dv, Load: accel.LoadClear, Clear: 1},
-				Width: parityW, Height: parityH, Label: "mark",
-			})
-			p1.SetPipeline(mark)
-			p1.SetStencilReference(5)
-			p1.Draw(accel.Draw{VertexCount: 3})
-
-			p2 := r.RenderPass(accel.RenderPassDescriptor{
-				Color: []accel.ColorAttachment{{
-					View: view(t, colour), Load: accel.LoadKeep,
-				}},
-				Depth: &accel.DepthAttachment{View: dv, Load: accel.LoadKeep},
-				Width: parityW, Height: parityH, Label: "test",
-			})
-			p2.SetPipeline(test)
-			p2.SetStencilReference(want)
-			p2.Draw(accel.Draw{VertexCount: 3})
-
+			pass := func(label string, target *accel.Texture, load, depthLoad accel.LoadOp,
+				p *accel.RenderPipeline, ref uint8, tint [4]float32, draws int) {
+				att := accel.ColorAttachment{View: view(t, target), Load: load}
+				if load == accel.LoadClear {
+					att.Clear = parityClear
+				}
+				dep := &accel.DepthAttachment{View: dv, Load: depthLoad}
+				if depthLoad == accel.LoadClear {
+					dep.Clear = 1
+				}
+				rp := r.RenderPass(accel.RenderPassDescriptor{
+					Color: []accel.ColorAttachment{att}, Depth: dep,
+					Width: parityW, Height: parityH, Label: name + " " + label,
+				})
+				rp.SetPipeline(p)
+				rp.SetStencilReference(ref)
+				rp.SetFragmentUniform(0, testkernels.StageTint{Colour: tint})
+				for range draws {
+					rp.Draw(accel.Draw{VertexCount: 3})
+				}
+			}
+			none := [4]float32{0, 0, 0, 1}
+			pass("seed all", scratch, accel.LoadClear, accel.LoadClear, seedAll, outside, none, 1)
+			pass("seed half", scratch, accel.LoadKeep, accel.LoadKeep, seedHalf, inside, none, 1)
+			pass("apply", scratch, accel.LoadKeep, accel.LoadKeep, apply, 9, none, times)
+			pass("test outside", colour, accel.LoadClear, accel.LoadKeep, test, want[0],
+				[4]float32{0.9, 0.1, 0.2, 1}, 1)
+			pass("test inside", colour, accel.LoadKeep, accel.LoadKeep, test, want[1],
+				[4]float32{0.1, 0.8, 0.3, 1}, 1)
 			submitOne(t, d, r)
 			return readTargetBytes(t, d, colour)
 		},
 	}
 }
 
-// stencilPipeline is a pipeline whose stencil state is one face repeated.
-//
-// The clear is 3 rather than 0 so that Keep, Zero and Decrement are three
-// different answers rather than two.
+// stencilPipeline is a pipeline whose stencil state is one face repeated,
+// with a tinted fragment stage so each test pass can name its own colour.
 func stencilPipeline(t *testing.T, d *accel.Device, vs *accel.Stage,
-	f accel.StencilFace, write bool, label string) *accel.RenderPipeline {
+	f accel.StencilFace, label string) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 		Vertex:   vs,
-		Fragment: &testkernels.SolidFSStage,
+		Fragment: &testkernels.TintedFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format:  accel.Depth32FloatStencil8,
