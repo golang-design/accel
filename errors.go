@@ -98,6 +98,13 @@ var (
 	// specs/003-command-graph.md, check V24.
 	ErrRebindOverlap = errors.New("accel: bound resources overlap where the graph assumed they did not")
 
+	// ErrUniformLoadAliased reports a dispatch that binds a write binding over
+	// bytes a binding declared with //accel:uniform reads. The compiler
+	// accepted the kernel's barriers on the promise that no invocation of the
+	// dispatch writes those bytes, so the alias would make a barrier's control
+	// flow diverge on a device. See specs/063-uniform-loads.md.
+	ErrUniformLoadAliased = errors.New("accel: a dispatch writes bytes one of its bindings declared uniform")
+
 	// ErrDeviceLost reports terminal device loss. It is not recoverable: every
 	// subsequent call on the device and on every resource under it reports it,
 	// and every outstanding fence is signalled with it so that nothing waits

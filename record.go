@@ -77,6 +77,14 @@ type access struct {
 	size int
 	mode Access
 
+	// uniform is a dispatch binding the kernel declared with //accel:uniform:
+	// the promise that nothing in the dispatch writes these bytes, which the
+	// compiler relied on to accept a barrier. Checked against the node's own
+	// concrete writers at record time; a slot on either side is covered by
+	// V24 at Bind, which refuses any slot overlapping any writer.
+	// specs/063-uniform-loads.md.
+	uniform bool
+
 	// stage is where in the pipeline this range is touched. Zero means the
 	// declaring call did not say, and [Recorder.node] fills in the node kind's
 	// default. A call that knows better -- a render pass, an indirect fetch --

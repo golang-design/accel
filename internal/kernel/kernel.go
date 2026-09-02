@@ -271,18 +271,32 @@ type Access uint8
 const (
 	Read Access = 1 << iota
 	Write
+
+	// UniformLoad marks a read-only binding the kernel declared with
+	// //accel:uniform: the author promises that no invocation of the dispatch
+	// writes the bytes it reads, so a load from it at a workgroup-uniform
+	// index is workgroup-uniform and may bound a barrier's control flow.
+	// The promise is enforced where it can be: the compiler refuses the
+	// directive on a written binding, and the graph refuses a dispatch that
+	// binds a write binding over the same bytes. specs/063-uniform-loads.md.
+	UniformLoad
 )
 
 func (a Access) String() string {
+	uniform := ""
+	if a&UniformLoad != 0 {
+		uniform = " (uniform load)"
+		a &^= UniformLoad
+	}
 	switch a {
 	case Read:
-		return "read"
+		return "read" + uniform
 	case Write:
-		return "write"
+		return "write" + uniform
 	case Read | Write:
-		return "read-write"
+		return "read-write" + uniform
 	}
-	return "no access"
+	return "no access" + uniform
 }
 
 // Binding is one resource a kernel's signature declares.

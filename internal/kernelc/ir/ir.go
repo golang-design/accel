@@ -822,6 +822,14 @@ type Binding struct {
 	// who could declare them would be a second source of truth for something the
 	// compiler already knows, and one that can be wrong.
 	Read, Write bool
+
+	// Uniform is the //accel:uniform declaration: the author's promise that no
+	// invocation of the dispatch writes what this binding reads, so a load
+	// from it at a uniform index is uniform. Declared rather than inferred
+	// because it is a fact about the dispatch's other bindings, which the
+	// compiler cannot see; the graph enforces it at record and bind time.
+	// Never set together with Write. specs/063-uniform-loads.md.
+	Uniform bool
 }
 
 // TextureBinding is one shader-visible texture a signature declares.

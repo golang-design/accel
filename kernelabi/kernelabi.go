@@ -103,6 +103,10 @@ const (
 const (
 	Read  = kernel.Read
 	Write = kernel.Write
+
+	// UniformLoad marks a binding declared with //accel:uniform, whose loads
+	// at a uniform index are uniform. specs/063-uniform-loads.md.
+	UniformLoad = kernel.UniformLoad
 )
 
 // The subgroup rendezvous a generated lowering names.

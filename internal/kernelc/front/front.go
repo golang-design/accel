@@ -66,6 +66,13 @@ const KernelDirective = "//accel:kernel"
 // specs/020-cooperative-atomics.md section 3.
 const RequiresDirective = "//accel:requires"
 
+// UniformDirective names the bindings a kernel promises no invocation of its
+// dispatch writes, so that a load from one at a uniform index is uniform and
+// may bound a barrier: `//accel:uniform offsets, lengths`. The compiler
+// refuses it on a binding the body writes; the graph refuses a dispatch that
+// binds a writer over the same bytes. specs/063-uniform-loads.md.
+const UniformDirective = "//accel:uniform"
+
 // HelperDirective marks a function a kernel or a stage in the same package may
 // call. A helper is compiled from source beside its callers, emitted ahead of
 // them, and its accesses to the bindings it takes are mapped onto theirs at
@@ -189,6 +196,7 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 		helpers: map[types.Object]*ir.Func{},
 		calls:   map[*ir.Func][]*ir.Func{},
 		layouts: map[string]*std140.Layout{},
+		decls:   map[*ir.Func]*ast.FuncDecl{},
 	}
 
 	var decls []declaration
@@ -243,6 +251,7 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 			if k := c.kernel(d.fn, d.extent, d.err); k != nil {
 				c.checkRequires(k, d.fn)
 				c.funcs = append(c.funcs, k)
+				c.decls[k] = d.fn
 			}
 		case VertexDirective, FragmentDirective:
 			if k := c.stage(d.fn, d.kind); k != nil {
@@ -250,7 +259,12 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 				c.funcs = append(c.funcs, k)
 			}
 		case HelperDirective:
-			// Built above, in three passes.
+			// Built above, in three passes. A helper has no dispatch of its
+			// own, so it has nothing to promise about one.
+			if _, has := uniformOf(d.fn); has {
+				c.errorf(d.fn.Pos(), "%s: //accel:uniform is a kernel's declaration about its "+
+					"dispatch, and a helper has no dispatch", d.fn.Name.Name)
+			}
 		default:
 			c.errorf(d.fn.Pos(), "%s: %q is not an accel directive; the set is %s, %s, %s "+
 				"and %s", d.fn.Name.Name, d.kind, KernelDirective, HelperDirective,
@@ -262,6 +276,13 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 	// and a caller built earlier read them before they were there.
 	c.propagateAccesses()
 	c.closeHelpers()
+	// The uniform declaration is checked against the settled accesses, since
+	// a binding a kernel writes only through a helper is written all the same.
+	for _, k := range c.funcs {
+		if fn, ok := c.decls[k]; ok {
+			c.checkUniform(k, fn)
+		}
+	}
 	c.checkUnused()
 	c.checkRecursion()
 
@@ -292,9 +313,12 @@ type declaration struct {
 
 // checker holds one package's state.
 type checker struct {
-	pkg  *packages.Package
-	fset *token.FileSet
-	info *types.Info
+	// decls is each kernel's declaration, for the checks that run after every
+	// body exists and need the directive text again.
+	decls map[*ir.Func]*ast.FuncDecl
+	pkg   *packages.Package
+	fset  *token.FileSet
+	info  *types.Info
 
 	funcs []*ir.Func
 	diags Diagnostics
@@ -389,7 +413,8 @@ func directiveOf(fn *ast.FuncDecl) (kind string, extent [3]uint32, err error, ok
 			return VertexDirective, extent, nil, true
 		case strings.HasPrefix(text, FragmentDirective):
 			return FragmentDirective, extent, nil, true
-		case strings.HasPrefix(text, "//accel:") && !strings.HasPrefix(text, RequiresDirective):
+		case strings.HasPrefix(text, "//accel:") && !strings.HasPrefix(text, RequiresDirective) &&
+			!strings.HasPrefix(text, UniformDirective+" ") && text != UniformDirective:
 			// An unrecognized directive in the reserved namespace is a typo or a
 			// feature that does not exist, and silence turns either into a
 			// function that simply never compiles to anything. Reported with the
@@ -442,16 +467,23 @@ func (c *checker) checkRequires(k *ir.Func, fn *ast.FuncDecl) {
 
 // requiresOf reads the //accel:requires assertion, if the declaration carries
 // one, as a set of capability names.
-func requiresOf(fn *ast.FuncDecl) ([]string, bool) {
+func requiresOf(fn *ast.FuncDecl) ([]string, bool) { return namesAfter(fn, RequiresDirective) }
+
+// uniformOf reads the //accel:uniform declaration, if the declaration carries
+// one, as a set of binding names.
+func uniformOf(fn *ast.FuncDecl) ([]string, bool) { return namesAfter(fn, UniformDirective) }
+
+// namesAfter reads a comma-separated name list from the directive line.
+func namesAfter(fn *ast.FuncDecl, directive string) ([]string, bool) {
 	if fn.Doc == nil {
 		return nil, false
 	}
 	for _, cm := range fn.Doc.List {
 		text := strings.TrimSpace(cm.Text)
-		if !strings.HasPrefix(text, RequiresDirective) {
+		if !strings.HasPrefix(text, directive) {
 			continue
 		}
-		rest := strings.TrimSpace(strings.TrimPrefix(text, RequiresDirective))
+		rest := strings.TrimSpace(strings.TrimPrefix(text, directive))
 		var out []string
 		for _, name := range strings.Split(rest, ",") {
 			if n := strings.TrimSpace(name); n != "" {
@@ -461,6 +493,44 @@ func requiresOf(fn *ast.FuncDecl) ([]string, bool) {
 		return out, true
 	}
 	return nil, false
+}
+
+// checkUniform applies the //accel:uniform declaration to the kernel's
+// bindings, after access inference has run.
+//
+// A name that is not a binding is a typo the author needs to hear about; a
+// binding the body writes cannot be uniform, since the writes are exactly
+// what the promise excludes; and an empty list declares nothing and is
+// refused so that a directive with its names on the next line is not silent.
+func (c *checker) checkUniform(k *ir.Func, fn *ast.FuncDecl) {
+	names, ok := uniformOf(fn)
+	if !ok {
+		return
+	}
+	if len(names) == 0 {
+		c.errorf(fn.Pos(), "kernel %s: //accel:uniform names no binding", k.Name)
+		return
+	}
+	for _, n := range names {
+		var b *ir.Binding
+		for _, cand := range k.Bindings {
+			if cand.Name == n {
+				b = cand
+			}
+		}
+		if b == nil {
+			c.errorf(fn.Pos(), "kernel %s: //accel:uniform names %q, which is not one of its "+
+				"bindings", k.Name, n)
+			continue
+		}
+		if b.Write {
+			c.errorf(fn.Pos(), "kernel %s: //accel:uniform names %q, which the body writes: a "+
+				"uniform load is one no invocation of the dispatch can change, and this "+
+				"kernel changes it", k.Name, n)
+			continue
+		}
+		b.Uniform = true
+	}
 }
 
 // parseWorkgroup reads `workgroup=X[,Y[,Z]]`, defaulting the omitted axes to 1.

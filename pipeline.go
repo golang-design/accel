@@ -193,6 +193,10 @@ func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, us []UniformVa
 	if !ok {
 		return r.node(NodeDispatch, p.label, nil, nil)
 	}
+	if err := uniformLoadConflict(p, accesses); err != nil {
+		r.state.errs = append(r.state.errs, err)
+		return r.node(NodeDispatch, p.label, nil, nil)
+	}
 
 	id := r.node(NodeDispatch, p.label, accesses, nil)
 	n := &r.state.nodes[id]
@@ -274,6 +278,7 @@ func (r *Recorder) bindingAccesses(p *ComputePipeline, bs []Binding, us []Unifor
 			ok = false
 			continue
 		}
+		a.uniform = slot.Access&kernel.UniformLoad != 0
 		out[b.Index] = a
 		filled[b.Index] = true
 	}
@@ -355,7 +360,7 @@ func (r *Recorder) bindingAccess(p *ComputePipeline, b Binding, slot kernel.Bind
 
 // publicAccess maps a kernel's inferred access onto the graph's vocabulary.
 func publicAccess(a kernel.Access) Access {
-	switch a {
+	switch a &^ kernel.UniformLoad {
 	case kernel.Read:
 		return AccessRead
 	case kernel.Write:
@@ -500,4 +505,33 @@ func (g *Graph) dispatchOperands(n *recNode) (*driver.Dispatch, error) {
 		d.Indirect = &driver.Indirect{Count: o, Max: n.count}
 	}
 	return d, nil
+}
+
+// uniformLoadConflict is specs/063-uniform-loads.md's enforcement: a binding
+// the kernel declared uniform must not share bytes with a binding the same
+// dispatch writes. Both are concrete here, which is the one pair V24 does not
+// compare (two concrete resources overlapping is ordinary, since their hazards
+// were inferred with both known). A slot on either side is V24's at Bind: any
+// slot overlapping any writer is refused, uniform or not.
+func uniformLoadConflict(p *ComputePipeline, accesses []access) error {
+	for i, u := range accesses {
+		if !u.uniform || u.res.buf == nil {
+			continue
+		}
+		for j, w := range accesses {
+			if j == i || !w.writes() || w.res.buf != u.res.buf {
+				continue
+			}
+			if u.off >= w.off+w.size || w.off >= u.off+u.size {
+				continue
+			}
+			return fmt.Errorf("%w: Dispatch %q: binding %q is declared uniform (//accel:uniform) "+
+				"and binding %q writes bytes [%d, %d) of the same buffer %q; the kernel's "+
+				"barriers were accepted on the promise that nothing in the dispatch writes "+
+				"what %q reads", ErrUniformLoadAliased, p.label, p.kernel.Bindings[i].Name,
+				p.kernel.Bindings[j].Name, max(u.off, w.off), min(u.off+u.size, w.off+w.size),
+				u.res.buf.desc.Label, p.kernel.Bindings[i].Name)
+		}
+	}
+	return nil
 }

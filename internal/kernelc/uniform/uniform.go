@@ -65,6 +65,10 @@ func (l Level) String() string {
 
 // Info is the analysis result for one function.
 type Info struct {
+	// fn is the kernel under analysis, for the binding declarations its
+	// parameters carry.
+	fn *ir.Func
+
 	// values is every value's level. Keyed by the node itself, which is stable
 	// because the IR is a tree of pointers built once.
 	values map[ir.Value]Level
@@ -99,6 +103,7 @@ type Info struct {
 // toward Non.
 func Of(fn *ir.Func) *Info {
 	in := &Info{
+		fn:        fn,
 		values:    map[ir.Value]Level{},
 		control:   map[ir.Stmt]Level{},
 		escapes:   map[*ir.For]Level{},
@@ -309,8 +314,16 @@ func (in *Info) compute(v ir.Value) Level {
 		// invocation may have written the location. Conservative and known to
 		// be so: specs/002-compute-model.md section 3.3 names the two kernel
 		// families this rejects.
+		//
+		// The exception is a binding the kernel declared with //accel:uniform:
+		// the author's promise that no invocation of the dispatch writes it,
+		// which the graph enforces at record and bind time. A load from one is
+		// as uniform as its index. specs/063-uniform-loads.md.
 		in.value(n.X)
-		in.value(n.Index)
+		idx := in.value(n.Index)
+		if p, ok := n.X.(*ir.Param); ok && in.uniformBinding(p) {
+			return idx
+		}
 		return Non
 
 	case *ir.Len:
@@ -435,4 +448,24 @@ func (in *Info) summary(fn *ir.Func) Level {
 	walk(fn.Body)
 	in.summaries[fn] = l
 	return l
+}
+
+// uniformBinding reports whether p is one of the kernel's bindings declared
+// with //accel:uniform. A helper's parameter is never one: the declaration is
+// the kernel's, about its dispatch, and a helper reached through a call is
+// analysed on its own parameters.
+func (in *Info) uniformBinding(p *ir.Param) bool {
+	if in.fn == nil {
+		return false
+	}
+	for _, b := range in.fn.Bindings {
+		if b.Uniform && b.Index == p.Index && b.Name == p.Name {
+			// The kernel's own parameter object, not a helper's of the same
+			// name and index.
+			if p.Index < len(in.fn.Params) && in.fn.Params[p.Index] == p {
+				return true
+			}
+		}
+	}
+	return false
 }

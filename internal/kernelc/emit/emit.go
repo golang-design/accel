@@ -928,14 +928,19 @@ func lowerName(name string) string {
 }
 
 func access(b *ir.Binding) string {
+	var a string
 	switch {
 	case b.Read && b.Write:
-		return "kernelabi.Read | kernelabi.Write"
+		a = "kernelabi.Read | kernelabi.Write"
 	case b.Write:
-		return "kernelabi.Write"
+		a = "kernelabi.Write"
 	default:
-		return "kernelabi.Read"
+		a = "kernelabi.Read"
 	}
+	if b.Uniform {
+		a += " | kernelabi.UniformLoad"
+	}
+	return a
 }
 
 // block emits a statement list at the given indent.
