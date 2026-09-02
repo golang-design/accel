@@ -289,14 +289,13 @@ func (b *Buffer) mapping() []byte {
 	return blk[b.alloc.Offset : b.alloc.Offset+b.alloc.Size]
 }
 
-// hostBytes reinterprets a caller's typed slice as bytes, rejecting one whose
-// element type does not match the buffer's dtype.
+// hostBytes reinterprets a caller's typed slice as the bytes a device holds,
+// rejecting one whose element type does not match the dtype.
 //
 // The reinterpretation is exact rather than a conversion, which is only
 // meaningful because accel fixes the byte order. A mismatched slice is rejected
 // naming both types, because silently accepting one would write the right number
 // of bytes with the wrong meaning.
-// hostBytes reinterprets a caller's typed slice as the bytes a device holds.
 //
 // It takes a dtype and a label rather than a *Buffer because a view may be at a
 // different dtype than the buffer it names, and a graph slot has a dtype and no

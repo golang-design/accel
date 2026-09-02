@@ -106,7 +106,7 @@ type Pool struct {
 }
 
 // AllocTexture suballocates a texture from a pool created with Textures set.
-// Buffer pools reject it, and texture pools reject [Pool.Alloc].
+// Buffer pools reject it, and texture pools reject [Pool.AllocBuffer].
 func (p *Pool) AllocTexture(desc TextureDescriptor) (*Texture, error) {
 	return p.allocTexture(desc)
 }

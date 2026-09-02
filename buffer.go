@@ -100,8 +100,12 @@ func (b *Buffer) View(offset, count int) (BufferView, error) {
 	return b.ViewAs(b.desc.DType, offset, count)
 }
 
-// ViewAs is [Buffer.View] with a reinterpreted element type. It reports an error
-// if the byte ranges do not divide evenly at the new dtype.
+// ViewAs is [Buffer.View] with a reinterpreted element type. A view from
+// offset zero that reaches as far as the new dtype allows is the whole-buffer
+// view, and it is refused when the dtype does not divide the buffer's byte
+// length: the caller asked for everything and would silently get everything
+// but a tail (specs/001-device-resources.md section 6.1, rule 4). A partial
+// view needs nothing beyond its own range lying inside the buffer.
 //
 // Offset and count are in elements of d, the *new* dtype, not of the buffer's.
 // Anything else would make ViewAs require the caller to do the arithmetic ViewAs
@@ -131,9 +135,12 @@ func (b *Buffer) ViewAs(d DType, offset, count int) (BufferView, error) {
 			d, b.desc.Label, b.desc.DType, b.desc.Count,
 			offset, offset+count, offset*elem, (offset+count)*elem, b.bytes)
 	}
-	// A view covering the whole buffer at a new dtype has to divide evenly. That
-	// is the "sizes work out" case, and it is the only one: a partial view needs
-	// nothing beyond its own range lying inside the buffer.
+	// The whole-buffer view is the one from offset zero with as many elements
+	// as fit, which is what a caller computing bytes/elem asks for. It has to
+	// divide evenly: refused, the caller learns the buffer is not a whole
+	// number of the new dtype; accepted, they would get everything but a tail
+	// and not know. Every shorter view is partial and needs only its own range
+	// to lie inside the buffer.
 	if offset == 0 && count == b.bytes/elem && count*elem != b.bytes {
 		return BufferView{}, fmt.Errorf("accel: ViewAs(%v) on %q (%v, %d elements): byte length %d "+
 			"is not a multiple of %d", d, b.desc.Label, b.desc.DType, b.desc.Count, b.bytes, elem)

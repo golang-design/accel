@@ -14,8 +14,8 @@ import "fmt"
 // on D3D12 against 256 bytes for a bound storage range — so a pool holding both
 // would either pad every buffer to the texture alignment or track two alignment
 // classes in one allocator. specs/001-device-resources.md section 4.4 makes a
-// pool one or the other, and [Pool.Alloc] refuses a texture pool for the same
-// reason this refuses a buffer one.
+// pool one or the other, and [Pool.AllocBuffer] refuses a texture pool for the
+// same reason this refuses a buffer one.
 func (p *Pool) allocTexture(desc TextureDescriptor) (*Texture, error) {
 	if err := p.state.checkOpen("AllocTexture"); err != nil {
 		return nil, err

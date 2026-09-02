@@ -177,7 +177,7 @@ type Requirements struct {
 // missing does not tell a caller whether to change the kernel or the device.
 type Unmet struct {
 	Cap       Capability // zero when the unmet requirement is a limit
-	Limit     string     // the Capabilities field that was exceeded, if any
+	Limit     string     // the Limits field that was exceeded, if any
 	Required  uint64
 	Available uint64
 }

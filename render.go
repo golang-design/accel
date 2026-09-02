@@ -888,9 +888,10 @@ func (p *RenderPass) SetTexture(slot int, v TextureView) {
 // graph, and the contents are rewritten every frame through
 // specs/003-command-graph.md's first kind of variation. Nothing is re-recorded.
 //
-//	stride := d.UniformStride(codec)
-//	for i, obj := range objects {
-//	    p.SetVertexUniformBuffer(0, ub.ViewAt(i*stride))
+//	stride := d.UniformStride(codec.EncodedSize())
+//	for i := range objects {
+//	    v, _ := transforms.View(i*stride, codec.EncodedSize())
+//	    p.SetVertexUniformBuffer(0, v)
 //	    p.Draw(...)
 //	}
 //

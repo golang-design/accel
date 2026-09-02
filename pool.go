@@ -29,11 +29,11 @@ const implicitBlockBytes = 64 << 20
 // are suballocated. See specs/001-device-resources.md for why allocation is
 // pooled rather than per resource.
 //
-// It is [Device.NewPoolWith] with the general-purpose policy. A pool never grows:
-// a pool is one device allocation, no backend can resize one in place, and moving
-// it would invalidate every address already handed out.
+// A pool never grows: a pool is one device allocation, no backend can resize
+// one in place, and moving it would invalidate every address already handed
+// out. [PoolDescriptor.Policy] chooses between general and linear allocation.
 func (d *Device) NewPool(desc PoolDescriptor) (*Pool, error) {
-	if err := d.state.checkOpen("NewPoolWith"); err != nil {
+	if err := d.state.checkOpen("NewPool"); err != nil {
 		return nil, err
 	}
 	if desc.Bytes <= 0 {
@@ -166,8 +166,10 @@ func (d *Device) NewBuffer(desc BufferDescriptor) (*Buffer, error) {
 		return nil, err
 	}
 
-	// One block set per memory kind: a buffer wanting Upload memory cannot be
-	// served out of a Device block.
+	// The set is keyed by memory kind, and NewBuffer takes device memory only:
+	// a BufferDescriptor names no kind, so a caller wanting host-visible memory
+	// makes a pool. The key is there so a kind, when a descriptor carries one,
+	// gets its own blocks rather than being served out of a Device one.
 	kind := MemoryDevice
 	d.mu.Lock()
 	if d.implicit == nil {
@@ -235,13 +237,13 @@ func (s *blockSet) close(d *Device) error {
 	return first
 }
 
-// Alloc suballocates a buffer from the pool.
+// AllocBuffer suballocates a buffer from the pool.
 func (p *Pool) AllocBuffer(desc BufferDescriptor) (*Buffer, error) {
-	if err := p.state.checkOpen("Alloc"); err != nil {
+	if err := p.state.checkOpen("AllocBuffer"); err != nil {
 		return nil, err
 	}
 	if p.desc.Textures {
-		return nil, fmt.Errorf("%w: Alloc %q: pool %q holds textures. Texture placement "+
+		return nil, fmt.Errorf("%w: AllocBuffer %q: pool %q holds textures. Texture placement "+
 			"alignment is far coarser than any buffer alignment, so a pool is one or the "+
 			"other and never both (spec 001 section 4.4)",
 			ErrUsage, desc.Label, p.desc.Label)
