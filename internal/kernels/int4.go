@@ -56,9 +56,9 @@ const Int4Group = 128
 // as z. A pruned or padded matrix really has such a group, and the two
 // disagreed about it silently. The select below is the host's reading.
 //
-//accel:kernel workgroup=32,4
+//accel:kernel workgroup=32,16
 func QuantMatVecInt4(t accel.Thread, d GEMMDims, a []float32, bq []uint32,
-	bs []accel.Float16, bz []accel.Float16, out []float32, sh *[128]float32) {
+	bs []accel.Float16, bz []accel.Float16, out []float32, sh *[512]float32) {
 
 	// The block layout of [MatVec]: a workgroup covers MatVecCols adjacent
 	// columns, its lanes are columns by K phases, and a phase's lanes read

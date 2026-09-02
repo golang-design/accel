@@ -910,7 +910,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, n)
 		groups := uint32((n + kernels.MatVecCols - 1) / kernels.MatVecCols)
 		for g := range groups {
-			var sh [128]float32
+			var sh [512]float32
 			kernel.RunAuthored(&kernels.QuantMatVecKernel, kernel.ID3{X: g},
 				kernel.ID3{X: groups, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					kernels.QuantMatVec(th, d, a, bq, bs, authored, &sh)
@@ -958,7 +958,7 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		authored := make([]float32, n)
 		groups := uint32((n + kernels.MatVecCols - 1) / kernels.MatVecCols)
 		for g := range groups {
-			var sh [128]float32
+			var sh [512]float32
 			kernel.RunAuthored(&kernels.QuantMatVecF32Kernel, kernel.ID3{X: g},
 				kernel.ID3{X: groups, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					kernels.QuantMatVecF32(th, d, a, bq, bs, authored, &sh)

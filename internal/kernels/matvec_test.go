@@ -193,7 +193,7 @@ func TestAuthoredMatVecAndLinear(t *testing.T) {
 
 		authored := make([]float32, n)
 		for col := range uint32(n) {
-			var sh [128]float32
+			var sh [512]float32
 			kernelabi.Poison(sh[:])
 			kernel.RunAuthored(&kernels.MatVecKernel, kernel.ID3{X: col}, kernel.ID3{X: n},
 				kernels.RowWidth, func(th kernel.Thread) {

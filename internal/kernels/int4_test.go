@@ -249,7 +249,7 @@ func TestTheAuthoredInt4KernelMatchesItsLowering(t *testing.T) {
 	authored := make([]float32, N)
 	groups := kernel.ID3{X: (N + kernels.MatVecCols - 1) / kernels.MatVecCols, Y: 1, Z: 1}
 	for g := range groups.X {
-		var sh [128]float32
+		var sh [512]float32
 		kernel.RunAuthored(&kernels.QuantMatVecInt4Kernel, kernel.ID3{X: g},
 			groups, 128, func(th kernel.Thread) {
 				kernels.QuantMatVecInt4(th, dims, a, packed, scales, zeros,

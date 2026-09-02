@@ -32,9 +32,9 @@ import "golang.design/x/accel"
 // The phases' partials meet in shared memory and are summed in phase order,
 // which is the one order both lowerings run.
 //
-//accel:kernel workgroup=32,4
+//accel:kernel workgroup=32,16
 func MatVec(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16,
-	out []float32, sh *[128]float32) {
+	out []float32, sh *[512]float32) {
 
 	lx := t.LocalID().X
 	ly := t.LocalID().Y
@@ -63,7 +63,7 @@ func MatVec(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16,
 // workgroup.
 const (
 	MatVecCols   = 32
-	MatVecPhases = 4
+	MatVecPhases = 16
 )
 
 // MatVecF32F16 is [MatVec] over f32 activations and f16 weights.
@@ -75,9 +75,9 @@ const (
 // cost rather than closing it. The body is [MatVec]'s with the activation load
 // already wide.
 //
-//accel:kernel workgroup=32,4
+//accel:kernel workgroup=32,16
 func MatVecF32F16(t accel.Thread, d GEMMDims, a []float32, b []accel.Float16,
-	out []float32, sh *[128]float32) {
+	out []float32, sh *[512]float32) {
 
 	lx := t.LocalID().X
 	ly := t.LocalID().Y
@@ -105,9 +105,9 @@ func MatVecF32F16(t accel.Thread, d GEMMDims, a []float32, b []accel.Float16,
 // [MatVecF32F16] exists: at M=1 the f32 tiled GEMM left the same seven rows
 // idle.
 //
-//accel:kernel workgroup=32,4
+//accel:kernel workgroup=32,16
 func MatVecF32(t accel.Thread, d GEMMDims, a []float32, b []float32,
-	out []float32, sh *[128]float32) {
+	out []float32, sh *[512]float32) {
 
 	lx := t.LocalID().X
 	ly := t.LocalID().Y
@@ -153,9 +153,9 @@ func MatVecF32(t accel.Thread, d GEMMDims, a []float32, b []float32,
 // in QuantMatMul -- which changes the rounding, not the bound, since 027 states
 // it over the number of terms rather than their order.
 //
-//accel:kernel workgroup=32,4
+//accel:kernel workgroup=32,16
 func QuantMatVec(t accel.Thread, d GEMMDims, a []accel.Float16, bq []int8,
-	bs []accel.Float16, out []float32, sh *[128]float32) {
+	bs []accel.Float16, out []float32, sh *[512]float32) {
 
 	lx := t.LocalID().X
 	ly := t.LocalID().Y
@@ -200,9 +200,9 @@ func QuantMatVec(t accel.Thread, d GEMMDims, a []accel.Float16, bq []int8,
 // not: specs/027-quantization.md states the error over the number of terms
 // rather than their order.
 //
-//accel:kernel workgroup=32,4
+//accel:kernel workgroup=32,16
 func QuantMatVecF32(t accel.Thread, d GEMMDims, a []float32, bq []int8,
-	bs []accel.Float16, out []float32, sh *[128]float32) {
+	bs []accel.Float16, out []float32, sh *[512]float32) {
 
 	lx := t.LocalID().X
 	ly := t.LocalID().Y
