@@ -1107,3 +1107,47 @@ public contract and was not decided inside an autonomous session:
    fast path at M = 1 and `QuantMatMul` at M > 1 untiled, and with them the
    matrix-vector kernels' uncoalesced column layout, which was the larger
    cost.
+
+### The same day, later: the eight next items
+
+Measured first, from the consumer's side, then built. Qwen3-0.6B at f16 on an
+M2 through tgo's `bench`, 64 prompt tokens, 32 decode steps:
+
+| accel | decode tokens/s | p50 step | device share | prefill tokens/s |
+| --- | ---: | ---: | ---: | ---: |
+| 2026-08-25 (tgo's record) | 17.97 | 54.2 ms | 94.6% | 379 |
+| 2026-09-02, morning's commits | 18.04 | 53.8 ms | 91.9% | 410 |
+| 2026-09-02, after the items below | 27.83 | 34.6 ms | 95.1% | 390 |
+
+The morning's kernel speedups did not move the consumer, which is what
+measuring from its side is for. Attributing the device time found two things
+the microbenchmarks had hidden: the matrix-vector kernels at the model's
+1024-wide outputs ran 32 workgroups and 30 GB/s, and every decode attention
+variant walked the cache's whole 4096-position capacity because its length was
+a load. Sixteen K phases per matvec workgroup and, under
+[063](063-uniform-loads.md), a loop bounded by the declared-uniform length
+are the two changes behind the third row. CPU and Metal produced the same six
+greedy tokens on the divergence prompt; the readback share is 0.2%; int8
+decodes at 20.6 tokens/s before those two changes.
+
+1. **Measured** (above). tgo's register row C27 is corrected to closed and its
+   spec 010 §3 carries these numbers.
+2. **Closed**: `QuantMatVecInt4` takes the block layout, 1.84 to 0.76 ms at
+   2048x2048.
+3. **Measured and not built**: host encode is 4-6% of the decode step and an
+   in-encoder memory barrier made nothing faster ([023](023-metal-graph.md)
+   §7), so indirect command buffers stay [006](006-backends.md) §4.3's option.
+4. **Closed**: [064](064-per-row-sampling.md), `SampleRows`.
+5. **Closed as documentation**: a batched prefill is the ragged form with
+   `QueryExtents`, which was built and tested and which the tutorial and the
+   rectangular form's refusal now say.
+6. **Closed**: the device is asked for f16 arithmetic and the float atomic by
+   GPU family, and the f32 atomic lowers ([006](006-backends.md) §3's note).
+7. **Closed**: `scripts/bench.sh` and the two workflows' benchmark steps
+   publish the figures per commit.
+8. **Closed**: `BuildError` and `NodeError` with the caller's site
+   ([003](003-command-graph.md)'s taxonomy).
+
+Housekeeping: the big-endian refusal is at `OpenDevice` and `OpenCPU`; the two
+stale agent worktrees are removed, the dirty one having held a superseded
+attempt at the corpus rename.
