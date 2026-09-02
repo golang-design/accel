@@ -30,23 +30,54 @@ var ErrNoDevice = errors.New("accel: Metal is present and reports no device")
 // Adapters reports every Metal device on this machine.
 //
 // A machine with no device returns [ErrNoDevice], not an empty list.
+//
+// Enumerated once per process. The layer above calls this on every Enumerate,
+// OpenDevice and OpenBest, and each enumeration used to retain a fresh set of
+// MTLDevice objects that nothing closed and compile the subgroup probe on each
+// of them, because the probe is cached per object. The devices are a process
+// fact, so they are found once and every caller gets the same adapters.
 func Adapters() ([]driver.Adapter, error) {
-	devs, err := mtl.Devices()
-	if err != nil {
-		return nil, err
+	adaptersOnce.Do(func() {
+		devs, err := mtl.Devices()
+		if err != nil {
+			adaptersErr = err
+			return
+		}
+		adaptersList, adaptersErr = adaptersFrom(devs, infoFor)
+	})
+	if adaptersErr != nil {
+		return nil, adaptersErr
 	}
+	// A copy, so a caller appending to the result appends to their own slice.
+	return append([]driver.Adapter(nil), adaptersList...), nil
+}
+
+var (
+	adaptersOnce sync.Once
+	adaptersList []driver.Adapter
+	adaptersErr  error
+)
+
+// adaptersFrom wraps each device, or releases every one of them when any
+// cannot answer for itself.
+//
+// Every one, including those already wrapped: a device that cannot report its
+// limits is not enumerated, and the enumeration is all or nothing, so the
+// devices that had answered would otherwise stay retained with no adapter to
+// reach them from. The refusal becomes a probe diagnostic one layer up, which
+// is the difference specs/006-backends.md section 6.4 draws between a probe
+// failure and an open error.
+func adaptersFrom(devs []*mtl.Device, info func(*mtl.Device) (driver.Info, error)) ([]driver.Adapter, error) {
 	out := make([]driver.Adapter, 0, len(devs))
 	for _, d := range devs {
-		info, err := infoFor(d)
+		i, err := info(d)
 		if err != nil {
-			// A device that cannot answer for itself is not enumerated. It
-			// becomes a probe diagnostic one layer up, which is the difference
-			// specs/006-backends.md section 6.4 draws between a probe failure
-			// and an open error.
-			d.Close()
+			for _, x := range devs {
+				x.Close()
+			}
 			return nil, err
 		}
-		out = append(out, &adapter{dev: d, info: info})
+		out = append(out, &adapter{dev: d, info: i})
 	}
 	if len(out) == 0 {
 		return nil, ErrNoDevice

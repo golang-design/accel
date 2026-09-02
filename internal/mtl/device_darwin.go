@@ -8,6 +8,7 @@ package mtl
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/ebitengine/purego/objc"
 )
@@ -97,9 +98,17 @@ func devicesFrom(copyAll func() uintptr, createDefault func() uintptr) []*Device
 	return out
 }
 
+// liveDevices counts the devices retained and not yet closed, for a test that
+// checks an enumeration path releases what it retained. See LiveCommandBuffers.
+var liveDevices atomic.Int64
+
+// LiveDevices reports how many devices are retained and not yet closed.
+func LiveDevices() int64 { return liveDevices.Load() }
+
 // newDevice reads the ceilings that never change. The device is already
 // retained by the caller.
 func newDevice(id objc.ID) *Device {
+	liveDevices.Add(1)
 	d := &Device{id: id}
 	d.name = utf8(id.Send(selName))
 	d.registryID = uint64(id.Send(selRegistryID))
@@ -120,8 +129,12 @@ func (d *Device) Name() string { return d.name }
 // an adapter token.
 func (d *Device) RegistryID() uint64 { return d.registryID }
 
-// Close releases the device.
+// Close releases the device. Closing twice releases once.
 func (d *Device) Close() {
+	if d.id == 0 {
+		return
+	}
 	release(d.id)
 	d.id = 0
+	liveDevices.Add(-1)
 }

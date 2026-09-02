@@ -8,6 +8,7 @@ package mtl
 
 import (
 	"fmt"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -93,6 +94,7 @@ func compileOptions() objc.ID {
 // anyway, because the compiler that accepts the text is the one that will run
 // it.
 func (d *Device) Compile(source, entryPoint string) (*Pipeline, error) {
+	compiles.Add(1)
 	p := &Pipeline{name: entryPoint}
 	var err error
 	withPool(func() {
@@ -127,6 +129,13 @@ func (d *Device) Compile(source, entryPoint string) (*Pipeline, error) {
 	}
 	return p, nil
 }
+
+// compiles counts every call into the device compiler, for a test that checks
+// a cached result is not compiled again.
+var compiles atomic.Int64
+
+// CompileCount reports how many compute pipelines have been compiled.
+func CompileCount() int64 { return compiles.Load() }
 
 // subgroupProbe is the smallest kernel that makes a pipeline exist.
 //
