@@ -120,7 +120,13 @@ type device struct {
 
 	mu     sync.Mutex
 	closed bool
-	blocks int
+
+	// blocks and executables count what is open against this device, so
+	// Close can refuse rather than release the queue and the pipelines out
+	// from under them. The CPU backend's Close makes the same refusal for its
+	// allocations, and an executable here is the thing a submission runs on.
+	blocks      int
+	executables int
 
 	// lost is non-nil once a submission reported the device gone, and stays
 	// non-nil. See [device.Lost].
@@ -257,11 +263,22 @@ func isDeviceLoss(err error) bool {
 	return false
 }
 
+// Close releases the queue and the compiled pipelines.
+//
+// Refused while anything is open against the device. An executable that is
+// open may be mid-submission, and its next Submit would encode into a released
+// queue; a block that is live is memory a caller still reads. executable.Close
+// already refuses while a submission is in flight, so counting open
+// executables covers in-flight work too. Closing twice is harmless.
 func (d *device) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.closed {
 		return nil
+	}
+	if d.blocks > 0 || d.executables > 0 {
+		return fmt.Errorf("accel: close Metal device: %d allocations and %d executables "+
+			"are still open", d.blocks, d.executables)
 	}
 	d.closed = true
 	d.pipeMu.Lock()

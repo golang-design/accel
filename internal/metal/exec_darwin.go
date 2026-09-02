@@ -94,6 +94,7 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 				"lower at specs/021-metal-bringup.md", n.ID, n.Op)
 		}
 	}
+	d.executables++
 	return e, nil
 }
 
@@ -658,6 +659,11 @@ func (e *executable) Close() error {
 	}
 	e.functions, e.pipelines, e.depthStates = nil, nil, nil
 	e.indirect = nil
+	// After e.mu, never before it: Submit takes e.mu and then d.mu through
+	// Lost, and Compile takes d.mu alone.
+	e.dev.mu.Lock()
+	e.dev.executables--
+	e.dev.mu.Unlock()
 	return nil
 }
 
