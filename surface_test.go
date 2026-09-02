@@ -75,34 +75,66 @@ func TestTheHeadlessFrameLoop(t *testing.T) {
 	s := newSurface(t, d, w, h, 2)
 	g, swap, _ := recordFrameGraph(t, d, s, w, h)
 
-	seen := map[int]bool{}
-	for frame := range 4 {
+	// One frame of the loop, at whatever extent the surface has now. The last
+	// pixel is checked as well as the first, so a frame drawn at the old
+	// extent into a resized surface is visible as an unwritten corner.
+	frame := func(n int, g *accel.Graph, swap accel.Slot, w, h int) *accel.Frame {
+		t.Helper()
 		f, err := s.Acquire(time.Second)
 		if err != nil {
-			t.Fatalf("frame %d: acquire: %v", frame, err)
+			t.Fatalf("frame %d: acquire: %v", n, err)
 		}
 		if err := g.BindPresent(swap, f); err != nil {
-			t.Fatalf("frame %d: BindPresent: %v", frame, err)
+			t.Fatalf("frame %d: BindPresent: %v", n, err)
 		}
 		fence := q.SubmitAfter(g, f.Acquired)
 		if err := fence.Wait(); err != nil {
-			t.Fatalf("frame %d: submit: %v", frame, err)
+			t.Fatalf("frame %d: submit: %v", n, err)
 		}
 
 		// Readback before present, which is what "presenting" means with no
 		// compositor: the pixels are available.
 		out := make([]float32, w*h*4)
 		if err := q.ReadBuffer(f.View().Buffer, f.View().Offset, out); err != nil {
-			t.Fatalf("frame %d: readback: %v", frame, err)
+			t.Fatalf("frame %d: readback: %v", n, err)
 		}
-		if out[0] != 1 || out[1] != 0 || out[2] != 0 {
-			t.Fatalf("frame %d: pixel (0,0) is %v, want the drawn red", frame, out[:4])
+		for _, px := range []int{0, w*h - 1} {
+			if c := out[px*4 : px*4+4]; c[0] != 1 || c[1] != 0 || c[2] != 0 {
+				t.Fatalf("frame %d: pixel %d of %dx%d is %v, want the drawn red",
+					n, px, w, h, c)
+			}
 		}
-		seen[f.Index()] = true
 
 		if err := s.Present(f, fence); err != nil {
-			t.Fatalf("frame %d: present: %v", frame, err)
+			t.Fatalf("frame %d: present: %v", n, err)
 		}
+		return f
+	}
+
+	seen := map[int]bool{}
+	for n := range 2 {
+		seen[frame(n, g, swap, w, h).Index()] = true
+	}
+
+	// The resize in the middle. It invalidates the graph built against the
+	// old generation, so the loop rebuilds and carries on at the new extent.
+	const w2, h2 = 16, 16
+	if err := s.Resize(w2, h2); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	stale, err := s.Acquire(time.Second)
+	if err != nil {
+		t.Fatalf("acquire after resize: %v", err)
+	}
+	if err := g.BindPresent(swap, stale); err == nil {
+		t.Fatal("a graph built against the old generation bound a frame of the new one")
+	}
+	if err := s.Discard(stale); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	g2, swap2, _ := recordFrameGraph(t, d, s, w2, h2)
+	for n := 2; n < 4; n++ {
+		seen[frame(n, g2, swap2, w2, h2).Index()] = true
 	}
 
 	// Double buffering means the images rotate. One image reused every frame
@@ -952,14 +984,15 @@ func TestAResizeWithAFrameOutstandingIsRefused(t *testing.T) {
 	}
 }
 
-// A frame that outlived its generation is dropped rather than shown, and its
-// drawable goes back.
+// A surface presents normally after a discard and a resize.
 //
-// Unreachable through Resize now that Resize refuses, and kept because a
-// refusal that is also handled is cheaper than a rule that is only stated: the
-// buffer behind a stale frame may already be closed, so presenting one would
-// read freed memory rather than show a wrong picture.
-func TestAStaleFrameIsDroppedRatherThanShown(t *testing.T) {
+// This is not the stale-frame drop in [accel.Surface.Present]: that branch
+// handles a frame acquired before a resize, and Resize refuses while a frame
+// is outstanding, so no sequence of public calls reaches it. What a caller can
+// do is discard the frame, resize, and acquire again -- and the frame they get
+// must present, or the discard has left the surface in a state the resize did
+// not recover from.
+func TestASurfacePresentsAfterADiscardAndAResize(t *testing.T) {
 	d := openDevice(t)
 	s := newSurface(t, d, 8, 8, 2)
 

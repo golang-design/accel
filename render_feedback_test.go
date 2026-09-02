@@ -137,20 +137,20 @@ func TestFetchingAnotherPassesTargetIsNotFeedback(t *testing.T) {
 	g.Close()
 }
 
-// A disjoint subresource is legal, and this test skips until one can be built.
+// A disjoint subresource is legal: writing mip 0 while fetching mip 1 of the
+// same texture builds.
 //
 // specs/033-render-api.md §3.3 permits a different mip or array layer, because
-// it is different storage. specs/045-texture-attachments.md §8.3 still refuses
-// MipLevels above one, so today every view of a texture names mip 0 and the
-// permission cannot be exercised.
+// it is different storage. The rule compares view ranges rather than texture
+// handles, and this is the accepting half of it -- the half an implementation
+// that compared handles would get wrong while still refusing every real
+// feedback loop.
 //
-// The rule compares ranges anyway rather than texture handles, because writing
-// the degenerate form would make the day mips land the day this silently starts
-// refusing legal draws. But an untested accepting half is the shape two rules
-// in this project were withdrawn in — V23, and 033 §6's undeclared-slot rule —
-// so this exists and **self-activates**: the day a second mip is admissible it
-// stops skipping and asserts the permission, rather than waiting for someone to
-// remember that it should.
+// It was written as a skip while specs/045-texture-attachments.md §8.3 refused
+// MipLevels above one, and self-activated on 2026-08-30 when the refusal went.
+// A two-mip texture being refused again is therefore a failure here rather
+// than a return to skipping: a skip that can never fire is a comparison
+// nobody notices is not happening.
 func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
@@ -163,10 +163,6 @@ func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 		Kind: accel.MemoryReadback, Label: "mipped",
 	})
 	if err != nil {
-		// It self-activated on 2026-08-30 and the skip is gone with the
-		// refusal it watched for. A skip that can never fire is a comparison
-		// nobody notices is not happening, so a two-mip texture being refused
-		// again is a failure rather than a quiet pass.
 		t.Fatalf("a texture with two mips was refused, so the permission this test "+
 			"exists for is unreachable again: %v", err)
 	}
@@ -203,24 +199,15 @@ func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 	g.Close()
 }
 
-// A draw parameterised by a UniformBuffer, which is not yet possible.
+// A draw parameterised by a UniformBuffer: the stage reads the block the
+// buffer holds, through [accel.RenderPass.SetFragmentUniformBuffer].
 //
-// specs/042-surface-completion.md §3.1 records this as the one instance of "an
-// exported declaration that reaches nothing" that this project shipped itself:
-// UniformBuffer allocates, encodes correctly, and hands back a BufferView no
-// draw takes. The mechanism is specs/033-render-api.md §6's draw at a recorded
-// byte offset, which that spec's deviation 1 removed and did not replace.
-//
-// It is a test rather than a sentence for the reason the same day's audit
-// found twice over: a gap recorded in prose has no accepting half, so nothing
-// makes it resume and nothing notices when it closes. This skips with the
-// reason and **self-activates** the day a draw can name a uniform offset, at
-// which point it is the first caller of that channel rather than a rewrite
-// somebody has to remember to do.
-//
-// The skip is deliberately not conditional on a feature flag. It reads the
-// surface: if RenderPass ever grows a call taking a BufferView for a stage
-// uniform, this stops describing the library and should be written out.
+// specs/042-surface-completion.md §3.1 recorded UniformBuffer as the one
+// exported declaration this project shipped that reached nothing: it
+// allocated, encoded correctly, and handed back a BufferView no draw took. The
+// channel is specs/033-render-api.md §6's draw at a recorded byte offset,
+// which section 11 of that spec built; this test was the skip that waited for
+// it and is now its first caller.
 func TestADrawCanBeParameterisedByAUniformBuffer(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)

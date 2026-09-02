@@ -286,9 +286,15 @@ func TestAHostWriteIsOwnedByTheGraph(t *testing.T) {
 	}
 }
 
-// Memory reports all three fields from this milestone, with the pool pinned to
-// the unaliased total. specs/017-graph-aliasing.md separates them, and pinning
-// them here is what makes that a measured difference rather than a new number.
+// Memory reports all three fields, on a graph whose transients cannot share
+// bytes.
+//
+// Three transients, each written by its own upload, and only the last read by
+// the copy. The uploads have no edges between them, so no transient's users
+// are all ordered before another's, and specs/017-graph-aliasing.md's
+// interference rule forbids every pair from sharing bytes: the pool is the
+// unaliased total for that reason, not because nothing aliases. The peak
+// cannot exceed the pool, and the pool cannot be below what the three need.
 func TestMemoryReportsAllThreeFields(t *testing.T) {
 	d := openDevice(t)
 	r := d.NewRecorder()
@@ -302,8 +308,6 @@ func TestMemoryReportsAllThreeFields(t *testing.T) {
 			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
 		})
 	}
-	// A chain: each transient is written then read, so at most two are live at
-	// any record-order point and the peak is below the total.
 	for i := range views {
 		r.UploadToBuffer(views[i], make([]float32, 64))
 	}
@@ -316,9 +320,13 @@ func TestMemoryReportsAllThreeFields(t *testing.T) {
 	defer g.Close()
 
 	m := g.Memory()
+	if placementsShareBytes(g.TransientPlacement()) {
+		t.Errorf("two of three transients whose writers are unordered share bytes: %+v",
+			g.TransientPlacement())
+	}
 	if m.UnaliasedBytes != m.TransientBytes {
-		t.Errorf("this milestone does not alias, so the pool is the unaliased total: "+
-			"%d vs %d", m.TransientBytes, m.UnaliasedBytes)
+		t.Errorf("no pair of these transients may alias, so the pool is the unaliased "+
+			"total: %d vs %d", m.TransientBytes, m.UnaliasedBytes)
 	}
 	if m.PeakBytes > m.TransientBytes {
 		t.Errorf("peak %d cannot exceed the allocated %d", m.PeakBytes, m.TransientBytes)
