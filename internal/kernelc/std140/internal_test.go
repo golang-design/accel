@@ -100,7 +100,7 @@ func TestForbiddenCoversEveryReason(t *testing.T) {
 		{types.Typ[types.Complex128], "no complex dtype"},
 		{types.NewSlice(types.Typ[types.Float32]), "no device representation"},
 		{types.NewChan(types.SendRecv, types.Typ[types.Int32]), "no device representation"},
-		{types.NewSignature(nil, nil, nil, false), "no device representation"},
+		{types.NewSignatureType(nil, nil, nil, nil, nil, false), "no device representation"},
 		{types.NewInterfaceType(nil, nil), "no device representation"},
 		{types.Typ[types.UnsafePointer], "not a scalar a uniform block can hold"},
 		{types.NewTuple(), "not a scalar, vector, matrix"},

@@ -100,6 +100,8 @@ const (
 
 func (u Uniformity) String() string {
 	switch u {
+	case unstated:
+		return "unstated"
 	case PerInvocation:
 		return "per-invocation"
 	case PerSubgroup:

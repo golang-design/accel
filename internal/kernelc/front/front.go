@@ -66,9 +66,10 @@ const KernelDirective = "//accel:kernel"
 // specs/020-cooperative-atomics.md section 3.
 const RequiresDirective = "//accel:requires"
 
-// HelperDirective marks a function callable from a kernel. Helpers are spec
-// 013's; the directive is recognized here so that using one reports that it
-// arrives later rather than that it is unknown.
+// HelperDirective marks a function a kernel or a stage in the same package may
+// call. A helper is compiled from source beside its callers, emitted ahead of
+// them, and its accesses to the bindings it takes are mapped onto theirs at
+// each call site. See specs/013-kernel-subset.md section 2.
 const HelperDirective = "//accel:helper"
 
 // VertexDirective and FragmentDirective mark the two graphics stages of
@@ -706,10 +707,6 @@ func (c *checker) helperBody(h *ir.Func, fn *ast.FuncDecl) {
 	c.nextID = 0
 	c.loops = 0
 	defer func() { c.current = nil }()
-
-	for _, p := range h.Params {
-		_ = p // parameters resolve through h.Params in ident
-	}
 
 	body := c.block(fn.Body)
 	if body == nil {

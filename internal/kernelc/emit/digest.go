@@ -39,11 +39,12 @@ const GeneratorVersion = 1
 //
 // # Why the preimage is line-oriented and versioned
 //
-// Because it grows. Helpers arrive with spec 013 and uniform codecs with 014,
-// and both add inputs. A line-oriented preimage with a section that is empty
-// today takes new lines without changing how the existing ones are written,
-// which matters because changing the format would reissue every committed
-// generated file at the same time as the change being reviewed.
+// Because it grows. Helpers came with spec 013, uniform codecs with 014 and
+// the stage interface with 032, and each added inputs. A line-oriented
+// preimage with a section that is empty for most kernels takes new lines
+// without changing how the existing ones are written, which matters because
+// changing the format would reissue every committed generated file at the
+// same time as the change being reviewed.
 func Digest(k *ir.Func) string {
 	return digestOf(preimage(k))
 }

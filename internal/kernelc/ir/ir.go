@@ -91,11 +91,6 @@ var kindNames = [...]string{
 	Texture2D: "texture2d",
 }
 
-// IsAtomic reports whether an opcode is an atomic read-modify-write.
-//
-// It exists so that access inference does not have to enumerate the set: an
-// atomic added to the table and forgotten here would be a binding that looks
-// untouched, which the graph builder turns into a missing barrier.
 // IsSubgroupRendezvous reports whether an opcode needs every lane's value at
 // the point of the call, and therefore suspends.
 //
@@ -142,6 +137,11 @@ func (o Opcode) IsSubgroupLaneRead() bool {
 	return o >= OpBroadcastF32 && o <= OpShuffleDownF32
 }
 
+// IsAtomic reports whether an opcode is an atomic read-modify-write.
+//
+// It exists so that access inference does not have to enumerate the set: an
+// atomic added to the table and forgotten here would be a binding that looks
+// untouched, which the graph builder turns into a missing barrier.
 func (o Opcode) IsAtomic() bool {
 	return o >= OpAtomicAddU32 && o <= OpAtomicAddF32
 }

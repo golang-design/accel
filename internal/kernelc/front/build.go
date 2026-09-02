@@ -895,7 +895,7 @@ func (c *checker) call(e *ast.CallExpr) ir.Value {
 	fn := c.calleeFunc(e.Fun)
 	if fn == nil {
 		c.errorf(e.Pos(), "this call is outside the subset: a kernel calls intrinsics and "+
-			"helpers, and helpers arrive with spec 013")
+			"//accel:helper functions declared in its package")
 		return nil
 	}
 
@@ -1079,10 +1079,10 @@ func (c *checker) intrinsicCall(e *ast.CallExpr, recvExpr ast.Expr, in *intrin.I
 	rt := &ir.Type{Kind: in.Result}
 	if in.Result == ir.Array {
 		// An array-kinded intrinsic result needs its element type and extent.
-		// Only Fragment.Coord has one, and it is the four-component window
-		// coordinate accel.Vec4 aliases. A bare Array kind reaches the emitter
-		// as a type with no element and fails there, far from the table that
-		// declared it.
+		// Fragment.Coord and Fetch have one, and both are the four floats
+		// accel.Vec4 aliases: the window coordinate and the texel. A bare
+		// Array kind reaches the emitter as a type with no element and fails
+		// there, far from the table that declared it.
 		rt = &ir.Type{Kind: ir.Array, Len: 4, Elem: &ir.Type{Kind: ir.F32}}
 	}
 	return ir.NewIntrinsic(e.Pos(), rt, in.Op, recv, args)
