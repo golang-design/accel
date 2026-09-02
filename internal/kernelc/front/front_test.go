@@ -424,10 +424,12 @@ func K(t accel.Thread, out []float32) { out[0] = 1 }`,
 			line: 2, want: "needs a workgroup extent",
 		},
 		{
+			// The parse error is the message, not a generic "needs an extent":
+			// the directive is there and one number in it is wrong.
 			name: "zero workgroup extent",
 			body: `//accel:kernel workgroup=0
 func K(t accel.Thread, out []float32) { out[0] = 1 }`,
-			line: 2, want: "needs a workgroup extent",
+			line: 2, want: `extent "0" is not a positive number`,
 		},
 		{
 			name: "unsupported element type",

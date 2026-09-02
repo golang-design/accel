@@ -198,11 +198,11 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 			if !ok {
 				continue
 			}
-			kind, extent, ok := directiveOf(fn)
+			kind, extent, err, ok := directiveOf(fn)
 			if !ok {
 				continue
 			}
-			decls = append(decls, declaration{fn: fn, kind: kind, extent: extent})
+			decls = append(decls, declaration{fn: fn, kind: kind, extent: extent, err: err})
 		}
 	}
 
@@ -239,7 +239,7 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 	for _, d := range decls {
 		switch d.kind {
 		case KernelDirective:
-			if k := c.kernel(d.fn, d.extent); k != nil {
+			if k := c.kernel(d.fn, d.extent, d.err); k != nil {
 				c.checkRequires(k, d.fn)
 				c.funcs = append(c.funcs, k)
 			}
@@ -282,6 +282,11 @@ type declaration struct {
 	fn     *ast.FuncDecl
 	kind   string
 	extent [3]uint32
+
+	// err is what was wrong with the kernel directive's extent, reported
+	// against the declaration because the directive's own position is inside
+	// a comment nobody edits by column.
+	err error
 }
 
 // checker holds one package's state.
@@ -356,10 +361,17 @@ func (c *checker) errorf(p token.Pos, format string, args ...any) {
 	c.diags = append(c.diags, Diagnostic{Pos: c.fset.Position(p), Msg: fmt.Sprintf(format, args...)})
 }
 
-// directiveOf reports which accel directive a declaration carries.
-func directiveOf(fn *ast.FuncDecl) (kind string, extent [3]uint32, ok bool) {
+// directiveOf reports which accel directive a declaration carries, and for a
+// kernel directive whose extent does not parse, what was wrong with it.
+//
+// The error travels rather than being replaced by "needs a workgroup extent":
+// `workgroup=0` and `workgroup=1,2,3,4` are different mistakes from a missing
+// extent, and the message that names the number is the one a reader can act
+// on. It is reported by the caller against the declaration, since the
+// directive's own position is inside a comment nobody edits by column.
+func directiveOf(fn *ast.FuncDecl) (kind string, extent [3]uint32, err error, ok bool) {
 	if fn.Doc == nil {
-		return "", extent, false
+		return "", extent, nil, false
 	}
 	for _, cm := range fn.Doc.List {
 		text := strings.TrimSpace(cm.Text)
@@ -367,27 +379,24 @@ func directiveOf(fn *ast.FuncDecl) (kind string, extent [3]uint32, ok bool) {
 		case strings.HasPrefix(text, KernelDirective):
 			e, err := parseWorkgroup(strings.TrimPrefix(text, KernelDirective))
 			if err != nil {
-				// Reported by the caller against the declaration, since the
-				// directive's own position is inside a comment nobody edits by
-				// column.
-				return KernelDirective, [3]uint32{}, true
+				return KernelDirective, [3]uint32{}, err, true
 			}
-			return KernelDirective, e, true
+			return KernelDirective, e, nil, true
 		case strings.HasPrefix(text, HelperDirective):
-			return HelperDirective, extent, true
+			return HelperDirective, extent, nil, true
 		case strings.HasPrefix(text, VertexDirective):
-			return VertexDirective, extent, true
+			return VertexDirective, extent, nil, true
 		case strings.HasPrefix(text, FragmentDirective):
-			return FragmentDirective, extent, true
+			return FragmentDirective, extent, nil, true
 		case strings.HasPrefix(text, "//accel:") && !strings.HasPrefix(text, RequiresDirective):
 			// An unrecognized directive in the reserved namespace is a typo or a
 			// feature that does not exist, and silence turns either into a
 			// function that simply never compiles to anything. Reported with the
 			// name so the reader sees which one.
-			return text, extent, true
+			return text, extent, nil, true
 		}
 	}
-	return "", extent, false
+	return "", extent, nil, false
 }
 
 // checkRequires compares an //accel:requires assertion against what the body
@@ -475,12 +484,15 @@ func parseWorkgroup(rest string) ([3]uint32, error) {
 }
 
 // kernel validates one entry function and builds its IR, or reports why not.
-func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
+func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32, directiveErr error) *ir.Func {
 	name := fn.Name.Name
 
-	if extent == [3]uint32{} {
+	if directiveErr != nil || extent == [3]uint32{} {
+		if directiveErr == nil {
+			directiveErr = fmt.Errorf("none given")
+		}
 		c.errorf(fn.Pos(), "kernel %s: %s needs a workgroup extent, spelled "+
-			"workgroup=64 or workgroup=16,8", name, KernelDirective)
+			"workgroup=64 or workgroup=16,8: %v", name, KernelDirective, directiveErr)
 		return nil
 	}
 	if fn.Recv != nil {
