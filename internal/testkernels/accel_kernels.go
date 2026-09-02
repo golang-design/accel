@@ -608,6 +608,26 @@ func accumulateFlat(in []float32, from uint32, to uint32) float32 {
 	return total
 }
 
+// halveFlat is the generated lowering of the helper halve.
+func halveFlat(x float32) float32 {
+	return float32(x * math.Float32frombits(0x3F000000 /* 0.5 */))
+}
+
+// averagePairFlat is the generated lowering of the helper averagePair.
+func averagePairFlat(in []float32, i uint32, j uint32) float32 {
+	return halveFlat(float32(in[i] + in[j]))
+}
+
+// putAtFlat is the generated lowering of the helper putAt.
+func putAtFlat(out []float32, i uint32, v float32) {
+	out[i] = v
+}
+
+// storeAtFlat is the generated lowering of the helper storeAt.
+func storeAtFlat(out []float32, i uint32, v float32) {
+	putAtFlat(out, i, v)
+}
+
 // addFlat is the generated flat lowering of Add.
 //
 // It is what the CPU backend runs. The authored Add is never registered as
@@ -11357,6 +11377,85 @@ kernel void Normalize(
 	},
 }
 
+// pairAverageFlat is the generated flat lowering of PairAverage.
+//
+// It is what the CPU backend runs. The authored PairAverage is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func pairAverageFlat(t accel.Thread, in []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= uint32(int32(len(out))) {
+		return
+	}
+	var n uint32 = uint32(int32(len(in)))
+	storeAtFlat(out, i, averagePairFlat(in, clampIndexFlat((uint32(2)*i), n), clampIndexFlat(((uint32(2)*i)+uint32(1)), n)))
+}
+
+// PairAverageKernel is the compiled form of PairAverage.
+var PairAverageKernel = kernelabi.Kernel{
+	Name:          "PairAverage",
+	WorkgroupSize: accel.ID3{X: 32, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "ee04475774ad66dbb3048ad3d2b8b8d4",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint clampIndex(uint i, uint n) {
+    if ((n == uint(0))) {
+        return uint(0);
+    }
+    if ((i >= n)) {
+        return (n - uint(1));
+    }
+    return i;
+}
+
+static float halve(float x) {
+    return (x * as_type<float>(0x3F000000u) /* 0.5 */);
+}
+
+static float averagePair(const device float *in, uint i, uint j) {
+    return halve((in[i] + in[j]));
+}
+
+static void putAt(device float *out, uint i, float v) {
+    out[i] = v;
+}
+
+static void storeAt(device float *out, uint i, float v) {
+    putAt(out, i, v);
+}
+
+kernel void PairAverage(
+    const device float *in [[buffer(0)]],
+    device float *out [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= uint(int(_lens[1])))) {
+        return;
+    }
+    uint n = uint(int(_lens[0]));
+    storeAt(out, i, averagePair(in, clampIndex((uint(2) * i), n), clampIndex(((uint(2) * i) + uint(1)), n)));
+}
+`,
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		pairAverageFlat(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1))
+	},
+}
+
 // reduceSumFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -14634,6 +14733,7 @@ var Kernels = []*kernelabi.Kernel{
 	&SegmentSumKernel,
 	&CountAboveKernel,
 	&NormalizeKernel,
+	&PairAverageKernel,
 	&ReduceSumKernel,
 	&SampleArgmaxKernel,
 	&SampleCategoricalKernel,

@@ -924,13 +924,12 @@ func (c *checker) helperCall(e *ast.CallExpr, fn *types.Func) ir.Value {
 
 	if c.current != nil {
 		c.calls[c.current] = append(c.calls[c.current], h)
-		if !slices.Contains(c.current.Helpers, h) {
-			c.current.Helpers = append(c.current.Helpers, h)
-		}
 		// A helper's own accesses become the caller's, mapped through the
 		// argument list. The access is a property of the call site rather than
-		// of the helper, which is why it is merged here and not recorded once.
-		c.propagateAccess(h, args)
+		// of the helper, which is why the site is recorded and merged once
+		// every body exists: the callee's accesses are inferred from its body,
+		// and a callee declared later has no body yet.
+		c.sites = append(c.sites, callSite{caller: c.current, callee: h, args: args})
 	}
 
 	result := h.Result
@@ -940,8 +939,10 @@ func (c *checker) helperCall(e *ast.CallExpr, fn *types.Func) ir.Value {
 	return ir.NewCall(e.Pos(), result, h, args)
 }
 
-// propagateAccess maps a helper's parameter accesses onto the caller's bindings.
-func (c *checker) propagateAccess(h *ir.Func, args []ir.Value) {
+// propagateAccess maps a helper's parameter accesses onto the caller's
+// bindings, reporting whether any rose.
+func propagateAccess(caller, h *ir.Func, args []ir.Value) bool {
+	changed := false
 	for _, hb := range h.Bindings {
 		if hb.Index >= len(args) {
 			continue
@@ -950,13 +951,18 @@ func (c *checker) propagateAccess(h *ir.Func, args []ir.Value) {
 		if !ok {
 			continue
 		}
-		for _, cb := range c.current.Bindings {
-			if cb.Index == p.Index {
-				cb.Read = cb.Read || hb.Read
-				cb.Write = cb.Write || hb.Write
+		for _, cb := range caller.Bindings {
+			if cb.Index != p.Index {
+				continue
 			}
+			if (hb.Read && !cb.Read) || (hb.Write && !cb.Write) {
+				changed = true
+			}
+			cb.Read = cb.Read || hb.Read
+			cb.Write = cb.Write || hb.Write
 		}
 	}
+	return changed
 }
 
 // isMethodCall reports whether a selector names a method on a value rather than

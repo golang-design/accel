@@ -256,6 +256,12 @@ func Check(pkg *packages.Package) ([]*ir.Func, Diagnostics) {
 				VertexDirective, FragmentDirective)
 		}
 	}
+	// Everything a call site contributes to its caller is settled after every
+	// body exists, because a helper's own accesses are inferred from its body
+	// and a caller built earlier read them before they were there.
+	c.propagateAccesses()
+	c.closeHelpers()
+	c.checkUnused()
 	c.checkRecursion()
 
 	sort.Slice(c.diags, func(i, j int) bool {
@@ -301,6 +307,11 @@ type checker struct {
 	// the recursion check runs over.
 	helpers map[types.Object]*ir.Func
 	calls   map[*ir.Func][]*ir.Func
+
+	// sites is every helper call, with the arguments the caller passed, so
+	// that a helper's accesses can be mapped onto its callers once every body
+	// is built rather than when the call was seen.
+	sites []callSite
 
 	// layouts is every uniform struct's std140 placement, by type name, so the
 	// generator can emit one codec per type however many kernels take it.
@@ -509,22 +520,89 @@ func (c *checker) kernel(fn *ast.FuncDecl, extent [3]uint32) *ir.Func {
 	}
 	k.Body = body
 	inferAccess(k)
-
-	// A resource nothing touches is one the caller has to supply for no reason,
-	// and it is nearly always a typo in the body rather than a deliberate
-	// signature.
-	for _, b := range k.Bindings {
-		if !b.Read && !b.Write {
-			c.errorf(k.Params[b.Index].Pos(), "kernel %s: binding %q is never read or written",
-				name, b.Name)
-		}
-	}
-	for _, u := range k.Uniforms {
-		if !u.Reads {
-			c.errorf(k.Params[u.Index].Pos(), "kernel %s: uniform %q is never read", name, u.Name)
-		}
-	}
 	return k
+}
+
+// checkUnused refuses a kernel resource nothing touches.
+//
+// A resource nothing touches is one the caller has to supply for no reason,
+// and it is nearly always a typo in the body rather than a deliberate
+// signature. It runs after every call site's accesses are mapped onto their
+// callers, because a binding a kernel touches only through a helper looks
+// untouched until then.
+func (c *checker) checkUnused() {
+	for _, k := range c.funcs {
+		if k.Stage != ir.StageCompute {
+			continue
+		}
+		for _, b := range k.Bindings {
+			if !b.Read && !b.Write {
+				c.errorf(k.Params[b.Index].Pos(), "kernel %s: binding %q is never read or written",
+					k.Name, b.Name)
+			}
+		}
+		for _, u := range k.Uniforms {
+			if !u.Reads {
+				c.errorf(k.Params[u.Index].Pos(), "kernel %s: uniform %q is never read", k.Name, u.Name)
+			}
+		}
+	}
+}
+
+// callSite is one call of a helper, with what the caller passed.
+type callSite struct {
+	caller, callee *ir.Func
+	args           []ir.Value
+}
+
+// propagateAccesses maps every helper's accesses onto its callers, to a fixed
+// point.
+//
+// A fixed point rather than one pass, because a helper's accesses include what
+// its own callees do to the bindings it passes on, and those are only known
+// once the callee's have been mapped onto it. Bodies are built in file order,
+// so a single pass at the call site read a callee declared later before its
+// body existed and dropped the write: the kernel was refused as never touching
+// the binding, or, with another read present, shipped a record without the
+// write -- which the graph builder turns into a missing barrier. Access only
+// ever rises, so the loop ends.
+func (c *checker) propagateAccesses() {
+	for changed := true; changed; {
+		changed = false
+		for _, s := range c.sites {
+			changed = propagateAccess(s.caller, s.callee, s.args) || changed
+		}
+	}
+}
+
+// closeHelpers fills every function's Helpers with the transitive closure of
+// what its body calls, each callee before every function that calls it.
+//
+// Transitive, because the generator emits exactly this list and nothing else:
+// a direct list left a helper reached only through another helper out of the
+// generated file, and the Go lowering did not compile. Callee first, because
+// the MSL target needs a declaration before its use and emits the list in
+// order. Post-order over the direct calls in source order is both, and it is
+// deterministic, which a walk over a map would not be. A cycle is stopped by
+// the visited set here and reported by checkRecursion.
+func (c *checker) closeHelpers() {
+	for _, f := range c.order {
+		seen := map[*ir.Func]bool{f: true}
+		var out []*ir.Func
+		var visit func(g *ir.Func)
+		visit = func(g *ir.Func) {
+			for _, callee := range c.calls[g] {
+				if seen[callee] {
+					continue
+				}
+				seen[callee] = true
+				visit(callee)
+				out = append(out, callee)
+			}
+		}
+		visit(f)
+		f.Helpers = out
+	}
 }
 
 // helper declares a //accel:helper function, without building its body.

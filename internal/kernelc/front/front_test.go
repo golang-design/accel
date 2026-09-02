@@ -1168,6 +1168,67 @@ func K(t accel.Thread, out []float32) {
 			write: []string{"out"},
 		},
 		{
+			// The write is two helpers deep and the outer helper is declared
+			// first. A helper's access used to be read off its callee when the
+			// caller's body was built, and the callee's body was not built yet,
+			// so the write was dropped: this kernel was refused as one that never
+			// touches out, and with any other read of out present the record
+			// would have shipped without the write, which the graph turns into a
+			// missing barrier.
+			name: "write two helpers deep, callee declared after its caller",
+			body: `//accel:helper
+func storeAt(buf []float32, i uint32, v float32) { putAt(buf, i, v) }
+
+//accel:helper
+func putAt(buf []float32, i uint32, v float32) { buf[i] = v }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		storeAt(out, i, 1)
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "write two helpers deep, callee declared before its caller",
+			body: `//accel:helper
+func putAt(buf []float32, i uint32, v float32) { buf[i] = v }
+
+//accel:helper
+func storeAt(buf []float32, i uint32, v float32) { putAt(buf, i, v) }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		storeAt(out, i, 1)
+	}
+}`,
+			write: []string{"out"},
+		},
+		{
+			name: "read three helpers deep, outermost declared first",
+			body: `//accel:helper
+func a(buf []float32, i uint32) float32 { return b(buf, i) }
+
+//accel:helper
+func b(buf []float32, i uint32) float32 { return c(buf, i) }
+
+//accel:helper
+func c(buf []float32, i uint32) float32 { return buf[i] }
+
+//accel:kernel workgroup=64
+func K(t accel.Thread, in []float32, out []float32) {
+	i := t.GlobalID().X
+	if i < uint32(len(out)) {
+		out[i] = a(in, i)
+	}
+}`,
+			read: []string{"in"}, write: []string{"out"},
+		},
+		{
 			name: "uniform read by a kernel",
 			body: `type Params struct {
 	Scale  float32

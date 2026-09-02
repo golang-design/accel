@@ -123,3 +123,44 @@ func Normalize(t accel.Thread, in []accel.Float16, out []float32, scratch []floa
 	scratch[i] = magnitude
 	out[i] = x * kmath.RSqrt(magnitude*magnitude)
 }
+
+// storeAt writes one element through putAt, which is declared after it.
+//
+// The order is the point. A helper's access to a binding was read off its
+// callee when the caller's body was built, and with the callee's body not yet
+// built the write was dropped. PairAverage writes out only through this chain,
+// so a dropped write refused the kernel as one that never touches out -- and
+// with any other read of out present it would instead have shipped a record
+// without the write, which the graph turns into a missing barrier.
+//
+//accel:helper
+func storeAt(out []float32, i uint32, v float32) { putAt(out, i, v) }
+
+//accel:helper
+func putAt(out []float32, i uint32, v float32) { out[i] = v }
+
+// halve is reached by no kernel directly, only through averagePair, so the
+// generated file has to carry a helper its kernels never name: Func.Helpers is
+// the transitive closure, and a direct list left halveFlat undefined.
+//
+//accel:helper
+func halve(x float32) float32 { return x * 0.5 }
+
+//accel:helper
+func averagePair(in []float32, i uint32, j uint32) float32 { return halve(in[i] + in[j]) }
+
+// PairAverage writes the mean of each adjacent pair of in.
+//
+// It exists for the two helper chains above: a kernel reaching a helper only
+// through another helper, and a write reaching a binding only through a helper
+// declared before the helper that makes it.
+//
+//accel:kernel workgroup=32
+func PairAverage(t accel.Thread, in []float32, out []float32) {
+	i := t.GlobalID().X
+	if i >= uint32(len(out)) {
+		return
+	}
+	n := uint32(len(in))
+	storeAt(out, i, averagePair(in, clampIndex(2*i, n), clampIndex(2*i+1, n)))
+}

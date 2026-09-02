@@ -341,6 +341,10 @@ func diffCases() []diffCase {
 			why: "integer results of an exact class, so they agree or they do not",
 		},
 		{kernel: &testkernels.SegmentSumKernel, counts: []int{256, 8}, groups: accel.WorkgroupCount{X: 1}},
+		// Helpers reached only through helpers, in the MSL as well as the Go:
+		// the emitted source has to declare halve and putAt before their
+		// callers, which is the order Func.Helpers carries.
+		{kernel: &testkernels.PairAverageKernel, counts: []int{128, 64}, groups: accel.WorkgroupCount{X: 2}},
 		{kernel: &testkernels.CountAboveKernel, counts: []int{256, 1}, groups: accel.WorkgroupCount{X: 16}},
 		{kernel: &testkernels.HistogramKernel, counts: []int{256, 4}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &testkernels.CountWorkgroupsKernel, counts: []int{1}, groups: accel.WorkgroupCount{X: 7}},
