@@ -102,19 +102,21 @@ Requires Go 1.26 or later. There is nothing to install and no GPU required,
 which is deliberate and should stay true.
 
 Metal code is `//go:build darwin`, so building on a Mac stops proving that the
-other platforms still compile. Run the cross-target build before pushing, since
-it is cheap and it is the only thing that catches a darwin-only file that leaked
-a reference into shared code:
+other platforms still compile. Run the cross-target build and vet before
+pushing, since it is cheap and it is the only thing that catches a darwin-only
+file that leaked a reference into shared code:
 
 ```sh
-for os in linux windows darwin; do GOOS=$os CGO_ENABLED=0 go build ./... || break; done
-for os in linux windows darwin; do GOOS=$os go vet ./... || break; done
+sh scripts/vet-all.sh
 ```
 
 **`vet` as well as `build`, because `build` does not compile tests.** A helper
 defined in a `_darwin_test.go` file and called from a portable one builds
 everywhere and fails to vet anywhere but a Mac, which is a red CI on a change
-whose own tests all passed locally. It has happened twice.
+whose own tests all passed locally. It happened three times while this was a
+loop in a document that nothing ran; the script is what CI runs now
+(`.github/workflows/ci.yml`, "Vet every platform"), so the local run and the
+gate are the same command.
 
 M0 through M7 are built, which is the v0 proof
 [000](specs/000-decisions.md#the-v0-milestone) names. A CPU device opens, pooled

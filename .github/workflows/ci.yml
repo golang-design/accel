@@ -49,6 +49,16 @@ jobs:
     - name: Vet
       run: go vet ./...
 
+    # Every platform's build and vet from one host. Metal code is
+    # //go:build darwin, so a job on one platform proves nothing about the
+    # others, and vet is what compiles the tests: a darwin-only test helper
+    # called from a portable test has reached main three times with every
+    # local check green. CONTRIBUTING.md asks for this before a push; this is
+    # the step that stops asking.
+    - name: Vet every platform
+      if: runner.os == 'Linux'
+      run: sh scripts/vet-all.sh
+
     - name: Test
       run: go test ./...
 
