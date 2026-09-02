@@ -168,3 +168,21 @@ removed:
 `NativeGraphReplay` stays false: every submission still re-encodes every node,
 and [006](006-backends.md) §4.3's indirect command buffers remain the native
 path.
+
+## 7. The barrier question, answered — 2026-09-02
+
+§1 asked whether a memory barrier inside one compute encoder would do where
+the backend ends the encoder at every barrier. Measured both ways on an M2:
+
+| | encoder boundary per barrier | `memoryBarrierWithScope:` in one encoder |
+| --- | ---: | ---: |
+| 790 trivial dispatches with a barrier between each, GPU wait | 1.27 ms | 2.48 ms |
+| Qwen3-0.6B f16 decode on tgo, tokens/s | 18.0 | 18.6 |
+
+The consumer's step did not move (the difference is within the run-to-run
+spread), and the trivial-node benchmark got worse: on this device a memory
+barrier inside an encoder costs more than an encoder boundary. The boundary
+stays. What the same measurement established about the decode step: 92% of
+its 54 ms is device time, host encode is 6%, and 256 positions of context
+against 4096 recover 7 ms, so the remaining device time is the kernels' and
+the per-node device overhead's, not the encoder's or the host's.
