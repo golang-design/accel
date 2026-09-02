@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -254,15 +255,21 @@ func TestAParallelDispatchIsRepeatable(t *testing.T) {
 // which is the thing that recover was put there to prevent.
 func TestAPanicInAWorkerReachesTheCaller(t *testing.T) {
 	// The panicking line, recorded from inside the kernel so the assertion on
-	// the site does not depend on where this test sits in the file.
-	var site string
+	// the site does not depend on where this test sits in the file. Every
+	// worker records it, so the record is under a lock.
+	var (
+		siteMu sync.Mutex
+		site   string
+	)
 	k := &kernel.Kernel{
 		Name: "Overrun", Generator: kernel.ABIVersion,
 		WorkgroupSize:    kernel.ID3{X: 1, Y: 1, Z: 1},
 		OrderIndependent: true,
 		Flat: func(t kernel.Thread, a kernel.Args) {
 			_, file, line, _ := runtime.Caller(0)
-			site = fmt.Sprintf("%s:%d", file, line+2)
+			siteMu.Lock()
+			site = fmt.Sprintf("%s:%d", file, line+4)
+			siteMu.Unlock()
 			panic(fmt.Sprintf("workgroup %d", t.GroupID().X))
 		},
 	}
@@ -290,6 +297,8 @@ func TestAPanicInAWorkerReachesTheCaller(t *testing.T) {
 		t.Fatalf("the panic reported is %v, and the serial loop would have stopped at "+
 			"workgroup 0", p.Value)
 	}
+	siteMu.Lock()
+	defer siteMu.Unlock()
 	if !strings.HasPrefix(p.Site, site) {
 		t.Errorf("the site is %q, want the panicking line %q", p.Site, site)
 	}
