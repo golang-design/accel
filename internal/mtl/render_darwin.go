@@ -366,7 +366,7 @@ func (d *Device) newTexture2D(format, w, h, usage int, what string) (*Texture, e
 
 // Close releases the texture.
 func (t *Texture) Close() {
-	withPool(func() { release(t.id) })
+	release(t.id)
 	t.id = 0
 }
 
@@ -428,7 +428,7 @@ type RenderPipeline struct{ id objc.ID }
 
 // Close releases the pipeline state.
 func (p *RenderPipeline) Close() {
-	withPool(func() { release(p.id) })
+	release(p.id)
 	p.id = 0
 }
 
@@ -550,7 +550,7 @@ type DepthState struct{ id objc.ID }
 
 // Close releases it.
 func (s *DepthState) Close() {
-	withPool(func() { release(s.id) })
+	release(s.id)
 	s.id = 0
 }
 
@@ -725,9 +725,7 @@ func (e *RenderEncoder) SetVertexBuffer(b *Buffer, offset, index int) {
 
 // SetFragmentBuffer binds a buffer the fragment stage reads.
 func (e *RenderEncoder) SetFragmentBuffer(b *Buffer, offset, index int) {
-	withPool(func() {
-		e.id.Send(selSetFragmentBuffer, b.id, uintptr(offset), uintptr(index))
-	})
+	e.id.Send(selSetFragmentBuffer, b.id, uintptr(offset), uintptr(index))
 }
 
 // SetVertexTexture binds a texture the vertex stage fetches from.
@@ -773,8 +771,12 @@ func (e *RenderEncoder) DrawIndexed(primitive, count, indexType int, idx *Buffer
 
 // End finishes the pass and releases the encoder. Nothing else may be encoded
 // into it afterwards.
+//
+// No pool, as [ComputeEncoder.End] has none: endEncoding and release both
+// return void, and objc_darwin.go's rule is that a void selector autoreleases
+// nothing.
 func (e *RenderEncoder) End() {
-	withPool(func() { e.id.Send(selEndEncoding) })
+	send(e.id, selEndEncoding)
 	release(e.id)
 	e.id = 0
 }
@@ -824,9 +826,7 @@ func (e *RenderEncoder) SetVertexBytes(b []byte, index int) {
 	if len(b) == 0 {
 		return
 	}
-	withPool(func() {
-		e.id.Send(selSetVertexBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
-	})
+	e.id.Send(selSetVertexBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
 }
 
 // SetFragmentBytes is the fragment stage's half. See [RenderEncoder.SetVertexBytes].
@@ -834,9 +834,7 @@ func (e *RenderEncoder) SetFragmentBytes(b []byte, index int) {
 	if len(b) == 0 {
 		return
 	}
-	withPool(func() {
-		e.id.Send(selSetFragmentBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
-	})
+	e.id.Send(selSetFragmentBytes, unsafe.Pointer(&b[0]), uintptr(len(b)), uintptr(index))
 }
 
 // CopyBufferToTexture blits a tightly packed buffer into a whole texture.

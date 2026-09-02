@@ -235,11 +235,9 @@ type Function struct {
 // Name is the entry point this function was resolved by.
 func (f *Function) Name() string { return f.name }
 
-// Close releases the function and its library.
+// Close releases the function and its library, as [Pipeline.Close] does.
 func (f *Function) Close() {
-	withPool(func() {
-		release(f.fn)
-		release(f.lib)
-	})
+	release(f.fn)
+	release(f.lib)
 	f.fn, f.lib = 0, 0
 }
