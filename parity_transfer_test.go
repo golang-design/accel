@@ -199,19 +199,24 @@ func formatParityCases() []parityCase {
 	}
 
 	// The depth aspect, read through a recorded copy: a depth format is not
-	// host-copyable on either backend, which is itself a parity claim.
-	cases = append(cases, parityCase{
-		name:   "a depth attachment written and copied back",
-		covers: parity.Covers{"Format.Depth32Float"},
-		run: func(t *testing.T, d *accel.Device) []byte {
-			t.Helper()
-			return f32Bytes(depthOfTwoFlatTriangles(t, d))
-		},
-	})
+	// host-copyable on either backend, which is itself a parity claim. The
+	// stencil-bearing format takes the same route; its stencil aspect is
+	// compared by the StencilOp cases, which can only observe it through a
+	// draw.
+	for _, f := range []accel.Format{accel.Depth32Float, accel.Depth32FloatStencil8} {
+		cases = append(cases, parityCase{
+			name:   "a " + f.String() + " attachment written and copied back",
+			covers: parity.Covers{"Format." + f.String()},
+			run: func(t *testing.T, d *accel.Device) []byte {
+				t.Helper()
+				return f32Bytes(depthOfTwoFlatTriangles(t, d, f))
+			},
+		})
+	}
 	return cases
 }
 
-// formatParityExclusions are the three formats no case can compare, and why.
+// formatParityExclusions are the two formats no case can compare, and why.
 func formatParityExclusions() []parity.Excluded {
 	return []parity.Excluded{
 		{Name: "Format.FormatInvalid", Why: "the zero-value sentinel for an optional " +
@@ -219,9 +224,6 @@ func formatParityExclusions() []parity.Excluded {
 		{Name: "Format.Depth24PlusStencil8", Why: "the CPU backend refuses it by name " +
 			"(internal/cpu/texel.go): \"24 plus\" has two defensible encodings and the " +
 			"oracle will not assert one. A comparison needs an oracle"},
-		{Name: "Format.Depth32FloatStencil8", Why: "the Metal backend does not lower " +
-			"stencil state (internal/metal/render_darwin.go) and has no pixel format for " +
-			"the stencil-bearing depth attachment. Delete this entry when it does"},
 	}
 }
 

@@ -531,8 +531,8 @@ func renderStateParityExclusions() []parity.Excluded {
 	return out
 }
 
-// depthOfTwoFlatTriangles writes two constant depths and reads the depth
-// aspect back through a recorded copy.
+// depthOfTwoFlatTriangles writes two constant depths into an attachment of
+// format f and reads the depth aspect back through a recorded copy.
 //
 // Constant depths rather than a slanted quad, and that is what makes the
 // comparison exact: an interpolated depth is a barycentric sum the two
@@ -541,25 +541,27 @@ func renderStateParityExclusions() []parity.Excluded {
 // values rather than one, so a target that came back filled with a single
 // constant -- a copy that read the wrong subresource, say -- is not mistaken
 // for agreement.
-func depthOfTwoFlatTriangles(t *testing.T, d *accel.Device) []float32 {
+func depthOfTwoFlatTriangles(t *testing.T, d *accel.Device, f accel.Format) []float32 {
 	t.Helper()
 	far := tintedPipeline(accel.RenderPipelineDescriptor{
 		Label: "depth far",
 		DepthStencil: &accel.DepthStencilState{
-			Format: accel.Depth32Float, Test: true, Write: true,
+			Format: f, Test: true, Write: true,
 			Compare: accel.CompareAlways,
 		},
 	})
 	near := tintedPipeline(accel.RenderPipelineDescriptor{
 		Label: "depth near",
 		DepthStencil: &accel.DepthStencilState{
-			Format: accel.Depth32Float, Test: true, Write: true,
+			Format: f, Test: true, Write: true,
 			Compare: accel.CompareLess,
 		},
 	})
 
 	colour := colourTarget(t, d, "depth colour", parityW, parityH)
-	depth := depthTarget(t, d, "depth", parityW, parityH)
+	depth := newTexture(t, d, "depth", parityW, parityH, f,
+		accel.TextureRenderTarget|accel.TextureCopySrc|accel.TextureCopyDst,
+		accel.MemoryDevice)
 
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{
