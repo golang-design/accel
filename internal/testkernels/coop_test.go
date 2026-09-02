@@ -58,26 +58,80 @@ func TestExchangeRunsCooperatively(t *testing.T) {
 // Shared storage is per workgroup, not per dispatch. Two workgroups sharing it
 // would be a hazard no barrier covers, because spec 002 section 2.7 gives no
 // ordering between workgroups at all.
+//
+// # Why the exchange kernel cannot show this on its own
+//
+// Workgroups run one after another on this backend, and Exchange writes every
+// element of its shared array before it reads any. One allocation handed to
+// every workgroup in turn therefore passes the exchange: each workgroup
+// overwrites the last one's values before looking. So the kernel here is
+// hand-written to read its shared slot *before* writing it, and to record what
+// it saw. Fresh storage arrives poisoned; reused storage arrives holding the
+// previous workgroup's input, and that is the value this test refuses.
 func TestSharedStorageIsPerWorkgroup(t *testing.T) {
-	const n = 256
+	const groups, width = 4, 8
+	const n = groups * width
 	in := make([]float32, n)
 	out := make([]float32, n)
+	residue := make([]float32, n)
 	for i := range in {
-		in[i] = float32(i)
+		in[i] = float32(i) + 1
 	}
-	args := kernelabi.Args{Slices: []any{in, out}}
-	if err := kernel.DispatchCooperative(&testkernels.ExchangeKernel,
-		accel.ID3{X: n / 64}, args); err != nil {
+	k := &kernel.Kernel{
+		Name: "Residue", Generator: kernel.ABIVersion,
+		WorkgroupSize: kernel.ID3{X: width, Y: 1, Z: 1},
+		// Grid order, so "the previous workgroup" names one workgroup.
+		OrderIndependent: false,
+		SharedSizes:      []int{width}, Suspensions: 1,
+		Bindings: []kernel.Binding{
+			{Name: "in", DType: kernel.F32, Access: kernel.Read},
+			{Name: "out", DType: kernel.F32, Access: kernel.Write},
+			{Name: "residue", DType: kernel.F32, Access: kernel.Write},
+		},
+		NewShared: func() []any {
+			var sh [width]float32
+			kernelabi.Poison(sh[:])
+			return []any{&sh}
+		},
+		Cooperative: func(t kernel.Thread, a kernel.Args, f *kernel.Frame) bool {
+			sh := kernel.SharedSlice[[width]float32](a, 0)
+			in := kernel.Slice[float32](a, 0)
+			out := kernel.Slice[float32](a, 1)
+			residue := kernel.Slice[float32](a, 2)
+			l, g := t.LocalIndex(), t.GlobalIndex()
+			if f.Pass == 0 {
+				residue[g] = sh[l] // before this workgroup writes anything
+				sh[l] = in[g]
+				f.Pass = 1
+				f.Barrier = kernel.BarrierID{Index: 0}
+				return true
+			}
+			out[g] = sh[(l+1)%width]
+			return false
+		},
+	}
+	args := kernelabi.Args{Slices: []any{in, out, residue}}
+	// Diagnostics off on purpose: with them on, the read before the write is
+	// reported as undefined and the dispatch fails before the residue can be
+	// looked at. The poison is the kernel's own, so the read is still
+	// observable.
+	if err := kernel.DispatchCooperativeWith(k, accel.ID3{X: groups}, args,
+		kernel.Options{Workers: 1}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	// Every invocation reads within its own workgroup, so a shared allocation
-	// leaking across workgroups shows up as a value from the wrong one.
+	for i, got := range residue {
+		if got == got { // a quiet NaN is not equal to itself
+			t.Fatalf("workgroup %d read %v from shared storage before writing it, and "+
+				"fresh storage is poisoned: the allocation was reused from workgroup %d, "+
+				"which is a hazard no barrier covers", i/width, got, i/width-1)
+		}
+	}
+	// And the exchange itself, within each workgroup.
 	for i, got := range out {
-		base, lid := (i/64)*64, i%64
-		want := in[base+(lid+1)%64]
-		if got != want {
-			t.Fatalf("element %d is %v, want %v: shared storage is leaking between "+
-				"workgroups", i, got, want)
+		base, lid := (i/width)*width, i%width
+		if want := in[base+(lid+1)%width]; got != want {
+			t.Fatalf("element %d is %v, want %v: the value read after the barrier came "+
+				"from the wrong workgroup", i, got, want)
 		}
 	}
 }
