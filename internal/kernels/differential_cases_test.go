@@ -361,6 +361,20 @@ func diffCases() []diffCase {
 		{kernel: &kernels.HistogramKernel, counts: []int{256, 4}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &kernels.CountWorkgroupsKernel, counts: []int{1}, groups: accel.WorkgroupCount{X: 7}},
 		{
+			// The float atomic, on the devices that report it: one invocation
+			// adds 0.5 and -0.25 to two words a caller seeded, so the sums are
+			// exact and the previous values are the seeds.
+			kernel: &kernels.AtomicAddF32Kernel, counts: []int{2, 2},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 0 {
+					return float32(i + 1)
+				}
+				return 0
+			},
+			why: "each add is exact in f32, so there is no ordering to bound",
+		},
+		{
 			// Ten state slots and ten results, which is what the kernel indexes.
 			// Its ninth case compare-exchanges against an expected 1, so the
 			// seed puts a 1 there and a 0 in the tenth: one swap must happen and

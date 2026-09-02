@@ -703,11 +703,11 @@ func (m *msl) bindingType(b *ir.Binding) string {
 	case ir.I32:
 		return "atomic_int"
 	case ir.F32:
-		// atomic<float> exists from Metal 3 and only for add. Refused by name
-		// until the capability table can answer for it, rather than emitted and
-		// found at run time on a device that lacks it.
-		m.refuse("an f32 atomic (atomic<float> is a Metal version capability)", m.fn.Pos())
-		return "void"
+		// atomic<float> exists from Metal 3 and only for add, which is the
+		// one f32 atomic the subset has. A device without the capability
+		// refuses the kernel at pipeline creation, naming it; the source is
+		// emitted for the devices that have it.
+		return "atomic<float>"
 	}
 	m.fail("binding %s is touched atomically and is %v, which has no atomic type in MSL",
 		b.Name, b.Type.Elem.Kind)
@@ -1568,6 +1568,7 @@ func (m *msl) atomicCall(v *ir.IntrinsicCall) {
 var mslAtomic = map[ir.Opcode]string{
 	ir.OpAtomicAddU32:      "atomic_fetch_add_explicit",
 	ir.OpAtomicAddI32:      "atomic_fetch_add_explicit",
+	ir.OpAtomicAddF32:      "atomic_fetch_add_explicit",
 	ir.OpAtomicSubU32:      "atomic_fetch_sub_explicit",
 	ir.OpAtomicSubI32:      "atomic_fetch_sub_explicit",
 	ir.OpAtomicMinU32:      "atomic_fetch_min_explicit",

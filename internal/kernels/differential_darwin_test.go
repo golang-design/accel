@@ -675,3 +675,69 @@ func TestMetalRefusesTheFloatAtomicByName(t *testing.T) {
 			"device would run it", err)
 	}
 }
+
+// A device that reports the float atomic runs the kernel that uses it, and
+// the sums are the exact ones.
+//
+// The row was a constant false until 2026-09-02, so every Apple-silicon
+// device reported a capability it had as absent and the refusal test above
+// was the only path anything took. Now the device is asked, and where it
+// answers yes this is the path.
+func TestMetalRunsTheFloatAtomicWhereItReportsIt(t *testing.T) {
+	d := openMetalDevice(t)
+	defer d.Close()
+	if !d.Capabilities().Has(accel.CapAtomicFloatAddStorage) {
+		t.Skip("this device reports no float atomic; the refusal test covers it")
+	}
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
+		Kernel: &kernels.AtomicAddF32Kernel, Label: "floatatomic",
+	})
+	if err != nil {
+		t.Fatalf("a device reporting CapAtomicFloatAddStorage refused the kernel: %v", err)
+	}
+	defer p.Close()
+	floatBuf := func(label string, vals []float32) accel.BufferView {
+		b, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(vals), Label: label,
+			Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+		})
+		if err != nil {
+			t.Fatalf("buffer %s: %v", label, err)
+		}
+		t.Cleanup(func() { _ = b.Close() })
+		if err := d.Queue().WriteBuffer(b, 0, vals); err != nil {
+			t.Fatalf("write %s: %v", label, err)
+		}
+		v, err := b.View(0, b.Count())
+		if err != nil {
+			t.Fatalf("view %s: %v", label, err)
+		}
+		return v
+	}
+	state := floatBuf("state", []float32{1, 2})
+	prev := floatBuf("prev", []float32{0, 0})
+	r := d.NewRecorder()
+	r.Dispatch(p, []accel.Binding{{Index: 0, Buffer: state}, {Index: 1, Buffer: prev}}, nil,
+		accel.WorkgroupCount{X: 1})
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	got := make([]float32, 2)
+	if err := d.Queue().ReadBuffer(state.Buffer, 0, got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got[0] != 1.5 || got[1] != 1.75 {
+		t.Fatalf("state after the adds is %v, want [1.5 1.75]", got)
+	}
+	if err := d.Queue().ReadBuffer(prev.Buffer, 0, got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got[0] != 1 || got[1] != 2 {
+		t.Fatalf("the previous values are %v, want [1 2]", got)
+	}
+}

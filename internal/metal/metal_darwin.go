@@ -452,11 +452,20 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			SubgroupOps: driver.SubgroupBasic | driver.SubgroupArithmetic |
 				driver.SubgroupVote | driver.SubgroupShuffle,
 
-			// Still absent. atomic<float> is a Metal *version* capability
-			// rather than a spelling, so it needs the family query this table
-			// does not make yet, and the emitter refuses an f32 atomic by name.
-			AtomicFloatAddStorage: false,
+			// atomic<float> add on device memory is a Metal *version*
+			// capability rather than a spelling: Apple family 7 (A14, M1) and
+			// later, and the Metal 3 feature set, have it. Asked of the device
+			// rather than assumed, since 2026-09-02; before that the row was a
+			// constant false and the emitter refused the f32 atomic by name,
+			// so every Apple-silicon device reported a capability it had as
+			// absent. Threadgroup-memory float atomics stay unclaimed.
+			AtomicFloatAddStorage: d.SupportsFamily(mtl.GPUFamilyApple7) || d.SupportsFamily(mtl.GPUFamilyMetal3),
 			AtomicFloatAddShared:  false,
+
+			// Every Apple GPU family computes in half natively; the emitter's
+			// f16 arithmetic is what specs/022 lowers. Asked of the device for
+			// the same reason as the atomic.
+			F16Arithmetic: d.SupportsFamily(mtl.GPUFamilyApple7),
 
 			// Present: specs/023-metal-graph.md encodes it, and the count is
 			// clamped on the device before the dispatch reads it, so the

@@ -52,6 +52,7 @@ var (
 	selMaxBufferLength            = objc.RegisterName("maxBufferLength")
 	selHasUnifiedMemory           = objc.RegisterName("hasUnifiedMemory")
 	selIsLowPower                 = objc.RegisterName("isLowPower")
+	selSupportsFamily             = objc.RegisterName("supportsFamily:")
 )
 
 // Devices returns every Metal device, each retained.
@@ -151,4 +152,23 @@ func (d *Device) Close() {
 	release(d.id)
 	d.id = 0
 	liveDevices.Add(-1)
+}
+
+// GPU families a capability question is asked of, MTLGPUFamily's values.
+const (
+	// GPUFamilyApple7 is the A14 and M1 generation and later: every Apple
+	// silicon GPU, the first with atomic<float> add on device memory.
+	GPUFamilyApple7 = 1007
+	// GPUFamilyMetal3 is the Metal 3 feature set, which every device that
+	// runs macOS 13 or later on Apple silicon reports.
+	GPUFamilyMetal3 = 5001
+)
+
+// SupportsFamily asks the device -supportsFamily:, which is how Metal exposes
+// a version capability rather than a spelling.
+func (d *Device) SupportsFamily(family int) bool {
+	if d.id == 0 {
+		return false
+	}
+	return d.id.Send(selSupportsFamily, uintptr(family)) != 0
 }

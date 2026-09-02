@@ -1092,9 +1092,11 @@ public contract and was not decided inside an autonomous session:
    §3 on Metal** — shift counts at or above 32 and division by zero are
    undefined in MSL and neither a build error nor a strict-mode error exists
    on that backend.
-6. **[006](006-backends.md) §3 matrix** — `F16Arithmetic` and `atomic<float>`
-   are never assigned for Metal (`metal_darwin.go`), so every Metal device
-   reports both false.
+6. **Closed 2026-09-02, [006](006-backends.md) §3's note of that date**: both
+   are asked of the device by GPU family, and the f32 atomic lowers to MSL.
+   Was: **[006](006-backends.md) §3 matrix** — `F16Arithmetic` and
+   `atomic<float>` are never assigned for Metal (`metal_darwin.go`), so every
+   Metal device reports both false.
 7. Performance items the audit measured and did not change: the CPU
    rasterizer's per-fragment slice allocation (`FragmentFn` returns
    `[][4]float32`). **Closed 2026-09-02, [023](023-metal-graph.md) §6:**

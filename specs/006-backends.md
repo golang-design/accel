@@ -549,6 +549,17 @@ exists to make a kernel's portability testable rather than assumed.
 
 ---
 
+**Metal's f16 and float-atomic cells, 2026-09-02.** Both were constants in the
+backend's capability table -- `F16Arithmetic` never assigned and
+`AtomicFloatAddStorage` false -- so every Apple-silicon device reported a
+capability it had as absent, and the emitter refused an f32 atomic by name. The
+device is asked now: `-supportsFamily:` for Apple family 7 (A14, M1 and later)
+answers both, and the Metal 3 feature set answers the atomic. The emitter lowers
+the f32 atomic add to `atomic<float>`, a device without the capability still
+refuses the kernel at pipeline creation naming it, and the corpus differential
+compares the float atomic on the devices that have it. Threadgroup-memory float
+atomics stay unclaimed.
+
 ## 4. How a graph lowers
 
 [003](003-command-graph.md) leaves this open and says the answer constrains how

@@ -25,11 +25,6 @@ var unlowered = map[string]string{
 		"specs/058-ballot.md section 3 is why it was built anyway: it is the " +
 		"case that proves the capability system does anything at all. The " +
 		"refusal a caller meets names simd_vote and the capability",
-	"AtomicAddF32": "the float atomic is a capability rather than a guarantee " +
-		"(accel.CapAtomicFloatAddStorage) and Metal reports it false, so the " +
-		"emitter declines to spell an operation the target cannot run. The " +
-		"refusal a caller meets is at pipeline creation and names the " +
-		"capability, which is checked in metal_darwin_test.go",
 }
 
 // Every corpus kernel lowers to MSL, or is listed with a reason.

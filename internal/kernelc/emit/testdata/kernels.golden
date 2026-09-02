@@ -990,7 +990,26 @@ var AtomicAddF32Kernel = kernelabi.Kernel{
 	Digest:    "f4d097a64f082d78cda31f395367aa2a",
 	Generator: kernelabi.Version,
 	Caps:      128,
-	NoMSL:     "an f32 atomic (atomic<float> is a Metal version capability) is not in the MSL subset (specs/022-msl-target.md), at ",
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+kernel void AtomicAddF32(
+    device atomic<float> *state [[buffer(0)]],
+    device float *prev [[buffer(1)]],
+    constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    prev[int(0)] = atomic_fetch_add_explicit(&state[uint(0)], as_type<float>(0x3F000000u) /* 0.5 */, memory_order_relaxed);
+    prev[int(1)] = atomic_fetch_add_explicit(&state[uint(1)], as_type<float>(0xBE800000u) /* -0.25 */, memory_order_relaxed);
+}
+`,
 	Flat: func(t accel.Thread, a kernelabi.Args) {
 		atomicAddF32Flat(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1))
 	},
