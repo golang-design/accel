@@ -871,6 +871,13 @@ target intersection. `OpenDevice` on the enumerated CPU adapter is equivalent to
 `OpenCPU(CPUOptions{})`; automatic selection never fabricates non-default CPU
 options.
 
+`NoDiagnostics` (added 2026-09-02) turns the cooperative instrumentation of
+§5's oracle role off. It is its own field because a mode is a capability and
+limits profile and says nothing about instrumentation: the checks are on in
+every mode, Strict included, and off only by this request. Before it, Strict
+switched them off as a side effect and the public options had no way to ask
+for them back.
+
 ### Exactness, and the one thing that threatens it
 
 Integer results are bit-exact everywhere and that is a hard requirement.

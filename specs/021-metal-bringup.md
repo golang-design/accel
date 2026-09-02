@@ -267,6 +267,12 @@ reintroducing a wrapper for one field. The gap closes, or is ratified, when a
 third target arrives; it is recorded here so that 004's struct is not read as
 describing code.
 
+`NoMSL string` (added 2026-09-02) is set exactly when `MSL` is empty: the
+emitter's refusal with the `file:line:col` of the construct outside the subset.
+The generator used to drop the refusal and emit nothing, so a kernel losing its
+lowering was a missing line rather than a statement, and the backend's error
+could name the kernel and not the reason.
+
 A Metal dispatch of a kernel whose `MSL` is empty is a **build error naming the
 kernel and the target**, not a fallback to the Go lowering. Running the CPU
 lowering on a device the caller selected specifically would be the worst

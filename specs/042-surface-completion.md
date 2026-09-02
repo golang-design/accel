@@ -446,7 +446,9 @@ rasterizer, which indexes buffers by slice position.
 
 So a caller met one backend's ABI wherever they ran, which is
 [000](000-decisions.md)'s layering rule 3 with a constant standing in for the
-type. `Limits.MaxVertexBuffers` is now reported per device — Metal's
+type. `Limits.MaxTexturesPerStage` followed on 2026-09-02, for the texture
+slot check that had kept comparing against `mslabi.StageTextureLimit` after
+the vertex-buffer one moved. `Limits.MaxVertexBuffers` is now reported per device — Metal's
 reservation, the CPU's portable floor of 16 in strict mode and 64 in the
 developer profile — and the refusal names the device and its number.
 

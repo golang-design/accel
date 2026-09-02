@@ -1001,3 +1001,91 @@ exists and nothing checks it. That is the same defect this project spent the
 week removing from operator refusals, one level up, and §4 above is where it
 stops recurring. Fixing §1 makes the library correct; fixing §4 makes it stay
 correct.
+
+## Corrections — 2026-09-02 audit
+
+Appended rather than edited in, per [009](009-sequencing.md)'s rule. A
+whole-tree audit on 2026-09-01 (root, CPU backend, Metal backend, compiler,
+tensor layer, tests and CI) found about a hundred and ten defects; the commits
+of 2026-09-02 fix the confirmed ones, each with a test that failed first. What
+follows is what that changes in the rows above, and what it leaves open.
+
+**Rows above that were already stale when this was written.** 033 §2.1 "Metal
+refuses a stencil draw", 035 §7.1 "stencil remains CPU-only", 045 §4 "staging
+copies", and 062 §10's "eight excluded stencil operations" closed on
+2026-08-30 (`0b77b34`, `70bc1ed`, `3c1d5a7`). The `Depth32FloatStencil8`
+transfer exclusion that cited them is gone and the format has a parity case.
+
+**Closed by the audit commits.**
+
+- 029 §2 (Tier 1, the compile-options key): the plan key hashes
+  `CompileOptions` by field, with a reflection test that fails when a field is
+  added and not hashed.
+- 011 "no Metal profile in `device.All()`": the harness has a Metal row on
+  darwin, absent without an adapter unless `ACCEL_REQUIRE_METAL` is set, in
+  which case it is a failing row. No conformance case fails on Metal.
+- 002 §1.3's `GlobalIndex`, `LocalIndex` and `GroupIndex` now lower to MSL;
+  `IndexShape` is the corpus kernel and differential case. They had a CPU
+  definition and no MSL case, and no corpus kernel called them.
+- 022 §5: the ballot mask is a *refusal* recorded as `Kernel.NoMSL`, not a
+  dropped error. `Ballot` and `AtomicAddF32` carry the reason and position;
+  the portable lowering test requires it of every kernel without MSL.
+- 059 §5: the f32 subgroup minimum and maximum propagate a NaN on both
+  backends (`FloatReduce`); kmath's `Min`/`Max` do so on Metal; signed i32
+  add, subtract and multiply wrap on Metal as 008 §3 requires.
+- 014: non-square and wide matrix uniforms are laid out with rows and columns
+  apart (`MatrixShapes`); the digest covers uniform layouts, varyings,
+  attributes and outputs.
+- 013: helpers are a transitive closure, a helper's access is settled after
+  every body exists (`PairAverage`), a local takes the type Go gave it, and
+  `==` on a packed narrow float is refused.
+- 042 §5.3: `Limits.MaxTexturesPerStage` joins `MaxVertexBuffers`; no public
+  check compares against an `mslabi` constant any more.
+- 006 §5: diagnostics are their own switch (`CPUOptions.NoDiagnostics`); Strict
+  no longer turns them off. 018's "Suspensions bounds the epoch loop" was
+  wrong and is corrected in 018.
+- 001 §6.1 and the lifetime rules: `Device.Close` counts transient pools,
+  `Pool.Reset` closes textures, `Texture.Close` reports a hold, `Buffer.Access`
+  refuses a transient, and every Close decides under one lock. Metal releases
+  its command buffers per submission and per presented frame, guards its
+  pipeline cache, classifies device loss by error code, and declares the
+  stencil format of the texture it draws into (verified under Metal API
+  validation).
+- 011 §4 (tolerance ratchet): 74 sites remain after the walk was made
+  recursive; the parity matrix compares every case against a committed CPU
+  golden on every platform, and six of eight stencil-op cases that had been
+  vacuous are distinct pictures.
+
+**Still open, and a decision rather than a fix.** Each changes a spec or a
+public contract and was not decided inside an autonomous session:
+
+1. **[019](019-cooperative-diagnostics.md)/002 §3.3 — the uniformity analysis
+   has no caller.** `uniform.AcceptBarriers` is sound now (return, helper body
+   and loop escape all level what follows) and is not run by the build.
+   Wiring it refuses `GroupedMatVec`, `GroupedMatMul`, `AttentionRagged` and
+   `AttentionRaggedF16`: their early returns and the tiled segment loop depend
+   on loaded routing data, which 002 §3.3 deliberately refuses to call uniform
+   because of 003's read/write aliasing. Restructuring keeps every lane at the
+   barriers and makes `GroupedMatMul` walk every token block per expert. The
+   alternative is a declared-uniform-load directive enforced at Bind (003's
+   V23, narrowed to the declared bindings). Until one is chosen the CPU
+   oracle's arrival diagnostic is the only gate, which is 002 §3.4's role.
+2. **[029](029-plan-cache.md)** — `PlanCache.Compile` returns one `*Plan` per
+   key and a Plan refuses a second Submit in flight, so two requests in one
+   bucket cannot run concurrently.
+3. **[010](010-kernel-corpus.md)** — `internal/testkernels` is the production
+   corpus (thirteen `tensor` files import it) under a test's name.
+4. **[000](000-decisions.md) rule 3** — `OpenCPU`, `CPUOptions`, `CPUMode` are
+   backend-specific public types.
+5. **[008](008-numerics.md) §3 on Metal** — shift counts at or above 32 and
+   division by zero are undefined in MSL and neither a build error nor a
+   strict-mode error exists on that backend.
+6. **[006](006-backends.md) §3 matrix** — `F16Arithmetic` and `atomic<float>`
+   are never assigned for Metal (`metal_darwin.go`), so every Metal device
+   reports both false.
+7. Performance items the audit measured and did not change: Metal's
+   per-submission render-target and sampled-texture allocation, one blit per
+   row in `OpCopyRows`, private storage forcing a staging copy and a wait per
+   host transfer, the CPU rasterizer's per-fragment slice allocation
+   (`FragmentFn` returns `[][4]float32`), the f32×f16 decode fast path at
+   M = 1, and `QuantMatMul` at M > 1 untiled.
