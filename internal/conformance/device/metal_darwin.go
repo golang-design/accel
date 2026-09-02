@@ -22,7 +22,12 @@ import (
 // ACCEL_REQUIRE_METAL a missing adapter is a row whose Open fails, so the
 // promise is broken loudly in every case that would have used the device.
 func metalProfiles() []Profile {
-	e := accel.Enumerate()
+	return metalProfilesFrom(accel.Enumerate(), os.Getenv("ACCEL_REQUIRE_METAL") != "")
+}
+
+// metalProfilesFrom is metalProfiles over a given enumeration and promise, so
+// the two no-adapter rows can be tested on a machine that has one.
+func metalProfilesFrom(e accel.Enumeration, required bool) []Profile {
 	for _, info := range e.Devices {
 		if info.Backend != accel.BackendMetal {
 			continue
@@ -37,7 +42,7 @@ func metalProfiles() []Profile {
 			open:         func() (*accel.Device, error) { return accel.OpenDevice(id) },
 		}}
 	}
-	if os.Getenv("ACCEL_REQUIRE_METAL") == "" {
+	if !required {
 		return nil
 	}
 	err := fmt.Errorf("this job promises Metal and enumerated no adapter; diagnostics: %v",
