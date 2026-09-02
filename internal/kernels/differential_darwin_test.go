@@ -70,6 +70,16 @@ func TestTheCorpusAgreesOnCPUAndMetal(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.kernel.Name, func(t *testing.T) {
+			// A kernel whose body needs a capability this device does not
+			// report is refused at pipeline creation by design, and the
+			// refusal test covers that path; the comparison is for the
+			// devices that have it. The float atomic is the case today: an
+			// Apple GPU reports it and the CI runner's paravirtual one does
+			// not.
+			if need := accel.Capability(c.kernel.Caps); !gpu.Capabilities().Has(need) {
+				t.Skipf("this device reports none of the capabilities kernel %s needs "+
+					"(%v); the refusal is tested separately", c.kernel.Name, need)
+			}
 			want := runCase(t, cpu, c)
 			got := runCase(t, gpu, c)
 			for b := range want {
