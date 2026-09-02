@@ -158,15 +158,23 @@ kernel void _accel_width(device uint *out [[buffer(0)]],
 // reporting a zero limit, so a zero here has to become a refusal to open rather
 // than a number nobody can use.
 func (d *Device) SubgroupSize() int {
-	d.widthOnce.Do(func() {
+	d.probe()
+	return d.width
+}
+
+// probe compiles subgroupProbe once and keeps what only a pipeline reports:
+// the execution width and the total threadgroup ceiling. A trivial kernel's
+// ceiling is the device's, since nothing in it costs registers.
+func (d *Device) probe() {
+	d.probeOnce.Do(func() {
 		p, err := d.Compile(subgroupProbe, "_accel_width")
 		if err != nil {
 			return
 		}
 		defer p.Close()
 		d.width = p.ThreadExecutionWidth
+		d.maxTotal = p.MaxTotalThreadsPerThreadgroup
 	})
-	return d.width
 }
 
 // Name is the entry point this pipeline runs.

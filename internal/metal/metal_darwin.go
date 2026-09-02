@@ -396,6 +396,13 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 		return driver.Info{}, fmt.Errorf("accel: %s reports no SIMD width, so its subgroup "+
 			"limits would be zero and specs/001-device-resources.md section 1.1 forbids that", d.Name())
 	}
+	// The same probe, and the same rule: the total is what a compiled
+	// pipeline reports, and a device that reports none is not enumerated.
+	total := d.MaxTotalThreadsPerThreadgroup()
+	if total <= 0 {
+		return driver.Info{}, fmt.Errorf("accel: %s reports no threadgroup ceiling, and "+
+			"specs/001-device-resources.md section 1.1 forbids a zero limit", d.Name())
+	}
 	return driver.Info{
 		Backend: driver.BackendMetal,
 		Name:    d.Name(),
@@ -513,12 +520,16 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			// guarantees, and under-reporting a ceiling costs nothing here.
 			MaxUniformBlockBytes: 65536,
 
-			// Queried: -maxThreadsPerThreadgroup and
-			// -maxThreadgroupMemoryLength.
+			// Queried: -maxThreadsPerThreadgroup, which is the limit along
+			// each axis, and -maxThreadgroupMemoryLength.
 			MaxWorkgroupSize: [3]int{
 				int(maxThreads.Width), int(maxThreads.Height), int(maxThreads.Depth),
 			},
-			MaxWorkgroupInvocations: int(maxThreads.Width),
+			// Measured from a compiled pipeline, because the total is not a
+			// device query. This was the per-axis width, which is the same
+			// number on Apple silicon and a different one wherever the axes
+			// are allowed more than the whole.
+			MaxWorkgroupInvocations: total,
 			MaxSharedMemoryBytes:    d.MaxThreadgroupMemoryBytes,
 
 			// Metal documents no threadgroup-count ceiling. MaxInt32 says so

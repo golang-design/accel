@@ -31,17 +31,17 @@ type Device struct {
 
 	// The device-level ceilings. Read once at open: they do not change, and a
 	// caller asking per dispatch would be paying a message send for a constant.
-	MaxThreadsPerThreadgroup      Size
-	MaxTotalThreadsPerThreadgroup int
-	MaxThreadgroupMemoryBytes     int
-	MaxBufferBytes                int
-	UnifiedMemory                 bool
-	LowPower                      bool
+	MaxThreadsPerThreadgroup  Size
+	MaxThreadgroupMemoryBytes int
+	MaxBufferBytes            int
+	UnifiedMemory             bool
+	LowPower                  bool
 
-	// The SIMD width, which only a compiled pipeline can report. See
-	// [Device.SubgroupSize].
-	widthOnce sync.Once
+	// The two limits only a compiled pipeline can report. See
+	// [Device.SubgroupSize] and [Device.MaxTotalThreadsPerThreadgroup].
+	probeOnce sync.Once
 	width     int
+	maxTotal  int
 }
 
 var (
@@ -113,12 +113,24 @@ func newDevice(id objc.ID) *Device {
 	d.name = utf8(id.Send(selName))
 	d.registryID = uint64(id.Send(selRegistryID))
 	d.MaxThreadsPerThreadgroup = objc.Send[Size](id, selMaxThreadsPerThreadgroup)
-	d.MaxTotalThreadsPerThreadgroup = int(d.MaxThreadsPerThreadgroup.Width)
 	d.MaxThreadgroupMemoryBytes = int(id.Send(selMaxThreadgroupMemoryLength))
 	d.MaxBufferBytes = int(id.Send(selMaxBufferLength))
 	d.UnifiedMemory = id.Send(selHasUnifiedMemory) != 0
 	d.LowPower = id.Send(selIsLowPower) != 0
 	return d
+}
+
+// MaxTotalThreadsPerThreadgroup is the most invocations one threadgroup may
+// hold on this device, whatever its shape. Zero if the probe fails.
+//
+// Read from a compiled pipeline, because MTLDevice has no query for it:
+// -maxThreadsPerThreadgroup is the limit along each axis, and the total is a
+// property of MTLComputePipelineState. This used to be the per-axis width,
+// which equals the total on Apple silicon -- both 1024 -- and is a different
+// number on a device where the two differ.
+func (d *Device) MaxTotalThreadsPerThreadgroup() int {
+	d.probe()
+	return d.maxTotal
 }
 
 // Name is the device's product name, as Metal reports it.
