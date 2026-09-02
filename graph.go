@@ -551,19 +551,26 @@ func (g *Graph) Close() error {
 		g.mu.Unlock()
 		return &LifetimeError{Op: "Close", Resource: "graph", Reason: reasonInFlight}
 	}
+	// Marked closed under the same lock that found it not in flight, which is
+	// the lock run takes before it checks the handle and marks itself in
+	// flight. So either run sees the closed handle or this sees the flight.
+	closing := g.state.beginClose()
 	g.mu.Unlock()
 
-	if !g.state.beginClose() {
+	if !closing {
 		return nil
 	}
+	// The handle is dead from here whatever the executable says, so the
+	// memory and the device's count go with it either way: an executable
+	// that refuses to close would otherwise strand the transients and leave
+	// the device refusing to close over a graph nobody can reach.
+	var err error
 	if g.exe != nil {
-		if err := g.exe.Close(); err != nil {
-			return err
-		}
+		err = g.exe.Close()
 	}
 	g.releaseTransients()
 	g.dev.countGraphs(-1)
-	return nil
+	return err
 }
 
 // GraphMemory reports a graph's memory requirement.

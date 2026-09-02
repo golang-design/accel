@@ -277,14 +277,19 @@ func (g *Graph) concreteSpans() []span {
 // done. It is called from inside [Queue.enqueue], which is what orders it
 // against everything else on that queue.
 func (g *Graph) run() error {
-	if err := g.state.checkOpen("Submit"); err != nil {
-		return err
-	}
 	if lost := g.dev.dev.Lost(); lost != nil {
 		return lost
 	}
 
 	g.mu.Lock()
+	// The open check is inside the critical section that marks the graph in
+	// flight, because Close marks the handle closed inside the one that finds
+	// it not in flight. Checked before taking the lock, a submission could
+	// pass and then run over an executable Close had just released.
+	if err := g.state.checkOpen("Submit"); err != nil {
+		g.mu.Unlock()
+		return err
+	}
 	if g.inFlight {
 		g.mu.Unlock()
 		return ErrGraphInFlight

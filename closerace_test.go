@@ -66,3 +66,52 @@ func TestPoolCloseAndAllocBufferCannotBothSucceed(t *testing.T) {
 		}
 	}
 }
+
+// Graph.Close and a concurrent submission never run a closed executable.
+//
+// Close checked inFlight under g.mu, released it, then marked the handle
+// closed and closed the executable; run checked the handle before taking g.mu
+// and set inFlight after. A submission that passed its check in the gap ran
+// over an executable Close had just released, and the fence carried the
+// backend's error rather than the lifetime one. Both sides now decide under
+// g.mu. Each iteration races the two and asserts one of the legal outcomes:
+// Close refused the graph as in flight, or the submission was refused as
+// closed, or the submission finished before Close began.
+//
+// The submission is queued behind another one, and Close is called the
+// moment that one's fence signals: the queue wakes the next unit at the same
+// instant, which puts the two sides as close together as the scheduler
+// allows.
+func TestGraphCloseAndSubmitCannotRunAClosedGraph(t *testing.T) {
+	d := openDevice(t)
+	q := d.Queue()
+	ahead, _ := buildInto(t, d, nil, 64)
+	for i := 0; i < 200; i++ {
+		g, _ := buildInto(t, d, nil, 64)
+		first := q.Submit(ahead)
+		f := q.Submit(g)
+		if err := first.Wait(); err != nil {
+			t.Fatalf("iteration %d: the submission ahead failed: %v", i, err)
+		}
+		closeErr := g.Close()
+		ferr := f.Wait()
+
+		var le *accel.LifetimeError
+		if ferr != nil && (!errors.As(ferr, &le) || le.Reason != "closed") {
+			t.Fatalf("iteration %d: the submission failed with %v, which is neither "+
+				"success nor a closed graph", i, ferr)
+		}
+		if closeErr != nil {
+			if !errors.As(closeErr, &le) || le.Reason != "in flight" {
+				t.Fatalf("iteration %d: Close returned %v", i, closeErr)
+			}
+			if ferr != nil {
+				t.Fatalf("iteration %d: Close refused an in-flight submission that then "+
+					"failed as closed: %v", i, ferr)
+			}
+			if err := g.Close(); err != nil {
+				t.Fatalf("iteration %d: Close after the submission: %v", i, err)
+			}
+		}
+	}
+}
