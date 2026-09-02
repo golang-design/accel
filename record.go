@@ -6,6 +6,7 @@ package accel
 
 import (
 	"fmt"
+	"strings"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
@@ -185,6 +186,10 @@ type recorderState struct {
 	// report reads in the order the caller wrote the calls.
 	errs []error
 
+	// cur is the node an entry point is recording, for the errors raised on
+	// the way; nil between entry points. See Recorder.recording.
+	cur *nodeContext
+
 	built bool
 
 	// shared is the caller-owned transient pool this graph will plan into, or
@@ -200,7 +205,35 @@ type recorderState struct {
 }
 
 func (r *Recorder) fail(format string, args ...any) {
-	r.state.errs = append(r.state.errs, fmt.Errorf("accel: "+format, args...))
+	r.failErr(fmt.Errorf("accel: "+format, args...))
+}
+
+// failErr records err against the node being recorded: the id the node will
+// get, the kind and label the entry point declared with [Recorder.recording],
+// and the caller's site. specs/003-command-graph.md's NodeError.
+func (r *Recorder) failErr(err error) {
+	ne := &NodeError{
+		Node:   NodeID(len(r.state.nodes)),
+		Site:   callSite(),
+		Cause:  err,
+		Detail: strings.TrimPrefix(err.Error(), "accel: "),
+	}
+	if c := r.state.cur; c != nil {
+		ne.Label, ne.Kind, ne.atNode = c.label, c.kind, true
+	}
+	r.state.errs = append(r.state.errs, ne)
+}
+
+// nodeContext is what Recorder.recording declared.
+type nodeContext struct {
+	kind  NodeKind
+	label string
+}
+
+// recording names the node an entry point is about to record, so an error
+// raised on the way carries its kind and label. node clears it.
+func (r *Recorder) recording(kind NodeKind, label string) {
+	r.state.cur = &nodeContext{kind: kind, label: label}
 }
 
 // node appends a recorded node and returns its id.
@@ -212,6 +245,7 @@ func (r *Recorder) fail(format string, args ...any) {
 // as an attachment then had a live range that excluded the pass writing it, and
 // another transient could be placed over those bytes.
 func (r *Recorder) node(kind NodeKind, label string, accesses []access, data []byte) NodeID {
+	defer func() { r.state.cur = nil }()
 	id := NodeID(len(r.state.nodes))
 	// An access that did not name a stage gets the node kind's default. The
 	// node's own stage is then the union, so a node with no accesses at all --
@@ -260,7 +294,7 @@ func (r *Recorder) declare(op string, v BufferView, mode Access) (access, bool) 
 		return access{}, false
 	}
 	if err := v.checkRange(op); err != nil {
-		r.state.errs = append(r.state.errs, err)
+		r.failErr(err)
 		return access{}, false
 	}
 	if v.Buffer.transient != nil && v.Buffer.transient.owner != r {
@@ -269,7 +303,7 @@ func (r *Recorder) declare(op string, v BufferView, mode Access) (access, bool) 
 	}
 	if v.Buffer.transient == nil {
 		if err := v.Buffer.state.checkOpen(op); err != nil {
-			r.state.errs = append(r.state.errs, err)
+			r.failErr(err)
 			return access{}, false
 		}
 		if v.Buffer.pool.dev != r.state.dev {
@@ -297,7 +331,7 @@ func (r *Recorder) declareTexture(op string, v TextureView, mode Access) (access
 		return access{}, false
 	}
 	if err := t.state.checkOpen(op); err != nil {
-		r.state.errs = append(r.state.errs, err)
+		r.failErr(err)
 		return access{}, false
 	}
 	if t.pool.dev != r.state.dev {
@@ -382,7 +416,7 @@ func (r *Recorder) transientImpl(desc BufferDescriptor) BufferView {
 	}
 	bytes, err := r.state.dev.bufferBytes(desc)
 	if err != nil {
-		r.state.errs = append(r.state.errs, err)
+		r.failErr(err)
 		return BufferView{}
 	}
 

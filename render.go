@@ -650,6 +650,7 @@ type Draw struct {
 
 // RenderPass begins recording a render pass. The pass becomes one node.
 func (r *Recorder) RenderPass(desc RenderPassDescriptor) *RenderPass {
+	r.recording(NodeRenderPass, desc.Label)
 	label := desc.Label
 	if label == "" {
 		label = "render pass"
@@ -772,7 +773,7 @@ func either(hasTexture, hasSlot bool) string {
 // compiled stages to this one's backend.
 func (p *RenderPass) SetPipeline(pipe *RenderPipeline) {
 	if pipe == nil {
-		p.r.fail("RenderPass %q: SetPipeline with no pipeline", p.desc.Label)
+		p.fail("RenderPass %q: SetPipeline with no pipeline", p.desc.Label)
 		p.failed = true
 		return
 	}
@@ -782,7 +783,7 @@ func (p *RenderPass) SetPipeline(pipe *RenderPipeline) {
 		return
 	}
 	if pipe.dev != p.r.state.dev {
-		p.r.fail("RenderPass %q: SetPipeline %q: the pipeline belongs to a different device",
+		p.fail("RenderPass %q: SetPipeline %q: the pipeline belongs to a different device",
 			p.desc.Label, pipe.label)
 		p.failed = true
 		return
@@ -800,7 +801,7 @@ func (p *RenderPass) SetPipeline(pipe *RenderPipeline) {
 // alongside the rest of a build's errors.
 func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
 	if slot < 0 {
-		p.r.fail("RenderPass %q: SetVertexBuffer at slot %d; a slot is an index into "+
+		p.fail("RenderPass %q: SetVertexBuffer at slot %d; a slot is an index into "+
 			"the pipeline's vertex layout and cannot be negative", p.desc.Label, slot)
 		p.failed = true
 		return
@@ -812,7 +813,7 @@ func (p *RenderPass) SetVertexBuffer(slot int, v BufferView) {
 	// limit accepted a layout its passes could not bind.
 	dev := p.r.state.dev
 	if limit := dev.info.Limits.MaxVertexBuffers; limit > 0 && slot >= limit {
-		p.r.fail("RenderPass %q: SetVertexBuffer at slot %d; %q reports a limit of %d "+
+		p.fail("RenderPass %q: SetVertexBuffer at slot %d; %q reports a limit of %d "+
 			"vertex buffers (Limits.MaxVertexBuffers)", p.desc.Label, slot, dev.info.Name, limit)
 		p.failed = true
 		return
@@ -845,7 +846,7 @@ func (p *RenderPass) vertexBuffers() []BufferView { return p.buffers }
 // a build's errors.
 func (p *RenderPass) SetTexture(slot int, v TextureView) {
 	if slot < 0 {
-		p.r.fail("RenderPass %q: SetTexture at slot %d; a slot is a stage's texture "+
+		p.fail("RenderPass %q: SetTexture at slot %d; a slot is a stage's texture "+
 			"index and cannot be negative", p.desc.Label, slot)
 		p.failed = true
 		return
@@ -855,7 +856,7 @@ func (p *RenderPass) SetTexture(slot int, v TextureView) {
 	// against was one backend's ABI reservation refusing every device.
 	dev := p.r.state.dev
 	if limit := dev.info.Limits.MaxTexturesPerStage; limit > 0 && slot >= limit {
-		p.r.fail("RenderPass %q: SetTexture at slot %d; %s reports %d as the ceiling on "+
+		p.fail("RenderPass %q: SetTexture at slot %d; %s reports %d as the ceiling on "+
 			"textures per stage (Limits.MaxTexturesPerStage)",
 			p.desc.Label, slot, dev.info.Name, limit)
 		p.failed = true
@@ -922,7 +923,7 @@ func (p *RenderPass) SetFragmentUniformBuffer(index int, v BufferView) {
 
 func (p *RenderPass) setUniformBuffer(dst *[]BufferView, op string, index int, v BufferView) {
 	if index < 0 {
-		p.r.fail("RenderPass %q: %s at index %d; an index is a stage's uniform "+
+		p.fail("RenderPass %q: %s at index %d; an index is a stage's uniform "+
 			"position and cannot be negative", p.desc.Label, op, index)
 		p.failed = true
 		return
@@ -958,12 +959,12 @@ func (p *RenderPass) SetFragmentUniform(index int, v any) {
 
 func (p *RenderPass) setUniform(dst *[]any, what string, index int, v any) {
 	if index < 0 {
-		p.r.fail("RenderPass %q: %s at index %d", p.desc.Label, what, index)
+		p.fail("RenderPass %q: %s at index %d", p.desc.Label, what, index)
 		p.failed = true
 		return
 	}
 	if v == nil {
-		p.r.fail("RenderPass %q: %s at index %d has a nil value", p.desc.Label, what, index)
+		p.fail("RenderPass %q: %s at index %d has a nil value", p.desc.Label, what, index)
 		p.failed = true
 		return
 	}
@@ -1007,7 +1008,7 @@ func (f IndexFormat) size() int {
 // elements is doing something ordinary rather than something wrong.
 func (p *RenderPass) SetIndexBuffer(v BufferView, format IndexFormat) {
 	if v.Buffer == nil {
-		p.r.fail("RenderPass %q: SetIndexBuffer with no buffer", p.desc.Label)
+		p.fail("RenderPass %q: SetIndexBuffer with no buffer", p.desc.Label)
 		p.failed = true
 		return
 	}
@@ -1035,13 +1036,13 @@ func (p *RenderPass) DrawIndexed(d DrawIndexed) {
 		return
 	}
 	if p.indexBuf.Buffer == nil {
-		p.r.fail("RenderPass %q: an indexed draw with no index buffer; call "+
+		p.fail("RenderPass %q: an indexed draw with no index buffer; call "+
 			"SetIndexBuffer first", p.desc.Label)
 		p.failed = true
 		return
 	}
 	if d.IndexCount <= 0 {
-		p.r.fail("RenderPass %q: an indexed draw of %d indices", p.desc.Label, d.IndexCount)
+		p.fail("RenderPass %q: an indexed draw of %d indices", p.desc.Label, d.IndexCount)
 		p.failed = true
 		return
 	}
@@ -1081,19 +1082,19 @@ func (p *RenderPass) DrawIndirect(args BufferView, bound Draw) {
 		return
 	}
 	if args.Buffer == nil {
-		p.r.fail("RenderPass %q: DrawIndirect with no argument buffer", p.desc.Label)
+		p.fail("RenderPass %q: DrawIndirect with no argument buffer", p.desc.Label)
 		p.failed = true
 		return
 	}
 	if bound.VertexCount <= 0 {
-		p.r.fail("RenderPass %q: an indirect draw with a maximum of %d vertices; the "+
+		p.fail("RenderPass %q: an indirect draw with a maximum of %d vertices; the "+
 			"maximum is what the device's count is clamped to, so it bounds the draw",
 			p.desc.Label, bound.VertexCount)
 		p.failed = true
 		return
 	}
 	if need := 4 * 4; args.Count*args.DType.Size() < need {
-		p.r.fail("RenderPass %q: the indirect argument buffer holds %d bytes and four "+
+		p.fail("RenderPass %q: the indirect argument buffer holds %d bytes and four "+
 			"uint32 arguments need %d", p.desc.Label, args.Count*args.DType.Size(), need)
 		p.failed = true
 		return
@@ -1120,7 +1121,7 @@ func (p *RenderPass) Draw(d Draw) {
 		return
 	}
 	if d.VertexCount <= 0 {
-		p.r.fail("RenderPass %q: a draw of %d vertices", p.desc.Label, d.VertexCount)
+		p.fail("RenderPass %q: a draw of %d vertices", p.desc.Label, d.VertexCount)
 		p.failed = true
 		return
 	}
@@ -1155,7 +1156,7 @@ func (p *RenderPass) beginDraw(what string) bool {
 		return false
 	}
 	if p.pipeline == nil {
-		p.r.fail("RenderPass %q: %s with no pipeline; call SetPipeline first",
+		p.fail("RenderPass %q: %s with no pipeline; call SetPipeline first",
 			p.desc.Label, what)
 		p.failed = true
 		return false
@@ -1180,7 +1181,7 @@ func (p *RenderPass) nonNegative(what string, fields ...any) bool {
 	if len(bad) == 0 {
 		return true
 	}
-	p.r.fail("RenderPass %q: %s with a negative %s", p.desc.Label, what,
+	p.fail("RenderPass %q: %s with a negative %s", p.desc.Label, what,
 		strings.Join(bad, ", "))
 	p.failed = true
 	return false
@@ -1377,4 +1378,12 @@ func declareUniformReads(p *RenderPass, bufs []BufferView, st stage, what string
 		}
 	}
 	return out
+}
+
+// fail records an error against this pass, whichever of its methods raised
+// it: a pass's node is recorded when the pass is declared, and its draws are
+// recorded after, so the context is restated here.
+func (p *RenderPass) fail(format string, args ...any) {
+	p.r.recording(NodeRenderPass, p.desc.Label)
+	p.r.fail(format, args...)
 }

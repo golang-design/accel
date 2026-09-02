@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"golang.design/x/accel/internal/driver"
 )
@@ -82,8 +83,16 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 
 	// Every recorded error is reported together. One per call would tell a
 	// caller about their first mistake and hide the rest behind a rebuild.
-	if err := errors.Join(r.state.errs...); err != nil {
-		return nil, err
+	if len(r.state.errs) > 0 {
+		be := &BuildError{Errs: make([]*NodeError, 0, len(r.state.errs))}
+		for _, err := range r.state.errs {
+			var ne *NodeError
+			if !errors.As(err, &ne) {
+				ne = &NodeError{Cause: err, Detail: strings.TrimPrefix(err.Error(), "accel: ")}
+			}
+			be.Errs = append(be.Errs, ne)
+		}
+		return nil, be
 	}
 
 	g := &Graph{

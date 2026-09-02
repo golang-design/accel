@@ -46,6 +46,11 @@ func (r *Recorder) Dispatch(p *ComputePipeline, b []Binding, u []UniformValue, c
 // actual count and it is clamped to max: on device in strict mode, and as a
 // documented caller obligation otherwise.
 func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, u []UniformValue, count BufferView, max WorkgroupCount) NodeID {
+	if p != nil {
+		r.recording(NodeDispatchIndirect, p.label)
+	} else {
+		r.recording(NodeDispatchIndirect, "")
+	}
 	return r.indirectImpl(p, b, u, count, max)
 }
 
@@ -60,13 +65,14 @@ func (r *Recorder) DispatchIndirect(p *ComputePipeline, b []Binding, u []Uniform
 // submission, which wants an Upload buffer written between submissions. It is
 // here for small constants baked into a graph.
 func (r *Recorder) UploadToBuffer(dst BufferView, src any) NodeID {
+	r.recording(NodeHostWrite, "UploadToBuffer")
 	a, ok := r.declare("UploadToBuffer", dst, AccessWrite)
 	if !ok {
 		return r.node(NodeHostWrite, "UploadToBuffer", nil, nil)
 	}
 	data, err := hostBytes("UploadToBuffer", dst.Buffer.desc.Label, dst.DType, src)
 	if err != nil {
-		r.state.errs = append(r.state.errs, err)
+		r.failErr(err)
 		return r.node(NodeHostWrite, "UploadToBuffer", nil, nil)
 	}
 	if len(data) != a.size {
@@ -90,6 +96,7 @@ func (r *Recorder) UploadToBuffer(dst BufferView, src any) NodeID {
 // resource to make a view of. Splitting it out rather than overloading a
 // BufferView with an optional slot keeps a view a thing that names bytes.
 func (r *Recorder) UploadToSlot(dst Slot, offset, count int, src any) NodeID {
+	r.recording(NodeHostWrite, "UploadToSlot")
 	d, ok := r.slotDescriptor(dst)
 	if !ok {
 		r.fail("UploadToSlot: slot %d was not declared by this recorder", int(dst))
@@ -97,7 +104,7 @@ func (r *Recorder) UploadToSlot(dst Slot, offset, count int, src any) NodeID {
 	}
 	data, err := hostBytes("UploadToSlot", d.Name, d.DType, src)
 	if err != nil {
-		r.state.errs = append(r.state.errs, err)
+		r.failErr(err)
 		return r.node(NodeHostWrite, "UploadToSlot", nil, nil)
 	}
 	a, ok := r.slotAccess("UploadToSlot", dst, offset*d.DType.Size(), count*d.DType.Size(), AccessWrite)
@@ -118,12 +125,14 @@ func (r *Recorder) UploadToSlot(dst Slot, offset, count int, src any) NodeID {
 
 // CopyBuffer records a device-to-device buffer copy.
 func (r *Recorder) CopyBuffer(dst, src BufferView) NodeID {
+	r.recording(NodeCopyBuffer, "CopyBuffer")
 	return r.copy("CopyBuffer", r.operandOf("CopyBuffer", dst, AccessWrite), r.operandOf("CopyBuffer", src, AccessRead))
 }
 
 // CopyFromSlot records a device-to-device copy whose source arrives before
 // submission.
 func (r *Recorder) CopyFromSlot(dst BufferView, src Slot, offset, count int) NodeID {
+	r.recording(NodeCopyBuffer, "CopyFromSlot")
 	d, ok := r.slotDescriptor(src)
 	if !ok {
 		r.fail("CopyFromSlot: slot %d was not declared by this recorder", int(src))
@@ -137,6 +146,7 @@ func (r *Recorder) CopyFromSlot(dst BufferView, src Slot, offset, count int) Nod
 // CopyToSlot records a device-to-device copy whose destination arrives before
 // submission.
 func (r *Recorder) CopyToSlot(dst Slot, offset, count int, src BufferView) NodeID {
+	r.recording(NodeCopyBuffer, "CopyToSlot")
 	d, ok := r.slotDescriptor(dst)
 	if !ok {
 		r.fail("CopyToSlot: slot %d was not declared by this recorder", int(dst))
@@ -188,11 +198,13 @@ func (r *Recorder) slotOperand(op string, s Slot, off, size int, mode Access) de
 // to the host and back. Readback follows caller row order regardless of the
 // backend's native origin; see docs/conventions.md.
 func (r *Recorder) CopyTextureToBuffer(dst BufferView, src *Texture) NodeID {
+	r.recording(NodeCopyTextureToBuffer, "CopyTextureToBuffer")
 	return r.textureCopy("CopyTextureToBuffer", dst, src, true)
 }
 
 // CopyBufferToTexture records an on-device copy from a buffer into a texture.
 func (r *Recorder) CopyBufferToTexture(dst *Texture, src BufferView) NodeID {
+	r.recording(NodeCopyBufferToTexture, "CopyBufferToTexture")
 	return r.textureCopy("CopyBufferToTexture", src, dst, false)
 }
 
@@ -865,4 +877,24 @@ func (g *Graph) SetUniform(n NodeID, index int, v any) error {
 	// would make this silently do nothing.
 	node.uniforms[index] = v
 	return nil
+}
+
+func (k NodeKind) String() string {
+	switch k {
+	case NodeDispatch:
+		return "dispatch"
+	case NodeDispatchIndirect:
+		return "indirect dispatch"
+	case NodeRenderPass:
+		return "render pass"
+	case NodeCopyBuffer:
+		return "buffer copy"
+	case NodeCopyTextureToBuffer:
+		return "texture-to-buffer copy"
+	case NodeCopyBufferToTexture:
+		return "buffer-to-texture copy"
+	case NodeHostWrite:
+		return "host write"
+	}
+	return fmt.Sprintf("NodeKind(%d)", int(k))
 }

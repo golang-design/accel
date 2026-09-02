@@ -169,6 +169,11 @@ func (d *Device) countPipelines(delta int) {
 // caller restate it would let them under-declare, which is how a missing
 // dependency becomes a race.
 func (r *Recorder) dispatchImpl(p *ComputePipeline, bs []Binding, us []UniformValue, count WorkgroupCount) NodeID {
+	if p != nil {
+		r.recording(NodeDispatch, p.label)
+	} else {
+		r.recording(NodeDispatch, "")
+	}
 	if p == nil {
 		r.fail("Dispatch: no pipeline")
 		return r.node(NodeDispatch, "Dispatch", nil, nil)

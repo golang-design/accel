@@ -7,6 +7,7 @@ package accel
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"golang.design/x/accel/internal/driver"
@@ -301,4 +302,112 @@ func humanBytes(n int) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// BuildError is what [Recorder.Build] returns when recording found problems.
+// It is a collection: every recorded error is reported together, one
+// [NodeError] each, so a caller learns about every mistake in one build rather
+// than one per rebuild. specs/003-command-graph.md's error taxonomy.
+//
+// errors.Is on a BuildError reaches every entry's sentinel through Unwrap, and
+// errors.As with a *NodeError finds the first entry.
+type BuildError struct {
+	Errs []*NodeError
+}
+
+func (e *BuildError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "accel: graph build failed: %d error", len(e.Errs))
+	if len(e.Errs) != 1 {
+		b.WriteString("s")
+	}
+	for _, n := range e.Errs {
+		b.WriteString("\n  ")
+		b.WriteString(n.Error())
+	}
+	return b.String()
+}
+
+// Unwrap exposes every entry, so errors.Is and errors.As look through the
+// collection.
+func (e *BuildError) Unwrap() []error {
+	out := make([]error, len(e.Errs))
+	for i, n := range e.Errs {
+		out[i] = n
+	}
+	return out
+}
+
+// NodeError is one problem with one recorded node.
+//
+// Site is the caller's file, line and column -- the first frame outside this
+// module when the recording call was made, so a caller sees their own line
+// rather than the recorder's. The column is 0, which runtime.Caller does not
+// report; the field is in the format because the kernel compiler's
+// diagnostics do have columns and one tool should parse both. Cause is the
+// error the check produced, which wraps one of the sentinels above where the
+// check has one, so errors.Is works through it; Detail is the human half.
+type NodeError struct {
+	Node   NodeID
+	Label  string
+	Kind   NodeKind
+	Site   string
+	Cause  error
+	Detail string
+
+	// atNode is whether an entry point had declared the node when the
+	// error was raised. A slot or transient declaration raises errors
+	// between nodes, and those carry the site and the detail alone.
+	atNode bool
+}
+
+func (e *NodeError) Error() string {
+	var b strings.Builder
+	if e.Site != "" {
+		b.WriteString(e.Site)
+		b.WriteString(": ")
+	}
+	if e.atNode {
+		fmt.Fprintf(&b, "node %d", int(e.Node))
+		if e.Label != "" {
+			fmt.Fprintf(&b, " %q", e.Label)
+		}
+		fmt.Fprintf(&b, " (%s): ", e.Kind)
+	}
+	b.WriteString(e.Detail)
+	return b.String()
+}
+
+func (e *NodeError) Unwrap() error { return e.Cause }
+
+// callSite is the first frame outside this module on the current stack, as
+// file:line:0, or "" when the whole stack is the module's (a test in it).
+func callSite() string {
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		f, more := frames.Next()
+		if f.Function != "" && !insideModule(f.Function) {
+			return fmt.Sprintf("%s:%d:0", f.File, f.Line)
+		}
+		if !more {
+			return ""
+		}
+	}
+}
+
+// insideModule reports whether a function belongs to this module's own
+// packages. An external test package (accel_test) is a caller, not the
+// module, which is what lets a test see its own line.
+func insideModule(fn string) bool {
+	pkg := fn
+	if i := strings.LastIndex(pkg, "/"); i >= 0 {
+		if j := strings.Index(pkg[i:], "."); j >= 0 {
+			pkg = pkg[:i+j]
+		}
+	} else if j := strings.Index(pkg, "."); j >= 0 {
+		pkg = pkg[:j]
+	}
+	return pkg == "golang.design/x/accel" || strings.HasPrefix(pkg, "golang.design/x/accel/")
 }
