@@ -122,13 +122,30 @@ func FuzzRecordAndBuild(f *testing.F) {
 		// A built graph's reported plan has to be self-consistent, whatever the
 		// input was: a plan with more barriers than nodes, or a pool smaller than
 		// its peak, is a builder defect rather than a bad recording.
+		//
+		// The planner aliases (specs/017-graph-aliasing.md), so the pool is at
+		// most the unaliased total and never more. An earlier version of this
+		// check demanded equality, which the first aliasable chain in the
+		// corpus refutes: the fuzz target was dead for every real -fuzz run
+		// while the seed corpus, which never aliases, kept it green.
 		m := g.Memory()
-		if m.TransientBytes != m.UnaliasedBytes {
-			t.Fatalf("this milestone does not alias: pool %d, unaliased %d",
-				m.TransientBytes, m.UnaliasedBytes)
+		if m.TransientBytes > m.UnaliasedBytes {
+			t.Fatalf("the pool %d exceeds the unaliased total %d: aliasing can only "+
+				"shrink the pool", m.TransientBytes, m.UnaliasedBytes)
 		}
 		if m.PeakBytes > m.TransientBytes {
 			t.Fatalf("peak %d exceeds the pool %d", m.PeakBytes, m.TransientBytes)
+		}
+		if m.PeakBytes > m.UnaliasedBytes {
+			t.Fatalf("peak %d exceeds the unaliased total %d", m.PeakBytes, m.UnaliasedBytes)
+		}
+		// And the gap between the two is exactly what the placement shows:
+		// two placements sharing bytes is aliasing, and a pool below the
+		// unaliased total with no shared bytes would be a pool with a hole in
+		// its accounting rather than a saving.
+		if aliased := placementsShareBytes(g.TransientPlacement()); aliased != (m.TransientBytes < m.UnaliasedBytes) {
+			t.Fatalf("placements share bytes: %v, but the pool is %d against an "+
+				"unaliased %d", aliased, m.TransientBytes, m.UnaliasedBytes)
 		}
 		nodes := g.Nodes()
 		if g.Barriers() > len(nodes) {
@@ -155,4 +172,16 @@ func FuzzRecordAndBuild(f *testing.F) {
 			}
 		}
 	})
+}
+
+// placementsShareBytes reports whether any two transients overlap in the pool.
+func placementsShareBytes(ps []accel.TransientPlacement) bool {
+	for i, a := range ps {
+		for _, b := range ps[:i] {
+			if a.Offset < b.Offset+b.Bytes && b.Offset < a.Offset+a.Bytes {
+				return true
+			}
+		}
+	}
+	return false
 }
