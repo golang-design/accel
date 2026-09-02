@@ -80,8 +80,17 @@ func TestCompareExchangeIsStrong(t *testing.T) {
 
 // The histogram is right, which it is not without atomics: every invocation
 // updates a bucket some other invocation may be updating.
+//
+// Above the CPU backend's pool threshold on purpose. Histogram is inferred
+// order-dependent and runs on one worker, where its plain-read-and-write
+// atomics are safe (internal/kernel/atomic.go). A Histogram whose atomic had
+// been replaced by counts[b]++ would be inferred order-*independent*, and at
+// this size it would run on the pool and lose updates under exactly the
+// contention internal/kernel's TestThePoolContendsAndALoadAddStoreLosesUpdates
+// demonstrates. TestAtomicKernelsAreInferredOrderDependent is the assertion
+// on the decision; this is the run the decision protects.
 func TestHistogramCountsEveryElement(t *testing.T) {
-	const n = 500
+	const n = 4000
 	in := make([]float32, n)
 	for i := range in {
 		in[i] = float32(i%100) / 100
@@ -104,6 +113,32 @@ func TestHistogramCountsEveryElement(t *testing.T) {
 	for i, got := range counts {
 		if want := uint32(n / 4); got != want {
 			t.Errorf("bucket %d has %d, want %d", i, got, want)
+		}
+	}
+}
+
+// Every kernel that reaches an atomic is inferred order-dependent.
+//
+// specs/006-backends.md section 5, rule 1: OrderIndependent is the absence of
+// any atomic, inferred by the compiler, and it is what keeps these kernels off
+// the CPU backend's worker pool. That gate is the only thing making the CPU
+// atomics correct -- they are plain reads and writes, safe on one worker -- so
+// a kernel here that came back order-independent has either lost its atomic
+// (a counts[b]++ where AddU32 was meant, which the pool would then run at
+// once and lose updates in) or the inference has stopped seeing atomics. Both
+// are wrong answers that would otherwise pass every value test on one worker.
+func TestAtomicKernelsAreInferredOrderDependent(t *testing.T) {
+	for _, k := range []*kernelabi.Kernel{
+		&testkernels.HistogramKernel,
+		&testkernels.AtomicOpsKernel,
+		&testkernels.AtomicOpsI32Kernel,
+		&testkernels.AtomicAddF32Kernel,
+		&testkernels.CountWorkgroupsKernel,
+	} {
+		if k.OrderIndependent {
+			t.Errorf("%s reaches an atomic and is inferred order-independent: the CPU "+
+				"backend would run its workgroups at once and its atomics are plain "+
+				"reads and writes", k.Name)
 		}
 	}
 }
