@@ -44,10 +44,13 @@ func renderPass(n *resolvedNode) (err error) {
 	}
 	applyLoads(rp, fb)
 
+	// One decode of each bound texture for the whole pass; see textureCache
+	// for why a pass is the right scope.
+	var textures textureCache
 	for i, d := range rp.Draws {
 		if err := drawOne(rp, fb, d, n.vertexBytes[i], n.vertexTextures[i], n.fragmentTextures[i],
 			n.vertexUniformBytes[i], n.fragmentUniformBytes[i],
-			n.indexBytes[i], n.indirectArgs[i]); err != nil {
+			n.indexBytes[i], n.indirectArgs[i], &textures); err != nil {
 			return fmt.Errorf("accel: render pass %q draw %d: %w", rp.Label, i, err)
 		}
 	}
@@ -178,16 +181,18 @@ func applyLoads(rp *driver.RenderPass, fb *raster.Framebuffer) {
 
 // drawOne rasterizes one draw.
 func drawOne(rp *driver.RenderPass, fb *raster.Framebuffer, d driver.RenderDraw, bufs [][]byte,
-	vbound, fbound []boundTexture, vubytes, fubytes [][]byte, indices, args []byte) error {
-	// Decoded here, when the draw runs, rather than when the node was
-	// resolved: resolution happens before any node executes, so a pass
-	// fetching what an earlier pass drew would otherwise read the texture as
-	// it was before the draw.
-	vtex, err := decodeTextures(vbound)
+	vbound, fbound []boundTexture, vubytes, fubytes [][]byte, indices, args []byte,
+	textures *textureCache) error {
+	// Decoded when the pass runs, rather than when the node was resolved:
+	// resolution happens before any node executes, so a pass fetching what an
+	// earlier pass drew would otherwise read the texture as it was before the
+	// draw. Once per pass, through the cache, since nothing in this pass can
+	// write a texture this pass reads.
+	vtex, err := textures.decode(vbound)
 	if err != nil {
 		return fmt.Errorf("accel: vertex texture: %w", err)
 	}
-	ftex, err := decodeTextures(fbound)
+	ftex, err := textures.decode(fbound)
 	if err != nil {
 		return fmt.Errorf("accel: fragment texture: %w", err)
 	}

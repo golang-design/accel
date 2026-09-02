@@ -764,28 +764,71 @@ type boundTexture struct {
 	raw  []byte
 }
 
-// decode turns the bytes into the four floats a fetch returns.
+// textureCache decodes each bound texture once per pass.
 //
-// Once per draw rather than once per fetch: a fragment stage fetching per pixel
-// would otherwise decode the same texel a thousand times for the same answer.
-// The codec is the *view's* format, so a texture written through a linear view
-// and fetched through an sRGB one decodes the way the fetch asked -- which is
-// what a texture unit does in fixed function on every target.
-func decodeTextures(ts []boundTexture) ([]kernel.Texture2D, error) {
+// Once per pass rather than once per draw: a pass of N draws sharing one
+// texture decoded it N times, and a decode is an image-sized allocation and a
+// conversion of every texel. Once is sound because feedback is rejected at
+// build -- a texture bound to a stage in a pass cannot be an attachment of the
+// same pass -- so its bytes cannot change between two draws of one pass. It is
+// still per pass rather than per submission, because an earlier pass of the
+// same submission may have drawn it, which is the case decoding at resolution
+// got wrong.
+//
+// Once per draw rather than once per fetch was the earlier bound, and it still
+// holds: a fragment stage fetching per pixel would otherwise decode the same
+// texel a thousand times for the same answer.
+type textureCache struct {
+	decoded map[textureKey]kernel.Texture2D
+
+	// decodes counts images decoded, so a test can say "once" rather than
+	// infer it from allocations.
+	decodes int
+}
+
+// textureKey is what makes two bindings the same texture: the same bytes, the
+// same extent and pitch, and the same format. The format is part of it because
+// the codec is the *view's*: a texture written through a linear view and
+// fetched through an sRGB one decodes the way the fetch asked -- which is what a
+// texture unit does in fixed function on every target -- and two views of one
+// texture with different formats are two decodes.
+type textureKey struct {
+	data          *byte
+	n             int
+	format        driver.Format
+	width, height int
+	pitch         int
+}
+
+func (c *textureCache) decode(ts []boundTexture) ([]kernel.Texture2D, error) {
 	if len(ts) == 0 {
 		return nil, nil
 	}
 	out := make([]kernel.Texture2D, len(ts))
 	for i, t := range ts {
-		c, err := codecFor(t.desc.Format)
+		key := textureKey{
+			data: unsafe.SliceData(t.raw), n: len(t.raw), format: t.desc.Format,
+			width: t.desc.Width, height: t.desc.Height, pitch: t.desc.Pitch,
+		}
+		if tex, ok := c.decoded[key]; ok {
+			out[i] = tex
+			continue
+		}
+		codec, err := codecFor(t.desc.Format)
 		if err != nil {
 			return nil, fmt.Errorf("slot %d: %w", i, err)
 		}
 		texels := make([]float32, t.desc.Width*t.desc.Height*4)
-		if err := c.decodeImage(texels, t.raw, t.desc.Width, t.desc.Height, t.desc.Pitch); err != nil {
+		if err := codec.decodeImage(texels, t.raw, t.desc.Width, t.desc.Height, t.desc.Pitch); err != nil {
 			return nil, fmt.Errorf("slot %d: %w", i, err)
 		}
-		out[i] = kernel.NewTexture2D(t.desc.Width, t.desc.Height, texels)
+		tex := kernel.NewTexture2D(t.desc.Width, t.desc.Height, texels)
+		if c.decoded == nil {
+			c.decoded = map[textureKey]kernel.Texture2D{}
+		}
+		c.decoded[key] = tex
+		c.decodes++
+		out[i] = tex
 	}
 	return out, nil
 }

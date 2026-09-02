@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel/internal/driver"
+	"golang.design/x/accel/internal/kernel"
 )
 
 // A pass reads and writes its attachments through the format the plan names.
@@ -71,6 +72,46 @@ func TestAPassDecodesAndStoresThroughTheAttachmentFormat(t *testing.T) {
 		if raw[i] != 0 {
 			t.Fatalf("byte %d of the row padding is %d, want 0", i, raw[i])
 		}
+	}
+}
+
+// A texture bound to two draws of one pass is decoded once, and a second view
+// of the same bytes with another format is a second decode.
+//
+// Decoding per draw is an image-sized allocation and a conversion of every
+// texel, repeated for every draw that binds the texture. Once per pass is
+// sound because a pass cannot draw into a texture it reads -- feedback is
+// rejected at build -- so the bytes cannot change between its draws.
+func TestAPassDecodesASharedTextureOnce(t *testing.T) {
+	const w, h, pitch = 4, 4, 16
+	raw := make([]byte, pitch*h)
+	raw[5] = 200
+	linear := boundTexture{desc: driver.RenderTexture{
+		Format: driver.RGBA8Unorm, Width: w, Height: h, Pitch: pitch}, raw: raw}
+	srgb := linear
+	srgb.desc.Format = driver.RGBA8UnormSRGB
+
+	var c textureCache
+	first, err := c.decode([]boundTexture{linear})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	second, err := c.decode([]boundTexture{linear})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if c.decodes != 1 {
+		t.Fatalf("the same texture bound to two draws was decoded %d times, want once", c.decodes)
+	}
+	if kernel.Fetch(first[0], 1, 0) != kernel.Fetch(second[0], 1, 0) {
+		t.Error("the two draws see different texels for one texture")
+	}
+	if _, err := c.decode([]boundTexture{srgb}); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if c.decodes != 2 {
+		t.Fatalf("a second view of the bytes with another format was decoded %d times in "+
+			"total, want 2: the codec is the view's, so it is a different decode", c.decodes)
 	}
 }
 
