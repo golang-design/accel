@@ -335,9 +335,14 @@ type checker struct {
 // run must not force every kernel to be regenerated, while an edit that changes
 // what the code means must.
 func (c *checker) normalize(fn *ast.FuncDecl) string {
+	// Without the doc comment. go/printer prints FuncDecl.Doc, and a comment
+	// is not something the generated form depends on: with it in, editing a
+	// sentence above a kernel changed the digest and forced regeneration.
+	decl := *fn
+	decl.Doc = nil
 	var b strings.Builder
 	cfg := printer.Config{Mode: printer.RawFormat, Tabwidth: 8}
-	if err := cfg.Fprint(&b, c.fset, fn); err != nil {
+	if err := cfg.Fprint(&b, c.fset, &decl); err != nil {
 		// Printing an AST that type-checked cannot fail; if it does, the digest
 		// falls back to something that is at least stable per position rather
 		// than silently becoming the empty string, which would make every kernel

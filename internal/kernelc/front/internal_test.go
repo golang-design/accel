@@ -6,6 +6,7 @@ package front
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"strings"
@@ -585,5 +586,45 @@ func TestSelectorOnAStructWithoutALayout(t *testing.T) {
 	}
 	if len(c.diags) != 1 || !strings.Contains(c.diags[0].Msg, "no field Field") {
 		t.Errorf("diagnostics = %v", c.diags)
+	}
+}
+
+// A kernel's normalized source is its declaration without its doc comment.
+//
+// go/printer prints FuncDecl.Doc, so with the comment left in place editing a
+// sentence above a kernel changed its digest and forced regeneration -- the
+// generated form does not depend on it, which is what ir.Func.Source promises.
+func TestNormalizedSourceDropsTheDocComment(t *testing.T) {
+	const a = `package p
+
+// K does one thing.
+//
+//accel:kernel workgroup=64
+func K(x int) int { return x }
+`
+	const b = `package p
+
+// K does another thing, and this comment is longer than the one above.
+//
+//accel:kernel workgroup=64
+func K(x int) int { return x }
+`
+	src := func(text string) string {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "k.go", text, parser.ParseComments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &checker{fset: fset}
+		return c.normalize(f.Decls[0].(*ast.FuncDecl))
+	}
+	if got, want := src(a), src(b); got != want {
+		t.Errorf("two declarations differing only in their doc comment normalize differently:\n%s\n---\n%s", got, want)
+	}
+	if strings.Contains(src(a), "does one thing") {
+		t.Error("the doc comment survived normalization")
+	}
+	if !strings.Contains(src(a), "func K(x int) int") {
+		t.Errorf("the declaration did not survive normalization: %q", src(a))
 	}
 }
