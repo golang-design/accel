@@ -45,10 +45,45 @@ jobs:
     - name: Enumerate
       run: go test ./internal/mtl/ -run TestDeviceOpens -v
 
+    # -json rather than plain, so the skips can be read back out of it: with
+    # the device promised, a test that skips for a narrower reason -- no
+    # CAMetalLayer, a device that enumerates and will not open -- would
+    # otherwise stay green and invisible. The output lines are replayed so
+    # the log still reads as go test -v.
     - name: Test
-      run: go test ./...
+      run: |
+        set -o pipefail
+        go test -json ./... | tee test.json | jq -rj 'select(.Action == "output") | .Output'
+
+    # Every skip, with its reason, and a failure for the device-conditional
+    # ones. Runs even when a test failed, since the skips are the part of the
+    # picture a failure alone does not show.
+    - name: Skips
+      if: always()
+      run: sh scripts/metal-skips.sh test.json
 
     - name: Test under the race detector
       env:
         CGO_ENABLED: '1'
       run: go test -race ./...
+
+    # The darwin packages' coverage, gated the way ci.yml gates the portable
+    # ones. The ubuntu coverage job cannot see internal/metal, internal/mtl,
+    # internal/mslabi, or the root package's *_darwin.go files, so until this
+    # step existed nothing measured them. Same tool, same 90% gate, same
+    # checked exclusions (specs/011-conformance-harness.md section 10.1); all
+    # four packages are above the gate as of this step's introduction.
+    - name: Measure darwin coverage
+      run: >
+        go test -coverprofile=cover-darwin.out
+        -coverpkg=.,./internal/metal,./internal/mtl,./internal/mslabi
+        ./ ./internal/metal/ ./internal/mtl/ ./internal/mslabi/ ./internal/testkernels/ ./tensor/
+
+    - name: Gate darwin coverage
+      run: go run ./internal/conformance/cover/covercheck -profile=cover-darwin.out
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-profile-darwin
+        path: cover-darwin.out
