@@ -51,6 +51,9 @@ type reduceFrame struct {
 	sum float32
 }
 
+// Reset is what the emitter generates, so the scheduler can reuse the frame.
+func (f *reduceFrame) Reset() { *f = reduceFrame{} }
+
 // reduceKernel is a generated-style cooperative kernel: each invocation
 // publishes to shared memory, a barrier, and lane 0 reduces the tile. Its
 // state lives in a frame the entry point allocates on first call, exactly as

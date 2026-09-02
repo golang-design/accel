@@ -171,12 +171,19 @@ func newScheduler(k *Kernel, args Args, invocations int, opts Options) *schedule
 
 // workgroup runs one workgroup to completion.
 func (s *scheduler) workgroup(k *Kernel, group, size, count ID3, opts Options) error {
-	// Frames are reset rather than reallocated. Their *contents* are dropped,
-	// though, and that is not an optimization to reclaim later: a frame carried
-	// into the next workgroup would resume an invocation mid-kernel with
-	// another workgroup's locals.
+	// Frames are reset rather than reallocated, and so is the generated state
+	// inside them when it can be: a [FrameState] is zeroed in place and handed
+	// back, anything else is dropped. Either way nothing of the previous
+	// workgroup survives, and that is not an optimization to reclaim later: a
+	// frame carried into the next workgroup would resume an invocation
+	// mid-kernel with another workgroup's locals.
 	for i := range s.frames {
+		state, _ := s.frames[i].State.(FrameState)
 		s.frames[i] = Frame{}
+		if state != nil {
+			state.Reset()
+			s.frames[i].State = state
+		}
 	}
 	// Shared storage is fresh per workgroup, and the generated code allocates
 	// it because only that knows each array's element type and extent. It

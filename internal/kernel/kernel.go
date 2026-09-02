@@ -531,7 +531,9 @@ func SharedSlice[T any](a Args, i int) *T {
 // knows what a particular kernel has to carry across a barrier. The scheduler
 // owns the slot and hands the same one back to the same invocation.
 type Frame struct {
-	// State is the generated frame, allocated by the kernel on its first call.
+	// State is the generated frame, allocated by the kernel on its first call
+	// in a slot and kept by the scheduler across workgroups when it implements
+	// [FrameState], which every generated frame does.
 	State any
 
 	// Done reports that this invocation has run to completion.
@@ -593,6 +595,20 @@ type Frame struct {
 	// while a peer waits at B a reported mismatch rather than a silent pairing.
 	// See specs/002-compute-model.md section 3.4.
 	Barrier BarrierID
+}
+
+// FrameState is a generated frame the scheduler can reuse across workgroups.
+//
+// The scheduler cannot zero a frame it does not know the type of, and dropping
+// it instead made the generated entry point allocate a fresh one per invocation
+// per workgroup: the same size every time, for a dispatch of thousands of
+// workgroups. Reset returns the frame to the state a first call expects, which
+// keeps the isolation dropping it gave -- a frame carried into the next
+// workgroup would otherwise resume an invocation mid-kernel with another
+// workgroup's locals -- without the allocation. A state that does not
+// implement it is dropped as before.
+type FrameState interface {
+	Reset()
 }
 
 // BarrierID identifies one suspension point in a kernel.

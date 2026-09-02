@@ -962,6 +962,10 @@ type attentionDecodeFrame struct {
 	j21        uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionDecodeFrame) Reset() { *f = attentionDecodeFrame{} }
+
 // attentionDecodeCoop runs one invocation of AttentionDecode to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -1299,6 +1303,10 @@ type attentionDecodeF16Frame struct {
 	j21        uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionDecodeF16Frame) Reset() { *f = attentionDecodeF16Frame{} }
+
 // attentionDecodeF16Coop runs one invocation of AttentionDecodeF16 to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -1611,6 +1619,10 @@ type ballotFrame struct {
 	i2    uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *ballotFrame) Reset() { *f = ballotFrame{} }
+
 // ballotCoop runs one invocation of Ballot to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -1694,6 +1706,10 @@ type publishStorageFrame struct {
 	g0    uint32
 	lane1 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *publishStorageFrame) Reset() { *f = publishStorageFrame{} }
 
 // publishStorageCoop runs one invocation of PublishStorage to its next suspension point.
 //
@@ -1780,6 +1796,10 @@ type publishSharedFrame struct {
 	g0    uint32
 	lane1 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *publishSharedFrame) Reset() { *f = publishSharedFrame{} }
 
 // publishSharedCoop runs one invocation of PublishShared to its next suspension point.
 //
@@ -1869,6 +1889,10 @@ type subgroupPublishFrame struct {
 	lane0 uint32
 	sid1  uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *subgroupPublishFrame) Reset() { *f = subgroupPublishFrame{} }
 
 // subgroupPublishCoop runs one invocation of SubgroupPublish to its next suspension point.
 //
@@ -1964,6 +1988,10 @@ type subgroupStaggerFrame struct {
 	lane1 uint32
 	i2    uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *subgroupStaggerFrame) Reset() { *f = subgroupStaggerFrame{} }
 
 // subgroupStaggerCoop runs one invocation of SubgroupStagger to its next suspension point.
 //
@@ -2095,6 +2123,10 @@ type attentionDecodeBatchedFrame struct {
 	j24        uint32
 	phys25     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionDecodeBatchedFrame) Reset() { *f = attentionDecodeBatchedFrame{} }
 
 // attentionDecodeBatchedCoop runs one invocation of AttentionDecodeBatched to its next suspension point.
 //
@@ -2642,6 +2674,10 @@ type exchangeFrame struct {
 	next2 uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *exchangeFrame) Reset() { *f = exchangeFrame{} }
+
 // exchangeCoop runs one invocation of Exchange to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -2745,6 +2781,10 @@ type reduceLoopFrame struct {
 	gid1    uint32
 	stride2 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *reduceLoopFrame) Reset() { *f = reduceLoopFrame{} }
 
 // reduceLoopCoop runs one invocation of ReduceLoop to its next suspension point.
 //
@@ -2872,6 +2912,10 @@ type reduceUnrolledFrame struct {
 	lid0 uint32
 	gid1 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *reduceUnrolledFrame) Reset() { *f = reduceUnrolledFrame{} }
 
 // reduceUnrolledCoop runs one invocation of ReduceUnrolled to its next suspension point.
 //
@@ -3141,6 +3185,10 @@ type shapeBoundedSumFrame struct {
 	total2 float32
 	i3     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *shapeBoundedSumFrame) Reset() { *f = shapeBoundedSumFrame{} }
 
 // shapeBoundedSumCoop runs one invocation of ShapeBoundedSum to its next suspension point.
 //
@@ -4005,6 +4053,10 @@ type matMulTiledFrame struct {
 	bv13  float32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *matMulTiledFrame) Reset() { *f = matMulTiledFrame{} }
+
 // matMulTiledCoop runs one invocation of MatMulTiled to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -4219,6 +4271,10 @@ type matMulTiledF32Frame struct {
 	av12  float32
 	bv13  float32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *matMulTiledF32Frame) Reset() { *f = matMulTiledF32Frame{} }
 
 // matMulTiledF32Coop runs one invocation of MatMulTiledF32 to its next suspension point.
 //
@@ -4436,6 +4492,10 @@ type matMulTiledF32F16Frame struct {
 	bv14   float32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *matMulTiledF32F16Frame) Reset() { *f = matMulTiledF32F16Frame{} }
+
 // matMulTiledF32F16Coop runs one invocation of MatMulTiledF32F16 to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -4649,6 +4709,10 @@ type groupedMatVecFrame struct {
 	stride9 uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *groupedMatVecFrame) Reset() { *f = groupedMatVecFrame{} }
+
 // groupedMatVecCoop runs one invocation of GroupedMatVec to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -4851,6 +4915,10 @@ type groupedMatMulFrame struct {
 	kk215  uint32
 	k16    uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *groupedMatMulFrame) Reset() { *f = groupedMatMulFrame{} }
 
 // groupedMatMulCoop runs one invocation of GroupedMatMul to its next suspension point.
 //
@@ -5096,6 +5164,10 @@ type quantMatVecInt4Frame struct {
 	stride10 uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *quantMatVecInt4Frame) Reset() { *f = quantMatVecInt4Frame{} }
+
 // quantMatVecInt4Coop runs one invocation of QuantMatVecInt4 to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -5298,6 +5370,10 @@ type quantMatMulInt4Frame struct {
 	av24   float32
 	bv25   float32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *quantMatMulInt4Frame) Reset() { *f = quantMatMulInt4Frame{} }
 
 // quantMatMulInt4Coop runs one invocation of QuantMatMulInt4 to its next suspension point.
 //
@@ -5547,6 +5623,10 @@ type intReduceFrame struct {
 	hiU6 uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *intReduceFrame) Reset() { *f = intReduceFrame{} }
+
 // intReduceCoop runs one invocation of IntReduce to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -5690,6 +5770,10 @@ type bitReduceFrame struct {
 	ou7 uint32
 	xu8 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *bitReduceFrame) Reset() { *f = bitReduceFrame{} }
 
 // bitReduceCoop runs one invocation of BitReduce to its next suspension point.
 //
@@ -5859,6 +5943,10 @@ type mulReduceFrame struct {
 	pi5 int32
 	pu6 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *mulReduceFrame) Reset() { *f = mulReduceFrame{} }
 
 // mulReduceCoop runs one invocation of MulReduce to its next suspension point.
 //
@@ -6130,6 +6218,10 @@ type matVecFrame struct {
 	stride4 uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *matVecFrame) Reset() { *f = matVecFrame{} }
+
 // matVecCoop runs one invocation of MatVec to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -6292,6 +6384,10 @@ type quantMatVecFrame struct {
 	s6      float32
 	stride7 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *quantMatVecFrame) Reset() { *f = quantMatVecFrame{} }
 
 // quantMatVecCoop runs one invocation of QuantMatVec to its next suspension point.
 //
@@ -6463,6 +6559,10 @@ type quantMatVecF32Frame struct {
 	s6      float32
 	stride7 uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *quantMatVecF32Frame) Reset() { *f = quantMatVecF32Frame{} }
 
 // quantMatVecF32Coop runs one invocation of QuantMatVecF32 to its next suspension point.
 //
@@ -6640,6 +6740,10 @@ type linearTiledFrame struct {
 	av12  float32
 	bv13  float32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *linearTiledFrame) Reset() { *f = linearTiledFrame{} }
 
 // linearTiledCoop runs one invocation of LinearTiled to its next suspension point.
 //
@@ -6854,6 +6958,10 @@ type rMSNormFrame struct {
 	i9      uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *rMSNormFrame) Reset() { *f = rMSNormFrame{} }
+
 // rMSNormCoop runs one invocation of RMSNorm to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -7028,6 +7136,10 @@ type softmaxFrame struct {
 	total11  float32
 	i12      uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *softmaxFrame) Reset() { *f = softmaxFrame{} }
 
 // softmaxCoop runs one invocation of Softmax to its next suspension point.
 //
@@ -7366,6 +7478,10 @@ type attentionDecodePagedFrame struct {
 	j21        uint32
 	phys22     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionDecodePagedFrame) Reset() { *f = attentionDecodePagedFrame{} }
 
 // attentionDecodePagedCoop runs one invocation of AttentionDecodePaged to its next suspension point.
 //
@@ -7710,6 +7826,10 @@ type attentionDecodePagedF16Frame struct {
 	j21        uint32
 	phys22     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionDecodePagedF16Frame) Reset() { *f = attentionDecodePagedF16Frame{} }
 
 // attentionDecodePagedF16Coop runs one invocation of AttentionDecodePagedF16 to its next suspension point.
 //
@@ -8060,6 +8180,10 @@ type attentionPrefillPagedF16Frame struct {
 	j27        uint32
 	phys28     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionPrefillPagedF16Frame) Reset() { *f = attentionPrefillPagedF16Frame{} }
 
 // attentionPrefillPagedF16Coop runs one invocation of AttentionPrefillPagedF16 to its next suspension point.
 //
@@ -8659,6 +8783,10 @@ type attentionPrefillFrame struct {
 	j26        uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionPrefillFrame) Reset() { *f = attentionPrefillFrame{} }
+
 // attentionPrefillCoop runs one invocation of AttentionPrefill to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -9019,6 +9147,10 @@ type attentionPrefillF16Frame struct {
 	stride25   uint32
 	j26        uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionPrefillF16Frame) Reset() { *f = attentionPrefillF16Frame{} }
 
 // attentionPrefillF16Coop runs one invocation of AttentionPrefillF16 to its next suspension point.
 //
@@ -9382,6 +9514,10 @@ type attentionPrefillPagedFrame struct {
 	j27        uint32
 	phys28     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionPrefillPagedFrame) Reset() { *f = attentionPrefillPagedFrame{} }
 
 // attentionPrefillPagedCoop runs one invocation of AttentionPrefillPaged to its next suspension point.
 //
@@ -10013,6 +10149,10 @@ type attentionRaggedFrame struct {
 	phys32     uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionRaggedFrame) Reset() { *f = attentionRaggedFrame{} }
+
 // attentionRaggedCoop runs one invocation of AttentionRagged to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -10431,6 +10571,10 @@ type attentionRaggedF16Frame struct {
 	j31        uint32
 	phys32     uint32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *attentionRaggedF16Frame) Reset() { *f = attentionRaggedF16Frame{} }
 
 // attentionRaggedF16Coop runs one invocation of AttentionRaggedF16 to its next suspension point.
 //
@@ -11049,6 +11193,10 @@ type reduceSumFrame struct {
 	stride4 uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *reduceSumFrame) Reset() { *f = reduceSumFrame{} }
+
 // reduceSumCoop runs one invocation of ReduceSum to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -11194,6 +11342,10 @@ type sampleArgmaxFrame struct {
 	a8      float32
 	b9      float32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *sampleArgmaxFrame) Reset() { *f = sampleArgmaxFrame{} }
 
 // sampleArgmaxCoop runs one invocation of SampleArgmax to its next suspension point.
 //
@@ -12755,6 +12907,10 @@ type subgroupReduceFrame struct {
 	sid4     uint32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *subgroupReduceFrame) Reset() { *f = subgroupReduceFrame{} }
+
 // subgroupReduceCoop runs one invocation of SubgroupReduce to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -12955,6 +13111,10 @@ type subgroupShuffleMixFrame struct {
 	down8    float32
 	r9       float32
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *subgroupShuffleMixFrame) Reset() { *f = subgroupShuffleMixFrame{} }
 
 // subgroupShuffleMixCoop runs one invocation of SubgroupShuffleMix to its next suspension point.
 //
@@ -13229,6 +13389,10 @@ type subgroupScanFrame struct {
 	exclusive3 float32
 }
 
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *subgroupScanFrame) Reset() { *f = subgroupScanFrame{} }
+
 // subgroupScanCoop runs one invocation of SubgroupScan to its next suspension point.
 //
 // It reports whether the invocation suspended. False means it finished, and
@@ -13483,6 +13647,10 @@ type topKMaskFrame struct {
 	w16      float32
 	keep17   bool
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *topKMaskFrame) Reset() { *f = topKMaskFrame{} }
 
 // topKMaskCoop runs one invocation of TopKMask to its next suspension point.
 //
@@ -13772,6 +13940,10 @@ type topPMaskFrame struct {
 	w20      float32
 	keep21   bool
 }
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *topPMaskFrame) Reset() { *f = topPMaskFrame{} }
 
 // topPMaskCoop runs one invocation of TopPMask to its next suspension point.
 //

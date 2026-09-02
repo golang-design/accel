@@ -477,6 +477,65 @@ func TestAStuckKernelIsReportedFromAWorker(t *testing.T) {
 	}
 }
 
+// countingFrame is a generated-style frame that records how many times it was
+// allocated and how many times an invocation started from a fresh one.
+type countingFrame struct {
+	pc int
+	v  uint32
+}
+
+func (f *countingFrame) Reset() { *f = countingFrame{} }
+
+// A generated frame is reused across workgroups and reset between them.
+//
+// Dropping the state made the entry point allocate a frame per invocation per
+// workgroup. Keeping it is only correct if nothing of the last workgroup is
+// left in it, so the kernel checks both: that it was handed a zeroed frame at
+// the start of every workgroup, and that the number of frames allocated is the
+// number of invocation slots rather than the number of invocations run.
+func TestAFrameStateIsReusedAcrossWorkgroups(t *testing.T) {
+	const size, groups = 8, 64
+	var allocated, fresh, stale int
+	k := &kernel.Kernel{
+		Name: "Reuse", Generator: kernel.ABIVersion,
+		WorkgroupSize: kernel.ID3{X: size, Y: 1, Z: 1},
+		Suspensions:   1,
+		Cooperative: func(th kernel.Thread, a kernel.Args, slot *kernel.Frame) bool {
+			f, _ := slot.State.(*countingFrame)
+			if f == nil {
+				f = &countingFrame{}
+				slot.State = f
+				allocated++
+			}
+			switch f.pc {
+			case 0:
+				if f.v == 0 {
+					fresh++
+				} else {
+					stale++
+				}
+				f.v = th.GlobalIndex() + 1
+				f.pc = 1
+				slot.Barrier = kernel.BarrierID{Index: 0}
+				return true
+			}
+			return false
+		},
+	}
+	if err := kernel.DispatchCooperativeWith(k, kernel.ID3{X: groups}, kernel.Args{},
+		kernel.Options{Diagnostics: true, Workers: 1}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if stale != 0 || fresh != size*groups {
+		t.Fatalf("%d invocations started on a frame holding another workgroup's state "+
+			"and %d on a fresh one, want 0 and %d", stale, fresh, size*groups)
+	}
+	if allocated != size {
+		t.Fatalf("%d frames were allocated for %d invocation slots: the scheduler drops "+
+			"the state between workgroups instead of resetting it", allocated, size)
+	}
+}
+
 // The epoch bound is not the kernel's static suspension count.
 //
 // Kernel.Suspensions counts the suspension points in the source, and a barrier

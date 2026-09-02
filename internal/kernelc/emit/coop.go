@@ -512,6 +512,16 @@ func (e *emitter) coopLowering(k *ir.Func, segs []segment) {
 	}
 	e.printf("}\n\n")
 
+	// The scheduler reuses a frame across workgroups rather than dropping it,
+	// which is what kernelabi.FrameState asks for: a way to zero it in place
+	// without knowing its type. The alternative is a fresh struct per
+	// invocation per workgroup, which for a dispatch of a thousand workgroups
+	// is a thousand allocations per invocation slot for state that is the
+	// same size every time.
+	e.printf("// Reset returns the frame to its initial state, so the scheduler can hand it\n")
+	e.printf("// to the next workgroup's invocation without allocating another.\n")
+	e.printf("func (f *%s) Reset() { *f = %s{} }\n\n", frame, frame)
+
 	e.printf("// %s runs one invocation of %s to its next suspension point.\n", lower, k.Name)
 	e.printf("//\n")
 	e.printf("// It reports whether the invocation suspended. False means it finished, and\n")
@@ -927,10 +937,12 @@ func (e *emitter) cooperativeKernel(k *ir.Func) {
 	}
 	e.uniformRecords(k)
 
-	// The entry point allocates one frame per invocation on first call and
-	// resumes it afterwards. The scheduler owns the frames, so it passes an
-	// opaque slot rather than the kernel keeping state of its own: two
-	// workgroups run concurrently and a package-level frame would alias them.
+	// The entry point allocates one frame per invocation slot on first call
+	// and resumes it afterwards; between workgroups the scheduler resets it
+	// through Reset rather than dropping it. The scheduler owns the frames, so
+	// it passes an opaque slot rather than the kernel keeping state of its
+	// own: two workgroups run concurrently and a package-level frame would
+	// alias them.
 	e.printf("\tCooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {\n")
 	e.printf("\t\tf, _ := slot.State.(*%s)\n", frameName(k.Name))
 	e.printf("\t\tif f == nil {\n")
