@@ -120,11 +120,27 @@ instances, each with its own transient memory, and runs that many submissions
 at once. The plan cache keys on the option, so a plan compiled for one and one
 for four are different plans.
 
-## Where this stops today
+## Prefilling several sequences at once
 
-A batched **prefill** is not built. The shape has room for it — `qSeq` is that
-axis — and no kernel takes it, so `qSeq` must be 1. Prefill one sequence at a
-time, then step them together.
+The rectangular `[batch, 1, heads, dim]` query above is one token per sequence.
+A batched **prefill** is the ragged form of the same operator: lay every
+sequence's prompt tokens end to end as `[tokens, heads, dim]`, and pass how
+many belong to each sequence as `QueryExtents`, next to the `Lengths` and
+`Pages` the step already carries.
+
+```go
+// Three prompts of 5, 2 and 7 tokens, concatenated: q is [14, heads, dim].
+extents := tensor.Input(b, tensor.ValueDesc{Name: "extents", DType: accel.U32, Shape: tensor.Shape{3}})
+out := tensor.Attention(b, q, kcache, vcache, tensor.AttentionOptions{
+	Lengths: lengths, Pages: pages, Block: block,
+	QueryExtents: extents, ScaleName: "scale",
+})
+```
+
+Each sequence attends causally within its own extent and against its own
+cache, and a test holds the batched result to the three prompts prefilled one
+at a time. What the rectangular form does not take is `qSeq` above one, and
+its refusal says to use this form.
 
 ## Try it
 

@@ -370,7 +370,7 @@ func TestStateAndAttentionRefusals(t *testing.T) {
 			tensor.Attention(b, f32(b, "q", 3, 5, 4, 8), cache(b, "k", 16, 2, 8),
 				cache(b, "v", 16, 2, 8), o)
 		},
-		want: "a batched *prefill* is specs/040-batch-scheduler.md's",
+		want: "pass their counts as QueryExtents",
 	}, {
 		name: "a page table whose rows are not the batch",
 		build: func(b *tensor.Builder) {

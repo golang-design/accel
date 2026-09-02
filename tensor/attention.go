@@ -372,9 +372,12 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 				"page table and no contiguous variant", batch)
 		}
 		if qSeq != 1 {
-			return b.fail(1, "Attention", "q is %v: a batched step takes one token per "+
-				"sequence, and a batched *prefill* is specs/040-batch-scheduler.md's. "+
-				"The shape has room for it -- qSeq is this axis -- and no kernel does",
+			return b.fail(1, "Attention", "q is %v: the rectangular batched form takes one "+
+				"token per sequence. A batched prefill is the ragged form: lay every "+
+				"sequence's tokens end to end as [tokens, qHeads, headDim] and pass their "+
+				"counts as QueryExtents (specs/046-segmented-extents.md); the rectangular "+
+				"form with qSeq above one is specs/040-batch-scheduler.md's and no kernel "+
+				"takes it",
 				Shape{batch, qSeq, qHeads, headDim})
 		}
 		if cacheDType != accel.F32 {
