@@ -180,6 +180,30 @@ func diffCases() []diffCase {
 			why: "a minimum and a maximum select an input, so this is exact",
 		},
 		{
+			// The f32 minimum and maximum, specs/059-subgroup-reductions.md
+			// §5, with the input IntReduce cannot carry: a NaN, and one that
+			// is never lane 0 of a subgroup on either backend (the CPU
+			// scheduler's default width is 4, Metal's is 32; lane 5 of every
+			// 64 is lane 1 of a 4-wide subgroup and lane 5 of a 32-wide one).
+			// kmath's contract is that a NaN in any lane makes the reduction
+			// NaN. simd_min and simd_max are fmin and fmax across lanes and
+			// drop it, and the CPU scheduler once kept only a lane-0 NaN, so
+			// this is the case both lowerings got wrong.
+			kernel: &testkernels.FloatReduceKernel,
+			counts: []int{64, 64, 64},
+			groups: accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b != 0 {
+					return 0
+				}
+				if i%64 == 5 {
+					return float32(math.NaN())
+				}
+				return float32((i*37)%64-21) * 0.5
+			},
+			why: "a minimum and a maximum select an input, so this is exact; a NaN is compared as a NaN",
+		},
+		{
 			// The bitwise family, specs/059-subgroup-reductions.md §6's second
 			// slice. Exact for a sharper reason than the minima: each is
 			// associative *and* commutative over its whole domain, so no

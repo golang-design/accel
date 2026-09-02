@@ -4045,6 +4045,124 @@ kernel void ElemBias(
 	},
 }
 
+// floatReduceFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type floatReduceFrame struct {
+	pc  int
+	i0  uint32
+	v1  float32
+	lo2 float32
+	hi3 float32
+}
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *floatReduceFrame) Reset() { *f = floatReduceFrame{} }
+
+// floatReduceCoop runs one invocation of FloatReduce to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func floatReduceCoop(t accel.Thread, in []float32, minF []float32, maxF []float32, f *floatReduceFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.i0 = t.LocalID().X
+			f.v1 = in[f.i0]
+			f.pc = 1
+			continue
+		case 1:
+			frame.Sub = kernelabi.SubMinF32
+			frame.SubF32 = f.v1
+			f.pc = 2
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "floatreduce.go:28:2"}
+			return true
+		case 2:
+			f.lo2 = frame.SubF32
+			f.pc = 3
+			continue
+		case 3:
+			frame.Sub = kernelabi.SubMaxF32
+			frame.SubF32 = f.v1
+			f.pc = 4
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "floatreduce.go:29:2"}
+			return true
+		case 4:
+			f.hi3 = frame.SubF32
+			f.pc = 5
+			continue
+		case 5:
+			minF[f.i0] = f.lo2
+			maxF[f.i0] = f.hi3
+			return false
+		}
+		return false
+	}
+}
+
+// FloatReduceKernel is the compiled form of FloatReduce.
+var FloatReduceKernel = kernelabi.Kernel{
+	Name:          "FloatReduce",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "in", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "minF", DType: kernelabi.F32, Access: kernelabi.Write},
+		{Name: "maxF", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "42520130351f44917b59681056ead9d1",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static float _accel_simd_fmin(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_min(x);
+}
+
+static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
+}
+
+kernel void FloatReduce(
+    const device float *in [[buffer(0)]],
+    device float *minF [[buffer(1)]],
+    device float *maxF [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _lid.x;
+    float v = in[i];
+    float lo = _accel_simd_fmin(v);
+    float hi = _accel_simd_fmax(v);
+    minF[i] = lo;
+    maxF[i] = hi;
+}
+`,
+	Caps:             16,
+	OrderIndependent: true,
+	Suspensions:      2,
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*floatReduceFrame)
+		if f == nil {
+			f = &floatReduceFrame{}
+			slot.State = f
+		}
+		return floatReduceCoop(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), f, slot, slot.Shared)
+	},
+}
+
 // matMulTiledFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -14480,6 +14598,7 @@ var Kernels = []*kernelabi.Kernel{
 	&ScatterRowsF16Kernel,
 	&RoPEKernel,
 	&ElemBiasKernel,
+	&FloatReduceKernel,
 	&MatMulTiledKernel,
 	&MatMulTiledF32Kernel,
 	&MatMulTiledF32F16Kernel,

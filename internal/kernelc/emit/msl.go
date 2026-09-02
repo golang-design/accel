@@ -229,6 +229,21 @@ var mslPrelude = []struct{ name, text string }{
     return fmax(a, b);
 }
 `},
+	// The subgroup minimum and maximum over f32, with the same contract:
+	// a NaN in any active lane makes the reduction NaN. simd_min and simd_max
+	// are fmin and fmax across the lanes, so they would return the smallest
+	// non-NaN and agree with the CPU scheduler on every input but the one
+	// the contract is about. simd_any is the cross-lane "is any NaN".
+	{"simd_fmin", `static float _accel_simd_fmin(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_min(x);
+}
+`},
+	{"simd_fmax", `static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
+}
+`},
 	{"cas_u32", `static uint _accel_cas_u32(device atomic_uint *p, uint expected, uint desired) {
     uint e = expected;
     while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
@@ -1289,6 +1304,14 @@ func (m *msl) intrinsic(v *ir.IntrinsicCall) {
 			m.fail("subgroup operation %v takes one value at %v", v.Op, v.Pos())
 			return
 		}
+		// The f32 minimum and maximum go through the NaN-propagating helpers
+		// for the reason OpMin and OpMax do above: the built-in drops a NaN.
+		switch v.Op {
+		case ir.OpSubgroupMinF32:
+			fn, m.need["simd_fmin"] = "_accel_simd_fmin", true
+		case ir.OpSubgroupMaxF32:
+			fn, m.need["simd_fmax"] = "_accel_simd_fmax", true
+		}
 		m.printf("%s(", fn)
 		m.value(v.Args[0])
 		m.printf(")")
@@ -1419,6 +1442,8 @@ var mslSubgroupNullary = map[ir.Opcode]string{
 // are here and it is not.
 var mslSubgroup = map[ir.Opcode]string{
 	ir.OpSubgroupAddF32: "simd_sum",
+	// The f32 minimum and maximum are listed so the table says the operation
+	// lowers; the emitter substitutes the NaN-propagating helpers at the call.
 	ir.OpSubgroupMinF32: "simd_min",
 	ir.OpSubgroupMaxF32: "simd_max",
 
