@@ -615,6 +615,15 @@ from the binding that describes its reach.
 The analysis runs on the IR, once, and is therefore shared by every target, which
 is [004](004-kernel-authoring.md)'s argument for having an IR at all.
 
+**Amendment, 2026-09-02.** The hatch above stays closed for an undeclared
+binding. [063](063-uniform-loads.md) opens a narrower one: a kernel may declare
+with `//accel:uniform` the read-only bindings no invocation of its dispatch
+writes, a load from one is then as uniform as its index, and the alias this
+paragraph's objection rests on is refused by the graph for the declared binding
+(at record time for two concrete resources, and by V24 at Bind for a slot). The
+analysis was wired into the build the same day, which is what made the four
+routing-table kernels' refusals visible.
+
 ### 3.4 The CPU backend catches what the compiler cannot
 
 Static analysis is conservative in one direction; the runtime check is exact. The

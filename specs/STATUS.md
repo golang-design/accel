@@ -1059,8 +1059,11 @@ transfer exclusion that cited them is gone and the format has a parity case.
 **Still open, and a decision rather than a fix.** Each changes a spec or a
 public contract and was not decided inside an autonomous session:
 
-1. **[019](019-cooperative-diagnostics.md)/002 §3.3 — the uniformity analysis
-   has no caller.** `uniform.AcceptBarriers` is sound now (return, helper body
+1. **Decided 2026-09-02, later the same day: [063](063-uniform-loads.md).** The
+   analysis runs in the build, the four kernels declare their routing tables
+   with `//accel:uniform`, and the graph refuses the alias. The row below is
+   kept as it was written. **[019](019-cooperative-diagnostics.md)/002 §3.3 —
+   the uniformity analysis has no caller.** `uniform.AcceptBarriers` is sound now (return, helper body
    and loop escape all level what follows) and is not run by the build.
    Wiring it refuses `GroupedMatVec`, `GroupedMatMul`, `AttentionRagged` and
    `AttentionRaggedF16`: their early returns and the tiled segment loop depend
