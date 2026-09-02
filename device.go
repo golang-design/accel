@@ -106,6 +106,7 @@ func OpenCPU(opts CPUOptions) (*Device, error) {
 		SubgroupSize:     opts.SubgroupSize,
 		ShuffleSeed:      opts.ShuffleSeed,
 		LoseAtSubmission: opts.LoseAtSubmission,
+		NoDiagnostics:    opts.NoDiagnostics,
 	}
 	for _, t := range opts.StrictTargets {
 		o.StrictTargets = append(o.StrictTargets, driver.Backend(t))

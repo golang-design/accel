@@ -312,6 +312,14 @@ type CPUOptions struct {
 	// the whole terminal-loss path is code nobody runs until a caller's driver
 	// restarts in production. It has no effect on any other backend.
 	LoseAtSubmission int
+
+	// NoDiagnostics turns the CPU backend's cooperative instrumentation off:
+	// the barrier-arrival, undefined-shared-read and shared-conflict checks
+	// that make it an oracle. They are on in every mode, Strict included,
+	// because specs/006-backends.md section 5 defines a mode as a capability
+	// and limits profile and says nothing about instrumentation. Turning them
+	// off is a separate request, for a run that wants the speed.
+	NoDiagnostics bool
 }
 
 // Device is an opened accelerator.
