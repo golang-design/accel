@@ -680,3 +680,77 @@ func samplingParityCase() tensorParityCase {
 		},
 	}
 }
+
+// rowSamplingParityCase covers the per-row policy, specs/064-per-row-sampling.md.
+//
+// Three rows, each with its own factor, k and p, a bias on one row and the
+// penalties with a row axis; the tokens are the comparison, since every stage
+// but the softmax is exact and the token is what a caller acts on.
+func rowSamplingParityCase() tensorParityCase {
+	const rows, vocab, cap = 3, 48, 4
+	logits := make([]float32, rows*vocab)
+	for i := range logits {
+		logits[i] = float32(math.Sin(float64(i)*0.37)) * 4
+	}
+	return tensorParityCase{
+		name:   "the per-row policy",
+		covers: parity.Covers{"SampleRows"},
+		ceiling: parity.Ceiling{Abs: 0,
+			Why: "the outputs are token indices, which are exact on both backends"},
+		run: func(t *testing.T, d *accel.Device) []float32 {
+			t.Helper()
+			rt := parityRuntime(t, d)
+			b := rt.NewBuilder("rowsampling")
+			in := func(name string, dt accel.DType, shape ...int) *tensor.Tensor {
+				return tensor.Input(b, tensor.ValueDesc{Name: name, DType: dt, Shape: tensor.Shape(shape)})
+			}
+			x := in("x", accel.F32, rows, vocab)
+			hs := tensor.NewState(b, tensor.StateDesc{Name: "history", DType: accel.U32, Shape: tensor.Shape{rows, cap}})
+			cs := tensor.NewState(b, tensor.StateDesc{Name: "counts", DType: accel.U32, Shape: tensor.Shape{rows, vocab}})
+			tok := tensor.SampleRows(b, x, in("u", accel.F32, rows), tensor.RowSampling{
+				Factor: in("factor", accel.F32, rows), TopK: in("k", accel.U32, rows), TopP: in("p", accel.F32, rows),
+				Bias: &tensor.RowBias{IDs: in("ids", accel.U32, rows, 2), Values: in("vals", accel.F32, rows, 2)},
+				Penalties: &tensor.RowPenalties{
+					History: hs, Counts: cs, Filled: in("filled", accel.U32, rows),
+					Repetition: in("rep", accel.F32, rows), Presence: in("pres", accel.F32, rows),
+					Frequency: in("freq", accel.F32, rows),
+				},
+			}, "s")
+			tensor.Output(b, "tok", tok)
+			plan, err := b.Compile(rt, tensor.CompileOptions{Label: "rowsampling"})
+			if err != nil {
+				t.Fatalf("compile row sampling on %v: %v", d.Info().Backend, err)
+			}
+			defer plan.Close()
+			out := u32Buffer(t, d, "tok", make([]uint32, rows))
+			f := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
+				"x":       f32Buffer(t, d, "x", logits),
+				"u":       f32Buffer(t, d, "u", []float32{0.1, 0.55, 0.93}),
+				"factor":  f32Buffer(t, d, "factor", []float32{1.25, 0, 0.8}),
+				"k":       u32Buffer(t, d, "k", []uint32{8, 0, 3}),
+				"p":       f32Buffer(t, d, "p", []float32{0.6, 0, 0}),
+				"ids":     u32Buffer(t, d, "ids", []uint32{vocab, vocab, 5, vocab, 7, 9}),
+				"vals":    f32Buffer(t, d, "vals", []float32{0, 0, 3, 0, -2, 1}),
+				"history": u32Buffer(t, d, "history", []uint32{1, 2, 2, 0, 5, 5, 5, 5, 0, 0, 0, 0}),
+				"counts":  u32Buffer(t, d, "counts", make([]uint32, rows*vocab)),
+				"filled":  u32Buffer(t, d, "filled", []uint32{3, 4, 0}),
+				"rep":     f32Buffer(t, d, "rep", []float32{1.5, 1, 1}),
+				"pres":    f32Buffer(t, d, "pres", []float32{0, 0.5, 0}),
+				"freq":    f32Buffer(t, d, "freq", []float32{0.1, 0, 0}),
+				"tok":     out,
+			}})
+			if err := f.Wait(); err != nil {
+				t.Fatalf("submit row sampling on %v: %v", d.Info().Backend, err)
+			}
+			toks := make([]uint32, rows)
+			if err := d.Queue().ReadBuffer(out.Buffer, 0, toks); err != nil {
+				t.Fatalf("read tokens on %v: %v", d.Info().Backend, err)
+			}
+			got := make([]float32, rows)
+			for i, v := range toks {
+				got[i] = float32(v)
+			}
+			return got
+		},
+	}
+}

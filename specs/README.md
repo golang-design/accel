@@ -156,6 +156,7 @@ numbered in.
 | [036-documentation.md](036-documentation.md) | In progress | Who each document is for, what builder-voice looks like, the ten-tutorial deck, and the public-surface freeze record that gates it |
 | [009-sequencing.md](009-sequencing.md) | In progress | What gets built in what order, what done means per milestone, the work no spec owns, and the risks with what retires each |
 | [011-conformance-harness.md](011-conformance-harness.md) | In progress | Profiles, comparisons, oracles, fuzzing, E2E scenarios, diagnostics, and greater-than-90% coverage gates |
+| [064-per-row-sampling.md](064-per-row-sampling.md) | Implemented | A batch where every row carries its own temperature, truncation, bias and penalties, in one dispatch chain |
 | [063-uniform-loads.md](063-uniform-loads.md) | Implemented | A kernel declares the bindings its dispatch never writes; a load from one is as uniform as its index, and the graph refuses the alias 002 §3.3 feared |
 | [062-backend-parity.md](062-backend-parity.md) | Implemented | The CPU/Metal agreement matrix: every enumeration member and every tensor operator, with a completeness gate that needs no device and runs on all three platforms |
 

@@ -461,6 +461,27 @@ func (RaggedDimsCodec) Encode(dst []byte, value RaggedDims) error {
 	return w.Err()
 }
 
+// RowSampleDimsCodec is the generated std140 codec for RowSampleDims.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type RowSampleDimsCodec struct{}
+
+// RowSampleDimsBlockSize is the encoded size of a RowSampleDims block, in bytes.
+const RowSampleDimsBlockSize = 16
+
+// EncodedSize reports the std140 block size.
+func (RowSampleDimsCodec) EncodedSize() int { return RowSampleDimsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (RowSampleDimsCodec) Encode(dst []byte, value RowSampleDims) error {
+	w := accel.NewUniformWriter(dst)
+	w.U32(0, value.Vocab)
+	w.U32(4, value.Rows)
+	w.U32(8, value.History)
+	w.U32(12, value.Slots)
+	return w.Err()
+}
+
 // SampleDimsCodec is the generated std140 codec for SampleDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -12903,6 +12924,1275 @@ kernel void ReduceSum(
 	},
 }
 
+// topKMaskRowsFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type topKMaskRowsFrame struct {
+	pc       int
+	lane0    uint32
+	row1     uint32
+	base2    uint32
+	rounds3  uint32
+	frontV4  float32
+	frontI5  uint32
+	r6       uint32
+	v7       float32
+	idx8     uint32
+	i9       uint32
+	w10      float32
+	below11  bool
+	better12 bool
+	stride13 uint32
+	a14      float32
+	b15      float32
+	i16      uint32
+	w17      float32
+	keep18   bool
+}
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *topKMaskRowsFrame) Reset() { *f = topKMaskRowsFrame{} }
+
+// topKMaskRowsCoop runs one invocation of TopKMaskRows to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func topKMaskRowsCoop(t accel.Thread, d RowSampleDims, weights []float32, ks []uint32, out []float32, best *[128]float32, at *[128]uint32, f *topKMaskRowsFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lane0 = t.LocalID().X
+			f.row1 = t.GroupID().X
+			f.base2 = (f.row1 * d.Vocab)
+			f.rounds3 = ks[f.row1]
+			if f.rounds3 > uint32(128) {
+				f.rounds3 = uint32(128)
+			}
+			if f.rounds3 >= d.Vocab {
+				f.rounds3 = uint32(0)
+			}
+			f.frontV4 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
+			f.frontI5 = uint32(0)
+			f.pc = 1
+			continue
+		case 1:
+			f.r6 = uint32(0)
+			f.pc = 12
+			continue
+		case 2:
+			f.v7 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx8 = d.Vocab
+			{
+				f.i9 = f.lane0
+				for ; f.i9 < d.Vocab; f.i9 = (f.i9 + uint32(128)) {
+					f.w10 = weights[(f.base2 + f.i9)]
+					f.below11 = (f.w10 < f.frontV4)
+					if (f.w10 == f.frontV4) && (f.i9 > f.frontI5) {
+						f.below11 = true
+					}
+					if f.below11 {
+						f.better12 = (f.w10 > f.v7)
+						if (f.w10 == f.v7) && (f.i9 < f.idx8) {
+							f.better12 = true
+						}
+						if f.better12 {
+							f.v7 = f.w10
+							f.idx8 = f.i9
+						}
+					}
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.v7
+			tr.Write(1, int(f.lane0))
+			at[f.lane0] = f.idx8
+			f.pc = 3
+			continue
+		case 3:
+			f.pc = 4
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "rowsample.go:82:3"}
+			return true
+		case 4:
+			f.stride13 = uint32(64)
+			f.pc = 8
+			continue
+		case 5:
+			if f.lane0 < f.stride13 {
+				f.a14 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b15 = best[tr.ReadAt(0, int((f.lane0+f.stride13)))]
+				if f.b15 > f.a14 {
+					tr.Write(0, int(f.lane0))
+					best[f.lane0] = f.b15
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride13)))]
+				} else if (f.b15 == f.a14) && (at[tr.ReadAt(1, int((f.lane0+f.stride13)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride13)))]
+				}
+			}
+			f.pc = 6
+			continue
+		case 6:
+			f.pc = 7
+			frame.Barrier = kernelabi.BarrierID{Index: 6, Pos: "rowsample.go:95:4"}
+			return true
+		case 7:
+			f.stride13 = (f.stride13 / uint32(2))
+			f.pc = 8
+			continue
+		case 8:
+			if f.stride13 > uint32(0) {
+				f.pc = 5
+				continue
+			}
+			f.pc = 9
+			continue
+		case 9:
+			f.frontV4 = best[tr.ReadAt(0, int(int32(0)))]
+			f.frontI5 = at[tr.ReadAt(1, int(int32(0)))]
+			f.pc = 10
+			continue
+		case 10:
+			f.pc = 11
+			frame.Barrier = kernelabi.BarrierID{Index: 10, Pos: "rowsample.go:99:3"}
+			return true
+		case 11:
+			f.r6 = (f.r6 + uint32(1))
+			f.pc = 12
+			continue
+		case 12:
+			if f.r6 < f.rounds3 {
+				f.pc = 2
+				continue
+			}
+			f.pc = 13
+			continue
+		case 13:
+			{
+				f.i16 = f.lane0
+				for ; f.i16 < d.Vocab; f.i16 = (f.i16 + uint32(128)) {
+					f.w17 = weights[(f.base2 + f.i16)]
+					f.keep18 = (f.w17 > f.frontV4)
+					if (f.w17 == f.frontV4) && (f.i16 <= f.frontI5) {
+						f.keep18 = true
+					}
+					if f.rounds3 == uint32(0) {
+						f.keep18 = true
+					}
+					if f.keep18 {
+						out[(f.base2 + f.i16)] = f.w17
+					} else {
+						out[(f.base2 + f.i16)] = float32(0)
+					}
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// TopKMaskRowsKernel is the compiled form of TopKMaskRows.
+var TopKMaskRowsKernel = kernelabi.Kernel{
+	Name:          "TopKMaskRows",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "ks", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "b2275c8788c3dd92d044d3caf8674f0d",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void TopKMaskRows(
+    const device float *weights [[buffer(0)]],
+    const device uint *ks [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowSampleDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float best[128];
+    threadgroup uint at[128];
+    uint lane = _lid.x;
+    uint row = _wid.x;
+    uint base = (row * d.Vocab);
+    uint rounds = ks[row];
+    if ((rounds > uint(128))) {
+        rounds = uint(128);
+    }
+    if ((rounds >= d.Vocab)) {
+        rounds = uint(0);
+    }
+    float frontV = as_type<float>(0x7F7FC99Eu) /* 3.4e+38 */;
+    uint frontI = uint(0);
+    for (uint r = uint(0); (r < rounds); r = (r + uint(1))) {
+        float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        uint idx = d.Vocab;
+        for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+            float w = weights[(base + i)];
+            bool below = (w < frontV);
+            if (((w == frontV) && (i > frontI))) {
+                below = true;
+            }
+            if (below) {
+                bool better = (w > v);
+                if (((w == v) && (i < idx))) {
+                    better = true;
+                }
+                if (better) {
+                    v = w;
+                    idx = i;
+                }
+            }
+        }
+        best[lane] = v;
+        at[lane] = idx;
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
+            if ((lane < stride)) {
+                float a = best[lane];
+                float b = best[(lane + stride)];
+                if ((b > a)) {
+                    best[lane] = b;
+                    at[lane] = at[(lane + stride)];
+                } else
+                if (((b == a) && (at[(lane + stride)] < at[lane]))) {
+                    at[lane] = at[(lane + stride)];
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        }
+        frontV = best[int(0)];
+        frontI = at[int(0)];
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    }
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        float w = weights[(base + i)];
+        bool keep = (w > frontV);
+        if (((w == frontV) && (i <= frontI))) {
+            keep = true;
+        }
+        if ((rounds == uint(0))) {
+            keep = true;
+        }
+        if (keep) {
+            out[(base + i)] = w;
+        } else {
+            out[(base + i)] = float(0);
+        }
+    }
+}
+`,
+	OrderIndependent: true,
+	Suspensions:      3,
+	SharedSizes:      []int{128, 128},
+	SharedBytes:      1024,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		var s1 [128]uint32
+		kernelabi.Poison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*topKMaskRowsFrame)
+		if f == nil {
+			f = &topKMaskRowsFrame{}
+			slot.State = f
+		}
+		return topKMaskRowsCoop(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[uint32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]uint32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// topPMaskRowsFrame is one invocation's saved state between suspension points.
+//
+// Every local lives here rather than only those live across a barrier: that
+// is a superset of the right answer and therefore correct, and a liveness
+// analysis can shrink it later without changing anything a caller sees.
+type topPMaskRowsFrame struct {
+	pc       int
+	lane0    uint32
+	row1     uint32
+	base2    uint32
+	p3       float32
+	active4  bool
+	sum5     float32
+	i6       uint32
+	stride7  uint32
+	target8  float32
+	frontV9  float32
+	frontI10 uint32
+	kept11   float32
+	r12      uint32
+	v13      float32
+	idx14    uint32
+	i15      uint32
+	w16      float32
+	below17  bool
+	better18 bool
+	stride19 uint32
+	a20      float32
+	b21      float32
+	i22      uint32
+	w23      float32
+	keep24   bool
+}
+
+// Reset returns the frame to its initial state, so the scheduler can hand it
+// to the next workgroup's invocation without allocating another.
+func (f *topPMaskRowsFrame) Reset() { *f = topPMaskRowsFrame{} }
+
+// topPMaskRowsCoop runs one invocation of TopPMaskRows to its next suspension point.
+//
+// It reports whether the invocation suspended. False means it finished, and
+// the scheduler stops calling it. Each case is one state; the assignment to
+// pc before continuing is the jump, which is explicit because a loop's states
+// do not run in numeric order.
+func topPMaskRowsCoop(t accel.Thread, d RowSampleDims, weights []float32, ps []float32, out []float32, best *[128]float32, at *[128]uint32, f *topPMaskRowsFrame, frame *kernelabi.Frame, tr *kernelabi.SharedTracker) bool {
+	for {
+		switch f.pc {
+		case 0:
+			f.lane0 = t.LocalID().X
+			f.row1 = t.GroupID().X
+			f.base2 = (f.row1 * d.Vocab)
+			f.p3 = ps[f.row1]
+			f.active4 = ((f.p3 > float32(0)) && (f.p3 < float32(1)))
+			f.sum5 = float32(0)
+			{
+				f.i6 = f.lane0
+				for ; f.i6 < d.Vocab; f.i6 = (f.i6 + uint32(128)) {
+					f.sum5 = float32(f.sum5 + weights[(f.base2+f.i6)])
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.sum5
+			f.pc = 1
+			continue
+		case 1:
+			f.pc = 2
+			frame.Barrier = kernelabi.BarrierID{Index: 1, Pos: "rowsample.go:141:2"}
+			return true
+		case 2:
+			f.stride7 = uint32(64)
+			f.pc = 6
+			continue
+		case 3:
+			if f.lane0 < f.stride7 {
+				tr.Write(0, int(f.lane0))
+				best[f.lane0] = float32(best[tr.ReadAt(0, int(f.lane0))] + best[tr.ReadAt(0, int((f.lane0+f.stride7)))])
+			}
+			f.pc = 4
+			continue
+		case 4:
+			f.pc = 5
+			frame.Barrier = kernelabi.BarrierID{Index: 4, Pos: "rowsample.go:146:3"}
+			return true
+		case 5:
+			f.stride7 = (f.stride7 / uint32(2))
+			f.pc = 6
+			continue
+		case 6:
+			if f.stride7 > uint32(0) {
+				f.pc = 3
+				continue
+			}
+			f.pc = 7
+			continue
+		case 7:
+			f.target8 = (best[tr.ReadAt(0, int(int32(0)))] * f.p3)
+			f.pc = 8
+			continue
+		case 8:
+			f.pc = 9
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "rowsample.go:149:2"}
+			return true
+		case 9:
+			f.frontV9 = math.Float32frombits(0x7F7FC99E /* 3.4e+38 */)
+			f.frontI10 = uint32(0)
+			f.kept11 = float32(0)
+			f.pc = 10
+			continue
+		case 10:
+			f.r12 = uint32(0)
+			f.pc = 21
+			continue
+		case 11:
+			f.v13 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+			f.idx14 = d.Vocab
+			{
+				f.i15 = f.lane0
+				for ; f.i15 < d.Vocab; f.i15 = (f.i15 + uint32(128)) {
+					f.w16 = weights[(f.base2 + f.i15)]
+					f.below17 = (f.w16 < f.frontV9)
+					if (f.w16 == f.frontV9) && (f.i15 > f.frontI10) {
+						f.below17 = true
+					}
+					if f.below17 {
+						f.better18 = (f.w16 > f.v13)
+						if (f.w16 == f.v13) && (f.i15 < f.idx14) {
+							f.better18 = true
+						}
+						if f.better18 {
+							f.v13 = f.w16
+							f.idx14 = f.i15
+						}
+					}
+				}
+			}
+			tr.Write(0, int(f.lane0))
+			best[f.lane0] = f.v13
+			tr.Write(1, int(f.lane0))
+			at[f.lane0] = f.idx14
+			f.pc = 12
+			continue
+		case 12:
+			f.pc = 13
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "rowsample.go:180:3"}
+			return true
+		case 13:
+			f.stride19 = uint32(64)
+			f.pc = 17
+			continue
+		case 14:
+			if f.lane0 < f.stride19 {
+				f.a20 = best[tr.ReadAt(0, int(f.lane0))]
+				f.b21 = best[tr.ReadAt(0, int((f.lane0+f.stride19)))]
+				if f.b21 > f.a20 {
+					tr.Write(0, int(f.lane0))
+					best[f.lane0] = f.b21
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride19)))]
+				} else if (f.b21 == f.a20) && (at[tr.ReadAt(1, int((f.lane0+f.stride19)))] < at[tr.ReadAt(1, int(f.lane0))]) {
+					tr.Write(1, int(f.lane0))
+					at[f.lane0] = at[tr.ReadAt(1, int((f.lane0+f.stride19)))]
+				}
+			}
+			f.pc = 15
+			continue
+		case 15:
+			f.pc = 16
+			frame.Barrier = kernelabi.BarrierID{Index: 15, Pos: "rowsample.go:193:4"}
+			return true
+		case 16:
+			f.stride19 = (f.stride19 / uint32(2))
+			f.pc = 17
+			continue
+		case 17:
+			if f.stride19 > uint32(0) {
+				f.pc = 14
+				continue
+			}
+			f.pc = 18
+			continue
+		case 18:
+			if f.active4 && (f.kept11 < f.target8) {
+				f.frontV9 = best[tr.ReadAt(0, int(int32(0)))]
+				f.frontI10 = at[tr.ReadAt(1, int(int32(0)))]
+				f.kept11 = float32(f.kept11 + f.frontV9)
+			}
+			f.pc = 19
+			continue
+		case 19:
+			f.pc = 20
+			frame.Barrier = kernelabi.BarrierID{Index: 19, Pos: "rowsample.go:201:3"}
+			return true
+		case 20:
+			f.r12 = (f.r12 + uint32(1))
+			f.pc = 21
+			continue
+		case 21:
+			if f.r12 < uint32(128) {
+				f.pc = 11
+				continue
+			}
+			f.pc = 22
+			continue
+		case 22:
+			{
+				f.i22 = f.lane0
+				for ; f.i22 < d.Vocab; f.i22 = (f.i22 + uint32(128)) {
+					f.w23 = weights[(f.base2 + f.i22)]
+					f.keep24 = (f.w23 > f.frontV9)
+					if (f.w23 == f.frontV9) && (f.i22 <= f.frontI10) {
+						f.keep24 = true
+					}
+					if !f.active4 {
+						f.keep24 = true
+					}
+					if f.keep24 {
+						out[(f.base2 + f.i22)] = f.w23
+					} else {
+						out[(f.base2 + f.i22)] = float32(0)
+					}
+				}
+			}
+			return false
+		}
+		return false
+	}
+}
+
+// TopPMaskRowsKernel is the compiled form of TopPMaskRows.
+var TopPMaskRowsKernel = kernelabi.Kernel{
+	Name:          "TopPMaskRows",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "weights", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "ps", DType: kernelabi.F32, Access: kernelabi.Read | kernelabi.UniformLoad},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:    "37a5a31a82a6aef3706c60ecfd3f8303",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void TopPMaskRows(
+    const device float *weights [[buffer(0)]],
+    const device float *ps [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowSampleDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float best[128];
+    threadgroup uint at[128];
+    uint lane = _lid.x;
+    uint row = _wid.x;
+    uint base = (row * d.Vocab);
+    float p = ps[row];
+    bool active = ((p > float(0)) && (p < float(1)));
+    float sum = float(0);
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        sum = (sum + weights[(base + i)]);
+    }
+    best[lane] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
+        if ((lane < stride)) {
+            best[lane] = (best[lane] + best[(lane + stride)]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    }
+    float target = (best[int(0)] * p);
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    float frontV = as_type<float>(0x7F7FC99Eu) /* 3.4e+38 */;
+    uint frontI = uint(0);
+    float kept = float(0);
+    for (uint r = uint(0); (r < uint(128)); r = (r + uint(1))) {
+        float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        uint idx = d.Vocab;
+        for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+            float w = weights[(base + i)];
+            bool below = (w < frontV);
+            if (((w == frontV) && (i > frontI))) {
+                below = true;
+            }
+            if (below) {
+                bool better = (w > v);
+                if (((w == v) && (i < idx))) {
+                    better = true;
+                }
+                if (better) {
+                    v = w;
+                    idx = i;
+                }
+            }
+        }
+        best[lane] = v;
+        at[lane] = idx;
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
+            if ((lane < stride)) {
+                float a = best[lane];
+                float b = best[(lane + stride)];
+                if ((b > a)) {
+                    best[lane] = b;
+                    at[lane] = at[(lane + stride)];
+                } else
+                if (((b == a) && (at[(lane + stride)] < at[lane]))) {
+                    at[lane] = at[(lane + stride)];
+                }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        }
+        if ((active && (kept < target))) {
+            frontV = best[int(0)];
+            frontI = at[int(0)];
+            kept = (kept + frontV);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    }
+    for (uint i = lane; (i < d.Vocab); i = (i + uint(128))) {
+        float w = weights[(base + i)];
+        bool keep = (w > frontV);
+        if (((w == frontV) && (i <= frontI))) {
+            keep = true;
+        }
+        if (!active) {
+            keep = true;
+        }
+        if (keep) {
+            out[(base + i)] = w;
+        } else {
+            out[(base + i)] = float(0);
+        }
+    }
+}
+`,
+	OrderIndependent: true,
+	Suspensions:      6,
+	SharedSizes:      []int{128, 128},
+	SharedBytes:      1024,
+	NewShared: func() []any {
+		var s0 [128]float32
+		kernelabi.Poison(s0[:])
+		var s1 [128]uint32
+		kernelabi.Poison(s1[:])
+		return []any{&s0, &s1}
+	},
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Cooperative: func(t accel.Thread, a kernelabi.Args, slot *kernelabi.Frame) bool {
+		f, _ := slot.State.(*topPMaskRowsFrame)
+		if f == nil {
+			f = &topPMaskRowsFrame{}
+			slot.State = f
+		}
+		return topPMaskRowsCoop(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Shared[[128]float32](a, 0), kernelabi.Shared[[128]uint32](a, 1), f, slot, slot.Shared)
+	},
+}
+
+// scaleRowsFlat is the generated flat lowering of ScaleRows.
+//
+// It is what the CPU backend runs. The authored ScaleRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func scaleRowsFlat(t accel.Thread, d RowSampleDims, x []float32, factors []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= (d.Rows * d.Vocab) {
+		return
+	}
+	var f float32 = factors[(i / d.Vocab)]
+	if f == float32(0) {
+		f = float32(1)
+	}
+	out[i] = float32(x[i] * f)
+}
+
+// ScaleRowsKernel is the compiled form of ScaleRows.
+var ScaleRowsKernel = kernelabi.Kernel{
+	Name:          "ScaleRows",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "x", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "factors", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "e9de2254a5e44424d2fd8a749cb404ad",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void ScaleRows(
+    const device float *x [[buffer(0)]],
+    const device float *factors [[buffer(1)]],
+    device float *out [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowSampleDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= (d.Rows * d.Vocab))) {
+        return;
+    }
+    float f = factors[_accel_div_u32(i, d.Vocab, _fault)];
+    if ((f == float(0))) {
+        f = float(1);
+    }
+    out[i] = (x[i] * f);
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		scaleRowsFlat(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2))
+	},
+}
+
+// sampleRowsFlat is the generated flat lowering of SampleRows.
+//
+// It is what the CPU backend runs. The authored SampleRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func sampleRowsFlat(t accel.Thread, d RowSampleDims, probs []float32, draws []float32, factors []float32, out []uint32) {
+	var r uint32 = t.GlobalID().X
+	if r >= d.Rows {
+		return
+	}
+	var base uint32 = (r * d.Vocab)
+	if factors[r] == float32(0) {
+		var v float32 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+		var idx uint32 = uint32(0)
+		{
+			var i uint32 = uint32(0)
+			for ; i < d.Vocab; i = (i + uint32(1)) {
+				var x float32 = probs[(base + i)]
+				if x > v {
+					v = x
+					idx = i
+				}
+			}
+		}
+		out[r] = idx
+		return
+	}
+	var draw float32 = draws[r]
+	if draw < float32(0) {
+		draw = float32(0)
+	}
+	if draw > math.Float32frombits(0x3F7FFFFF /* 0.99999994 */) {
+		draw = math.Float32frombits(0x3F7FFFFF /* 0.99999994 */)
+	}
+	var total float32 = float32(0)
+	{
+		var i uint32 = uint32(0)
+		for ; i < d.Vocab; i = (i + uint32(1)) {
+			total = float32(total + probs[(base+i)])
+		}
+	}
+	var target float32 = (draw * total)
+	var acc float32 = float32(0)
+	var chosen uint32 = (d.Vocab - uint32(1))
+	var found bool = false
+	{
+		var i uint32 = uint32(0)
+		for ; i < d.Vocab; i = (i + uint32(1)) {
+			acc = float32(acc + probs[(base+i)])
+			if !found && (acc > target) {
+				chosen = i
+				found = true
+			}
+		}
+	}
+	out[r] = chosen
+}
+
+// SampleRowsKernel is the compiled form of SampleRows.
+var SampleRowsKernel = kernelabi.Kernel{
+	Name:          "SampleRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "probs", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "draws", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "factors", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.U32, Access: kernelabi.Write},
+	},
+	Digest:           "2347a0dbcebdab08cae36b139e19c382",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void SampleRows(
+    const device float *probs [[buffer(0)]],
+    const device float *draws [[buffer(1)]],
+    const device float *factors [[buffer(2)]],
+    device uint *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant RowSampleDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint r = _gid.x;
+    if ((r >= d.Rows)) {
+        return;
+    }
+    uint base = (r * d.Vocab);
+    if ((factors[r] == float(0))) {
+        float v = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+        uint idx = uint(0);
+        for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
+            float x = probs[(base + i)];
+            if ((x > v)) {
+                v = x;
+                idx = i;
+            }
+        }
+        out[r] = idx;
+        return;
+    }
+    float draw = draws[r];
+    if ((draw < float(0))) {
+        draw = float(0);
+    }
+    if ((draw > as_type<float>(0x3F7FFFFFu) /* 0.99999994 */)) {
+        draw = as_type<float>(0x3F7FFFFFu) /* 0.99999994 */;
+    }
+    float total = float(0);
+    for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
+        total = (total + probs[(base + i)]);
+    }
+    float target = (draw * total);
+    float acc = float(0);
+    uint chosen = (d.Vocab - uint(1));
+    bool found = false;
+    for (uint i = uint(0); (i < d.Vocab); i = (i + uint(1))) {
+        acc = (acc + probs[(base + i)]);
+        if ((!found && (acc > target))) {
+            chosen = i;
+            found = true;
+        }
+    }
+    out[r] = chosen;
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		sampleRowsFlat(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[uint32](a, 3))
+	},
+}
+
+// logitBiasFlat is the generated flat lowering of LogitBias.
+//
+// It is what the CPU backend runs. The authored LogitBias is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func logitBiasFlat(t accel.Thread, d RowSampleDims, logits []float32, ids []uint32, values []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= (d.Rows * d.Vocab) {
+		return
+	}
+	var row uint32 = (i / d.Vocab)
+	var id uint32 = (i - (row * d.Vocab))
+	var x float32 = logits[i]
+	{
+		var s uint32 = uint32(0)
+		for ; s < d.Slots; s = (s + uint32(1)) {
+			if ids[((row*d.Slots)+s)] == id {
+				x = float32(x + values[((row*d.Slots)+s)])
+			}
+		}
+	}
+	out[i] = x
+}
+
+// LogitBiasKernel is the compiled form of LogitBias.
+var LogitBiasKernel = kernelabi.Kernel{
+	Name:          "LogitBias",
+	WorkgroupSize: accel.ID3{X: 128, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "logits", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "ids", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "values", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "109003e26dfd684e53f144743bfb35de",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void LogitBias(
+    const device float *logits [[buffer(0)]],
+    const device uint *ids [[buffer(1)]],
+    const device float *values [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant uint *_lens [[buffer(4)]],
+    constant RowSampleDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= (d.Rows * d.Vocab))) {
+        return;
+    }
+    uint row = _accel_div_u32(i, d.Vocab, _fault);
+    uint id = (i - (row * d.Vocab));
+    float x = logits[i];
+    for (uint s = uint(0); (s < d.Slots); s = (s + uint(1))) {
+        if ((ids[((row * d.Slots) + s)] == id)) {
+            x = (x + values[((row * d.Slots) + s)]);
+        }
+    }
+    out[i] = x;
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		logitBiasFlat(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[uint32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[float32](a, 3))
+	},
+}
+
+// penaltyClearRowsFlat is the generated flat lowering of PenaltyClearRows.
+//
+// It is what the CPU backend runs. The authored PenaltyClearRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func penaltyClearRowsFlat(t accel.Thread, d RowSampleDims, counts []uint32) {
+	var i uint32 = t.GlobalID().X
+	if i < (d.Rows * d.Vocab) {
+		counts[i] = uint32(0)
+	}
+}
+
+// PenaltyClearRowsKernel is the compiled form of PenaltyClearRows.
+var PenaltyClearRowsKernel = kernelabi.Kernel{
+	Name:          "PenaltyClearRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Write},
+	},
+	Digest:           "d67d51196d4f77da7e8bcc5f25426151",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void PenaltyClearRows(
+    device uint *counts [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    constant RowSampleDims &d [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i < (d.Rows * d.Vocab))) {
+        counts[i] = uint(0);
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		penaltyClearRowsFlat(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[uint32](a, 0))
+	},
+}
+
+// penaltyCountRowsFlat is the generated flat lowering of PenaltyCountRows.
+//
+// It is what the CPU backend runs. The authored PenaltyCountRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func penaltyCountRowsFlat(t accel.Thread, d RowSampleDims, history []uint32, filled []uint32, counts []uint32) {
+	var i uint32 = t.GlobalID().X
+	if i >= (d.Rows * d.History) {
+		return
+	}
+	var row uint32 = (i / d.History)
+	if (i - (row * d.History)) >= filled[row] {
+		return
+	}
+	var id uint32 = history[i]
+	if id < d.Vocab {
+		accel.AddU32(counts, ((row * d.Vocab) + id), uint32(1))
+	}
+}
+
+// PenaltyCountRowsKernel is the compiled form of PenaltyCountRows.
+var PenaltyCountRowsKernel = kernelabi.Kernel{
+	Name:          "PenaltyCountRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "history", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "filled", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.Write},
+	},
+	Digest:    "7a24af1207b89e0e46bc817ffc7a98d4",
+	Generator: kernelabi.Version,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void PenaltyCountRows(
+    const device uint *history [[buffer(0)]],
+    const device uint *filled [[buffer(1)]],
+    device atomic_uint *counts [[buffer(2)]],
+    constant uint *_lens [[buffer(3)]],
+    constant RowSampleDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= (d.Rows * d.History))) {
+        return;
+    }
+    uint row = _accel_div_u32(i, d.History, _fault);
+    if (((i - (row * d.History)) >= filled[row])) {
+        return;
+    }
+    uint id = history[i];
+    if ((id < d.Vocab)) {
+        atomic_fetch_add_explicit(&counts[((row * d.Vocab) + id)], uint(1), memory_order_relaxed);
+    }
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		penaltyCountRowsFlat(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[uint32](a, 0), kernelabi.Slice[uint32](a, 1), kernelabi.Slice[uint32](a, 2))
+	},
+}
+
+// penaltyApplyRowsFlat is the generated flat lowering of PenaltyApplyRows.
+//
+// It is what the CPU backend runs. The authored PenaltyApplyRows is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func penaltyApplyRowsFlat(t accel.Thread, d RowSampleDims, logits []float32, counts []uint32, repetition []float32, presence []float32, frequency []float32, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= (d.Rows * d.Vocab) {
+		return
+	}
+	var row uint32 = (i / d.Vocab)
+	var l float32 = logits[i]
+	var c uint32 = counts[i]
+	if c == uint32(0) {
+		out[i] = l
+		return
+	}
+	var rep float32 = repetition[row]
+	if (rep != float32(0)) && (rep != float32(1)) {
+		if l > float32(0) {
+			l = float32(l / rep)
+		} else {
+			l = float32(l * rep)
+		}
+	}
+	out[i] = float32(float32(l-presence[row]) - float32(frequency[row]*float32(c)))
+}
+
+// PenaltyApplyRowsKernel is the compiled form of PenaltyApplyRows.
+var PenaltyApplyRowsKernel = kernelabi.Kernel{
+	Name:          "PenaltyApplyRows",
+	WorkgroupSize: accel.ID3{X: 64, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "logits", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "counts", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "repetition", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "presence", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "frequency", DType: kernelabi.F32, Access: kernelabi.Read},
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "cd9a10a0a70537a0218683189a006a4e",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+struct RowSampleDims {
+    uint Vocab;
+    uint Rows;
+    uint History;
+    uint Slots;
+};
+
+kernel void PenaltyApplyRows(
+    const device float *logits [[buffer(0)]],
+    const device uint *counts [[buffer(1)]],
+    const device float *repetition [[buffer(2)]],
+    const device float *presence [[buffer(3)]],
+    const device float *frequency [[buffer(4)]],
+    device float *out [[buffer(5)]],
+    constant uint *_lens [[buffer(6)]],
+    constant RowSampleDims &d [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= (d.Rows * d.Vocab))) {
+        return;
+    }
+    uint row = _accel_div_u32(i, d.Vocab, _fault);
+    float l = logits[i];
+    uint c = counts[i];
+    if ((c == uint(0))) {
+        out[i] = l;
+        return;
+    }
+    float rep = repetition[row];
+    if (((rep != float(0)) && (rep != float(1)))) {
+        if ((l > float(0))) {
+            l = (l / rep);
+        } else {
+            l = (l * rep);
+        }
+    }
+    out[i] = ((l - presence[row]) - (frequency[row] * float(c)));
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "d", Type: "RowSampleDims", Size: 16, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, RowSampleDimsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		penaltyApplyRowsFlat(t, kernelabi.UniformValue[RowSampleDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[uint32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Slice[float32](a, 5))
+	},
+}
+
 // sampleArgmaxFrame is one invocation's saved state between suspension points.
 //
 // Every local lives here rather than only those live across a barrier: that
@@ -16091,6 +17381,14 @@ var Kernels = []*kernelabi.Kernel{
 	&NormalizeKernel,
 	&PairAverageKernel,
 	&ReduceSumKernel,
+	&TopKMaskRowsKernel,
+	&TopPMaskRowsKernel,
+	&ScaleRowsKernel,
+	&SampleRowsKernel,
+	&LogitBiasKernel,
+	&PenaltyClearRowsKernel,
+	&PenaltyCountRowsKernel,
+	&PenaltyApplyRowsKernel,
 	&SampleArgmaxKernel,
 	&SampleCategoricalKernel,
 	&ScaleKernel,

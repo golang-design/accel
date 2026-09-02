@@ -46,6 +46,7 @@ func tensorParityCases() []tensorParityCase {
 		attentionParityCase(),
 		linearAttentionParityCase(),
 		samplingParityCase(),
+		rowSamplingParityCase(),
 	}
 }
 

@@ -361,6 +361,128 @@ func diffCases() []diffCase {
 		{kernel: &kernels.HistogramKernel, counts: []int{256, 4}, groups: accel.WorkgroupCount{X: 4}},
 		{kernel: &kernels.CountWorkgroupsKernel, counts: []int{1}, groups: accel.WorkgroupCount{X: 7}},
 		{
+			// The per-row sampling kernels, specs/064-per-row-sampling.md: two
+			// rows of a 64-token vocabulary, each with its own k, p and
+			// factor, so a lowering that read one row's parameter for both
+			// would differ. The extraction rounds are bounded by a load
+			// declared uniform, which is the case specs/063 exists for.
+			kernel:   &kernels.TopKMaskRowsKernel,
+			counts:   []int{2 * 64, 2, 2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return float32(3 + 4*i) // k = 3 and 7
+				}
+				return float32((i*37)%64) / 64
+			},
+			why: "a mask keeps or zeroes an input, so this is exact",
+		},
+		{
+			kernel:   &kernels.TopPMaskRowsKernel,
+			counts:   []int{2 * 64, 2, 2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return 0.5 + 0.3*float32(i) // p = 0.5 and 0.8
+				}
+				return float32((i*37)%64+1) / 64
+			},
+			why: "a mask keeps or zeroes an input; the kept mass is a sum of 128 terms " +
+				"both lowerings run in one order, so this is exact",
+		},
+		{
+			kernel:   &kernels.ScaleRowsKernel,
+			counts:   []int{2 * 64, 2, 2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				if b == 1 {
+					return float32(i) * 1.25 // 0 (greedy) and 1.25
+				}
+				return float32(i%13) - 6
+			},
+			why: "one product per element, exact",
+		},
+		{
+			kernel:   &kernels.SampleRowsKernel,
+			counts:   []int{2 * 64, 2, 2, 2},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return 0.3 + 0.4*float32(i) // draws
+				case 2:
+					return float32(i) // factor 0 (greedy) and 1
+				}
+				return float32((i*37)%64+1) / 64
+			},
+			why: "an index chosen by a walk both lowerings run in one order",
+		},
+		{
+			kernel:   &kernels.LogitBiasKernel,
+			counts:   []int{2 * 64, 2 * 2, 2 * 2, 2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2, Slots: 2}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32([]int{5, 64, 9, 9}[i]) // an empty slot, and a duplicate
+				case 2:
+					return float32(i + 1)
+				}
+				return float32(i%7) - 3
+			},
+			why: "at most two additions per element, of small integers, exact",
+		},
+		{
+			kernel:   &kernels.PenaltyClearRowsKernel,
+			counts:   []int{2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed:     func(b, i int) float32 { return float32(i % 5) },
+			why:      "a store of zero",
+		},
+		{
+			kernel:   &kernels.PenaltyCountRowsKernel,
+			counts:   []int{2 * 8, 2, 2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2, History: 8}},
+			groups:   accel.WorkgroupCount{X: 1},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(3 + 5*i) // filled 3 and 8
+				case 2:
+					return 0
+				}
+				return float32((i * 7) % 64)
+			},
+			why: "integer atomic increments, exact and order-independent",
+		},
+		{
+			kernel:   &kernels.PenaltyApplyRowsKernel,
+			counts:   []int{2 * 64, 2 * 64, 2, 2, 2, 2 * 64},
+			uniforms: []any{kernels.RowSampleDims{Vocab: 64, Rows: 2}},
+			groups:   accel.WorkgroupCount{X: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i % 3) // counts 0, 1, 2
+				case 2:
+					return 1.5 + float32(i) // repetition 1.5 and 2.5
+				case 3:
+					return 0.25 * float32(i) // presence 0 and 0.25
+				case 4:
+					return 0.5 // frequency
+				}
+				return float32(i%11) - 5
+			},
+			why: "one division or product and two subtractions per element of small " +
+				"dyadic values, exact",
+		},
+		{
 			// The float atomic, on the devices that report it: one invocation
 			// adds 0.5 and -0.25 to two words a caller seeded, so the sums are
 			// exact and the previous values are the seeds.
