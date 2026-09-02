@@ -5,8 +5,12 @@
 package accel_test
 
 import (
+	"flag"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"golang.design/x/accel"
@@ -127,19 +131,80 @@ func TestTheParityMatrixCoversEverySurface(t *testing.T) {
 	}
 }
 
-// Every case runs on the CPU backend and produces something worth comparing.
+// updateParityGoldens rewrites testdata/parity from the CPU backend's results.
+var updateParityGoldens = flag.Bool("update-parity-goldens", false,
+	"rewrite testdata/parity/*.bin from the CPU backend's results")
+
+// Every case runs on the CPU backend and produces the result it produced when
+// its golden was committed.
 //
 // It runs on every platform, and it is not the parity comparison: it is what
-// keeps a case honest between Metal runs. A case that panics, that reads back
-// nothing, or that returns a buffer of zeros would agree with Metal perfectly,
-// and the agreement would mean nothing -- two blank images are equal.
+// keeps a case honest between Metal runs. Before the goldens existed the only
+// check here was "some byte is non-zero", and every render case clears to a
+// non-zero colour, so a case whose draw was skipped passed on Linux and
+// Windows. The golden is the CPU backend's own output, compared under the
+// case's ceiling, and it makes the case's result a fact on every platform
+// rather than only where a Metal device is present to disagree.
+//
+// A golden is generated from the CPU backend and validated by
+// TestTheParityMatrixAgreesOnCPUAndMetal on darwin, which is where it earns
+// its standing: a golden that Metal disagreed with would fail there. When a
+// case or the rasterizer changes on purpose, regenerate with
+// -update-parity-goldens and run the darwin comparison before committing.
 func TestEveryParityCaseProducesAResultOnTheCPU(t *testing.T) {
 	d := openDevice(t)
 	for _, c := range parityCases() {
 		t.Run(c.name, func(t *testing.T) {
 			got := c.run(t, d)
 			assertNotDegenerate(t, "the CPU backend", got)
+
+			path := filepath.Join("testdata", "parity", parityGoldenName(c.name))
+			if *updateParityGoldens {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, got, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("no golden for this case: %v\n  generate one with\n    go test "+
+					"-run TestEveryParityCaseProducesAResultOnTheCPU -update-parity-goldens ./\n"+
+					"  and run TestTheParityMatrixAgreesOnCPUAndMetal on a Mac before committing", err)
+			}
+			compareParity(t, c, want, got, "the committed golden", "the CPU backend")
 		})
+	}
+}
+
+// parityGoldenName is the file a case's golden lives in: the case name with
+// everything that is not a letter or a digit folded to one dash.
+func parityGoldenName(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(name) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			dash = false
+		} else if !dash {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.Trim(b.String(), "-") + ".bin"
+}
+
+// Two cases cannot share a golden.
+func TestParityGoldenNamesAreDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, c := range parityCases() {
+		g := parityGoldenName(c.name)
+		if prev, ok := seen[g]; ok {
+			t.Errorf("%q and %q both keep their golden in %s", prev, c.name, g)
+		}
+		seen[g] = c.name
 	}
 }
 
@@ -158,28 +223,29 @@ func assertNotDegenerate(t *testing.T, who string, got []byte) {
 		"would be two blank results agreeing", who, len(got))
 }
 
-// compareParity applies a case's ceiling to two backends' results.
-func compareParity(t *testing.T, c parityCase, onCPU, onMetal []byte) {
+// compareParity applies a case's ceiling to two results: got against want,
+// each named for the failure.
+func compareParity(t *testing.T, c parityCase, want, got []byte, wantName, gotName string) {
 	t.Helper()
-	if len(onCPU) != len(onMetal) {
-		t.Fatalf("%s: %d bytes on the CPU backend and %d on Metal",
-			c.name, len(onCPU), len(onMetal))
+	if len(want) != len(got) {
+		t.Fatalf("%s: %d bytes from %s and %d from %s",
+			c.name, len(want), wantName, len(got), gotName)
 	}
 	if c.ceiling.Exact() {
-		if r := numeq.Exact(onMetal, onCPU); !r.Equal {
-			t.Fatalf("%s: %v\n  %s", c.name, r, c.ceiling)
+		if r := numeq.Exact(got, want); !r.Equal {
+			t.Fatalf("%s: %s against %s: %v\n  %s", c.name, gotName, wantName, r, c.ceiling)
 		}
 		return
 	}
-	cpu, metal := asFloat32(t, onCPU), asFloat32(t, onMetal)
+	w, g := asFloat32(t, want), asFloat32(t, got)
 	var r numeq.Report
 	if c.ceiling.Abs > 0 {
-		r = withinAbsolute(metal, cpu, c.ceiling.Abs)
+		r = withinAbsolute(g, w, c.ceiling.Abs)
 	} else {
-		r = numeq.WithinULP(metal, cpu, c.ceiling.ULP)
+		r = numeq.WithinULP(g, w, c.ceiling.ULP)
 	}
 	if !r.Equal {
-		t.Fatalf("%s: %v\n  %s", c.name, r, c.ceiling)
+		t.Fatalf("%s: %s against %s: %v\n  %s", c.name, gotName, wantName, r, c.ceiling)
 	}
 }
 

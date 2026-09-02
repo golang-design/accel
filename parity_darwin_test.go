@@ -28,7 +28,7 @@ func TestTheParityMatrixAgreesOnCPUAndMetal(t *testing.T) {
 			assertNotDegenerate(t, "the CPU backend", onCPU)
 			onMetal := c.run(t, metal)
 			assertNotDegenerate(t, "Metal", onMetal)
-			compareParity(t, c, onCPU, onMetal)
+			compareParity(t, c, onCPU, onMetal, "the CPU backend", "Metal")
 		})
 	}
 }
