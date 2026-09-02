@@ -346,8 +346,13 @@ func (d *Device) QueueFor(kind QueueKind) *Queue {
 // The implicit pool behind [Device.NewBuffer] is the exception, because the
 // caller never named it: it has no handle to close, so the device owns it.
 func (d *Device) Close() error {
+	// Held across the count and the transition, against every path that
+	// registers a child. See the field.
+	d.lifecycle.Lock()
+	defer d.lifecycle.Unlock()
+
 	d.mu.Lock()
-	live := len(d.pools) + d.graphs + d.pipelines
+	live := len(d.pools) + d.graphs + d.pipelines + d.transientPools
 	implicit := make([]*blockSet, 0, len(d.implicit))
 	for _, set := range d.implicit {
 		implicit = append(implicit, set)
@@ -374,6 +379,8 @@ func (d *Device) Close() error {
 	// refuses to close stays fully usable: marking first and rolling back would
 	// give a concurrent NewPool a spurious closed error, and would let a
 	// concurrent second Close report success for a device that never closed.
+	// A child that would arrive between the count and the mark is what the
+	// lifecycle lock excludes.
 	if live > 0 {
 		return &LifetimeError{Op: "Close", Resource: d.info.Name, Reason: reasonChildren, Children: live}
 	}

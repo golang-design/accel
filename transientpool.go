@@ -81,9 +81,16 @@ type TransientPool struct {
 
 // NewTransientPool creates a pool this device's graphs can share.
 func (d *Device) NewTransientPool(label string) (*TransientPool, error) {
+	// A child of the device from here, counted by Device.Close as an explicit
+	// pool is, and registered under the same lock Close counts under.
+	d.lifecycle.RLock()
+	defer d.lifecycle.RUnlock()
 	if err := d.state.checkOpen("NewTransientPool"); err != nil {
 		return nil, err
 	}
+	d.mu.Lock()
+	d.transientPools++
+	d.mu.Unlock()
 	return &TransientPool{dev: d, label: label}, nil
 }
 
@@ -206,6 +213,9 @@ func (p *TransientPool) Close() error {
 		p.block = nil
 	}
 	p.bytes = 0
+	p.dev.mu.Lock()
+	p.dev.transientPools--
+	p.dev.mu.Unlock()
 	return nil
 }
 

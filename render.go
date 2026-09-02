@@ -329,6 +329,10 @@ type RenderPipeline struct {
 // A pipeline that survives this is one a pass can only get wrong by pairing it
 // with mismatched attachments, which graph build catches.
 func (d *Device) NewRenderPipeline(desc RenderPipelineDescriptor) (*RenderPipeline, error) {
+	// One reading against Device.Close, for NewPool's reason: the pipeline is
+	// counted as a child at the end.
+	d.lifecycle.RLock()
+	defer d.lifecycle.RUnlock()
 	if err := d.state.checkOpen("NewRenderPipeline"); err != nil {
 		return nil, err
 	}

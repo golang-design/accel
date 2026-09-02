@@ -53,6 +53,14 @@ func (d *Device) NewPool(desc PoolDescriptor) (*Pool, error) {
 		return nil, err
 	}
 
+	// The pool is a child from the moment it is registered, and Close counts
+	// children under the lifecycle lock: the check and the registration are
+	// one reading against it.
+	d.lifecycle.RLock()
+	defer d.lifecycle.RUnlock()
+	if err := d.state.checkOpen("NewPool"); err != nil {
+		return nil, err
+	}
 	p, err := d.newPool(desc)
 	if err != nil {
 		return nil, err
@@ -171,6 +179,13 @@ func (d *Device) NewBuffer(desc BufferDescriptor) (*Buffer, error) {
 	// makes a pool. The key is there so a kind, when a descriptor carries one,
 	// gets its own blocks rather than being served out of a Device one.
 	kind := MemoryDevice
+	// One reading against Close, for NewPool's reason: the buffer is a child
+	// of the device from the moment its block records it.
+	d.lifecycle.RLock()
+	defer d.lifecycle.RUnlock()
+	if err := d.state.checkOpen("NewBuffer"); err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	if d.implicit == nil {
 		d.implicit = make(map[MemoryKind]*blockSet)

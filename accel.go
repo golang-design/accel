@@ -330,10 +330,28 @@ type Device struct {
 
 	state resourceState
 
+	// lifecycle orders registering a child against closing the device. Every
+	// path that gives the device a new child holds it for reading across its
+	// open check and its registration, and Close holds it for writing across
+	// its count of children and the transition to closed. Without it a child
+	// registered between the two was one Close had not counted: the handle
+	// was marked dead, the backend refused over the live allocation, and the
+	// device was closed to every caller and never closed.
+	//
+	// Held for reading at the entry points rather than inside the registering
+	// helpers, so it is never taken twice on one goroutine: NewTexture reaches
+	// NewPool, and a surface reaches NewBuffer.
+	lifecycle sync.RWMutex
+
 	mu             sync.Mutex
 	pools          []*Pool
 	implicit       map[MemoryKind]*blockSet
 	implicitBlocks int
+
+	// transientPools counts open TransientPools. Each is a child with a
+	// handle, exactly as an explicit pool is: its allocation is counted among
+	// the implicit blocks, and those are the device's own to free.
+	transientPools int
 
 	// graphs counts built, unclosed graphs. They own transient memory and a
 	// compiled executable, so a device closing under one would strand both;

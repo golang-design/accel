@@ -67,7 +67,13 @@ func (r *Recorder) build(naive bool) (*Graph, error) {
 	}
 	r.state.built = true
 
-	if err := r.state.dev.state.checkOpen("Build"); err != nil {
+	// The graph is a child of the device once it is counted at the end, and
+	// it holds device memory from the middle; both are one reading against
+	// Device.Close, for the reason NewPool's is.
+	dev := r.state.dev
+	dev.lifecycle.RLock()
+	defer dev.lifecycle.RUnlock()
+	if err := dev.state.checkOpen("Build"); err != nil {
 		return nil, err
 	}
 	if lost := r.state.dev.dev.Lost(); lost != nil {

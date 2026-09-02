@@ -115,3 +115,123 @@ func TestGraphCloseAndSubmitCannotRunAClosedGraph(t *testing.T) {
 		}
 	}
 }
+
+// Device.Close and a concurrent NewPool cannot both succeed.
+//
+// Close counted its children, released every lock, and only then marked the
+// handle closed; a NewPool that passed its open check in the gap registered a
+// pool the count had not seen, the backend then refused to close over the live
+// allocation, and the device was dead: closed to every caller and never
+// closed. Registration and Close now share one lock, held across the count
+// and the transition. Each iteration races the two and asserts one of the
+// legal outcomes, and that a refusal leaves the device usable.
+func TestDeviceCloseAndNewPoolCannotBothSucceed(t *testing.T) {
+	for i := 0; i < 300; i++ {
+		d, err := accel.OpenCPU(accel.CPUOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var (
+			p       *accel.Pool
+			poolErr error
+			done    = make(chan struct{})
+		)
+		go func() {
+			defer close(done)
+			p, poolErr = d.NewPool(accel.PoolDescriptor{
+				Kind: accel.MemoryDevice, Bytes: 1 << 16, Label: "raced",
+			})
+		}()
+		closeErr := d.Close()
+		<-done
+
+		var le *accel.LifetimeError
+		switch {
+		case poolErr == nil && closeErr == nil:
+			t.Fatalf("iteration %d: the device closed and handed out a pool", i)
+		case poolErr == nil:
+			if !errors.As(closeErr, &le) || le.Reason != "has live children" {
+				t.Fatalf("iteration %d: Close under a live pool returned %v", i, closeErr)
+			}
+			// The refusal left the device open and working.
+			probe, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryUpload, Bytes: 1 << 16})
+			if err != nil {
+				t.Fatalf("iteration %d: the device stopped working after refusing to close: %v", i, err)
+			}
+			for _, c := range []*accel.Pool{probe, p} {
+				if err := c.Close(); err != nil {
+					t.Fatalf("iteration %d: pool close: %v", i, err)
+				}
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("iteration %d: Close once the pools went: %v", i, err)
+			}
+		default:
+			if !errors.As(poolErr, &le) || le.Reason != "closed" {
+				t.Fatalf("iteration %d: NewPool on a closing device returned %v", i, poolErr)
+			}
+			if closeErr != nil {
+				t.Fatalf("iteration %d: Close with no children returned %v", i, closeErr)
+			}
+		}
+	}
+}
+
+// A device refuses to close over an open transient pool, and stays usable.
+//
+// The pool's allocation was counted among the implicit blocks, which Close
+// does not count as children, so Close found nothing live, marked the handle
+// dead, and then the backend refused over the live allocation: the device
+// reported closed to every caller and never closed. An open pool is a child
+// with a handle, exactly as an explicit pool is.
+func TestDeviceCloseRefusesOverAnOpenTransientPool(t *testing.T) {
+	d, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := d.NewTransientPool("buckets")
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	// A graph built into it makes the pool allocate, and closing the graph
+	// leaves that allocation with the pool, which is the point of sharing.
+	r := d.NewRecorder()
+	r.UseTransientPool(pool)
+	mid := r.Transient(accel.BufferDescriptor{
+		DType: accel.F32, Count: 64, Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "mid",
+	})
+	r.UploadToBuffer(mid, make([]float32, 64))
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if err := g.Close(); err != nil {
+		t.Fatalf("graph close: %v", err)
+	}
+	if pool.Bytes() == 0 {
+		t.Fatal("the pool holds nothing, so this test proves nothing")
+	}
+
+	err = d.Close()
+	var le *accel.LifetimeError
+	if !errors.As(err, &le) || le.Reason != "has live children" {
+		t.Fatalf("Close over an open transient pool returned %v, want a live-children refusal", err)
+	}
+	if le.Children != 1 {
+		t.Errorf("Children = %d, want 1 for the one pool", le.Children)
+	}
+	// The refusal left the device fully open.
+	probe, err := d.NewPool(accel.PoolDescriptor{Kind: accel.MemoryUpload, Bytes: 1 << 16})
+	if err != nil {
+		t.Fatalf("the device stopped working after refusing to close: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatalf("pool close: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close once the pool went: %v", err)
+	}
+}

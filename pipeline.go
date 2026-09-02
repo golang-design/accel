@@ -23,6 +23,10 @@ import (
 // times, so a limit violation discovered at submit would be discovered on the
 // hot path.
 func (d *Device) newComputePipeline(desc ComputePipelineDescriptor) (*ComputePipeline, error) {
+	// One reading against Device.Close, for NewPool's reason: the pipeline is
+	// counted as a child at the end.
+	d.lifecycle.RLock()
+	defer d.lifecycle.RUnlock()
 	if err := d.state.checkOpen("NewComputePipeline"); err != nil {
 		return nil, err
 	}
