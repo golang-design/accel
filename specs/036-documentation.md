@@ -216,7 +216,7 @@ stage types until there is.
 
 Devices and selection (`OpenCPU`, `OpenDevice`, `OpenBest`, `Policy`, `Backend`,
 `Enumerate`, `DeviceInfo`, `Limits`, `Capabilities`, `CPUMode`); pools, buffers
-and views (`NewPool`, `NewPoolWith`, `Pool`, `Buffer`, `BufferView`,
+and views (`NewPool`, `Pool`, `Buffer`, `BufferView`,
 `PoolStats`, `MemoryKind`, `BufferUsage`, `DType`); graphs (`NewRecorder`,
 `Recorder`, `Graph`, `Slot`, `Queue`, `Fence`, `TransientPool`, the error
 types); and `tensor`, `quant`, `kmath` in full apart from §5.6's exclusions.

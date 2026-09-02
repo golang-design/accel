@@ -158,9 +158,11 @@ itself detected rather than merely loud.
   slot and the resumable entry point. A cooperative kernel has no `Flat` at all.
 - **`Kernel.NewShared`**, generated, because only the generated code knows each
   shared array's element type and extent; the runtime would need reflection.
-- **`Kernel.Suspensions`**, which bounds the epoch loop. Exceeding it means the
-  generated program counter is not advancing — a defect in the transform rather
-  than in the kernel, so it reports rather than looping forever.
+- **`Kernel.Suspensions`**, the number of rendezvous points in the kernel's
+  body, which the transform counts and the runtime reports. It is not the
+  epoch bound: a barrier inside a data-bounded loop is one suspension reached
+  many times. The scheduler bounds the epoch loop with its own backstop, so a
+  program counter that stops advancing is reported rather than spun on.
 - **`ir.SharedMem`** and `Func.Shared`, since a kernel's shared storage is part
   of its signature and a backend needs it at pipeline creation.
 - **`Thread.Barrier` does nothing rather than panicking.** The authored function
