@@ -41,6 +41,7 @@ type PagedDims struct {
 // per step, and a uniform would make every sequence its own plan, which is what
 // paging exists to avoid.
 //
+//accel:uniform lengths
 //accel:kernel workgroup=128
 func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	v []float32, pages []uint32, lengths []uint32, out []float32,
@@ -88,7 +89,7 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 	// inside a loop that holds barriers.
 	o := float32(0)
 
-	for base := uint32(0); base < capacity; base += AttnBlock {
+	for base := uint32(0); base < kvLen; base += AttnBlock {
 		pos := base + lane
 
 		// Each lane scores one cached position, reached through its page.
@@ -181,6 +182,7 @@ func AttentionDecodePaged(t accel.Thread, d PagedDims, q []float32, k []float32,
 // bound counts positions the table addresses, so it is the same expression at
 // either storage width.
 //
+//accel:uniform lengths
 //accel:kernel workgroup=128
 func AttentionDecodePagedF16(t accel.Thread, d PagedDims, q []float32, k []accel.Float16,
 	v []accel.Float16, pages []uint32, lengths []uint32, out []float32,
@@ -228,7 +230,7 @@ func AttentionDecodePagedF16(t accel.Thread, d PagedDims, q []float32, k []accel
 	// inside a loop that holds barriers.
 	o := float32(0)
 
-	for base := uint32(0); base < capacity; base += AttnBlock {
+	for base := uint32(0); base < kvLen; base += AttnBlock {
 		pos := base + lane
 
 		// Each lane scores one cached position, reached through its page.

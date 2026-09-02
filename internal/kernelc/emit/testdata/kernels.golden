@@ -1207,7 +1207,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -1231,10 +1231,10 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "q", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "2eff1cc4eb5654941e6759c11fcd65b5",
+	Digest:    "fec3d8114e8ff704a77f8de3dd5c4c82",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1287,7 +1287,7 @@ kernel void AttentionDecode(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -1418,6 +1418,9 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			f.group3 = (d.QHeads / d.KVHeads)
 			f.kvHead4 = (f.h0 / f.group3)
 			f.capacity5 = (uint32(int32(len(k))) / (d.KVHeads * d.HeadDim))
+			if f.kvLen1 > f.capacity5 {
+				f.kvLen1 = f.capacity5
+			}
 			f.m6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l7 = float32(0)
 			f.o8 = float32(0)
@@ -1556,7 +1559,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -1580,10 +1583,10 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 		{Name: "q", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "k", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F16, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "dbe275d25b5f4c29576d1086bcc15a13",
+	Digest:    "caa40b9f6f797a156a2dcff5b285a7d0",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1630,10 +1633,13 @@ kernel void AttentionDecodeF16(
     uint group = _accel_div_u32(d.QHeads, d.KVHeads, _fault);
     uint kvHead = _accel_div_u32(h, group, _fault);
     uint capacity = _accel_div_u32(uint(int(_lens[1])), (d.KVHeads * d.HeadDim), _fault);
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
+    }
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -2405,7 +2411,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			f.pc = 22
 			continue
 		case 22:
-			if f.base12 < f.capacity8 {
+			if f.base12 < f.kvLen5 {
 				f.pc = 2
 				continue
 			}
@@ -2430,10 +2436,10 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "06cff51172e8defc88fc33cf58c2643e",
+	Digest:    "b0dcc7f824703113b9696fd988e5ccc9",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2499,7 +2505,7 @@ kernel void AttentionDecodeBatched(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -8497,7 +8503,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -8522,10 +8528,10 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b1830d7b4801e6a458238d6af91db2e6",
+	Digest:    "87da262a432973165978eb4facd3fe26",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8586,7 +8592,7 @@ kernel void AttentionDecodePaged(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -8861,7 +8867,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -8886,10 +8892,10 @@ var AttentionDecodePagedF16Kernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "92cdbfd8d4517ba205570776a96ccfe5",
+	Digest:    "8d54003fcacb55ece1bb451f9c13cf69",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8950,7 +8956,7 @@ kernel void AttentionDecodePagedF16(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {

@@ -47,6 +47,7 @@ type BatchedDims struct {
 //
 // specs/030-paged-kv.md's pool is what makes the page tables independent.
 //
+//accel:uniform lengths
 //accel:kernel workgroup=128
 func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []float32,
 	v []float32, pages []uint32, lengths []uint32, out []float32,
@@ -99,7 +100,7 @@ func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []floa
 	// inside a loop that holds barriers.
 	o := float32(0)
 
-	for base := uint32(0); base < capacity; base += AttnBlock {
+	for base := uint32(0); base < kvLen; base += AttnBlock {
 		pos := base + lane
 
 		// Each lane scores one cached position, reached through its page.

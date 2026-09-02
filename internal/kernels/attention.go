@@ -78,18 +78,20 @@ const AttnBlock = 128
 // deliberate -- every test written against the 128-position form keeps its exact
 // numbers, so this is a longer reach rather than a different answer.
 //
-// # The loop bound is a length, not a load
+// # The loop bound is the length, declared uniform
 //
-// specs/002-compute-model.md section 3.3 makes every load non-uniform, so a
-// loop bounded by lengths[0] cannot hold a barrier and this loop has fourteen.
-// The bound is therefore the *binding's* extent, which len() reports and
-// section 3.3 seeds as workgroup-uniform: it is fixed when the node is
-// recorded, and no aliased write can change it the way one can change a
-// buffer's contents. Positions past kvLen are masked per lane and cost the
-// barriers of an empty block, which is the price of the uniform bound.
+// specs/002-compute-model.md section 3.3 makes every load non-uniform, so
+// until specs/063-uniform-loads.md a loop bounded by lengths[0] could not
+// hold a barrier, and this loop has fourteen: the bound was the binding's
+// extent, and every position past the length cost the barriers of an empty
+// block. At a 4096-position capacity and a 256-position sequence that was
+// 533 µs per layer against 198 µs, measured on an M2. The lengths table is
+// the host's routing data, no invocation of the dispatch writes it, and
+// //accel:uniform says so; the loop stops at the length.
 //
 // One workgroup per query head.
 //
+//accel:uniform lengths
 //accel:kernel workgroup=128
 func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32,
 	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32) {
@@ -140,7 +142,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 	// inside a loop that holds barriers.
 	o := float32(0)
 
-	for base := uint32(0); base < capacity; base += AttnBlock {
+	for base := uint32(0); base < kvLen; base += AttnBlock {
 		pos := base + lane
 
 		// Score this lane's position. Out of range contributes negative
@@ -249,6 +251,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 // keeps generics out of the subset, and a variant is what
 // specs/010-kernel-corpus.md registers.
 //
+//accel:uniform lengths
 //accel:kernel workgroup=128
 func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float16,
 	v []accel.Float16, lengths []uint32,
@@ -270,6 +273,11 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 	// The cache's capacity, from the binding rather than from a load. See the
 	// note above on why the bound cannot be kvLen.
 	capacity := uint32(len(k)) / (d.KVHeads * d.HeadDim)
+	// Clamped for the reason the f32 form clamps: a length past the cache's
+	// reach would read another sequence's blocks.
+	if kvLen > capacity {
+		kvLen = capacity
+	}
 
 	// The running softmax. m and l are per-lane copies of one value: every lane
 	// computes them from the same reduced quantities, so they agree without
@@ -284,7 +292,7 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 	// inside a loop that holds barriers.
 	o := float32(0)
 
-	for base := uint32(0); base < capacity; base += AttnBlock {
+	for base := uint32(0); base < kvLen; base += AttnBlock {
 		pos := base + lane
 
 		// Score this lane's position. Out of range contributes negative

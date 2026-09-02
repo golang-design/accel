@@ -1096,7 +1096,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:167:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:169:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane2))
@@ -1107,7 +1107,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "attention.go:170:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "attention.go:172:3"}
 			return true
 		case 6:
 			f.stride15 = uint32(64)
@@ -1122,7 +1122,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "attention.go:176:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "attention.go:178:4"}
 			return true
 		case 9:
 			f.stride15 = (f.stride15 / uint32(2))
@@ -1147,7 +1147,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:193:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:195:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane2))
@@ -1158,7 +1158,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:196:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:198:3"}
 			return true
 		case 15:
 			f.stride20 = uint32(64)
@@ -1173,7 +1173,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:202:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:204:4"}
 			return true
 		case 18:
 			f.stride20 = (f.stride20 / uint32(2))
@@ -1207,7 +1207,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -1231,10 +1231,10 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "q", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "2eff1cc4eb5654941e6759c11fcd65b5",
+	Digest:    "fec3d8114e8ff704a77f8de3dd5c4c82",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1287,7 +1287,7 @@ kernel void AttentionDecode(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -1418,6 +1418,9 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			f.group3 = (d.QHeads / d.KVHeads)
 			f.kvHead4 = (f.h0 / f.group3)
 			f.capacity5 = (uint32(int32(len(k))) / (d.KVHeads * d.HeadDim))
+			if f.kvLen1 > f.capacity5 {
+				f.kvLen1 = f.capacity5
+			}
 			f.m6 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
 			f.l7 = float32(0)
 			f.o8 = float32(0)
@@ -1445,7 +1448,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:311:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:319:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane2))
@@ -1456,7 +1459,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "attention.go:314:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "attention.go:322:3"}
 			return true
 		case 6:
 			f.stride15 = uint32(64)
@@ -1471,7 +1474,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "attention.go:320:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "attention.go:328:4"}
 			return true
 		case 9:
 			f.stride15 = (f.stride15 / uint32(2))
@@ -1496,7 +1499,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:337:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:345:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane2))
@@ -1507,7 +1510,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:340:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:348:3"}
 			return true
 		case 15:
 			f.stride20 = uint32(64)
@@ -1522,7 +1525,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:346:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:354:4"}
 			return true
 		case 18:
 			f.stride20 = (f.stride20 / uint32(2))
@@ -1556,7 +1559,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -1580,10 +1583,10 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 		{Name: "q", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "k", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F16, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "dbe275d25b5f4c29576d1086bcc15a13",
+	Digest:    "caa40b9f6f797a156a2dcff5b285a7d0",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1630,10 +1633,13 @@ kernel void AttentionDecodeF16(
     uint group = _accel_div_u32(d.QHeads, d.KVHeads, _fault);
     uint kvHead = _accel_div_u32(h, group, _fault);
     uint capacity = _accel_div_u32(uint(int(_lens[1])), (d.KVHeads * d.HeadDim), _fault);
+    if ((kvLen > capacity)) {
+        kvLen = capacity;
+    }
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -2293,7 +2299,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "batched.go:119:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "batched.go:120:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane1))
@@ -2304,7 +2310,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "batched.go:122:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "batched.go:123:3"}
 			return true
 		case 6:
 			f.stride18 = uint32(64)
@@ -2319,7 +2325,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "batched.go:128:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "batched.go:129:4"}
 			return true
 		case 9:
 			f.stride18 = (f.stride18 / uint32(2))
@@ -2344,7 +2350,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "batched.go:139:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "batched.go:140:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane1))
@@ -2355,7 +2361,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "batched.go:142:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "batched.go:143:3"}
 			return true
 		case 15:
 			f.stride23 = uint32(64)
@@ -2370,7 +2376,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "batched.go:148:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "batched.go:149:4"}
 			return true
 		case 18:
 			f.stride23 = (f.stride23 / uint32(2))
@@ -2405,7 +2411,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			f.pc = 22
 			continue
 		case 22:
-			if f.base12 < f.capacity8 {
+			if f.base12 < f.kvLen5 {
 				f.pc = 2
 				continue
 			}
@@ -2430,10 +2436,10 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "06cff51172e8defc88fc33cf58c2643e",
+	Digest:    "b0dcc7f824703113b9696fd988e5ccc9",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2499,7 +2505,7 @@ kernel void AttentionDecodeBatched(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -8385,7 +8391,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:108:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:109:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane2))
@@ -8396,7 +8402,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "paged.go:111:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "paged.go:112:3"}
 			return true
 		case 6:
 			f.stride15 = uint32(64)
@@ -8411,7 +8417,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "paged.go:117:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "paged.go:118:4"}
 			return true
 		case 9:
 			f.stride15 = (f.stride15 / uint32(2))
@@ -8436,7 +8442,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:128:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:129:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane2))
@@ -8447,7 +8453,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:131:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:132:3"}
 			return true
 		case 15:
 			f.stride20 = uint32(64)
@@ -8462,7 +8468,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:137:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:138:4"}
 			return true
 		case 18:
 			f.stride20 = (f.stride20 / uint32(2))
@@ -8497,7 +8503,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -8522,10 +8528,10 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F32, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b1830d7b4801e6a458238d6af91db2e6",
+	Digest:    "87da262a432973165978eb4facd3fe26",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8586,7 +8592,7 @@ kernel void AttentionDecodePaged(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
@@ -8749,7 +8755,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:248:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:250:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane2))
@@ -8760,7 +8766,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "paged.go:251:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "paged.go:253:3"}
 			return true
 		case 6:
 			f.stride15 = uint32(64)
@@ -8775,7 +8781,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "paged.go:257:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "paged.go:259:4"}
 			return true
 		case 9:
 			f.stride15 = (f.stride15 / uint32(2))
@@ -8800,7 +8806,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:268:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:270:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane2))
@@ -8811,7 +8817,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:271:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:273:3"}
 			return true
 		case 15:
 			f.stride20 = uint32(64)
@@ -8826,7 +8832,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:277:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:279:4"}
 			return true
 		case 18:
 			f.stride20 = (f.stride20 / uint32(2))
@@ -8861,7 +8867,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			f.pc = 22
 			continue
 		case 22:
-			if f.base9 < f.capacity5 {
+			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
@@ -8886,10 +8892,10 @@ var AttentionDecodePagedF16Kernel = kernelabi.Kernel{
 		{Name: "k", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "v", DType: kernelabi.F16, Access: kernelabi.Read},
 		{Name: "pages", DType: kernelabi.U32, Access: kernelabi.Read},
-		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read},
+		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "92cdbfd8d4517ba205570776a96ccfe5",
+	Digest:    "8d54003fcacb55ece1bb451f9c13cf69",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8950,7 +8956,7 @@ kernel void AttentionDecodePagedF16(
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
-    for (uint base = uint(0); (base < capacity); base = (base + uint(128))) {
+    for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
