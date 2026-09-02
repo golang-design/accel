@@ -1080,9 +1080,12 @@ public contract and was not decided inside an autonomous session:
    corpus (thirteen `tensor` files import it) under a test's name.
 4. **[000](000-decisions.md) rule 3** — `OpenCPU`, `CPUOptions`, `CPUMode` are
    backend-specific public types.
-5. **[008](008-numerics.md) §3 on Metal** — shift counts at or above 32 and
-   division by zero are undefined in MSL and neither a build error nor a
-   strict-mode error exists on that backend.
+5. **Closed 2026-09-02, [022](022-msl-target.md) §5.1**: shifts give Go's result
+   on every count, a constant count outside the range is a build error, and a
+   zero divisor records a fault word `Wait` reports. Was: **[008](008-numerics.md)
+   §3 on Metal** — shift counts at or above 32 and division by zero are
+   undefined in MSL and neither a build error nor a strict-mode error exists
+   on that backend.
 6. **[006](006-backends.md) §3 matrix** — `F16Arithmetic` and `atomic<float>`
    are never assigned for Metal (`metal_darwin.go`), so every Metal device
    reports both false.

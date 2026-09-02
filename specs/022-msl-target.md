@@ -190,6 +190,31 @@ it would otherwise pass every ceiling there is.
   one index, and reconciling that rewrites the index expression rather than the
   declaration. No corpus kernel needs it.
 
+### 5.1 Integer shifts and division — closed 2026-09-02
+
+[008](008-numerics.md) §3 makes a shift count outside `[0, 31]`, integer
+division by zero and `MinInt32 / -1` build errors or execution errors. MSL
+leaves the first two undefined and this target had neither an error. Now:
+
+- A shift lowers to `_accel_shl_*`/`_accel_shr_*`, which spell Go's result for
+  every count (zero, or the sign for a signed right shift), so the differential
+  is exact on counts above 31 rather than undefined. A constant count outside
+  the range is a build error in the front end.
+- Integer division lowers to `_accel_div_*`/`_accel_rem_*`, which take the
+  kernel's **fault word**: `device atomic_uint *_fault` at
+  `mslabi.FaultIndex(bindings, uniforms)`, one uint per plan node, allocated
+  per executable, cleared on the host before each submission and read after
+  it. A zero divisor stores `mslabi.FaultDivByZero` and yields zero; `Wait`
+  reports the node and the kernel, and the device stays usable. `MinInt32 / -1`
+  yields `MinInt32`, which is Go's defined result, rather than a fault.
+- A vertex or fragment stage has no fault word; its division yields zero on a
+  zero divisor and records nothing. The stage ABI's buffer indices are fixed by
+  [032](032-stage-abi.md), so adding one there is that spec's change.
+
+The word is reserved for every kernel whether or not it divides, for the reason
+the lengths slot is: a layout that depends on the body is one the host must be
+told about.
+
 ## 6. Done — all met 2026-08-23
 
 - the Metal numeric profile is recorded, from probes, before anything derives

@@ -96,6 +96,13 @@ division is exact only for a non-zero divisor and excludes signed
 excluded division/shift cases are build errors or strict-mode execution errors,
 not numeric comparisons.
 
+*2026-09-02:* on the CPU a zero divisor is Go's panic, reported through the
+fence in every mode; on Metal it is a fault word the kernel records and `Wait`
+reports ([022](022-msl-target.md) §5.1). A constant shift count outside the
+range is a build error, and a variable one gives Go's defined result on both
+backends, which is stricter than this section requires. `MinInt32 / -1` gives
+Go's `MinInt32` on both.
+
 ### f32 add, subtract, and multiply
 
 Class-A f32 arithmetic is exact across a pair of backends only when all of these
