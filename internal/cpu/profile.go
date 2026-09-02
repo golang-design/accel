@@ -119,6 +119,12 @@ var portableFloor = driver.Limits{
 	// here passes everywhere.
 	MaxVertexBuffers: 16,
 
+	// GLES 3.1's GL_MAX_TEXTURE_IMAGE_UNITS and Vulkan's
+	// maxPerStageDescriptorSampledImages guaranteed minimums, and the
+	// texture index space mslabi reserves for a Metal stage. Sixteen is the
+	// portable floor, as with vertex buffers.
+	MaxTexturesPerStage: 16,
+
 	// Vulkan maxUniformBufferRange and GLES 3.1 GL_MAX_UNIFORM_BLOCK_SIZE
 	// guaranteed minimums.
 	MaxUniformBlockBytes: 16384,
@@ -203,6 +209,11 @@ var developerLimits = driver.Limits{
 	// is generous. Strict mode reports the floor above, which is what makes a
 	// layout that passes on the oracle pass on a real device.
 	MaxVertexBuffers: 64,
+
+	// The CPU rasterizer indexes bound textures by slice position and has
+	// no ceiling of its own; this is the portability one, for the reason
+	// MaxVertexBuffers gives.
+	MaxTexturesPerStage: 32,
 
 	MaxColorAttachments: 8,
 

@@ -25,17 +25,23 @@ import (
 // diagnostic a caller cannot handle, cannot attribute to a slot, and cannot see
 // beside the rest of a build's errors.
 func TestATextureSlotOutsideWhatAStageHoldsIsRefused(t *testing.T) {
+	d := openDevice(t)
+	limit := d.Info().Limits.MaxTexturesPerStage
+	if limit <= 0 {
+		t.Fatal("the device reports no per-stage texture limit, so nothing constrains a slot")
+	}
 	for _, c := range []struct {
 		name string
 		slot int
 		says string
 	}{
 		{"negative", -1, "cannot be negative"},
-		{"at the ceiling", 16, "is the ceiling"},
-		{"far past the ceiling", 4096, "is the ceiling"},
+		// The ceiling is the device's Limits.MaxTexturesPerStage rather
+		// than a constant, and the refusal names the device.
+		{"at the ceiling", limit, d.Info().Name},
+		{"far past the ceiling", 4096, "the ceiling"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			d := openDevice(t)
 			target := colourTarget(t, d, "colour", 4, 4)
 			src := colourTarget(t, d, "src", 4, 4)
 

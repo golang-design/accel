@@ -10,7 +10,6 @@ import (
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
-	"golang.design/x/accel/internal/mslabi"
 )
 
 // The render API of specs/033-render-api.md: what consumes a graphics stage.
@@ -851,11 +850,14 @@ func (p *RenderPass) SetTexture(slot int, v TextureView) {
 		p.failed = true
 		return
 	}
-	if slot >= mslabi.StageTextureLimit {
-		p.r.fail("RenderPass %q: SetTexture at slot %d; %d is the ceiling, which is what "+
-			"every target this project emits for guarantees a stage "+
-			"(specs/032-stage-abi.md section 5)",
-			p.desc.Label, slot, mslabi.StageTextureLimit)
+	// The ceiling is the device's Limits.MaxTexturesPerStage, for the reason
+	// SetVertexBuffer's is the device's: the constant this used to compare
+	// against was one backend's ABI reservation refusing every device.
+	dev := p.r.state.dev
+	if limit := dev.info.Limits.MaxTexturesPerStage; limit > 0 && slot >= limit {
+		p.r.fail("RenderPass %q: SetTexture at slot %d; %s reports %d as the ceiling on "+
+			"textures per stage (Limits.MaxTexturesPerStage)",
+			p.desc.Label, slot, dev.info.Name, limit)
 		p.failed = true
 		return
 	}

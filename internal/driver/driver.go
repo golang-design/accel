@@ -98,6 +98,10 @@ type Limits struct {
 	// "no limit" rather than as "none allowed".
 	MaxVertexBuffers int
 
+	// MaxTexturesPerStage is how many textures one stage may bind. Zero
+	// reads as "no limit" at the public check, as MaxVertexBuffers does.
+	MaxTexturesPerStage int
+
 	MinSubgroupSize int
 	MaxSubgroupSize int
 }

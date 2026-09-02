@@ -84,6 +84,13 @@ type Limits struct {
 	// specs/000-decisions.md's layering rule 3.
 	MaxVertexBuffers int
 
+	// MaxTexturesPerStage is how many textures one stage may bind.
+	//
+	// Reported per device for MaxVertexBuffers's reason: it used to be
+	// mslabi.StageTextureLimit at the record-time check, one backend's ABI
+	// constant refusing every device, which is layering rule 3 again.
+	MaxTexturesPerStage int
+
 	// Devices without subgroups report 1/1 while Capabilities.Subgroups is false,
 	// so every opened device still has positive numeric limits.
 	MinSubgroupSize int

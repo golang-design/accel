@@ -497,6 +497,10 @@ func infoFor(d *mtl.Device) (driver.Info, error) {
 			// limit rather than every device's.
 			MaxVertexBuffers: mslabi.StageVertexBufferLimit,
 
+			// A stage's texture index space, which is mslabi's reservation
+			// for the same reason the vertex-buffer one is.
+			MaxTexturesPerStage: mslabi.StageTextureLimit,
+
 			// Queried. maxBufferLength is the largest single allocation, and a
 			// pool is exactly one allocation.
 			MaxBufferBytes:               d.MaxBufferBytes,
