@@ -129,29 +129,36 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 			kernel:  vec,
 			uniform: func(map[string]ScalarValue) any { return dims },
 			grid: func(*Tensor) accel.WorkgroupCount {
-				return accel.WorkgroupCount{X: n}
+				return accel.WorkgroupCount{X: (n + kernels.MatVecCols - 1) / kernels.MatVecCols}
 			},
 			reason: fmt.Sprintf("M is 1, so the quantized matrix-vector kernel over %s "+
-				"activations gives each of the %d output columns a workgroup and folds "+
-				"K across the lanes", acts, n),
+				"activations gives each block of %d of the %d output columns a workgroup "+
+				"and splits K %d ways across its lanes", acts, kernels.MatVecCols, n,
+				kernels.MatVecPhases),
 			rejected: []string{integer, "the per-element quantized GEMM: it gives each " +
 				"output element one invocation, which at M=1 leaves K unparallelized"},
 		}, accel.F32, Shape{m, n})
 	}
 
-	gemm := &kernels.QuantMatMulKernel
+	// Tiled since 2026-09-02: the per-element kernel fetched every int8
+	// weight M times, which made prefill on int8 weights the least tiled
+	// GEMM in the corpus. The tile dequantizes B on load and accumulates in
+	// the same K order, so the answer is the per-element kernel's.
+	gemm := &kernels.QuantMatMulTiledKernel
 	if wide {
-		gemm = &kernels.QuantMatMulF32Kernel
+		gemm = &kernels.QuantMatMulTiledF32Kernel
 	}
 	return b.record(node{
 		op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
 		kernel:  gemm,
 		uniform: func(map[string]ScalarValue) any { return dims },
-		grid:    perElement(int(gemm.WorkgroupSize.X)),
-		reason: fmt.Sprintf("the int8 quantized GEMM over %s activations and a %dx%d "+
-			"output; each product widens to f32 before accumulating, because the scale "+
-			"varies per block", acts, m, n),
-		rejected: []string{integer, "the quantized matrix-vector kernel: it applies only at M=1"},
+		grid:    gemmGrid(m, n),
+		reason: fmt.Sprintf("the tiled int8 quantized GEMM over %s activations and a %dx%d "+
+			"output in %dx%d tiles; B is dequantized into the tile and each product "+
+			"widens to f32 before accumulating, because the scale varies per block",
+			acts, m, n, kernels.TileM, kernels.TileN),
+		rejected: []string{integer, "the quantized matrix-vector kernel: it applies only at M=1",
+			"the per-element quantized GEMM: it reads every weight once per token"},
 	}, accel.F32, Shape{m, n})
 }
 

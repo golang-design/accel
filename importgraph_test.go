@@ -185,6 +185,8 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 		"IntReduce":                  "059's integer minima and maxima",
 		"BitReduce":                  "059's bitwise reductions",
 		"FloatReduce":                "059's f32 minimum and maximum, with a NaN",
+		"QuantMatMul":                "027's per-element quantized GEMM, the tiled form's reference",
+		"QuantMatMulF32":             "027's per-element quantized GEMM over f32 activations, the tiled form's reference",
 		"MatrixShapes":               "014's non-square and wide matrix uniforms",
 		"PairAverage":                "013's helper calling a helper",
 		"MulReduce":                  "059's product reductions",

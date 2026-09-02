@@ -158,13 +158,14 @@ func TestAMatMulOverAnUnregisteredWidthIsRefused(t *testing.T) {
 	}
 }
 
-// The mixed pair takes the tile at M=1, and Selections says what that costs.
+// The mixed pair takes the matrix-vector kernel at M=1, and Selections says
+// what the tile would have cost.
 //
-// The matrix-vector kernel reads f16 on both operands, so a mixed decode has no
-// specialized kernel. That is a real gap and it is reported rather than hidden:
-// a caller reading Selections sees that seven of eight tile rows are idle,
-// which is the number they would need to decide whether it matters.
-func TestAMixedMatMulAtOneRowReportsTheIdleTileRows(t *testing.T) {
+// Until 2026-09-02 the matrix-vector kernel read f16 on both operands, so a
+// mixed decode took the tile with seven of eight rows idle, and Selections
+// reported the gap rather than hiding it. MatVecF32F16 closes it; the rejected
+// list still names the idle rows, so a reader sees why the tile was not taken.
+func TestAMixedMatMulAtOneRowTakesTheMatrixVectorKernel(t *testing.T) {
 	rt := newRuntime(t)
 	b := rt.NewBuilder("mixeddecode")
 	x := tensor.Input(b, tensor.ValueDesc{
@@ -181,17 +182,17 @@ func TestAMixedMatMulAtOneRowReportsTheIdleTileRows(t *testing.T) {
 	defer plan.Close()
 
 	sel := plan.Selections()
-	if len(sel) != 1 || sel[0].Kernel != "MatMulTiledF32F16" {
-		t.Fatalf("selections are %+v, want the mixed tiled GEMM", sel)
+	if len(sel) != 1 || sel[0].Kernel != "MatVecF32F16" {
+		t.Fatalf("selections are %+v, want the mixed matrix-vector kernel", sel)
 	}
 	var named bool
 	for _, r := range sel[0].Rejected {
-		if strings.Contains(r, "rows are idle") {
+		if strings.Contains(r, "rows idle") {
 			named = true
 		}
 	}
 	if !named {
-		t.Errorf("the selection does not report the idle tile rows, so the cost of "+
-			"having no mixed matrix-vector kernel is invisible: %+v", sel[0])
+		t.Errorf("the selection does not say why the tile was rejected (its idle "+
+			"rows), so the choice is invisible: %+v", sel[0])
 	}
 }

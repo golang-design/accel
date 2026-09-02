@@ -46,12 +46,10 @@ func TestADecoderStackOnF32ActivationsNeedsNoCast(t *testing.T) {
 		wantKernel string
 	}{
 		// The kernel each expects at M=1, which is a decode step and is the
-		// shape a model spends nearly all of its dispatches in. The quantized
-		// path has an M=1 kernel and gets it; the unquantized one does not,
-		// because the matrix-vector kernel reads f16 on both operands, so a
-		// mixed decode takes the tile and the selection reports the idle rows.
-		// That asymmetry is deliberate and is recorded in 010.
-		{"f16 weights", false, "MatMulTiledF32F16"},
+		// shape a model spends nearly all of its dispatches in. Both paths
+		// have an M=1 kernel over f32 activations since 2026-09-02; before
+		// that the unquantized one took the tile with seven rows idle.
+		{"f16 weights", false, "MatVecF32F16"},
 		{"int8 weights", true, "QuantMatVecF32"},
 	} {
 		t.Run(wt.name, func(t *testing.T) {

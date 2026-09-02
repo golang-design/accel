@@ -17,35 +17,117 @@ import "golang.design/x/accel"
 // exactly when M=1 for that reason, and the selection is deterministic rather
 // than heuristic so that two runs of the same model dispatch the same kernel.
 //
-// One workgroup per output column-block, each invocation folding a strided slice
-// of K and the tree reducing the partials — the same shape as the other
-// reductions here, and the same argument: depth seven rather than K-1.
+// # Why lanes own adjacent columns
 //
-//accel:kernel workgroup=128
+// A workgroup covers [MatVecCols] adjacent output columns, and its lanes are a
+// grid of columns by K phases: lane (lx, ly) folds every K-th row starting at
+// ly for column lx. For one k the [MatVecCols] lanes of a phase read
+// [MatVecCols] adjacent weights, which is one coalesced row segment; the
+// earlier form gave each workgroup one column and strode K across the lanes,
+// so adjacent lanes read rows N apart and the decode step read the matrix
+// through the worst access pattern the hardware has. Measured on an M2 at
+// 2048x2048 f16: 2.4 ms per step against 1.15 ms for the tile with seven rows
+// idle; this layout is what makes the specialization faster than the tile.
+//
+// The phases' partials meet in shared memory and are summed in phase order,
+// which is the one order both lowerings run.
+//
+//accel:kernel workgroup=32,4
 func MatVec(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16,
 	out []float32, sh *[128]float32) {
 
-	col := t.GroupID().X
-	lid := t.LocalID().X
+	lx := t.LocalID().X
+	ly := t.LocalID().Y
+	col := t.GroupID().X*MatVecCols + lx
 
 	acc := float32(0)
 	if col < d.N {
-		for k := lid; k < d.K; k += RowWidth {
+		for k := ly; k < d.K; k += MatVecPhases {
 			acc = acc + a[k].F32()*b[k*d.N+col].F32()
 		}
 	}
-	sh[lid] = acc
+	sh[ly*MatVecCols+lx] = acc
 	t.Barrier()
 
-	for stride := uint32(RowWidth / 2); stride > 0; stride /= 2 {
-		if lid < stride {
-			sh[lid] = sh[lid] + sh[lid+stride]
+	if ly == 0 && col < d.N {
+		sum := float32(0)
+		for p := uint32(0); p < MatVecPhases; p++ {
+			sum = sum + sh[p*MatVecCols+lx]
 		}
-		t.Barrier()
+		out[col] = sum
 	}
+}
 
-	if lid == 0 && col < d.N {
-		out[col] = sh[0]
+// MatVecCols is how many adjacent output columns one matrix-vector workgroup
+// covers, and MatVecPhases how many ways it splits K; their product is the
+// workgroup.
+const (
+	MatVecCols   = 32
+	MatVecPhases = 4
+)
+
+// MatVecF32F16 is [MatVec] over f32 activations and f16 weights.
+//
+// It is the decode pair a transformer actually has: activations are f32
+// because every other operator produces f32, and weights are f16 because that
+// is the width a model is stored at. The mixed tiled GEMM computed it
+// correctly with seven of its eight rows idle, and the selection reported the
+// cost rather than closing it. The body is [MatVec]'s with the activation load
+// already wide.
+//
+//accel:kernel workgroup=32,4
+func MatVecF32F16(t accel.Thread, d GEMMDims, a []float32, b []accel.Float16,
+	out []float32, sh *[128]float32) {
+
+	lx := t.LocalID().X
+	ly := t.LocalID().Y
+	col := t.GroupID().X*MatVecCols + lx
+
+	acc := float32(0)
+	if col < d.N {
+		for k := ly; k < d.K; k += MatVecPhases {
+			acc = acc + a[k]*b[k*d.N+col].F32()
+		}
+	}
+	sh[ly*MatVecCols+lx] = acc
+	t.Barrier()
+
+	if ly == 0 && col < d.N {
+		sum := float32(0)
+		for p := uint32(0); p < MatVecPhases; p++ {
+			sum = sum + sh[p*MatVecCols+lx]
+		}
+		out[col] = sum
+	}
+}
+
+// MatVecF32 is [MatVec] over f32 on both operands, for the same reason
+// [MatVecF32F16] exists: at M=1 the f32 tiled GEMM left the same seven rows
+// idle.
+//
+//accel:kernel workgroup=32,4
+func MatVecF32(t accel.Thread, d GEMMDims, a []float32, b []float32,
+	out []float32, sh *[128]float32) {
+
+	lx := t.LocalID().X
+	ly := t.LocalID().Y
+	col := t.GroupID().X*MatVecCols + lx
+
+	acc := float32(0)
+	if col < d.N {
+		for k := ly; k < d.K; k += MatVecPhases {
+			acc = acc + a[k]*b[k*d.N+col]
+		}
+	}
+	sh[ly*MatVecCols+lx] = acc
+	t.Barrier()
+
+	if ly == 0 && col < d.N {
+		sum := float32(0)
+		for p := uint32(0); p < MatVecPhases; p++ {
+			sum = sum + sh[p*MatVecCols+lx]
+		}
+		out[col] = sum
 	}
 }
 
@@ -71,34 +153,32 @@ func MatVec(t accel.Thread, d GEMMDims, a []accel.Float16, b []accel.Float16,
 // in QuantMatMul -- which changes the rounding, not the bound, since 027 states
 // it over the number of terms rather than their order.
 //
-//accel:kernel workgroup=128
+//accel:kernel workgroup=32,4
 func QuantMatVec(t accel.Thread, d GEMMDims, a []accel.Float16, bq []int8,
 	bs []accel.Float16, out []float32, sh *[128]float32) {
 
-	col := t.GroupID().X
-	lid := t.LocalID().X
+	lx := t.LocalID().X
+	ly := t.LocalID().Y
+	col := t.GroupID().X*MatVecCols + lx
 
 	acc := float32(0)
 	if col < d.N {
-		for k := lid; k < d.K; k += RowWidth {
+		for k := ly; k < d.K; k += MatVecPhases {
 			w := k*d.N + col
 			q := float32(bq[w])
 			s := bs[w/QuantBlock].F32()
 			acc = acc + a[k].F32()*(q*s)
 		}
 	}
-	sh[lid] = acc
+	sh[ly*MatVecCols+lx] = acc
 	t.Barrier()
 
-	for stride := uint32(RowWidth / 2); stride > 0; stride /= 2 {
-		if lid < stride {
-			sh[lid] = sh[lid] + sh[lid+stride]
+	if ly == 0 && col < d.N {
+		sum := float32(0)
+		for p := uint32(0); p < MatVecPhases; p++ {
+			sum = sum + sh[p*MatVecCols+lx]
 		}
-		t.Barrier()
-	}
-
-	if lid == 0 && col < d.N {
-		out[col] = sh[0]
+		out[col] = sum
 	}
 }
 
@@ -120,34 +200,32 @@ func QuantMatVec(t accel.Thread, d GEMMDims, a []accel.Float16, bq []int8,
 // not: specs/027-quantization.md states the error over the number of terms
 // rather than their order.
 //
-//accel:kernel workgroup=128
+//accel:kernel workgroup=32,4
 func QuantMatVecF32(t accel.Thread, d GEMMDims, a []float32, bq []int8,
 	bs []accel.Float16, out []float32, sh *[128]float32) {
 
-	col := t.GroupID().X
-	lid := t.LocalID().X
+	lx := t.LocalID().X
+	ly := t.LocalID().Y
+	col := t.GroupID().X*MatVecCols + lx
 
 	acc := float32(0)
 	if col < d.N {
-		for k := lid; k < d.K; k += RowWidth {
+		for k := ly; k < d.K; k += MatVecPhases {
 			w := k*d.N + col
 			q := float32(bq[w])
 			s := bs[w/QuantBlock].F32()
 			acc = acc + a[k]*(q*s)
 		}
 	}
-	sh[lid] = acc
+	sh[ly*MatVecCols+lx] = acc
 	t.Barrier()
 
-	for stride := uint32(RowWidth / 2); stride > 0; stride /= 2 {
-		if lid < stride {
-			sh[lid] = sh[lid] + sh[lid+stride]
+	if ly == 0 && col < d.N {
+		sum := float32(0)
+		for p := uint32(0); p < MatVecPhases; p++ {
+			sum = sum + sh[p*MatVecCols+lx]
 		}
-		t.Barrier()
-	}
-
-	if lid == 0 && col < d.N {
-		out[col] = sh[0]
+		out[col] = sum
 	}
 }
 

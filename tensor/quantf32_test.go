@@ -37,7 +37,7 @@ func TestF32ActivationsMultiplyInt8Weights(t *testing.T) {
 		wantKernel string
 	}{
 		{"decode", 1, 64, 16, "QuantMatVecF32"},
-		{"prefill", 4, 64, 16, "QuantMatMulF32"},
+		{"prefill", 4, 64, 16, "QuantMatMulTiledF32"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			acts := make([]float32, c.m*c.k)

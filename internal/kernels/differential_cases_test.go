@@ -604,7 +604,18 @@ func diffCases() []diffCase {
 		{
 			kernel: &kernels.MatVecKernel, counts: []int{1 * 40, 40 * 12, 1 * 12},
 			uniforms: []any{kernels.GEMMDims{M: 1, N: 12, K: 40}},
-			groups:   accel.WorkgroupCount{X: 12},
+			groups:   accel.WorkgroupCount{X: 1},
+		},
+		{
+			// The mixed and the f32 matrix-vector kernels, the same shape.
+			kernel: &kernels.MatVecF32F16Kernel, counts: []int{1 * 40, 40 * 12, 1 * 12},
+			uniforms: []any{kernels.GEMMDims{M: 1, N: 12, K: 40}},
+			groups:   accel.WorkgroupCount{X: 1},
+		},
+		{
+			kernel: &kernels.MatVecF32Kernel, counts: []int{1 * 40, 40 * 12, 1 * 12},
+			uniforms: []any{kernels.GEMMDims{M: 1, N: 12, K: 40}},
+			groups:   accel.WorkgroupCount{X: 1},
 		},
 		{
 			// Top-k over a distribution with a deliberate plateau at the
@@ -792,6 +803,38 @@ func diffCases() []diffCase {
 			},
 		},
 		{
+			// The tiled forms, over an output that is not a whole number of
+			// tiles in either axis, so the edge guards run on both backends.
+			kernel:   &kernels.QuantMatMulTiledKernel,
+			counts:   []int{11 * 40, 40 * 21, 40*21/32 + 1, 11 * 21},
+			uniforms: []any{kernels.GEMMDims{M: 11, N: 21, K: 40}},
+			groups:   accel.WorkgroupCount{X: 2, Y: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i%201) - 100
+				case 2:
+					return 0.25 + float32(i%3)/8
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
+			kernel:   &kernels.QuantMatMulTiledF32Kernel,
+			counts:   []int{11 * 40, 40 * 21, 40*21/32 + 1, 11 * 21},
+			uniforms: []any{kernels.GEMMDims{M: 11, N: 21, K: 40}},
+			groups:   accel.WorkgroupCount{X: 2, Y: 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 1:
+					return float32(i%201) - 100
+				case 2:
+					return 0.25 + float32(i%3)/8
+				}
+				return defaultSeed(b, i)
+			},
+		},
+		{
 			// The M=1 quantized selection. It folds K across the lanes and tree
 			// reduces where QuantMatMul sums sequentially, so its rounding
 			// differs from that kernel's -- but both backends run *this* order,
@@ -800,7 +843,7 @@ func diffCases() []diffCase {
 			kernel:   &kernels.QuantMatVecKernel,
 			counts:   []int{32, 32 * 8, 32 * 8 / 32, 8},
 			uniforms: []any{kernels.GEMMDims{M: 1, N: 8, K: 32}},
-			groups:   accel.WorkgroupCount{X: 8},
+			groups:   accel.WorkgroupCount{X: 1},
 			seed: func(b, i int) float32 {
 				switch b {
 				case 1:
@@ -818,7 +861,7 @@ func diffCases() []diffCase {
 			kernel:   &kernels.QuantMatVecF32Kernel,
 			counts:   []int{32, 32 * 8, 32 * 8 / 32, 8},
 			uniforms: []any{kernels.GEMMDims{M: 1, N: 8, K: 32}},
-			groups:   accel.WorkgroupCount{X: 8},
+			groups:   accel.WorkgroupCount{X: 1},
 			seed: func(b, i int) float32 {
 				switch b {
 				case 1:

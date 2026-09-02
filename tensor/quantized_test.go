@@ -89,7 +89,7 @@ func TestAPlanMixesQuantizedAndUnquantized(t *testing.T) {
 	var sawQuant, sawPlain bool
 	for _, s := range plan.Selections() {
 		switch s.Kernel {
-		case "QuantMatMul":
+		case "QuantMatMulTiled":
 			sawQuant = true
 		case "MatMulTiled":
 			sawPlain = true

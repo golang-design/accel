@@ -109,6 +109,17 @@ func gemmKernel(x, w DType, m, n int) (*accel.Kernel, string) {
 		"the portable tiled GEMM over " + tiles
 }
 
+// matVecKernel is the M=1 kernel for an operand pair gemmPair admits.
+func matVecKernel(x, w DType) (*accel.Kernel, string) {
+	switch {
+	case x == accel.F32 && w == accel.F16:
+		return &kernels.MatVecF32F16Kernel, "f32 activations and f16 weights"
+	case x == accel.F32:
+		return &kernels.MatVecF32Kernel, "f32 operands"
+	}
+	return &kernels.MatVecKernel, "f16 operands"
+}
+
 // gemmGrid covers the output in tiles, which is what the tiled kernel expects:
 // one workgroup per output tile rather than per element.
 func gemmGrid(m, n int) grid {
@@ -138,40 +149,29 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 
 	// The one selection v0 makes. A matrix-vector product has one output row,
 	// so a tile eight rows tall would leave seven idle; the M=1 kernel gives
-	// each output column a workgroup instead.
-	//
-	// Only for the f16 pair, because the matrix-vector kernel reads f16 on
-	// both operands and a second variant of it would be a kernel added for a
-	// shape the tiled one already computes correctly. The f32 and mixed pairs
-	// take the tile and Selections says the rows are idle, which is the cost
-	// reported rather than hidden. That is a real gap for decode against f16
-	// weights, and it is reported rather than closed here: the quantized path
-	// has its own M=1 kernel because int8 is the width a large model is in,
-	// and a mixed matvec is the same shape of argument at f16.
-	if m == 1 && x.dtype == accel.F16 {
+	// each output column a workgroup instead. One variant per operand pair,
+	// because decode is the shape every step after the first has and the
+	// pair a transformer actually has is f32 activations against f16
+	// weights: until 2026-09-02 only the f16 pair had the kernel and the
+	// other two took the tile with seven rows idle, reported rather than
+	// closed.
+	if m == 1 {
+		vec, over := matVecKernel(x.dtype, w.dtype)
 		return b.record(node{
-			op: "MatMul", inputs: []*Tensor{x, w}, kernel: &kernels.MatVecKernel,
+			op: "MatMul", inputs: []*Tensor{x, w}, kernel: vec,
 			uniform: func(map[string]ScalarValue) any { return dims },
 			grid: func(*Tensor) accel.WorkgroupCount {
-				return accel.WorkgroupCount{X: n}
+				return accel.WorkgroupCount{X: (n + kernels.MatVecCols - 1) / kernels.MatVecCols}
 			},
-			reason: fmt.Sprintf("M is 1, so the matrix-vector kernel gives each of the %d "+
-				"output columns a workgroup", n),
+			reason: fmt.Sprintf("M is 1, so the matrix-vector kernel over %s gives each "+
+				"block of %d of the %d output columns a workgroup and splits K %d ways "+
+				"across its lanes", over, kernels.MatVecCols, n, kernels.MatVecPhases),
 			rejected: []string{fmt.Sprintf("the tiled GEMM: its %d-row tile would leave %d "+
 				"rows idle", kernels.TileM, kernels.TileM-1)},
 		}, accel.F32, Shape{m, n})
 	}
 	gemm, why := gemmKernel(x.dtype, w.dtype, m, n)
 	rejected := []string{"the matrix-vector kernel: it applies only at M=1"}
-	if m == 1 {
-		// Reached only when x is f32: the f16 pair took the MatVec branch
-		// above. The matrix-vector kernel reads f16 on *both* operands, so
-		// neither the f32 nor the mixed pair can use it, and the cost of the
-		// tile is reported rather than hidden.
-		rejected = []string{fmt.Sprintf("the matrix-vector kernel: it reads f16 on both "+
-			"operands, so %d of this tile's %d rows are idle",
-			kernels.TileM-1, kernels.TileM)}
-	}
 	return b.record(node{
 		op: "MatMul", inputs: []*Tensor{x, w}, kernel: gemm,
 		uniform:  func(map[string]ScalarValue) any { return dims },

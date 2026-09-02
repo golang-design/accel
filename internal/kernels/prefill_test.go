@@ -905,17 +905,20 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 			bs[i] = accel.ToFloat16(0.25 + float32(i%3)/8)
 		}
 
+		// One workgroup per block of MatVecCols columns, which for n = 8 is
+		// one group; the lanes are the kernel's 32x4 grid.
 		authored := make([]float32, n)
-		for col := range uint32(n) {
+		groups := uint32((n + kernels.MatVecCols - 1) / kernels.MatVecCols)
+		for g := range groups {
 			var sh [128]float32
-			kernel.RunAuthored(&kernels.QuantMatVecKernel, kernel.ID3{X: col},
-				kernel.ID3{X: n, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+			kernel.RunAuthored(&kernels.QuantMatVecKernel, kernel.ID3{X: g},
+				kernel.ID3{X: groups, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					kernels.QuantMatVec(th, d, a, bq, bs, authored, &sh)
 				})
 		}
 		generated := make([]float32, n)
 		if err := kernel.DispatchCooperative(&kernels.QuantMatVecKernel,
-			accel.ID3{X: n},
+			accel.ID3{X: (n + kernels.MatVecCols - 1) / kernels.MatVecCols},
 			kernelabi.Args{
 				Slices: []any{a, bq, bs, generated}, Uniforms: []any{d},
 			}); err != nil {
@@ -934,8 +937,16 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		a := make([]float32, k)
 		bq := make([]int8, k*n)
 		bs := make([]accel.Float16, k*n/kernels.QuantBlock)
+		// Activations with few significant bits, so that a[k]*(q*s) is exact
+		// in f32: q is an int8, s one of three dyadic scales, and the product
+		// then rounds once at the add whether or not the authored form fused
+		// the multiply into it. The generated lowering wraps every operation
+		// in float32() and never fuses; Go on arm64 may fuse the authored
+		// form, and with several products per lane the two would differ by
+		// an ULP on activations like sin(i) -- a property of fusion, not of
+		// the lowering, which is what this test is about.
 		for i := range a {
-			a[i] = float32(math.Sin(float64(i) * 0.21))
+			a[i] = float32(i%7) - 3
 		}
 		for i := range bq {
 			bq[i] = int8(i%201 - 100)
@@ -945,16 +956,17 @@ func TestAuthoredFormsAgreeWithTheirLowerings(t *testing.T) {
 		}
 
 		authored := make([]float32, n)
-		for col := range uint32(n) {
+		groups := uint32((n + kernels.MatVecCols - 1) / kernels.MatVecCols)
+		for g := range groups {
 			var sh [128]float32
-			kernel.RunAuthored(&kernels.QuantMatVecF32Kernel, kernel.ID3{X: col},
-				kernel.ID3{X: n, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
+			kernel.RunAuthored(&kernels.QuantMatVecF32Kernel, kernel.ID3{X: g},
+				kernel.ID3{X: groups, Y: 1, Z: 1}, 128, func(th kernel.Thread) {
 					kernels.QuantMatVecF32(th, d, a, bq, bs, authored, &sh)
 				})
 		}
 		generated := make([]float32, n)
 		if err := kernel.DispatchCooperative(&kernels.QuantMatVecF32Kernel,
-			accel.ID3{X: n},
+			accel.ID3{X: (n + kernels.MatVecCols - 1) / kernels.MatVecCols},
 			kernelabi.Args{
 				Slices: []any{a, bq, bs, generated}, Uniforms: []any{d},
 			}); err != nil {
