@@ -1262,11 +1262,11 @@ kernel void AttentionDecode(
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
             uint phys = (((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot = (dot + (q[((h * d.HeadDim) + i)] * k[(phys + i)]));
+                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * k[(phys + i)]));
             }
-            s = (dot * d.Scale);
+            s = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
@@ -1602,11 +1602,11 @@ kernel void AttentionDecodeF16(
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
             uint phys = (((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot = (dot + (q[((h * d.HeadDim) + i)] * float(k[(phys + i)])));
+                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * float(k[(phys + i)])));
             }
-            s = (dot * d.Scale);
+            s = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
@@ -2448,11 +2448,11 @@ kernel void AttentionDecodeBatched(
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
             uint phys = ((pages[(pageBase + (pos / d.Block))] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot = (dot + (q[(qBase + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                dot_ = (dot_ + (q[(qBase + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
             }
-            s = (dot * d.Scale);
+            s = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
@@ -8061,11 +8061,11 @@ kernel void AttentionDecodePaged(
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
             uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot = (dot + (q[((h * d.HeadDim) + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
             }
-            s = (dot * d.Scale);
+            s = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
@@ -8414,11 +8414,11 @@ kernel void AttentionDecodePagedF16(
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
             uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot = (dot + (q[((h * d.HeadDim) + i)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
             }
-            s = (dot * d.Scale);
+            s = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = s;
@@ -8791,13 +8791,13 @@ kernel void AttentionPrefillPagedF16(
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
             uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
                 float ki = float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]);
-                dot = (dot + (qi * ki));
+                dot_ = (dot_ + (qi * ki));
             }
-            score = (dot * d.Scale);
+            score = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
@@ -9392,13 +9392,13 @@ kernel void AttentionPrefill(
         float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
                 float ki = k[((((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
-                dot = (dot + (qi * ki));
+                dot_ = (dot_ + (qi * ki));
             }
-            score = (dot * d.Scale);
+            score = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
@@ -9762,13 +9762,13 @@ kernel void AttentionPrefillF16(
         float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
                 float ki = float(k[((((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]);
-                dot = (dot + (qi * ki));
+                dot_ = (dot_ + (qi * ki));
             }
-            score = (dot * d.Scale);
+            score = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
@@ -10140,13 +10140,13 @@ kernel void AttentionPrefillPaged(
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
             uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
                 float ki = k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)];
-                dot = (dot + (qi * ki));
+                dot_ = (dot_ + (qi * ki));
             }
-            score = (dot * d.Scale);
+            score = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
@@ -10826,11 +10826,11 @@ kernel void AttentionRagged(
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
             uint phys = ((pages[(pageBase + (pos / d.Block))] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint j = uint(0); (j < d.HeadDim); j = (j + uint(1))) {
-                dot = (dot + (q[(qBase + j)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + j)]));
+                dot_ = (dot_ + (q[(qBase + j)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + j)]));
             }
-            score = (dot * d.Scale);
+            score = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;
@@ -11254,11 +11254,11 @@ kernel void AttentionRaggedF16(
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
             uint phys = ((pages[(pageBase + (pos / d.Block))] * d.Block) + (pos % d.Block));
-            float dot = float(0);
+            float dot_ = float(0);
             for (uint j = uint(0); (j < d.HeadDim); j = (j + uint(1))) {
-                dot = (dot + (q[(qBase + j)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + j)])));
+                dot_ = (dot_ + (q[(qBase + j)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + j)])));
             }
-            score = (dot * d.Scale);
+            score = (dot_ * d.Scale);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = score;

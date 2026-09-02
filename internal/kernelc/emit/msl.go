@@ -69,6 +69,10 @@ func MSL(k *ir.Func) (string, error) {
 		m.binding[b.Name] = i
 	}
 	m.atomic = atomicBindings(k)
+	m.param = map[string]*ir.Param{}
+	for _, p := range k.Params {
+		m.param[p.Name] = p
+	}
 	m.need = map[string]bool{}
 	m.emit()
 	if m.err != nil {
@@ -97,7 +101,13 @@ type msl struct {
 	// has to go through atomic_load_explicit. That is why this is computed
 	// before the signature is printed rather than discovered while printing the
 	// body.
-	atomic map[string]bool
+	atomic map[*ir.Param]bool
+
+	// param is the kernel's own parameters by name, which is what bindingType
+	// needs to ask atomic about a binding. Keyed by name here and by identity
+	// in atomic, so a helper parameter that happens to share a binding's
+	// name is its own parameter and not an atomic one.
+	param map[string]*ir.Param
 
 	// need records the built-in helpers the body reached, so they are emitted
 	// once and only when used. MSL has no statement expression, so an operation
@@ -328,14 +338,14 @@ func (m *msl) body(k *ir.Func) {
 	nb := len(k.Bindings)
 	for i, b := range k.Bindings {
 		qual := "device"
-		if !b.Write && !m.atomic[b.Name] {
+		if !b.Write && !m.atomic[m.param[b.Name]] {
 			qual = "const device"
 		}
-		m.printf("\n    %s %s *%s [[buffer(%d)]],", qual, m.bindingType(b), b.Name, i)
+		m.printf("\n    %s %s *%s [[buffer(%d)]],", qual, m.bindingType(b), mslIdent(b.Name), i)
 	}
 	m.printf("\n    constant uint *_lens [[buffer(%d)]],", MSLLengthsIndex(nb))
 	for i, u := range k.Uniforms {
-		m.printf("\n    constant %s &%s [[buffer(%d)]],", u.TypeName, u.Name, MSLUniformIndex(nb, i))
+		m.printf("\n    constant %s &%s [[buffer(%d)]],", u.TypeName, mslIdent(u.Name), MSLUniformIndex(nb, i))
 	}
 	// The three ids and the grid size are always declared. MSL does not object
 	// to an unused parameter, and declaring them unconditionally keeps the
@@ -365,7 +375,7 @@ func (m *msl) body(k *ir.Func) {
 			m.fail("shared %s is %v, and shared storage is a fixed-size array", sh.Name, sh.Type)
 			return
 		}
-		m.printf("    threadgroup %s %s[%d];\n", m.dtype(sh.Type.Elem), sh.Name, sh.Type.Len)
+		m.printf("    threadgroup %s %s[%d];\n", m.dtype(sh.Type.Elem), mslIdent(sh.Name), sh.Type.Len)
 	}
 	m.block(k.Body, 1)
 	m.printf("}\n")
@@ -391,7 +401,7 @@ func (m *msl) helper(h *ir.Func) {
 	if h.Result != nil {
 		ret = m.dtype(h.Result)
 	}
-	m.printf("static %s %s(", ret, h.Name)
+	m.printf("static %s %s(", ret, mslIdent(h.Name))
 	for i, p := range h.Params {
 		if i > 0 {
 			m.printf(", ")
@@ -412,10 +422,10 @@ func (m *msl) helper(h *ir.Func) {
 			if writesThrough(h.Body, p) {
 				qual = "device"
 			}
-			m.printf("%s %s *%s", qual, m.dtype(t.Elem), p.Name)
+			m.printf("%s %s *%s", qual, m.dtype(t.Elem), mslIdent(p.Name))
 			continue
 		}
-		m.printf("%s %s", m.dtype(t), p.Name)
+		m.printf("%s %s", m.dtype(t), mslIdent(p.Name))
 	}
 	m.printf(") {\n")
 	m.block(h.Body, 1)
@@ -621,7 +631,7 @@ func (m *msl) scalar(goSpelling string) string {
 // kernel cannot pass a plain pointer to an atomic operation, and this is the
 // only place the two facts meet.
 func (m *msl) bindingType(b *ir.Binding) string {
-	if !m.atomic[b.Name] {
+	if !m.atomic[m.param[b.Name]] {
 		return m.dtype(b.Type.Elem)
 	}
 	switch b.Type.Elem.Kind {
@@ -646,8 +656,8 @@ func (m *msl) bindingType(b *ir.Binding) string {
 // The same walk specs/012-kernel-pipeline.md's access inference makes, repeated
 // here because it answers a different question: that pass records that the
 // binding is read and written, and this one records that its *type* changes.
-func atomicBindings(k *ir.Func) map[string]bool {
-	out := map[string]bool{}
+func atomicBindings(k *ir.Func) map[*ir.Param]bool {
+	out := map[*ir.Param]bool{}
 	var walkValue func(ir.Value)
 	var walk func(ir.Stmt)
 	walkValue = func(v ir.Value) {
@@ -655,7 +665,7 @@ func atomicBindings(k *ir.Func) map[string]bool {
 		case *ir.IntrinsicCall:
 			if v.Op.IsAtomic() && len(v.Args) > 0 {
 				if p, ok := v.Args[0].(*ir.Param); ok {
-					out[p.Name] = true
+					out[p] = true
 				}
 			}
 			for _, a := range v.Args {
@@ -811,14 +821,14 @@ func (m *msl) stmt(s ir.Stmt, depth int) {
 		m.printf("%s}\n", mslIndent(depth))
 
 	case *ir.Declare:
-		m.printf("%s%s %s = ", mslIndent(depth), m.dtype(s.Local.Type()), s.Local.Name)
+		m.printf("%s%s %s = ", mslIndent(depth), m.dtype(s.Local.Type()), mslIdent(s.Local.Name))
 		m.value(s.Init)
 		m.printf(";\n")
 
 	case *ir.Assign:
 		if idx, ok := s.LHS.(*ir.IndexExpr); ok {
-			if p, isParam := idx.X.(*ir.Param); isParam && m.atomic[p.Name] {
-				m.printf("%satomic_store_explicit(&%s[", mslIndent(depth), p.Name)
+			if p, isParam := idx.X.(*ir.Param); isParam && m.atomic[p] {
+				m.printf("%satomic_store_explicit(&%s[", mslIndent(depth), mslIdent(p.Name))
 				m.value(idx.Index)
 				m.printf("], ")
 				m.value(s.RHS)
@@ -927,10 +937,10 @@ func (m *msl) value(v ir.Value) {
 		m.constant(v)
 
 	case *ir.Param:
-		m.printf("%s", v.Name)
+		m.printf("%s", mslIdent(v.Name))
 
 	case *ir.Local:
-		m.printf("%s", v.Name)
+		m.printf("%s", mslIdent(v.Name))
 
 	case *ir.Composite:
 		m.composite(v)
@@ -949,8 +959,8 @@ func (m *msl) value(v ir.Value) {
 		// A plain read of a binding whose type is atomic has to go through
 		// atomic_load_explicit: MSL will not let an atomic_uint decay to a
 		// uint, which is the whole reason the qualifier is on the pointer.
-		if p, ok := v.X.(*ir.Param); ok && m.atomic[p.Name] {
-			m.printf("atomic_load_explicit(&%s[", p.Name)
+		if p, ok := v.X.(*ir.Param); ok && m.atomic[p] {
+			m.printf("atomic_load_explicit(&%s[", mslIdent(p.Name))
 			m.value(v.Index)
 			m.printf("], memory_order_relaxed)")
 			break
@@ -1612,4 +1622,56 @@ func (m *msl) paddedArrayMember(v ir.Value) bool {
 		}
 	}
 	return false
+}
+
+// mslIdent spells a Go identifier as an MSL one.
+//
+// Go and C++ do not share a reserved set: `half`, `float`, `new`, `this`,
+// `device`, `kernel` and the rest are ordinary Go names and MSL keywords or
+// types, and a name beginning with an underscore is the emitter's own space
+// (`_gid`, `_lens`). A colliding name gets a trailing underscore, which no Go
+// identifier the front end passes can already end in without also colliding,
+// and every other name is printed as it is, so the generated text stays
+// readable and the golden stays stable.
+func mslIdent(name string) string {
+	if strings.HasPrefix(name, "_") || mslReserved[name] {
+		return name + "_"
+	}
+	return name
+}
+
+// mslReserved is every word an MSL identifier cannot be, or that names a type
+// or a built-in function the emitted text uses: C++ keywords, MSL address
+// space and function qualifiers, the scalar and vector types, and the math
+// functions the intrinsic table lowers to. Go's own keywords are absent
+// because a Go identifier cannot be one.
+var mslReserved = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`
+		alignas alignof and and_eq asm auto bitand bitor bool catch char char16_t
+		char32_t class compl concept consteval constexpr constinit const_cast
+		co_await co_return co_yield decltype delete do double dynamic_cast enum
+		explicit export extern false float friend inline int long mutable
+		namespace new noexcept not not_eq nullptr operator or or_eq private
+		protected public register reinterpret_cast requires short signed sizeof
+		static static_assert static_cast template this thread_local throw true
+		try typedef typeid typename union unsigned using virtual void volatile
+		wchar_t while xor xor_eq
+		device constant threadgroup thread kernel vertex fragment
+		half uint ushort uchar ulong size_t ptrdiff_t
+		float2 float3 float4 half2 half3 half4 int2 int3 int4 uint2 uint3 uint4
+		short2 short3 short4 ushort2 ushort3 ushort4 bool2 bool3 bool4
+		float2x2 float3x3 float4x4 float2x4 float4x2 float3x4 float4x3
+		texture2d sampler atomic_uint atomic_int atomic_float
+		abs min max clamp mix step smoothstep sign floor ceil round trunc fract
+		sqrt rsqrt exp exp2 log log2 pow sin cos tan asin acos atan atan2 sinh
+		cosh tanh fma fmin fmax fmod isnan isinf isfinite select any all dot
+		cross length normalize distance
+		simd_sum simd_min simd_max simd_and simd_or simd_xor simd_product
+		simd_any simd_all simd_ballot simd_broadcast simd_shuffle
+		threadgroup_barrier simdgroup_barrier as_type
+	`) {
+		mslReserved[w] = true
+	}
 }
