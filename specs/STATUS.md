@@ -1095,11 +1095,12 @@ public contract and was not decided inside an autonomous session:
 6. **[006](006-backends.md) §3 matrix** — `F16Arithmetic` and `atomic<float>`
    are never assigned for Metal (`metal_darwin.go`), so every Metal device
    reports both false.
-7. Performance items the audit measured and did not change: Metal's
-   per-submission render-target and sampled-texture allocation, one blit per
-   row in `OpCopyRows`, private storage forcing a staging copy and a wait per
-   host transfer, the CPU rasterizer's per-fragment slice allocation
-   (`FragmentFn` returns `[][4]float32`). **Closed 2026-09-02,
+7. Performance items the audit measured and did not change: the CPU
+   rasterizer's per-fragment slice allocation (`FragmentFn` returns
+   `[][4]float32`). **Closed 2026-09-02, [023](023-metal-graph.md) §6:**
+   Metal's per-submission render-target and sampled-texture allocation, one
+   blit per row in `OpCopyRows`, and private storage forcing a staging copy
+   and a wait per host transfer. **Closed 2026-09-02,
    [010](010-kernel-corpus.md)'s outcome of that date:** the f32×f16 decode
    fast path at M = 1 and `QuantMatMul` at M > 1 untiled, and with them the
    matrix-vector kernels' uncoalesced column layout, which was the larger

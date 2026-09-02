@@ -139,3 +139,32 @@ and says it ships only with a measurement against re-encode.
 Against the CPU backend, as everywhere in M6. The graph tests already exist and
 already assert edge sets and barrier positions that were written down before the
 code; what this child adds is running them on a second backend.
+
+## 6. Replay cost — 2026-09-02
+
+Three costs a replayed graph paid per submission, measured on an M2 and
+removed:
+
+- **Textures were allocated per pass.** Every attachment and every sampled
+  texture was a fresh `MTLTexture` per submission, closed at the pass's end.
+  The executable now owns a cache keyed by what a texture is a view of (the
+  buffer, offset, extent, pitch and format), stamps each entry with the
+  submission that used it, and closes the entries a submission did not touch
+  once it is encoded, so a rebound-away buffer's texture goes and a steady
+  frame's stay. A sampled texture's contents are still copied in per pass,
+  since an earlier node may have written the buffer; what is reused is the
+  object. The 32-draw replay benchmark's submit went from 271 to 186 µs and
+  its per-node cost from 8.5 to 5.8 µs.
+- **A rows copy was one blit per row.** It is one dispatch of a row-copy
+  kernel compiled once per device, four bytes per thread where every offset,
+  pitch and row length allows and one byte otherwise.
+- **Device memory was private storage, so every immediate transfer staged.**
+  On a unified-memory device `MemoryDevice` is shared storage now and
+  `Block.Write`/`Read` are a memcpy; `Block.Bytes` still answers nil for it,
+  because [006](006-backends.md) §1 makes that the mappability contract and a
+  mapping one device happens to have is not one a caller may depend on. A
+  discrete device keeps private storage and the staged path.
+
+`NativeGraphReplay` stays false: every submission still re-encodes every node,
+and [006](006-backends.md) §4.3's indirect command buffers remain the native
+path.
