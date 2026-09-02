@@ -187,6 +187,40 @@ func TestDigestCoversMoreThanSource(t *testing.T) {
 	}
 }
 
+// The layouts a backend binds against are in the preimage as well. They were
+// not, and internal/metal caches a compiled pipeline by digest: a uniform
+// struct with a field moved kept its digest and its cached pipeline, and so
+// did a stage whose varyings changed.
+func TestDigestCoversTheLayoutsABackendBindsAgainst(t *testing.T) {
+	for _, tc := range []struct {
+		name, kernel string
+		mutate       func(k *ir.Func)
+	}{
+		{"uniform field offset", "Transform", func(k *ir.Func) { k.Uniforms[0].Fields[1].Offset += 16 }},
+		{"uniform field kind", "Transform", func(k *ir.Func) { k.Uniforms[0].Fields[0].Kind = "vector" }},
+		{"uniform field scalar", "Transform", func(k *ir.Func) { k.Uniforms[0].Fields[0].Scalar = "int32" }},
+		{"uniform matrix rows", "Transform", func(k *ir.Func) { k.Uniforms[0].Fields[3].Rows = 2 }},
+		{"uniform block size", "Transform", func(k *ir.Func) { k.Uniforms[0].Size += 16 }},
+		{"uniform type name", "Transform", func(k *ir.Func) { k.Uniforms[0].TypeName = "Other" }},
+		{"attribute type", "AttributeVS", func(k *ir.Func) {
+			k.Attributes[0].Type = &ir.Type{Kind: ir.Array, Len: 2, Elem: &ir.Type{Kind: ir.F32}}
+		}},
+		{"varyings field flat", "AttributeVS", func(k *ir.Func) { k.Varyings.Fields[0].Flat = !k.Varyings.Fields[0].Flat }},
+		{"varyings field name", "AttributeVS", func(k *ir.Func) { k.Varyings.Fields[0].Name = "Renamed" }},
+		{"output name", "SolidFS", func(k *ir.Func) { k.Outputs[0].Name = "Renamed" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := corpusKernel(t, tc.kernel)
+			baseline := emit.Digest(k)
+			tc.mutate(k)
+			if got := emit.Digest(k); got == baseline {
+				t.Errorf("changing the %s of %s left the digest unchanged, so a backend "+
+					"caching a compiled pipeline by digest would reuse the old one", tc.name, tc.kernel)
+			}
+		})
+	}
+}
+
 // TestPreimageExplainsAMismatch checks that a freshness failure can say which
 // input moved. "The digest differs" leaves a reader guessing between half a
 // dozen possibilities.

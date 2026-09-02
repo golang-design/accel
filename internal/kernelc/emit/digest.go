@@ -31,8 +31,11 @@ const GeneratorVersion = 1
 // generated file that no longer matches its inputs.
 //
 // So the preimage covers the source, the ABI versions of everything between the
-// source and the output, the intrinsic table's contents, and the helpers the
-// body reaches.
+// source and the output, the intrinsic table's contents, the helpers the body
+// reaches, and the layouts a backend binds against: the uniform blocks, and a
+// stage's attributes, varyings and outputs. Those last were missing, and the
+// Metal backend caches compiled pipelines by digest, so a uniform struct with
+// a field moved kept its digest and its cached pipeline.
 //
 // # Why the preimage is line-oriented and versioned
 //
@@ -75,6 +78,36 @@ func preimage(k *ir.Func) string {
 	// kernel with no texture, so adding it does not reissue the corpus.
 	for _, tx := range k.Textures {
 		fmt.Fprintf(&b, "texture\t%d\t%s\t%d\t%v\n", tx.Index, tx.Name, tx.Param, tx.Reads)
+	}
+
+	// A uniform block's placement, field by field. The generated codec is
+	// written from these offsets and the MSL block is declared from them, and
+	// internal/metal caches a compiled pipeline by digest: a struct whose
+	// field moved and whose digest did not would run the old block against
+	// the new codec. The rows and the stride are here as well, since they
+	// are what the codec loops over.
+	for _, u := range k.Uniforms {
+		fmt.Fprintf(&b, "uniform\t%d\t%s\t%s\t%d\n", u.Index, u.Name, u.TypeName, u.Size)
+		for _, f := range u.Fields {
+			fmt.Fprintf(&b, "field\t%s\t%d\t%s\t%s\t%d\t%d\t%d\n",
+				f.Name, f.Offset, f.Kind, f.Scalar, f.Len, f.Rows, f.Stride)
+		}
+	}
+
+	// A stage's interface: what it takes per vertex, what it passes between
+	// the stages, and what it writes. Each is part of the pipeline's layout
+	// that a cached compilation is keyed on, for the reason the uniforms are.
+	for _, a := range k.Attributes {
+		fmt.Fprintf(&b, "attribute\t%d\t%s\t%s\n", a.Index, a.Name, a.Type)
+	}
+	if k.Varyings != nil {
+		fmt.Fprintf(&b, "varyings\t%s\n", k.Varyings.Name)
+		for _, f := range k.Varyings.Fields {
+			fmt.Fprintf(&b, "varying\t%s\t%s\t%v\t%v\n", f.Name, f.Type, f.Flat, f.NoPerspective)
+		}
+	}
+	for _, o := range k.Outputs {
+		fmt.Fprintf(&b, "output\t%d\t%s\t%s\n", o.Index, o.Name, o.Type)
 	}
 
 	// Intrinsics by authored spelling, in first-use order. The authored spelling
