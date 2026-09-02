@@ -166,16 +166,16 @@ func profileFor(mode Mode, targets []accel.Backend, opts accel.CPUOptions) Profi
 
 // All returns every profile the current tier runs.
 //
-// Absence is a skip only when the job does not promise that backend. At M1
-// there is one backend and it is mandatory, so nothing here can be absent; the
-// shape exists so that adding Metal is adding a row rather than restructuring
-// every caller.
+// The three CPU rows are mandatory on every platform. The Metal row is a
+// darwin fact: present when an adapter enumerates, absent when none does, and
+// present-but-failing when the job promised one. See metalProfiles.
 func All() []Profile {
-	return []Profile{
+	all := []Profile{
 		CPU(),
 		Strict(accel.BackendMetal),
 		Strict(accel.BackendMetal, accel.BackendVulkan),
 	}
+	return append(all, metalProfiles()...)
 }
 
 // Each runs fn once per profile as a subtest named by that profile.
