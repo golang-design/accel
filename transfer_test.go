@@ -572,14 +572,24 @@ func TestHostVisibleWritesDoNotStage(t *testing.T) {
 		}
 		write() // warm any one-time allocation out of the measurement
 
-		var before, after runtime.MemStats
-		runtime.GC()
-		runtime.ReadMemStats(&before)
-		for range runs {
-			write()
+		// The fewest bytes per write over several rounds: TotalAlloc is
+		// process-wide and anything else allocating during a round can only
+		// add to it, so the minimum is the write's own cost.
+		const rounds = 5
+		var best uint64
+		for round := range rounds {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			for range runs {
+				write()
+			}
+			runtime.ReadMemStats(&after)
+			if per := (after.TotalAlloc - before.TotalAlloc) / runs; round == 0 || per < best {
+				best = per
+			}
 		}
-		runtime.ReadMemStats(&after)
-		return (after.TotalAlloc - before.TotalAlloc) / runs
+		return best
 	}
 
 	// The payload difference, in bytes, between the two measurements.

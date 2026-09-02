@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/kernelabi"
 	"golang.design/x/accel/tensor"
 )
 
@@ -941,19 +942,12 @@ func TestViews(t *testing.T) {
 // specs/007-tensor-layer.md gives a plan "the Graph's one-submission-in-flight
 // restriction". This is where that has to be enforced rather than inherited.
 func TestASecondSubmissionInFlightIsRefused(t *testing.T) {
-	// Enough work that the first submission is still queued when the second
-	// arrives. The assertion below does not depend on that -- if the first has
-	// already finished, the second is legitimate and both results are right --
-	// but the interesting path needs it.
-	const n = 1 << 18
+	const n = 1 << 10
 	rt := newRuntime(t)
 	d := rt.Device()
 	b := rt.NewBuilder("f")
 	h := tensor.Input(b, value("x", n))
-	for range 8 {
-		h = tensor.SiLU(b, h)
-	}
-	tensor.Output(b, "y", h)
+	tensor.Output(b, "y", tensor.SiLU(b, h))
 	plan, err := b.Compile(rt, tensor.CompileOptions{})
 	if err != nil {
 		t.Fatalf("compile: %v", err)
@@ -967,23 +961,43 @@ func TestASecondSubmissionInFlightIsRefused(t *testing.T) {
 	y1 := f32Buffer(t, d, "y1", make([]float32, n))
 	y2 := f32Buffer(t, d, "y2", make([]float32, n))
 
+	// The queue is serial, so a graph that does not return until released
+	// holds everything submitted after it. The first submission is therefore
+	// still in flight when the second is made, every time: an earlier form of
+	// this test submitted a large plan twice and skipped when the machine
+	// finished the first before the second arrived.
+	hold, release := blockingGraph(t, d)
+	held := d.Queue().Submit(hold)
+
 	f1 := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
 		"x": f32Buffer(t, d, "x1", ones), "y": y1,
 	}})
+	if f1.Done() {
+		t.Fatal("the first submission completed behind a graph that has not been released")
+	}
 	f2 := plan.Submit(d.Queue(), tensor.Bindings{Buffers: map[string]accel.BufferView{
 		"x": f32Buffer(t, d, "x2", ones), "y": y2,
 	}})
-
-	if err := f1.Wait(); err != nil {
-		t.Fatalf("the first submission: %v", err)
+	// A refusal is an already-failed fence; an accepted submission would be
+	// queued behind the held graph and Done only once it is released.
+	if !f2.Done() {
+		close(release)
+		t.Fatal("a second submission while the first was in flight was accepted")
 	}
 	second := f2.Wait()
 	if second == nil {
-		t.Skip("the first submission finished before the second was made, so nothing was " +
-			"in flight; the path this test is about did not run")
+		t.Fatal("a second submission while the first was in flight was accepted")
 	}
 	if !strings.Contains(second.Error(), "in flight") {
 		t.Errorf("the refusal should say why: %v", second)
+	}
+
+	close(release)
+	if err := held.Wait(); err != nil {
+		t.Fatalf("the holding graph: %v", err)
+	}
+	if err := f1.Wait(); err != nil {
+		t.Fatalf("the first submission: %v", err)
 	}
 
 	// The first submission's own output, which is the part the bug destroyed:
@@ -1048,4 +1062,29 @@ func TestReshapeRefusalNamesAnOperatorThatExists(t *testing.T) {
 	if err := ok.Err(); err != nil {
 		t.Errorf("the advice the refusal gives does not work: %v", err)
 	}
+}
+
+// blockingGraph builds a graph whose one node does not return until release
+// is closed, which is how a test holds a queue.
+func blockingGraph(t *testing.T, d *accel.Device) (*accel.Graph, chan struct{}) {
+	t.Helper()
+	release := make(chan struct{})
+	k := &kernelabi.Kernel{
+		Name: "Block", Generator: kernelabi.Version,
+		WorkgroupSize: kernelabi.ID3{X: 1, Y: 1, Z: 1},
+		Flat:          func(accel.Thread, kernelabi.Args) { <-release },
+	}
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: k, Label: "block"})
+	if err != nil {
+		t.Fatalf("blocking pipeline: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	r := d.NewRecorder()
+	r.Dispatch(p, nil, nil, accel.WorkgroupCount{X: 1})
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("blocking graph: %v", err)
+	}
+	t.Cleanup(func() { _ = g.Close() })
+	return g, release
 }

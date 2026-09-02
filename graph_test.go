@@ -768,17 +768,27 @@ func TestSubmissionDoesNotScaleWithGraphSize(t *testing.T) {
 			t.Fatalf("warm-up submit: %v", err)
 		}
 
-		const runs = 100
-		var before, after runtime.MemStats
-		runtime.GC()
-		runtime.ReadMemStats(&before)
-		for range runs {
-			if err := q.Submit(g).Wait(); err != nil {
-				t.Fatalf("submit: %v", err)
+		// The fewest bytes per submission over several rounds. TotalAlloc is
+		// process-wide, so anything else allocating during a round -- a
+		// finalizer, a timer, another test's goroutine -- inflates it, and it
+		// can only inflate: the minimum is the submission's own cost.
+		const runs, rounds = 100, 5
+		var best uint64
+		for round := range rounds {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			for range runs {
+				if err := q.Submit(g).Wait(); err != nil {
+					t.Fatalf("submit: %v", err)
+				}
+			}
+			runtime.ReadMemStats(&after)
+			if per := (after.TotalAlloc - before.TotalAlloc) / runs; round == 0 || per < best {
+				best = per
 			}
 		}
-		runtime.ReadMemStats(&after)
-		return (after.TotalAlloc - before.TotalAlloc) / runs
+		return best
 	}
 
 	small, large := cost(2), cost(200)
