@@ -14,7 +14,7 @@ import (
 
 // indirectGraph records a dispatch whose workgroup count comes from a buffer.
 func indirectGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stats bool) (
-	*accel.Graph, *accel.Buffer, *accel.Buffer) {
+	*accel.Graph, *accel.Buffer, *accel.Buffer, *accel.Buffer) {
 	t.Helper()
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
@@ -55,13 +55,30 @@ func indirectGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stat
 		t.Fatalf("build: %v", err)
 	}
 	t.Cleanup(func() { _ = g.Close() })
-	return g, count, out
+	return g, count, in, out
 }
 
 // The device supplies the count and the dispatch runs that many workgroups.
 func TestIndirectDispatchUsesTheDeviceCount(t *testing.T) {
 	d := openDevice(t)
-	g, count, out := indirectGraph(t, d, accel.WorkgroupCount{X: 4}, false)
+	g, count, input, out := indirectGraph(t, d, accel.WorkgroupCount{X: 4}, false)
+
+	// Non-zero input and a poisoned output, so "written" and "untouched" are
+	// two different values rather than two ways of reading zero: an earlier
+	// version of this test left both at zero, and a dispatch that ran every
+	// workgroup, or none, passed it.
+	in := make([]float32, 256)
+	poison := make([]float32, 256)
+	for i := range in {
+		in[i] = float32(i) + 1
+		poison[i] = -7
+	}
+	if err := d.Queue().WriteBuffer(input, 0, in); err != nil {
+		t.Fatalf("write in: %v", err)
+	}
+	if err := d.Queue().WriteBuffer(out, 0, poison); err != nil {
+		t.Fatalf("write out: %v", err)
+	}
 
 	// Two workgroups of 64, so the first 128 elements are written.
 	if err := d.Queue().WriteBuffer(count, 0, []uint32{2, 1, 1}); err != nil {
@@ -72,15 +89,17 @@ func TestIndirectDispatchUsesTheDeviceCount(t *testing.T) {
 	}
 	got := readback(t, d, out)
 	for i := range 128 {
-		if got[i] != 0 { // in is zero, so out is zero, but it must be *written*
-			t.Fatalf("element %d is %v", i, got[i])
+		if want := in[i] + in[i]; got[i] != want {
+			t.Fatalf("element %d is %v, want %v: the dispatched range was not written",
+				i, got[i], want)
 		}
 	}
 	// Elements past the dispatched range are untouched, which is what says the
 	// count was honoured rather than ignored.
 	for i := 128; i < len(got); i++ {
-		if got[i] != 0 {
-			t.Fatalf("element %d past the dispatched range is %v", i, got[i])
+		if got[i] != -7 {
+			t.Fatalf("element %d past the dispatched range is %v, want the -7 it "+
+				"started with", i, got[i])
 		}
 	}
 }
@@ -208,7 +227,7 @@ func TestAnIndirectCountIsClampedInEveryMode(t *testing.T) {
 // host-authored count does not do: an omitted Y or Z normalizes to one.
 func TestAZeroIndirectCountSkipsTheDispatch(t *testing.T) {
 	d := openDevice(t)
-	g, count, out := indirectGraph(t, d, accel.WorkgroupCount{X: 4}, true)
+	g, count, _, out := indirectGraph(t, d, accel.WorkgroupCount{X: 4}, true)
 
 	// Poison the output, so a dispatch that ran is visible.
 	poison := make([]float32, 256)
@@ -237,7 +256,7 @@ func TestAZeroIndirectCountSkipsTheDispatch(t *testing.T) {
 // previous submission's.
 func TestStatsBeforeCompletionIsAnError(t *testing.T) {
 	d := openDevice(t)
-	g, count, _ := indirectGraph(t, d, accel.WorkgroupCount{X: 4}, true)
+	g, count, _, _ := indirectGraph(t, d, accel.WorkgroupCount{X: 4}, true)
 	if err := d.Queue().WriteBuffer(count, 0, []uint32{1, 1, 1}); err != nil {
 		t.Fatalf("write count: %v", err)
 	}
