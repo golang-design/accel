@@ -111,23 +111,24 @@ func TestForbiddenCoversEveryReason(t *testing.T) {
 	}
 }
 
-// TestArrayOfArraysOfArrays covers the recursion in the matrix path, which a
-// three-dimensional array reaches and which nothing in the corpus does.
+// TestArrayOfArraysOfArrays covers the three-dimensional array, which nothing
+// in the corpus declares.
+//
+// It was laid out as a matrix of 2 columns with a 64-byte stride, and the
+// encoder then wrote A[c][r] for c and r below 2 -- four of its thirty-two
+// floats -- against an MSL declaration of `float A[2][16]`. An array of
+// matrices is refused as an array of structs is, until something needs it.
 func TestArrayOfArraysOfArrays(t *testing.T) {
 	inner := types.NewArray(types.Typ[types.Float32], 4)
 	mid := types.NewArray(inner, 4)
 	outer := types.NewArray(mid, 2)
 
-	f, err := layoutArray("A", outer, 0)
-	if err != nil {
-		t.Fatalf("layoutArray: %v", err)
+	_, err := layoutArray("A", outer, 0)
+	if err == nil {
+		t.Fatal("an array of matrices was laid out, and the encoder had no shape for it")
 	}
-	if f.Kind != KMatrix {
-		t.Errorf("kind is %v, want a matrix", f.Kind)
-	}
-	// Two outer elements, each a 4x4 matrix of 64 bytes, so 128.
-	if f.Size != 128 {
-		t.Errorf("size is %d, want 128", f.Size)
+	if !strings.Contains(err.Error(), "array of matrices") {
+		t.Errorf("the refusal should say what it is: %v", err)
 	}
 }
 

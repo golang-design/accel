@@ -295,6 +295,10 @@ func TestEveryGeneratedCodecEncodes(t *testing.T) {
 			c := TopDimsCodec{}
 			return c.EncodedSize(), c.Encode(make([]byte, c.EncodedSize()), TopDims{})
 		}},
+		{"MatrixParams", func() (int, error) {
+			c := MatrixParamsCodec{}
+			return c.EncodedSize(), c.Encode(make([]byte, c.EncodedSize()), MatrixParams{})
+		}},
 	}
 
 	listed := map[string]bool{}

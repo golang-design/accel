@@ -819,7 +819,7 @@ func (e *emitter) decodeField(f ir.UniformField, expr string, offset, depth int)
 	case "matrix":
 		for col := range f.Len {
 			base := offset + col*f.Stride
-			for row := range f.Len {
+			for row := range f.Rows {
 				read(base+row*4, fmt.Sprintf("%s[%d][%d]", expr, col, row))
 			}
 		}
@@ -853,10 +853,12 @@ func (e *emitter) codecField(f ir.UniformField, expr string, offset, depth int) 
 
 	case "matrix":
 		// A matrix is an array of column vectors, so each column starts a slot
-		// and its components are adjacent within it.
+		// and its components are adjacent within it. Rows rather than Len for
+		// the inner bound: a 2x4 has two columns of four, and looping Len both
+		// ways wrote two of each and left the rest zero.
 		for col := range f.Len {
 			base := offset + col*f.Stride
-			for row := range f.Len {
+			for row := range f.Rows {
 				write(base+row*4, fmt.Sprintf("%s[%d][%d]", expr, col, row))
 			}
 		}

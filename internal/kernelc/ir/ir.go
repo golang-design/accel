@@ -775,8 +775,14 @@ type UniformField struct {
 	// column count.
 	Len int
 
+	// Rows is a matrix's row count, the components in each column. Kept apart
+	// from Len because a matrix need not be square: a codec that used Len for
+	// both wrote a 2x4 as a 2x2 and a 4x2 as a 4x4.
+	Rows int
+
 	// Stride is the byte distance between elements of an array or columns of a
-	// matrix, which std140 rounds up to sixteen.
+	// matrix, which std140 rounds up to sixteen. It is the layout's number,
+	// not a constant restated here.
 	Stride int
 }
 

@@ -1001,7 +1001,8 @@ func uniformFields(l *std140.Layout) []ir.UniformField {
 	out := make([]ir.UniformField, 0, len(l.Fields))
 	for _, f := range l.Fields {
 		uf := ir.UniformField{
-			Name: f.Name, Offset: f.Offset, Scalar: f.Scalar.String(), Len: f.Len,
+			Name: f.Name, Offset: f.Offset, Scalar: f.Scalar.String(),
+			Len: f.Len, Rows: f.Rows, Stride: f.Stride,
 		}
 		switch f.Kind {
 		case std140.KScalar:
@@ -1009,9 +1010,9 @@ func uniformFields(l *std140.Layout) []ir.UniformField {
 		case std140.KVector:
 			uf.Kind = "vector"
 		case std140.KArray:
-			uf.Kind, uf.Stride = "array", 16
+			uf.Kind = "array"
 		case std140.KMatrix:
-			uf.Kind, uf.Stride = "matrix", 16
+			uf.Kind = "matrix"
 		case std140.KStruct:
 			uf.Kind = "struct"
 		}

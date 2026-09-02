@@ -59,11 +59,22 @@ type Field struct {
 	// writing a scalar, a vector, an array, or a nested struct.
 	Kind Kind
 
-	// Elem describes an array's element or a matrix's column.
+	// Elem describes a nested struct's layout.
 	Elem *Layout
 
-	// Len is an array's length or a matrix's column count.
+	// Len is an array's length, a vector's component count, or a matrix's
+	// column count.
 	Len int
+
+	// Rows is a matrix's row count: the components of each column vector.
+	// Separate from Len because a matrix need not be square, and a layout
+	// that kept one number for both encoded a 2x4 as a 2x2.
+	Rows int
+
+	// Stride is the byte distance between an array's elements or a matrix's
+	// columns, which std140 rounds up to sixteen. Zero for a scalar, a vector
+	// and a nested struct, which have no elements to stride over.
+	Stride int
 
 	// Scalar is the element type for a scalar, a vector, or an array of them.
 	Scalar Scalar
@@ -202,6 +213,13 @@ func layoutField(name string, t types.Type, depth int) (*Field, error) {
 // to sixteen; a [4][4]float32 is a matrix, which is an array of four column
 // vectors; and a [64]float32 is an array, whose element stride rounds up to
 // sixteen and therefore occupies 1024 bytes rather than 256.
+//
+// A matrix is an array of column vectors and nothing else: [N][M] with M at
+// most four. [3][8]float32 is not a matrix in std140, it is an array of arrays
+// of scalars, and each of those scalars would take its own sixteen-byte slot
+// -- 384 bytes for 96 bytes of data, indexed nowhere the way a matrix is. It
+// is refused, as an array of structs is, rather than laid out as a matrix
+// whose rows past the fourth the encoder and the shader would disagree on.
 func layoutArray(name string, a *types.Array, depth int) (*Field, error) {
 	n := int(a.Len())
 	if n <= 0 {
@@ -215,7 +233,7 @@ func layoutArray(name string, a *types.Array, depth int) (*Field, error) {
 	if s, ok := scalarOf(elem); ok && n <= 4 {
 		switch n {
 		case 1:
-			return &Field{Name: name, Kind: KArray, Scalar: s, Len: 1, Align: 16, Size: 16}, nil
+			return &Field{Name: name, Kind: KArray, Scalar: s, Len: 1, Align: 16, Size: 16, Stride: 16}, nil
 		case 2:
 			return &Field{Name: name, Kind: KVector, Scalar: s, Len: 2, Align: 8, Size: 8}, nil
 		case 3:
@@ -229,17 +247,25 @@ func layoutArray(name string, a *types.Array, depth int) (*Field, error) {
 		}
 	}
 
-	// A matrix: an array of column vectors, each aligned to sixteen.
+	// A matrix: an array of column vectors, each aligned to sixteen. The
+	// column count and the row count are kept apart, because a 2x4 and a 4x2
+	// have the same column stride and nothing else in common.
 	if inner, ok := elem.Underlying().(*types.Array); ok {
-		col, err := layoutArray(name, inner, depth)
-		if err != nil {
-			return nil, err
+		rows := int(inner.Len())
+		s, scalar := scalarOf(types.Unalias(inner.Elem()))
+		if !scalar {
+			return nil, fmt.Errorf("%s is an array of arrays of arrays: std140 has no matrix "+
+				"of matrices, and an array of matrices is excluded until something needs "+
+				"it (specs/004-kernel-authoring.md)", name)
 		}
-		stride := align(col.Size, 16)
+		if rows < 1 || rows > 4 {
+			return nil, fmt.Errorf("%s is [%d][%d]%s, and a std140 matrix has at most four "+
+				"rows: an array of %d-element arrays gives every scalar its own sixteen-byte "+
+				"slot, so put it in a storage buffer", name, n, rows, s, rows)
+		}
 		return &Field{
-			Name: name, Kind: KMatrix, Scalar: col.Scalar, Len: n,
-			Align: 16, Size: stride * n,
-			Elem: &Layout{Name: name, Size: stride, Align: 16},
+			Name: name, Kind: KMatrix, Scalar: s, Len: n, Rows: rows,
+			Align: 16, Size: 16 * n, Stride: 16,
 		}, nil
 	}
 
@@ -247,11 +273,10 @@ func layoutArray(name string, a *types.Array, depth int) (*Field, error) {
 	// is, which is why an array of 64 floats occupies 1024 bytes and why arrays
 	// belong in storage buffers rather than here.
 	if s, ok := scalarOf(elem); ok {
-		return &Field{Name: name, Kind: KArray, Scalar: s, Len: n, Align: 16, Size: 16 * n}, nil
+		return &Field{Name: name, Kind: KArray, Scalar: s, Len: n, Align: 16, Size: 16 * n, Stride: 16}, nil
 	}
 
-	if st, ok := elem.Underlying().(*types.Struct); ok {
-		_ = st
+	if _, ok := elem.Underlying().(*types.Struct); ok {
 		return nil, fmt.Errorf("%s is an array of structs: legal in std140 and a padding trap, "+
 			"excluded until something needs it (specs/004-kernel-authoring.md)", name)
 	}
@@ -337,7 +362,8 @@ func (f Field) describe() string {
 	case KArray:
 		return fmt.Sprintf("[%d]%s at stride 16, %d bytes, align %d", f.Len, f.Scalar, f.Size, f.Align)
 	case KMatrix:
-		return fmt.Sprintf("%d columns of %s, %d bytes, align %d", f.Len, f.Scalar, f.Size, f.Align)
+		return fmt.Sprintf("%d columns of %d %s at stride %d, %d bytes, align %d",
+			f.Len, f.Rows, f.Scalar, f.Stride, f.Size, f.Align)
 	case KStruct:
 		return fmt.Sprintf("nested struct, %d bytes, align %d", f.Size, f.Align)
 	}

@@ -530,6 +530,20 @@ func diffCases() []diffCase {
 			groups: accel.WorkgroupCount{X: 2},
 		},
 		{
+			// specs/014-kernel-uniforms.md section 4's device check for the
+			// members whose two extents differ: the CPU reads the Go struct
+			// and Metal reads the std140 bytes the codec wrote against the
+			// block the emitter declared, so a codec looping the column count
+			// for the rows shows here and nowhere host-side.
+			kernel: &testkernels.MatrixShapesKernel, counts: []int{24},
+			uniforms: []any{testkernels.MatrixParams{
+				Wide:   [2][4]float32{{1, 2, 3, 4}, {5, 6, 7, 8}},
+				Tall:   [4][2]float32{{-1, -2}, {-3, -4}, {-5, -6}, {-7, -8}},
+				Column: [6]float32{10, 11, 12, 13, 14, 15},
+			}},
+			groups: accel.WorkgroupCount{X: 1},
+		},
+		{
 			// Tails on all three axes, so every guarded edge of the tiled GEMM
 			// runs. A shape that fitted the tile exactly would exercise none of
 			// them, and every one is a place an off-by-one produces a plausible

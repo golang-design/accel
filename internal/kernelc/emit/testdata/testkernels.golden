@@ -250,6 +250,45 @@ func (LinearDimsCodec) Encode(dst []byte, value LinearDims) error {
 	return w.Err()
 }
 
+// MatrixParamsCodec is the generated std140 codec for MatrixParams.
+//
+// The offsets are std140's, not Go's. A caller never spells one.
+type MatrixParamsCodec struct{}
+
+// MatrixParamsBlockSize is the encoded size of a MatrixParams block, in bytes.
+const MatrixParamsBlockSize = 192
+
+// EncodedSize reports the std140 block size.
+func (MatrixParamsCodec) EncodedSize() int { return MatrixParamsBlockSize }
+
+// Encode writes value into dst in std140 layout.
+func (MatrixParamsCodec) Encode(dst []byte, value MatrixParams) error {
+	w := accel.NewUniformWriter(dst)
+	w.F32(0, value.Wide[0][0])
+	w.F32(4, value.Wide[0][1])
+	w.F32(8, value.Wide[0][2])
+	w.F32(12, value.Wide[0][3])
+	w.F32(16, value.Wide[1][0])
+	w.F32(20, value.Wide[1][1])
+	w.F32(24, value.Wide[1][2])
+	w.F32(28, value.Wide[1][3])
+	w.F32(32, value.Tall[0][0])
+	w.F32(36, value.Tall[0][1])
+	w.F32(48, value.Tall[1][0])
+	w.F32(52, value.Tall[1][1])
+	w.F32(64, value.Tall[2][0])
+	w.F32(68, value.Tall[2][1])
+	w.F32(80, value.Tall[3][0])
+	w.F32(84, value.Tall[3][1])
+	w.F32(96, value.Column[0])
+	w.F32(112, value.Column[1])
+	w.F32(128, value.Column[2])
+	w.F32(144, value.Column[3])
+	w.F32(160, value.Column[4])
+	w.F32(176, value.Column[5])
+	return w.Err()
+}
+
 // RowDimsCodec is the generated std140 codec for RowDims.
 //
 // The offsets are std140's, not Go's. A caller never spells one.
@@ -6354,6 +6393,91 @@ kernel void LinearAttention(
 	},
 	Flat: func(t accel.Thread, a kernelabi.Args) {
 		linearAttentionFlat(t, kernelabi.UniformValue[LinearDims](a, 0), kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1), kernelabi.Slice[float32](a, 2), kernelabi.Slice[float32](a, 3), kernelabi.Slice[float32](a, 4), kernelabi.Slice[uint32](a, 5), kernelabi.Slice[float32](a, 6), kernelabi.Slice[float32](a, 7))
+	},
+}
+
+// matrixShapesFlat is the generated flat lowering of MatrixShapes.
+//
+// It is what the CPU backend runs. The authored MatrixShapes is never registered as
+// an executable: it supplies the typed source this was built from, and it is
+// run only by the test that checks the two agree.
+func matrixShapesFlat(t accel.Thread, p MatrixParams, out []float32) {
+	var i uint32 = t.GlobalID().X
+	if i >= uint32(int32(len(out))) {
+		return
+	}
+	if i < uint32(8) {
+		out[i] = p.Wide[(i / uint32(4))][(i % uint32(4))]
+		return
+	}
+	if i < uint32(16) {
+		out[i] = p.Tall[((i - uint32(8)) / uint32(2))][((i - uint32(8)) % uint32(2))]
+		return
+	}
+	if i < uint32(22) {
+		out[i] = p.Column[(i - uint32(16))]
+		return
+	}
+	out[i] = float32(0)
+}
+
+// MatrixShapesKernel is the compiled form of MatrixShapes.
+var MatrixShapesKernel = kernelabi.Kernel{
+	Name:          "MatrixShapes",
+	WorkgroupSize: accel.ID3{X: 32, Y: 1, Z: 1},
+	Bindings: []kernelabi.Binding{
+		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
+	},
+	Digest:           "6fd50ead5d24838849dc7d8cd2798980",
+	Generator:        kernelabi.Version,
+	OrderIndependent: true,
+	MSL: `#include <metal_stdlib>
+using namespace metal;
+#pragma METAL fp contract(off)
+
+struct MatrixParams {
+    float Wide[2][4];
+    float Tall[4][4];
+    float Column[6][4];
+};
+
+kernel void MatrixShapes(
+    device float *out [[buffer(0)]],
+    constant uint *_lens [[buffer(1)]],
+    constant MatrixParams &p [[buffer(2)]],
+    uint3 _gid [[thread_position_in_grid]],
+    uint3 _lid [[thread_position_in_threadgroup]],
+    uint3 _wid [[threadgroup_position_in_grid]],
+    uint3 _ngroups [[threadgroups_per_grid]],
+    uint _sgsize [[threads_per_simdgroup]],
+    uint _sglane [[thread_index_in_simdgroup]],
+    uint _sgid [[simdgroup_index_in_threadgroup]]) {
+    uint i = _gid.x;
+    if ((i >= uint(int(_lens[0])))) {
+        return;
+    }
+    if ((i < uint(8))) {
+        out[i] = p.Wide[(i / uint(4))][(i % uint(4))];
+        return;
+    }
+    if ((i < uint(16))) {
+        out[i] = p.Tall[((i - uint(8)) / uint(2))][((i - uint(8)) % uint(2))];
+        return;
+    }
+    if ((i < uint(22))) {
+        out[i] = p.Column[(i - uint(16))][0];
+        return;
+    }
+    out[i] = float(0);
+}
+`,
+	Uniforms: []kernelabi.Uniform{
+		{Name: "p", Type: "MatrixParams", Size: 192, Encode: func(dst []byte, v any) error {
+			return kernelabi.EncodeUniform(dst, v, MatrixParamsCodec{}.Encode)
+		}},
+	},
+	Flat: func(t accel.Thread, a kernelabi.Args) {
+		matrixShapesFlat(t, kernelabi.UniformValue[MatrixParams](a, 0), kernelabi.Slice[float32](a, 0))
 	},
 }
 
@@ -14709,6 +14833,7 @@ var Kernels = []*kernelabi.Kernel{
 	&BitReduceKernel,
 	&MulReduceKernel,
 	&LinearAttentionKernel,
+	&MatrixShapesKernel,
 	&MatVecKernel,
 	&QuantMatVecKernel,
 	&QuantMatVecF32Kernel,
