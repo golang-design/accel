@@ -195,8 +195,21 @@ type SharedTracker struct {
 	// because a barrier is exactly what orders accesses in different ones.
 	epoch int
 
-	// touched records this epoch's accesses per array, for the conflict check.
-	touched []map[int]touch
+	// touched records the last access to each element per array, for the
+	// conflict check. One entry per element rather than a map per epoch: the
+	// element counts are known from the kernel's SharedSizes, and a map lookup
+	// and insert per shared access was the largest cost of developer mode.
+	//
+	// An entry belongs to the current window only when its stamp matches, so
+	// ending an epoch is a counter increment rather than a clear of every
+	// array.
+	touched [][]touch
+
+	// stamp identifies the window conflicts are compared in. It advances at
+	// every epoch and every reset and never returns to a value it held, which
+	// is what lets a stale entry from an earlier workgroup be told from a live
+	// one without touching it.
+	stamp uint64
 
 	diags Diagnostics
 
@@ -204,18 +217,20 @@ type SharedTracker struct {
 	current ID3
 }
 
-// touch is one invocation's access to one element within an epoch.
+// touch is the last access to one element: who, whether it wrote, and the
+// window it happened in. A zero stamp is an element nothing has touched.
 type touch struct {
 	by    ID3
 	wrote bool
+	stamp uint64
 }
 
 // NewSharedTracker makes a tracker for one workgroup's shared arrays.
 func NewSharedTracker(kernelName string, workgroup ID3, sizes []int) *SharedTracker {
-	t := &SharedTracker{kernel: kernelName, workgroup: workgroup}
+	t := &SharedTracker{kernel: kernelName, workgroup: workgroup, stamp: 1}
 	for _, n := range sizes {
 		t.defined = append(t.defined, newDefinedBits(n))
-		t.touched = append(t.touched, map[int]touch{})
+		t.touched = append(t.touched, make([]touch, max(n, 0)))
 	}
 	return t
 }
@@ -271,8 +286,17 @@ func (t *SharedTracker) Read(array, index int) {
 // The comparison is after the fact, from records, so the report does not depend
 // on the two accesses actually interleaving — which is what makes it fire on
 // the first offending run rather than on an unlucky schedule.
+//
+// An index outside the array is not recorded. The kernel's own access to it is
+// what reports that, as a panic the backend turns into an error, and a table
+// sized from the declared extent has nowhere to put it.
 func (t *SharedTracker) conflict(array, index int, wrote bool) {
-	prev, seen := t.touched[array][index]
+	entries := t.touched[array]
+	if index < 0 || index >= len(entries) {
+		return
+	}
+	prev := &entries[index]
+	seen := prev.stamp == t.stamp
 	if seen && prev.by != t.current && (prev.wrote || wrote) {
 		t.diags = append(t.diags, Diagnostic{
 			Kind: DiagConflict, Kernel: t.kernel, Workgroup: t.workgroup,
@@ -284,7 +308,7 @@ func (t *SharedTracker) conflict(array, index int, wrote bool) {
 	// The writer is remembered in preference to a reader, since a later reader
 	// conflicting with an earlier writer is the pair worth naming.
 	if !seen || wrote {
-		t.touched[array][index] = touch{by: t.current, wrote: wrote || prev.wrote}
+		*prev = touch{by: t.current, wrote: wrote || (seen && prev.wrote), stamp: t.stamp}
 	}
 }
 
@@ -296,9 +320,7 @@ func (t *SharedTracker) Epoch() {
 		return
 	}
 	t.epoch++
-	for i := range t.touched {
-		clear(t.touched[i])
-	}
+	t.stamp++
 }
 
 // Reset starts a new workgroup. Shared storage is fresh, so nothing is defined
@@ -309,10 +331,10 @@ func (t *SharedTracker) Reset(workgroup ID3) {
 	}
 	t.workgroup = workgroup
 	t.epoch = 0
+	t.stamp++
 	t.diags = nil
 	for i := range t.defined {
 		t.defined[i].reset()
-		clear(t.touched[i])
 	}
 }
 
