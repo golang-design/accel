@@ -10047,7 +10047,13 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			f.i8 = (f.tok2 - offsets[f.seq6])
 			f.n9 = (offsets[(f.seq6+uint32(1))] - offsets[f.seq6])
 			f.kvLen10 = lengths[f.seq6]
-			f.limit11 = ((f.kvLen10 - f.n9) + f.i8)
+			if (f.kvLen10 + f.i8) < f.n9 {
+				if f.lane1 < d.HeadDim {
+					out[(f.qBase5 + f.lane1)] = float32(0)
+				}
+				return false
+			}
+			f.limit11 = ((f.kvLen10 + f.i8) - f.n9)
 			f.pageBase12 = (f.seq6 * d.MaxPages)
 			f.capacity13 = (d.MaxPages * d.Block)
 			f.bound14 = (f.limit11 + uint32(1))
@@ -10085,7 +10091,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "ragged.go:172:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "ragged.go:192:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane1))
@@ -10096,7 +10102,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "ragged.go:175:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "ragged.go:195:3"}
 			return true
 		case 6:
 			f.stride25 = uint32(64)
@@ -10111,7 +10117,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "ragged.go:181:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "ragged.go:201:4"}
 			return true
 		case 9:
 			f.stride25 = (f.stride25 / uint32(2))
@@ -10136,7 +10142,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "ragged.go:192:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "ragged.go:212:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane1))
@@ -10147,7 +10153,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "ragged.go:195:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "ragged.go:215:3"}
 			return true
 		case 15:
 			f.stride30 = uint32(64)
@@ -10162,7 +10168,7 @@ func attentionRaggedCoop(t accel.Thread, d RaggedDims, q []float32, k []float32,
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "ragged.go:201:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "ragged.go:221:4"}
 			return true
 		case 18:
 			f.stride30 = (f.stride30 / uint32(2))
@@ -10226,7 +10232,7 @@ var AttentionRaggedKernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "1368f7a829f32c08b3b4e984b525b9d6",
+	Digest:    "4dc2af08140ac12fd357e38d9b0dcb9a",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -10283,7 +10289,13 @@ kernel void AttentionRagged(
     uint i = (tok - offsets[seq]);
     uint n = (offsets[(seq + uint(1))] - offsets[seq]);
     uint kvLen = lengths[seq];
-    uint limit = ((kvLen - n) + i);
+    if (((kvLen + i) < n)) {
+        if ((lane < d.HeadDim)) {
+            out[(qBase + lane)] = float(0);
+        }
+        return;
+    }
+    uint limit = ((kvLen + i) - n);
     uint pageBase = (seq * d.MaxPages);
     uint capacity = (d.MaxPages * d.Block);
     uint bound = (limit + uint(1));
@@ -10454,7 +10466,13 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			f.i8 = (f.tok2 - offsets[f.seq6])
 			f.n9 = (offsets[(f.seq6+uint32(1))] - offsets[f.seq6])
 			f.kvLen10 = lengths[f.seq6]
-			f.limit11 = ((f.kvLen10 - f.n9) + f.i8)
+			if (f.kvLen10 + f.i8) < f.n9 {
+				if f.lane1 < d.HeadDim {
+					out[(f.qBase5 + f.lane1)] = float32(0)
+				}
+				return false
+			}
+			f.limit11 = ((f.kvLen10 + f.i8) - f.n9)
 			f.pageBase12 = (f.seq6 * d.MaxPages)
 			f.capacity13 = (d.MaxPages * d.Block)
 			f.bound14 = (f.limit11 + uint32(1))
@@ -10492,7 +10510,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "raggedf16.go:140:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "raggedf16.go:150:3"}
 			return true
 		case 4:
 			tr.Write(0, int(f.lane1))
@@ -10503,7 +10521,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 5:
 			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "raggedf16.go:143:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "raggedf16.go:153:3"}
 			return true
 		case 6:
 			f.stride25 = uint32(64)
@@ -10518,7 +10536,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 8:
 			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "raggedf16.go:149:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "raggedf16.go:159:4"}
 			return true
 		case 9:
 			f.stride25 = (f.stride25 / uint32(2))
@@ -10543,7 +10561,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "raggedf16.go:160:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "raggedf16.go:170:3"}
 			return true
 		case 13:
 			tr.Write(0, int(f.lane1))
@@ -10554,7 +10572,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "raggedf16.go:163:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "raggedf16.go:173:3"}
 			return true
 		case 15:
 			f.stride30 = uint32(64)
@@ -10569,7 +10587,7 @@ func attentionRaggedF16Coop(t accel.Thread, d RaggedDims, q []float32, k []accel
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "raggedf16.go:169:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "raggedf16.go:179:4"}
 			return true
 		case 18:
 			f.stride30 = (f.stride30 / uint32(2))
@@ -10633,7 +10651,7 @@ var AttentionRaggedF16Kernel = kernelabi.Kernel{
 		{Name: "offsets", DType: kernelabi.U32, Access: kernelabi.Read},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "1be590a7c4b23efce86b2b6ba1b13553",
+	Digest:    "bd40acd3a6a3a1fceda332d365cd5ab7",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -10690,7 +10708,13 @@ kernel void AttentionRaggedF16(
     uint i = (tok - offsets[seq]);
     uint n = (offsets[(seq + uint(1))] - offsets[seq]);
     uint kvLen = lengths[seq];
-    uint limit = ((kvLen - n) + i);
+    if (((kvLen + i) < n)) {
+        if ((lane < d.HeadDim)) {
+            out[(qBase + lane)] = float(0);
+        }
+        return;
+    }
+    uint limit = ((kvLen + i) - n);
     uint pageBase = (seq * d.MaxPages);
     uint capacity = (d.MaxPages * d.Block);
     uint bound = (limit + uint(1));

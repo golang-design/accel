@@ -58,6 +58,10 @@ func TestSegmentOffsetsArePrefixSums(t *testing.T) {
 // it computes each token's position as L-n+i and attends over 0..position, in
 // f64, with no blocking. A reference that mirrored the kernel's block loop
 // would agree with a kernel whose blocking was wrong.
+//
+// A token whose position would be negative -- its sequence's length is smaller
+// than its count -- has nothing to attend and its output is zero, which is the
+// rule the kernel's padding guard states for a row applied to a token.
 func raggedRef(t *testing.T, d testkernels.RaggedDims, q, k, v []float32,
 	pages, lengths, offsets []uint32) []float32 {
 
@@ -70,7 +74,10 @@ func raggedRef(t *testing.T, d testkernels.RaggedDims, q, k, v []float32,
 		n := offsets[seq+1] - offsets[seq]
 		for i := uint32(0); i < n; i++ {
 			tok := offsets[seq] + i
-			pos := lengths[seq] - n + i
+			if lengths[seq]+i < n {
+				continue // the output is already zero
+			}
+			pos := lengths[seq] + i - n
 			for h := uint32(0); h < d.QHeads; h++ {
 				kvHead := h / group
 				scores := make([]float64, pos+1)
@@ -272,6 +279,110 @@ func TestARaggedTokenDoesNotSeeThePositionAfterIt(t *testing.T) {
 	for i := range want {
 		if math.Abs(float64(loud[i]-want[i])) > 1e-3 {
 			t.Fatalf("element %d is %v, want %v", i, loud[i], want[i])
+		}
+	}
+}
+
+// A sequence whose length is smaller than its count keeps its causal mask.
+//
+// The kernel computed a token's last visible position as `kvLen - n + i` in
+// uint32, which wraps when the length is smaller than the count: the limit
+// became a number near 2^32, every cached position passed `pos <= limit`, and
+// the causal mask was silently gone for the whole sequence. The host cannot
+// check this -- lengths is device data -- so the kernel clamps, and this is the
+// test that reaches the clamp.
+//
+// The fixture is one sequence of four tokens over two cached positions beside
+// an ordinary sequence. Tokens 0 and 1 have no position and write zero; token 2
+// sits at position 0 and token 3 at position 1. Position 1 is made loud, so a
+// token 2 that could see it moves, and the assertion is that the masked
+// position contributes nothing rather than that the numbers look plausible.
+func TestARaggedSequenceShorterThanItsCountKeepsItsMask(t *testing.T) {
+	d := testkernels.RaggedDims{
+		Batch: 2, QHeads: 2, KVHeads: 1, HeadDim: 8,
+		Block: 4, MaxPages: 3, Scale: float32(1 / math.Sqrt(8)),
+	}
+	counts := []uint32{4, 1}
+	q, k, v, pages, lengths, offsets := raggedFixture(d, counts)
+	lengths[0] = 2 // fewer positions than the four tokens it contributes
+
+	quiet := runRagged(t, d, q, k, v, pages, lengths, offsets)
+
+	// Position 1 of sequence 0: token 3's own position, and the position
+	// after token 2's.
+	phys := pages[1/d.Block]*d.Block + 1%d.Block
+	for e := uint32(0); e < d.HeadDim; e++ {
+		v[phys*d.KVHeads*d.HeadDim+e] = 1000
+	}
+	loud := runRagged(t, d, q, k, v, pages, lengths, offsets)
+
+	w := int(d.QHeads * d.HeadDim)
+	for tok := 0; tok < 2; tok++ {
+		for e := range w {
+			if got := loud[tok*w+e]; got != 0 {
+				t.Fatalf("token %d has no position -- its sequence holds 2 positions and "+
+					"contributes 4 tokens -- and its output element %d is %v rather "+
+					"than zero: the unsigned limit wrapped and the token attended the "+
+					"cache", tok, e, got)
+			}
+		}
+	}
+	for e := range w {
+		if loud[2*w+e] != quiet[2*w+e] {
+			t.Fatalf("token 2 sits at position 0 and its output element %d moved from "+
+				"%v to %v when position 1 was changed: the causal mask is gone",
+				e, quiet[2*w+e], loud[2*w+e])
+		}
+	}
+	moved := false
+	for e := range w {
+		if loud[3*w+e] != quiet[3*w+e] {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatal("token 3 sits at position 1 and its output did not move when that " +
+			"position was changed, so the fixture does not reach the bound it " +
+			"claims to test")
+	}
+
+	want := raggedRef(t, d, q, k, v, pages, lengths, offsets)
+	for i := range want {
+		if math.Abs(float64(loud[i]-want[i])) > 1e-3 {
+			t.Fatalf("element %d is %v, want %v", i, loud[i], want[i])
+		}
+	}
+
+	// The f16 variant takes the same guard, checked the way its own test
+	// does: over a cache f16 holds exactly, the two lowerings agree bit for
+	// bit, so a variant that kept the wrapping limit would differ here.
+	for i := range k {
+		k[i] = float32(i%13-6) / 4
+		v[i] = float32(i%11-5) / 2
+	}
+	for e := uint32(0); e < d.HeadDim; e++ {
+		v[phys*d.KVHeads*d.HeadDim+e] = 1000
+	}
+	wide := runRagged(t, d, q, k, v, pages, lengths, offsets)
+	narrowK := make([]accel.Float16, len(k))
+	narrowV := make([]accel.Float16, len(v))
+	for i := range k {
+		narrowK[i] = accel.ToFloat16(k[i])
+		narrowV[i] = accel.ToFloat16(v[i])
+	}
+	narrow := make([]float32, len(wide))
+	if err := kernel.DispatchCooperative(&testkernels.AttentionRaggedF16Kernel,
+		accel.ID3{X: offsets[d.Batch] * d.QHeads},
+		kernelabi.Args{
+			Uniforms: []any{d},
+			Slices:   []any{q, narrowK, narrowV, pages, lengths, offsets, narrow},
+		}); err != nil {
+		t.Fatalf("f16 dispatch: %v", err)
+	}
+	for i := range wide {
+		if narrow[i] != wide[i] {
+			t.Fatalf("element %d: the f16 cache gave %v and the f32 cache %v over a "+
+				"sequence shorter than its count", i, narrow[i], wide[i])
 		}
 	}
 }

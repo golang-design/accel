@@ -98,7 +98,17 @@ func AttentionRaggedF16(t accel.Thread, d RaggedDims, q []float32, k []accel.Flo
 	i := tok - offsets[seq]
 	n := offsets[seq+1] - offsets[seq]
 	kvLen := lengths[seq]
-	limit := kvLen - n + i
+
+	// A token with no position, because its sequence's length is smaller than
+	// its count: [AttentionRagged]'s guard, for its reason. The unsigned form
+	// of L-n+i wrapped and removed the mask for the whole sequence.
+	if kvLen+i < n {
+		if lane < d.HeadDim {
+			out[qBase+lane] = 0
+		}
+		return
+	}
+	limit := kvLen + i - n
 
 	pageBase := seq * d.MaxPages
 

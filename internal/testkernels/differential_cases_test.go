@@ -1262,6 +1262,57 @@ func diffCases() []diffCase {
 			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
 		},
 		{
+			// The ragged step with a sequence shorter than its count: sequence
+			// 0 contributes three tokens over two cached positions, so its
+			// first token has no position and writes zero, and the kernel's
+			// guard against the wrapping limit runs on both backends. Both
+			// cache widths, because each carries the guard.
+			kernel: &testkernels.AttentionRaggedKernel,
+			counts: []int{6 * 2 * 8, 12 * 4 * 1 * 8, 12 * 4 * 1 * 8, 3 * 4, 3, 4, 6 * 2 * 8},
+			uniforms: []any{testkernels.RaggedDims{
+				Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+				Block: 4, MaxPages: 4, Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 6 * 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 2:
+					return float32(i%7+1) / 4
+				case 3:
+					return float32(i)
+				case 4: // lengths: sequence 0 holds fewer positions than its count
+					return []float32{2, 2, 5}[i]
+				case 5: // offsets: counts 3, 1, 2
+					return []float32{0, 3, 4, 6}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
+		},
+		{
+			kernel: &testkernels.AttentionRaggedF16Kernel,
+			counts: []int{6 * 2 * 8, 12 * 4 * 1 * 8, 12 * 4 * 1 * 8, 3 * 4, 3, 4, 6 * 2 * 8},
+			uniforms: []any{testkernels.RaggedDims{
+				Batch: 3, QHeads: 2, KVHeads: 1, HeadDim: 8,
+				Block: 4, MaxPages: 4, Scale: float32(1) / float32(math.Sqrt(8)),
+			}},
+			groups: accel.WorkgroupCount{X: 6 * 2},
+			seed: func(b, i int) float32 {
+				switch b {
+				case 2:
+					return float32(i%7+1) / 4
+				case 3:
+					return float32(i)
+				case 4:
+					return []float32{2, 2, 5}[i]
+				case 5:
+					return []float32{0, 3, 4, 6}[i]
+				}
+				return defaultSeed(b, i)
+			},
+			ulp: 32, why: "a softmax over the cache, per section 8's propagation",
+		},
+		{
 			// The exclusive prefix sum. Integer, so the two backends agree
 			// exactly, and the seeded counts include a zero so the repeated
 			// offset a zero-count row produces is compared too.

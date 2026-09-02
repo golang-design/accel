@@ -130,7 +130,27 @@ func AttentionRagged(t accel.Thread, d RaggedDims, q []float32, k []float32,
 	i := tok - offsets[seq]
 	n := offsets[seq+1] - offsets[seq]
 	kvLen := lengths[seq]
-	limit := kvLen - n + i
+
+	// A sequence whose length is smaller than its count has tokens with no
+	// position: L-n+i is negative for i < n-L. Written as `kvLen - n + i`
+	// that subtraction wrapped to a limit near 2^32, `pos <= limit` held for
+	// every cached position, and the causal mask was silently gone for the
+	// whole sequence -- its earlier tokens scored positions they were meant
+	// to precede, and an all-positive limit reads as a fluent continuation
+	// rather than as a fault. The host cannot refuse it: lengths is device
+	// data (specs/043-per-row-values.md §2), so this is the one place the
+	// invariant can be enforced, for the same reason as the padding guard
+	// above. Such a token attends nothing and writes zero, which is that
+	// guard's rule applied to a token rather than to a row; the test is on
+	// kvLen+i against n so nothing here wraps. Workgroup-uniform, because
+	// every operand is.
+	if kvLen+i < n {
+		if lane < d.HeadDim {
+			out[qBase+lane] = 0
+		}
+		return
+	}
+	limit := kvLen + i - n
 
 	pageBase := seq * d.MaxPages
 
