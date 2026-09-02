@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // AttentionOptions carries what attention needs beyond its operands.
@@ -312,9 +312,9 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		// prefill -- so refusing the pair made a server give up one to have the
 		// other, which is what accel issue 23 reported the day the ragged step
 		// landed.
-		ragged := &testkernels.AttentionRaggedKernel
+		ragged := &kernels.AttentionRaggedKernel
 		if cacheDType == accel.F16 {
-			ragged = &testkernels.AttentionRaggedF16Kernel
+			ragged = &kernels.AttentionRaggedF16Kernel
 		} else if cacheDType != accel.F32 {
 			return b.fail(1, "Attention", "the cache is %v and the ragged kernels read "+
 				"f32 or f16", cacheDType)
@@ -340,7 +340,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			kernel: ragged,
 			reads:  []string{opts.ScaleName},
 			uniform: func(vals map[string]ScalarValue) any {
-				return testkernels.RaggedDims{
+				return kernels.RaggedDims{
 					Batch: uint32(batch), QHeads: uint32(qHeads),
 					KVHeads: uint32(kvHeads), HeadDim: uint32(headDim),
 					Block: uint32(opts.Block), MaxPages: uint32(maxPages),
@@ -394,10 +394,10 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			inputs: []*Tensor{
 				q, readState(b, k), readState(b, v), opts.Pages, opts.Lengths,
 			},
-			kernel: &testkernels.AttentionDecodeBatchedKernel,
+			kernel: &kernels.AttentionDecodeBatchedKernel,
 			reads:  []string{opts.ScaleName},
 			uniform: func(vals map[string]ScalarValue) any {
-				return testkernels.BatchedDims{
+				return kernels.BatchedDims{
 					Batch: uint32(batch), QHeads: uint32(qHeads),
 					KVHeads: uint32(kvHeads), HeadDim: uint32(headDim),
 					Block: uint32(opts.Block), MaxPages: uint32(maxPages),
@@ -452,20 +452,20 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		var prefillKernel *accel.Kernel
 		switch {
 		case opts.Pages != nil && cacheDType == accel.F16:
-			prefillKernel = &testkernels.AttentionPrefillPagedF16Kernel
+			prefillKernel = &kernels.AttentionPrefillPagedF16Kernel
 		case opts.Pages != nil:
-			prefillKernel = &testkernels.AttentionPrefillPagedKernel
+			prefillKernel = &kernels.AttentionPrefillPagedKernel
 		case cacheDType == accel.F16:
-			prefillKernel = &testkernels.AttentionPrefillF16Kernel
+			prefillKernel = &kernels.AttentionPrefillF16Kernel
 		default:
-			prefillKernel = &testkernels.AttentionPrefillKernel
+			prefillKernel = &kernels.AttentionPrefillKernel
 		}
 		prefillInputs := []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths}
 		prefillWhy := fmt.Sprintf("the causal prefill kernel: one workgroup per query "+
 			"position and head, %d of them", qSeq*qHeads)
 		prefillRejected := []string{"the decode kernel: it takes one query token"}
 		prefillDims := func(vals map[string]ScalarValue) any {
-			return testkernels.PrefillDims{
+			return kernels.PrefillDims{
 				QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 				HeadDim: uint32(headDim), QSeq: uint32(qSeq),
 				Base:  vals[opts.BaseName].U32,
@@ -488,7 +488,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 				"the contiguous prefill kernel: a page table was supplied, and it would "+
 					"read the pool in order")
 			prefillDims = func(vals map[string]ScalarValue) any {
-				return testkernels.PagedPrefillDims{
+				return kernels.PagedPrefillDims{
 					QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 					HeadDim: uint32(headDim), QSeq: uint32(qSeq),
 					Base:  vals[opts.BaseName].U32,
@@ -528,16 +528,16 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 	// Which decode kernel runs. The caller writes one shape and the choice is
 	// reported in Plan.Selections, which is how every other operator here
 	// behaves: a variant is a selection, not a second API.
-	decode := &testkernels.AttentionDecodeKernel
+	decode := &kernels.AttentionDecodeKernel
 	decodeWhy := "the fused decode kernel"
 	inputs := []*Tensor{q, readState(b, k), readState(b, v), opts.Lengths}
 	rejected := []string{"the causal prefill kernel: it takes a sequence of query tokens"}
 
 	switch {
 	case opts.Pages != nil:
-		decode = &testkernels.AttentionDecodePagedKernel
+		decode = &kernels.AttentionDecodePagedKernel
 		if cacheDType == accel.F16 {
-			decode = &testkernels.AttentionDecodePagedF16Kernel
+			decode = &kernels.AttentionDecodePagedF16Kernel
 		}
 		decodeWhy = fmt.Sprintf("the paged decode kernel: blocks of %d, addressed through "+
 			"a page table", opts.Block)
@@ -547,7 +547,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 			"the contiguous decode kernel: a page table was supplied")
 
 	case cacheDType == accel.F16:
-		decode = &testkernels.AttentionDecodeF16Kernel
+		decode = &kernels.AttentionDecodeF16Kernel
 		decodeWhy = "the fused decode kernel over an f16 cache, accumulating f32"
 	}
 
@@ -558,13 +558,13 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		reads:  []string{opts.ScaleName},
 		uniform: func(vals map[string]ScalarValue) any {
 			if opts.Pages != nil {
-				return testkernels.PagedDims{
+				return kernels.PagedDims{
 					QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 					HeadDim: uint32(headDim), Block: uint32(opts.Block),
 					Scale: vals[opts.ScaleName].F32,
 				}
 			}
-			return testkernels.AttnDims{
+			return kernels.AttnDims{
 				QHeads: uint32(qHeads), KVHeads: uint32(kvHeads),
 				HeadDim: uint32(headDim),
 				Scale:   vals[opts.ScaleName].F32,
@@ -580,7 +580,7 @@ func Attention(b *Builder, q *Tensor, k, v *State, opts AttentionOptions) *Tenso
 		// the number they already had.
 		reason: fmt.Sprintf("%s: one workgroup per query head over %d cached positions, "+
 			"%d tile(s) of %d", decodeWhy, k.shape[0],
-			(k.shape[0]+testkernels.AttnBlock-1)/testkernels.AttnBlock, testkernels.AttnBlock),
+			(k.shape[0]+kernels.AttnBlock-1)/kernels.AttnBlock, kernels.AttnBlock),
 		rejected: rejected,
 		attrs:    []uint64{uint64(opts.Block)},
 	}, accel.F32, out)

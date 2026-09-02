@@ -231,7 +231,7 @@ func TestUnreachableKernelsAreTheOnesWeNamed(t *testing.T) {
 			if !ok {
 				return true
 			}
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "testkernels" {
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "kernels" {
 				reached[strings.TrimSuffix(sel.Sel.Name, "Kernel")] = true
 			}
 			return true
@@ -368,7 +368,7 @@ func TestNoNewAdHocFloatComparisons(t *testing.T) {
 func corpusKernelNames(t *testing.T) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "internal/testkernels/accel_kernels.go", nil, 0)
+	file, err := parser.ParseFile(fset, "internal/kernels/accel_kernels.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse corpus: %v", err)
 	}

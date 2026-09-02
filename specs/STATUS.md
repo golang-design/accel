@@ -70,7 +70,7 @@ the first pass failed on them and appear in their own sections at the end.
 
 **Unbacked (code exists, nothing checks it):**
 
-- "**v0 inference is deliberately unquantized.** It proves one f16/f32 transformer decode path ... Quantized weights, a quantized KV cache, and the kernel variant — Contradicted by shipped code: quant/quant.go (Int8Quantize, Error), quant/int4.go, tensor/int4.go, tensor/grouped.go, and testkernels/int4.go / int4tiled.go. specs/027-quantization.md is Implemented a
+- "**v0 inference is deliberately unquantized.** It proves one f16/f32 transformer decode path ... Quantized weights, a quantized KV cache, and the kernel variant — Contradicted by shipped code: quant/quant.go (Int8Quantize, Error), quant/int4.go, tensor/int4.go, tensor/grouped.go, and kernels/int4.go / int4tiled.go. specs/027-quantization.md is Implemented a
 - "**v0 is compute only.** ... No graphics public API was promised until its stage ABI, render API, surface/present contract, and CPU rasterizer had their own imp — A full public graphics API now exists and runs: render.go (RenderPipeline, RenderPass, draws), surface.go (Surface, acquire/present), texture.go, textureview.go, internal/raster/. Exercised by render_
 - Layering rule 3: "No backend-specific type appears in a public signature." — Violated by the public surface: device.go:103 `func OpenCPU(opts CPUOptions) (*Device, error)`, plus the exported CPU-only types CPUOptions (accel.go:298), CPUMode with CPUDeveloper/CPUStrict/CPUMimic
 - Layering rules 1, 2 and 4 ("Layer 2 imports layer 1. Layer 1 never imports layer 2", "Backends implement an unexported interface", "The CPU backend ... is never — no test. The rules are true of the tree today but nothing checks them; importgraph_test.go only checks that the root package does not reach golang.org/x/tools or go/types.
@@ -159,7 +159,7 @@ the first pass failed on them and appear in their own sections at the end.
 **Unbuilt:**
 
 - **§'Persistent state and the KV cache' — the sizing helper** — KVCacheDesc, KVCacheSizeInfo, and KVCacheSize do not exist. Nothing checks 'every dimension, dtype, integer multiplication, and layer-1 buffer limit' before a caller allocates. This section is not listed in the spec's own 'Absent, with what each waits on' table.
-- **§'Persistent state and the KV cache' — capacity checking** — 'An index or length beyond capacity fails before submission on the host; strict CPU execution also checks it in the kernel.' Neither half exists: the write index is now a device tensor (ScatterRows takes ids *Tensor), and internal/testkernels/elementwise.go:177,218 record that an out-of-range scatte
+- **§'Persistent state and the KV cache' — capacity checking** — 'An index or length beyond capacity fails before submission on the host; strict CPU execution also checks it in the kernel.' Neither half exists: the write index is now a device tensor (ScatterRows takes ids *Tensor), and internal/kernels/elementwise.go:177,218 record that an out-of-range scatte
 - **§'v0 operator contracts' — Softmax mask and causal** — SoftmaxOptions carries only Axis. No mask binding and no causal attribute. The spec's own audit table names this as waiting on a kernel with a mask binding, but the normative operator block below still declares both fields.
 - **§'Layouts, views, and broadcasting' — Squeeze and Unsqueeze** — Neither operator exists; Reshape is the only path. The spec's audit table records this as a deliberate absence, but the operations table above still lists both as producing views.
 
@@ -170,7 +170,7 @@ the first pass failed on them and appear in their own sections at the end.
 - §'Creating graph values': PortDesc carries Access accel.Access, and StateDesc carries Capacity int. — Neither field exists. PortDesc is {Name, DType, Shape, Kind}; StateDesc is {Name, DType, Shape}, with capacity folded into Shape's leading axis. A caller reading Plan.Ports() cannot learn the access t
 - §'Persistent state and the KV cache': func ScatterRows(b *Builder, state *State, rows *Tensor, indexName string) *State, with 'the runtime index names the first — Built as ScatterRows(b, s, rows, ids *Tensor). The spec's own audit table 200 lines later records the correction, but this normative code block and its surrounding prose were never updated, so the spe
 - §'v0 operator contracts': SoftmaxOptions{Axis, ScaleName, Mask, Causal} and RoPE(b, x, positions *Tensor, rotaryDim int, baseName string). — Same contradiction. Built: SoftmaxOptions{Axis} only, and RoPE(b, x, rotaryDim, baseName, positions) (tensor/ops.go:208). The spec's audit table records both corrections and the normative API block st
-- §'Shape and indexing': 'Rows ... Out-of-range ids fail in strict mode and are a caller error otherwise.' — There is no strict-mode failure. internal/testkernels/elementwise.go:114 states the kernel writes zeros for an out-of-range id, and internal/testkernels/elementwise_test.go:137-148 asserts exactly tha
+- §'Shape and indexing': 'Rows ... Out-of-range ids fail in strict mode and are a caller error otherwise.' — There is no strict-mode failure. internal/kernels/elementwise.go:114 states the kernel writes zeros for an out-of-range id, and internal/kernels/elementwise_test.go:137-148 asserts exactly tha
 - §'Ownership and core types': 'There is no automatic plan cache in v0', repeated in the audit table as 'a plan cache | post-v0 by this spec's own §Ownership'. — tensor.PlanCache, NewPlanCache, PlanCache.Compile/Close/Len are shipped and documented, keyed by Builder.Identity. Owned by specs/029-plan-cache.md — so this is a stale scope claim contradicted by shi
 - §'Prefill and decode plans': 'Production bucketing is not part of v0.' — tensor.Buckets, NewBuckets, Buckets.For and Buckets.Sizes are shipped, with padding-without-a-mask reasoning in their doc. Owned by specs/040-batch-scheduler.md.
 - §'Post-v0 scope': quantized dtypes and quantized GEMM/Rows, sampling operators and policy, plan caches, paged KV caches, and multi-sequence scheduling are post- — All shipped in the same package: Quantized/QuantMatMul/QuantGatherRows and Int4/Int4MatMul/Int4MatVec (027, 048), Sample/SampleCategorical/Argmax/TopKMask/TopPMask/SamplingOptions/DeclareSamplingScala
@@ -199,7 +199,7 @@ the first pass failed on them and appear in their own sections at the end.
 - §6: 'Compile rejects a larger declared capacity/domain' once the generated maximum RoPE angle would leave the 2^16 sin/cos domain. — no code. tensor/ops.go:208-259 checks only rotaryDim; no path derives a maximum angle from the declared capacity or refuses one. A model configured past the bounded domain compiles and runs on kernels
 - §11: 'For positive normal-reference sqrt cases, assert that r and each finite adjacent f32 value pass and that the second representable value on either side fai — no test. TestPrimitiveCeilings runs sqrt over eighteen positive inputs at 1 ULP but never probes the adjacency boundary, never asserts sqrt(+0) is +0, and carries no adversarial rsqrt case. The §6 dis
 - §11: 'Force a backend profile without class-A proof and assert numeq.Exact refuses.' — no test, and not testable: Exact takes no profile.
-- §11: 'Test budgets monotonically: a synthetic result at the budget passes and the next representable value beyond it fails' and 'A deliberately wrong reduction  — no test. internal/testkernels/reducesum_test.go covers Gamma's refusal cases, tree-versus-sequential ordering, and magnitude scaling, but no test drives a synthetic value to the budget edge or injects
+- §11: 'Test budgets monotonically: a synthetic result at the budget passes and the next representable value beyond it fails' and 'A deliberately wrong reduction  — no test. internal/kernels/reducesum_test.go covers Gamma's refusal cases, tree-versus-sequential ordering, and magnitude scaling, but no test drives a synthetic value to the budget edge or injects
 - Header 'What is not': the outstanding work is '§6's normative primitive ceilings ... §5's contraction control on targets other than Go; and §8's composed budget — The status rule requires an in-progress spec to name what is outstanding, and this list is wrong in both directions. It omits §6's committed corpus and generator, §6's Compile-time domain gate, §9's s
 - Header 'What is built': '§6's normative primitive ceilings are stated and unmeasured on any GPU' (paired with the later claim that they were measured on Metal 2 — They are measured, but only where the test can run: internal/metal/primitives_darwin_test.go carries //go:build darwin. That gate also means the CPU oracle's own ceilings — the check the test says mus
 
@@ -224,7 +224,7 @@ the first pass failed on them and appear in their own sections at the end.
 
 - **§3 rejection corpus — rows 2 and 3 (interfaces, channels, strings, slices of slices; panic)** — No positioned source case exists for any of them. Interfaces, channels, strings and maps are only rejected through white-box unit tests that feed synthesized go/types values and assert no position: internal/kernelc/front/internal_test.go:153-173 (TestIRTypeRejections) and :81-98 (TestUnhandledExpres
 - **§3 rejection corpus — generic methods** — No case. front_test.go covers generic kernels (:296), generic helpers (:697) and generic stages (:190). Same gap as 012 §7.
-- **§4 — break and continue inside nested loops** — No kernel in internal/testkernels puts a break or continue inside an inner loop, and front_test.go's accept case "nested loops" (front_test.go:957 region) contains neither and asserts only inferred accesses, not level-5 agreement. linear.go:79's continue sits in the outer loop.
+- **§4 — break and continue inside nested loops** — No kernel in internal/kernels puts a break or continue inside an inner loop, and front_test.go's accept case "nested loops" (front_test.go:957 region) contains neither and asserts only inferred accesses, not level-5 agreement. linear.go:79's continue sits in the outer loop.
 - **§4 — helper freshness naming both** — No test edits a helper and asserts the freshness failure names the helper and its caller. cmd/accel-kernel/main_test.go:39 edits a kernel body ("* 2" -> "* 3") and asserts only that stderr says "go generate". emit_test.go:224 checks the preimage carries helper lines, which is the input to the check,
 
 **Unbacked (code exists, nothing checks it):**
@@ -239,14 +239,14 @@ the first pass failed on them and appear in their own sections at the end.
 **Unbuilt:**
 
 - **§2 — "A generated per-kernel encoder and decoder"** — There is no decoder. accel.UniformCodec[T] (uniform.go:20-28) declares only EncodedSize and Encode, no generated file contains a Decode method, and internal/kernelc/std140 has no decode path. §4's "Host-side encode/decode round-trips structs" therefore cannot exist: scaled_test.go:41 TestCodecMatche
-- **§2 — "Typed bindings: a generated bindings struct whose Bind checks every field and returns ordinary resource bindings"** — No generated bindings struct and no generated Bind exist. internal/testkernels/accel_kernels.go contains only codecs, Kernel records and lowerings. A caller builds []accel.Binding and []accel.UniformValue by hand (pipeline.go:199-230).
+- **§2 — "Typed bindings: a generated bindings struct whose Bind checks every field and returns ordinary resource bindings"** — No generated bindings struct and no generated Bind exist. internal/kernels/accel_kernels.go contains only codecs, Kernel records and lowerings. A caller builds []accel.Binding and []accel.UniformValue by hand (pipeline.go:199-230).
 - **§2 — "Validation against the device: a struct whose encoded size exceeds Limits.MaxUniformBlockBytes is a pipeline-creation error naming the struct, the encoded size, and the device's limit"** — pipeline.go:25-100 newComputePipeline checks the ABI version, the entry points, the workgroup extents and V10/V11/V17, and never looks at uniform block size. The only check is at uniform.go:139, in NewUniformBuffer, and its message names the size and the limit but not the struct. A kernel whose by-v
 - **§4 — the device check in its stated form** — No kernel writes each uniform field to a distinct storage element. The closest is TransformKernel, which accumulates the fields into one output.
 
 **Unbacked (code exists, nothing checks it):**
 
 - §2: `UniformBuffer[T]` exists "so values may change between submissions without changing graph structure". — Nothing consumes a uniform buffer binding. uniform.go:100-116 says so in the code: "UniformBuffer.View returns a binding no draw and no dispatch is parameterised by today", the mechanism having been r
-- §6: "§4's device-side check is deferred, and this is the one gap ... it lands with Metal". — Stale in both directions. It effectively landed: TransformKernel with the exact worked-example Params value is in the Metal differential list at internal/testkernels/differential_darwin_test.go:303-31
+- §6: "§4's device-side check is deferred, and this is the one gap ... it lands with Metal". — Stale in both directions. It effectively landed: TransformKernel with the exact worked-example Params value is in the Metal differential list at internal/kernels/differential_darwin_test.go:303-31
 - §4: "Host-side encode/decode round-trips structs containing scalar, vector, and array fields". — There is no decode, so no round trip. The encoder is checked against a literal byte expectation only.
 - §5: the root package carries `accel.KernelUniform` and `accel.KernelUniformValue`. — Neither identifier exists. The record's by-value declaration is internal/kernel.Uniform re-exported as kernelabi.Uniform (kernelabi/kernelabi.go:62), and the generated entry point recovers one through
 - §2/§4: the oversize refusal names "the struct". — uniform.go:140-144 formats only the encoded size and the device limit, and scaled_test.go:240 asserts only that "MaxUniformBlockBytes" and "std140 pads" appear. No code names the Go type.
@@ -367,11 +367,11 @@ the first pass failed on them and appear in their own sections at the end.
 
 **Unbuilt:**
 
-- **§6 Done bullet 1 — "every operator above builds, infers, lowers, and runs on both backends"** — The operators are built and lower on CPU, and their kernels agree on Metal through the corpus differential (internal/testkernels/differential_darwin_test.go:108,111,221,281,353). What has no both-backends test is the tensor-layer lowering of Mul, Scale, Softmax, RoPE and Linear: no *_darwin_test.go 
+- **§6 Done bullet 1 — "every operator above builds, infers, lowers, and runs on both backends"** — The operators are built and lower on CPU, and their kernels agree on Metal through the corpus differential (internal/kernels/differential_darwin_test.go:108,111,221,281,353). What has no both-backends test is the tensor-layer lowering of Mul, Scale, Softmax, RoPE and Linear: no *_darwin_test.go 
 
 **Unbacked (code exists, nothing checks it):**
 
-- §4.1: "an f32 GEMM is a corpus kernel that does not exist" and "MatMul, Linear and MatVec take f16 operands and produce f32". — Half false and contradicted by code. MatMulTiledF32Kernel and MatMulTiledF32F16Kernel are registered (internal/testkernels/accel_kernels.go; documented at specs/010-kernel-corpus.md:216) and tensor/ma
+- §4.1: "an f32 GEMM is a corpus kernel that does not exist" and "MatMul, Linear and MatVec take f16 operands and produce f32". — Half false and contradicted by code. MatMulTiledF32Kernel and MatMulTiledF32F16Kernel are registered (internal/kernels/accel_kernels.go; documented at specs/010-kernel-corpus.md:216) and tensor/ma
 - §3 operator table names the operator `Rows`. — No such exported function. The operator is tensor.GatherRows (tensor/ops.go:50). A reader following the spec's API name finds nothing.
 - §3 table: `Cast` — "the identity is a no-op rather than a copy". — no test. Code is tensor/ops.go:288-292 (returns x unchanged when dtype matches), but no test in tensor/ constructs a same-dtype Cast and asserts that no node is recorded; grep for Cast across tensor/*
 - §4.4 and §5: RoPE's copy into scratch "is reported". — no test. tensor/compile.go:421-425 appends a KernelSelection{Kernel: "copy"} for the in-place path, but tensor/ops_test.go:345's RoPE subtest never reads plan.Selections(), and no other test asserts t
@@ -482,7 +482,7 @@ the first pass failed on them and appear in their own sections at the end.
 - §9 Done bullet 6: "the origin test asserts both equality and the top-row value, confirmed by mirroring both paths and checking the test still fails". — no test. There is no origin test at all, so nothing was confirmed by mirroring. This is the entry §7 singles out as catching the predecessor's actual bug, and docs/conventions.md:33 says explicitly th
 - §9 Done bullet 7: "`conventions.md`'s graphics entries — clip depth range, winding, readback origin, depth storage mode — each name the corpus test that verifie — no code. docs/conventions.md lines 31-33 name *backends* ("both backends", "the CPU rasterizer only"), not corpus tests. No test name appears in that table, and the readback-origin row states the oppo
 - ~~§7 corpus row "Feedback validation ... disjoint mip and disjoint layer accepted", declared side exact.~~ — **closed 2026-08-30**, [045](045-texture-attachments.md) §10.4. When this row was written: no test — the accepting half skips. render_feedback_test.go:154 TestADisjointSubresourceIsNotFeedback t.Skipf()s when NewTexture with MipLevels: 2 is refused, which it still is. Only the rejecting hal
-- §7.1: "When a comparison fails, `conventions.md`'s diagnostic order applies ... **Equal pixel counts with roughly half overlap is the flip fingerprint**". — no code. No differential in internal/testkernels computes coverage counts or overlap between competing interpretations on failure; the comparisons report per-pixel deltas. The diagnostic procedure is 
+- §7.1: "When a comparison fails, `conventions.md`'s diagnostic order applies ... **Equal pixel counts with roughly half overlap is the flip fingerprint**". — no code. No differential in internal/kernels computes coverage counts or overlap between competing interpretations on failure; the comparisons report per-pixel deltas. The diagnostic procedure is 
 
 ### [036-documentation.md](036-documentation.md)
 
@@ -576,20 +576,20 @@ the first pass failed on them and appear in their own sections at the end.
 
 - §4 Refusals: "Σn_r ≠ q.shape[0] | §1 property 3: the host can check it and the kernel cannot" — listed as a host-side refusal. — No code and no test. tensor.Attention has no host value to compare q.shape[0] against, because QueryExtents is a tensor. The spec's OWN §6 Correction retracts this exact claim and states "the host can
 - §4 Refusals: "QueryExtents whose element count is not the batch | one count per row is what the primitive is". — No code implements it and no test checks it. batch is derived from QueryExtents itself (tensor/attention.go:211), so the refusal is unwritable as stated. The only refusal on that element count is the 
-- §4 header: "Every one is host-side, because 043 §2's rule cuts both ways: a value that reaches the device as data cannot be checked there." — Two of the five rows are not host-side refusals at all — one is enforced in the kernel (property 3's padding write, internal/testkernels/ragged.go:110) and one does not exist. The header is what makes
+- §4 header: "Every one is host-side, because 043 §2's rule cuts both ways: a value that reaches the device as data cannot be checked there." — Two of the five rows are not host-side refusals at all — one is enforced in the kernel (property 3's padding write, internal/kernels/ragged.go:110) and one does not exist. The header is what makes
 
 ### [047-linear-attention.md](047-linear-attention.md)
 
 **Unbuilt:**
 
-- **§6.1 "What is still not built: the kernel" (linear_attention_chunked)** — The chunked UT-transform kernel itself. The derivation and the Go-side oracle exist (internal/testkernels/linear_test.go:424), but no kernel is authored or registered — confirmed against internal/kernelc/kernelc_test.go:51 and specs/010-kernel-corpus.md:129. Also missing: the refusal of chunk sizes 
+- **§6.1 "What is still not built: the kernel" (linear_attention_chunked)** — The chunked UT-transform kernel itself. The derivation and the Go-side oracle exist (internal/kernels/linear_test.go:424), but no kernel is authored or registered — confirmed against internal/kernelc/kernelc_test.go:51 and specs/010-kernel-corpus.md:129. Also missing: the refusal of chunk sizes 
 - **§2 / §2.1, the over-sum direction of 046 §1 property 3** — No clamp of `last` to the token count in LinearAttention, no host refusal, no test. Counts summing past q.shape[0] read q/k/alpha/beta and write out past their ends.
 
 **Unbacked (code exists, nothing checks it):**
 
-- §5: "A sequence's tokens do not disturb another sequence's state. Two sequences in one step, and each slot equals what that sequence alone produced — the same o — No test runs two NON-EMPTY sequences and compares each slot against that sequence run alone. Both candidate tests use a second sequence with count zero: internal/testkernels/linear_test.go:235 TestALi
-- §2 states the input is 046's segmented extent unchanged, which carries 046 §1 property 3. — No code honours property 3's over-sum direction in this kernel and no test checks it. `last` comes straight from the offsets with no clamp in internal/testkernels/linear.go:75, in the flat lowering, o
-- §5: "alpha = 1, beta = 0 ... makes o the same for every token." — No assertion. internal/testkernels/linear_test.go:209 TestALinearStepWithNoWriteLeavesTheStateAlone checks only that the state did not move, then closes with `if len(out) == 0 { t.Fatal("no output") }
+- §5: "A sequence's tokens do not disturb another sequence's state. Two sequences in one step, and each slot equals what that sequence alone produced — the same o — No test runs two NON-EMPTY sequences and compares each slot against that sequence run alone. Both candidate tests use a second sequence with count zero: internal/kernels/linear_test.go:235 TestALi
+- §2 states the input is 046's segmented extent unchanged, which carries 046 §1 property 3. — No code honours property 3's over-sum direction in this kernel and no test checks it. `last` comes straight from the offsets with no clamp in internal/kernels/linear.go:75, in the flat lowering, o
+- §5: "alpha = 1, beta = 0 ... makes o the same for every token." — No assertion. internal/kernels/linear_test.go:209 TestALinearStepWithNoWriteLeavesTheStateAlone checks only that the state did not move, then closes with `if len(out) == 0 { t.Fatal("no output") }
 - §5: "The state's shape is [slots, heads, V, K] and a step writes only its own slot, asserted by leaving another slot filled with a sentinel." — No sentinel exists. The untouched slot starts at zero in both tests (tensor/linear_test.go:197 reads it back and asserts it is still 0), so "untouched" is indistinguishable from "written with zeros". 
 
 
@@ -745,7 +745,7 @@ true. Mostly they are. Three are stale enough to mislead:
   2026-08-27 say otherwise. The section outlived its cause.
 - **M4's outcome contradicts M4's own child table.** The outcome says subgroup
   shuffles, scans and the strict-mode narrowing were deferred or not built; all
-  three shipped (`internal/testkernels/subgroup.go:100,146,183`,
+  three shipped (`internal/kernels/subgroup.go:100,146,183`,
   `internal/cpu/profile.go:302,349`). All six of M4's done criteria hold, and M4
   is the only milestone in M0–M7 carrying **no completion marker**.
 - **M8's status row** says the sampling policy integration remains. It is built
@@ -758,7 +758,7 @@ Not splittable: a build history has no shippable chunks. The fix is three edits.
 **Unbuilt:**
 
 - **§1's package layout** — `tensor/internal/kernels/{elementwise,layout,…}` does
-  not exist and everything lives in one flat `internal/testkernels`. §3.1
+  not exist and everything lives in one flat `internal/kernels`. §3.1
   mentions the real location but never records §1 as superseded. This is the
   section the naming requirement misses.
 - **§1's record types** — `KernelID`, `KernelMeta`, `LayoutClass`,
@@ -1076,7 +1076,7 @@ public contract and was not decided inside an autonomous session:
 2. **[029](029-plan-cache.md)** — `PlanCache.Compile` returns one `*Plan` per
    key and a Plan refuses a second Submit in flight, so two requests in one
    bucket cannot run concurrently.
-3. **[010](010-kernel-corpus.md)** — `internal/testkernels` is the production
+3. **[010](010-kernel-corpus.md)** — `internal/kernels` is the production
    corpus (thirteen `tensor` files import it) under a test's name.
 4. **[000](000-decisions.md) rule 3** — `OpenCPU`, `CPUOptions`, `CPUMode` are
    backend-specific public types.

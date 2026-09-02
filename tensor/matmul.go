@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Matrix multiplication, and the one selection v0 actually makes.
@@ -96,16 +96,16 @@ func gemmPair(x, w DType) bool {
 // matrix rather than a diagnostic.
 func gemmKernel(x, w DType, m, n int) (*accel.Kernel, string) {
 	tiles := fmt.Sprintf("a %dx%d output in %dx%d tiles", m, n,
-		testkernels.TileM, testkernels.TileN)
+		kernels.TileM, kernels.TileN)
 	switch {
 	case x == accel.F32 && w == accel.F16:
-		return &testkernels.MatMulTiledF32F16Kernel,
+		return &kernels.MatMulTiledF32F16Kernel,
 			"the mixed tiled GEMM, f32 activations against f16 weights, over " + tiles
 	case x == accel.F32:
-		return &testkernels.MatMulTiledF32Kernel,
+		return &kernels.MatMulTiledF32Kernel,
 			"the tiled GEMM over f32 operands, " + tiles
 	}
-	return &testkernels.MatMulTiledKernel,
+	return &kernels.MatMulTiledKernel,
 		"the portable tiled GEMM over " + tiles
 }
 
@@ -114,8 +114,8 @@ func gemmKernel(x, w DType, m, n int) (*accel.Kernel, string) {
 func gemmGrid(m, n int) grid {
 	return func(*Tensor) accel.WorkgroupCount {
 		return accel.WorkgroupCount{
-			X: (n + testkernels.TileN - 1) / testkernels.TileN,
-			Y: (m + testkernels.TileM - 1) / testkernels.TileM,
+			X: (n + kernels.TileN - 1) / kernels.TileN,
+			Y: (m + kernels.TileM - 1) / kernels.TileM,
 		}
 	}
 }
@@ -134,7 +134,7 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 	if !ok {
 		return b.poison()
 	}
-	dims := testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
+	dims := kernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
 
 	// The one selection v0 makes. A matrix-vector product has one output row,
 	// so a tile eight rows tall would leave seven idle; the M=1 kernel gives
@@ -150,7 +150,7 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 	// and a mixed matvec is the same shape of argument at f16.
 	if m == 1 && x.dtype == accel.F16 {
 		return b.record(node{
-			op: "MatMul", inputs: []*Tensor{x, w}, kernel: &testkernels.MatVecKernel,
+			op: "MatMul", inputs: []*Tensor{x, w}, kernel: &kernels.MatVecKernel,
 			uniform: func(map[string]ScalarValue) any { return dims },
 			grid: func(*Tensor) accel.WorkgroupCount {
 				return accel.WorkgroupCount{X: n}
@@ -158,7 +158,7 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 			reason: fmt.Sprintf("M is 1, so the matrix-vector kernel gives each of the %d "+
 				"output columns a workgroup", n),
 			rejected: []string{fmt.Sprintf("the tiled GEMM: its %d-row tile would leave %d "+
-				"rows idle", testkernels.TileM, testkernels.TileM-1)},
+				"rows idle", kernels.TileM, kernels.TileM-1)},
 		}, accel.F32, Shape{m, n})
 	}
 	gemm, why := gemmKernel(x.dtype, w.dtype, m, n)
@@ -170,7 +170,7 @@ func MatMul(b *Builder, x, w *Tensor) *Tensor {
 		// tile is reported rather than hidden.
 		rejected = []string{fmt.Sprintf("the matrix-vector kernel: it reads f16 on both "+
 			"operands, so %d of this tile's %d rows are idle",
-			testkernels.TileM-1, testkernels.TileM)}
+			kernels.TileM-1, kernels.TileM)}
 	}
 	return b.record(node{
 		op: "MatMul", inputs: []*Tensor{x, w}, kernel: gemm,
@@ -214,9 +214,9 @@ func Linear(b *Builder, x, w, bias *Tensor) *Tensor {
 		return b.fail(1, "Linear", "the bias is %v and the output is %d wide; a bias is one "+
 			"value per output column", bias.shape, n)
 	}
-	dims := testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
+	dims := kernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
 	return b.record(node{
-		op: "Linear", inputs: []*Tensor{x, w, bias}, kernel: &testkernels.LinearTiledKernel,
+		op: "Linear", inputs: []*Tensor{x, w, bias}, kernel: &kernels.LinearTiledKernel,
 		uniform:  func(map[string]ScalarValue) any { return dims },
 		grid:     gemmGrid(m, n),
 		reason:   "the authored epilogue, which adds the bias while the tile is still in registers",

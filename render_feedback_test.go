@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // A stage that fetches the subresource its pass is writing is refused.
@@ -26,8 +26,8 @@ func TestAStageFetchingTheAttachmentIsFeedback(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
-	blit := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.BlitFSStage)
+	blit := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.BlitFSStage)
 	defer blit.Close()
 
 	target := renderTexture(t, d, "target", w, h)
@@ -69,8 +69,8 @@ func TestFixedFunctionAttachmentReadsAreNotFeedback(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
-	solid := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.SolidFSStage)
+	solid := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.SolidFSStage)
 	defer solid.Close()
 
 	target := renderTexture(t, d, "target", w, h)
@@ -104,11 +104,11 @@ func TestFetchingAnotherPassesTargetIsNotFeedback(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
-	draw := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.SolidFSStage)
+	draw := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.SolidFSStage)
 	defer draw.Close()
-	blit := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.BlitFSStage)
+	blit := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.BlitFSStage)
 	defer blit.Close()
 
 	first := renderTexture(t, d, "first", w, h)
@@ -177,8 +177,8 @@ func TestADisjointSubresourceIsNotFeedback(t *testing.T) {
 		t.Fatalf("mip 1 view: %v", err)
 	}
 
-	blit := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.BlitFSStage)
+	blit := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.BlitFSStage)
 	defer blit.Close()
 
 	r := d.NewRecorder()
@@ -212,14 +212,14 @@ func TestADrawCanBeParameterisedByAUniformBuffer(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
-	ub, err := accel.NewUniformBuffer[testkernels.StageTint](d, testkernels.StageTintCodec{})
+	ub, err := accel.NewUniformBuffer[kernels.StageTint](d, kernels.StageTintCodec{})
 	if err != nil {
 		t.Fatalf("NewUniformBuffer: %v", err)
 	}
 	defer ub.Close()
 
 	want := accel.Vec4{0.125, 0.25, 0.5, 1}
-	if err := ub.Write(d.Queue(), testkernels.StageTint{Colour: want}); err != nil {
+	if err := ub.Write(d.Queue(), kernels.StageTint{Colour: want}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	view, err := ub.View()
@@ -227,7 +227,7 @@ func TestADrawCanBeParameterisedByAUniformBuffer(t *testing.T) {
 		t.Fatalf("View: %v", err)
 	}
 
-	pipe := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.TintedFSStage)
+	pipe := texturePipeline(t, d, &kernels.FullScreenVSStage, &kernels.TintedFSStage)
 	defer pipe.Close()
 	tex := renderTexture(t, d, "target", w, h)
 

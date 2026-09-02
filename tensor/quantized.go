@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 	"golang.design/x/accel/quant"
 )
 
@@ -98,7 +98,7 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 	}
 	m, k, n := x.shape[0], x.shape[1], w.Quants.shape[1]
 
-	dims := testkernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
+	dims := kernels.GEMMDims{M: uint32(m), N: uint32(n), K: uint32(k)}
 	integer := "an integer-accumulating variant: it needs one scale per output " +
 		"column, and this representation has one per block"
 
@@ -120,9 +120,9 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 	// exist for that reason: closing issue 14's refusal on the general kernel
 	// alone would leave decode running the unspecialized shape again.
 	if m == 1 {
-		vec := &testkernels.QuantMatVecKernel
+		vec := &kernels.QuantMatVecKernel
 		if wide {
-			vec = &testkernels.QuantMatVecF32Kernel
+			vec = &kernels.QuantMatVecF32Kernel
 		}
 		return b.record(node{
 			op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
@@ -139,9 +139,9 @@ func QuantMatMul(b *Builder, x *Tensor, w Quantized) *Tensor {
 		}, accel.F32, Shape{m, n})
 	}
 
-	gemm := &testkernels.QuantMatMulKernel
+	gemm := &kernels.QuantMatMulKernel
 	if wide {
-		gemm = &testkernels.QuantMatMulF32Kernel
+		gemm = &kernels.QuantMatMulF32Kernel
 	}
 	return b.record(node{
 		op: "QuantMatMul", inputs: []*Tensor{x, w.Quants, w.Scales},
@@ -186,13 +186,13 @@ func QuantGatherRows(b *Builder, table Quantized, ids *Tensor) *Tensor {
 
 	return b.record(node{
 		op: "QuantGatherRows", inputs: []*Tensor{table.Quants, table.Scales, ids},
-		kernel: &testkernels.QuantRowsKernel,
+		kernel: &kernels.QuantRowsKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.RowParams{
+			return kernels.RowParams{
 				Rows: uint32(rows), Width: uint32(width), Capacity: uint32(capacity),
 			}
 		},
-		grid: perElement(int(testkernels.QuantRowsKernel.WorkgroupSize.X)),
+		grid: perElement(int(kernels.QuantRowsKernel.WorkgroupSize.X)),
 		reason: "the quantized gather; an id at or above the table's capacity writes " +
 			"zeros, because a GPU cannot report one",
 	}, accel.F32, out)

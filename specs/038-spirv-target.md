@@ -342,7 +342,7 @@ this spec has.
 
 **The differential runs last, and that ordering is the answer to "you cannot
 read the artifact".** The comparison is unchanged from
-`internal/testkernels/differential_darwin_test.go`; what changes is that a
+`internal/kernels/differential_darwin_test.go`; what changes is that a
 mismatch has a fourth suspect beside the lowering, the device and the test —
 **the module might not encode what the emitter thinks it wrote** — and the three
 layers above are what eliminate it.

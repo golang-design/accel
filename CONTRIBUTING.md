@@ -158,8 +158,8 @@ happened twice.
 Reproduce the Linux number before pushing a new kernel:
 
 ```sh
-go test ./internal/testkernels/ -skip 'Metal|Darwin' \
-  -coverprofile=cover.out -coverpkg=./internal/testkernels/
+go test ./internal/kernels/ -skip 'Metal|Darwin' \
+  -coverprofile=cover.out -coverpkg=./internal/kernels/
 go tool cover -func=cover.out | tail -1
 ```
 

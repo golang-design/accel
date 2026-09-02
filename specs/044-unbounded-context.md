@@ -15,7 +15,7 @@ depends_on:
 `tensor.Attention` refuses a cache longer than the decode kernel's workgroup:
 
 ```go
-lanes := int(testkernels.AttentionDecodeKernel.WorkgroupSize.X)
+lanes := int(kernels.AttentionDecodeKernel.WorkgroupSize.X)
 if k.shape[0] > lanes {
     return b.fail(1, "Attention", "the cache holds %d positions and the decode kernel "+
         "scores one per lane over %d; a longer cache needs the looping variant, which "+

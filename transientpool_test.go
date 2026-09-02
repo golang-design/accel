@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // buildInto records a graph of n-element work, optionally into a shared pool,
@@ -19,7 +19,7 @@ func buildInto(t *testing.T, d *accel.Device, pool *accel.TransientPool, n int) 
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)

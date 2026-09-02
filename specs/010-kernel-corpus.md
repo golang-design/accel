@@ -419,7 +419,7 @@ up, which is exactly what they asked for.
 ## 3.1 What is built — 2026-08-23
 
 Every kernel in the tables above exists on the CPU backend, in
-`internal/testkernels`, each checked against an independently written
+`internal/kernels`, each checked against an independently written
 higher-precision reference and each authored form checked against its generated
 lowering.
 

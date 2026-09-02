@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // specs/045-texture-attachments.md: an attachment is a texture view, the view's
@@ -60,8 +60,8 @@ func unormTarget(t *testing.T, d *accel.Device, label string, w, h int) *accel.T
 func unormPipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA8Unorm}},
 		Label:    "unorm solid",
 	})
@@ -229,8 +229,8 @@ func TestAnSRGBViewConvertsOnWriteAndOnRead(t *testing.T) {
 		fillBytes(t, d, target, prior)
 
 		pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-			Vertex:   &testkernels.ScaledVSStage,
-			Fragment: &testkernels.TintedFSStage,
+			Vertex:   &kernels.ScaledVSStage,
+			Fragment: &kernels.TintedFSStage,
 			VertexBuffers: []accel.VertexBufferLayout{{
 				Stride: 12,
 				Attributes: []accel.VertexAttribute{
@@ -260,8 +260,8 @@ func TestAnSRGBViewConvertsOnWriteAndOnRead(t *testing.T) {
 		})
 		pass.SetPipeline(pipe)
 		pass.SetVertexBuffer(0, whole(t, vb))
-		pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-		pass.SetFragmentUniform(0, testkernels.StageTint{
+		pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+		pass.SetFragmentUniform(0, kernels.StageTint{
 			Colour: [4]float32{0.25, 0.25, 0.25, 1},
 		})
 		pass.Draw(accel.Draw{VertexCount: 3})
@@ -423,8 +423,8 @@ func TestV13RefusesAPipelineCompiledForAnotherFormat(t *testing.T) {
 		name: "the second attachment of a pair",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder) {
 			mrt, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-				Vertex:   &testkernels.GeometryVSStage,
-				Fragment: &testkernels.ShadeFSStage,
+				Vertex:   &kernels.GeometryVSStage,
+				Fragment: &kernels.ShadeFSStage,
 				VertexBuffers: []accel.VertexBufferLayout{{
 					Stride: 20,
 					Attributes: []accel.VertexAttribute{
@@ -456,8 +456,8 @@ func TestV13RefusesAPipelineCompiledForAnotherFormat(t *testing.T) {
 		name: "a depth attachment of another format",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder) {
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-				Vertex:   &testkernels.HalfTriangleVSStage,
-				Fragment: &testkernels.SolidFSStage,
+				Vertex:   &kernels.HalfTriangleVSStage,
+				Fragment: &kernels.SolidFSStage,
 				Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 				DepthStencil: &accel.DepthStencilState{
 					Format: accel.Depth24PlusStencil8, Test: true, Write: true,
@@ -527,8 +527,8 @@ func TestV13AcceptsAPipelineCompiledForTheViewsFormat(t *testing.T) {
 	tex := unormTarget(t, d, "linear texture", w, h)
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA8UnormSRGB}},
 		Label:    "srgb solid",
 	})
@@ -598,8 +598,8 @@ func TestAReinterpretingViewIsAnAttachmentAndAnIncompatibleOneIsNot(t *testing.T
 
 	r := d.NewRecorder()
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA8UnormSRGB}},
 		Label:    "srgb solid",
 	})

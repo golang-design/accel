@@ -6,7 +6,7 @@ package tensor
 
 import (
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // The elementwise family.
@@ -86,12 +86,12 @@ func elementwiseDType(d DType) bool { return d == accel.F32 || d == accel.F16 }
 
 // Add returns x + y, elementwise, with NumPy broadcasting.
 func Add(b *Builder, x, y *Tensor) *Tensor {
-	return binary(b, "Add", &testkernels.ElemAddKernel, x, y, 1)
+	return binary(b, "Add", &kernels.ElemAddKernel, x, y, 1)
 }
 
 // Mul returns x * y, elementwise, with NumPy broadcasting.
 func Mul(b *Builder, x, y *Tensor) *Tensor {
-	return binary(b, "Mul", &testkernels.ElemMulKernel, x, y, 1)
+	return binary(b, "Mul", &kernels.ElemMulKernel, x, y, 1)
 }
 
 // Scale multiplies x by a named runtime f32 scalar.
@@ -119,10 +119,10 @@ func Scale(b *Builder, x *Tensor, scalarName string) *Tensor {
 		return bad
 	}
 	return b.record(node{
-		op: "Scale", inputs: []*Tensor{x}, kernel: &testkernels.ElemScaleKernel, bcast: true,
+		op: "Scale", inputs: []*Tensor{x}, kernel: &kernels.ElemScaleKernel, bcast: true,
 		reads: []string{scalarName},
 		uniform: func(vals map[string]ScalarValue) any {
-			return testkernels.ScaleParams{Factor: vals[scalarName].F32}
+			return kernels.ScaleParams{Factor: vals[scalarName].F32}
 		},
 		reason: "the contiguous elementwise variant, with the factor in a uniform block " +
 			"rewritten before each submission",
@@ -145,7 +145,7 @@ func SiLU(b *Builder, x *Tensor) *Tensor {
 		return bad
 	}
 	return b.record(node{
-		op: "SiLU", inputs: []*Tensor{x}, kernel: &testkernels.SiLUKernel, bcast: true,
+		op: "SiLU", inputs: []*Tensor{x}, kernel: &kernels.SiLUKernel, bcast: true,
 		reason: "the contiguous elementwise variant; exp is bounded by " +
 			"specs/008-numerics.md section 6",
 	}, x.dtype, x.shape)
@@ -180,7 +180,7 @@ func SwiGLU(b *Builder, gate, value *Tensor) *Tensor {
 		return bad
 	}
 	return b.record(node{
-		op: "SwiGLU", inputs: []*Tensor{gate, value}, kernel: &testkernels.SwiGLUKernel,
+		op: "SwiGLU", inputs: []*Tensor{gate, value}, kernel: &kernels.SwiGLUKernel,
 		bcast:    true,
 		reason:   "the authored fused kernel, which specs/010-kernel-corpus.md registers",
 		rejected: []string{"SiLU followed by Mul: correct, and two dispatches over the same bytes"},

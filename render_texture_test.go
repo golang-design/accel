@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Binding a texture to a stage, per specs/032-stage-abi.md section 5.
@@ -116,11 +116,11 @@ func TestAPassReadsWhatAnEarlierPassDrew(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
-	draw := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.RowFSStage)
+	draw := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.RowFSStage)
 	defer draw.Close()
-	blit := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.BlitFSStage)
+	blit := texturePipeline(t, d, &kernels.FullScreenVSStage,
+		&kernels.BlitFSStage)
 	defer blit.Close()
 
 	first := renderTexture(t, d, "first", w, h)
@@ -298,7 +298,7 @@ func TestAClearValueWithoutLoadClearIsRefused(t *testing.T) {
 	// The accepting half, and it is the one that constrains the rule: a zero
 	// clear value is also the field's zero value, so a pass that says nothing
 	// about clearing must still be legal with any load op.
-	pipe := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.SolidFSStage)
+	pipe := texturePipeline(t, d, &kernels.FullScreenVSStage, &kernels.SolidFSStage)
 	defer pipe.Close()
 	r := d.NewRecorder()
 	p := r.RenderPass(accel.RenderPassDescriptor{

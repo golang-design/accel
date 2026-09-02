@@ -86,7 +86,7 @@ k and p, which the plan digest already covers.
 [009](009-sequencing.md) says the primitives "take their inputs explicitly,
 including the random draw, so a policy layer is a caller of this API and not a
 change to it". That is true of the **kernel** API and false of the **tensor**
-API. The four primitives live in `internal/testkernels`, reachable only through
+API. The four primitives live in `internal/kernels`, reachable only through
 `kernel.Dispatch` and `kernel.DispatchCooperative`, so **no `Plan` can produce a
 token today**.
 

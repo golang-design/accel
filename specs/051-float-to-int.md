@@ -48,9 +48,9 @@ wrong. Three kernels do it, all in graphics stages, all converting an
 interpolated coordinate for a texel fetch:
 
 ```
-internal/testkernels/stages.go:173   x := int32(in.Texel[0])
-internal/testkernels/stages.go:174   y := int32(in.Texel[1])
-internal/testkernels/stages.go:210   accel.Fetch(src, int32(c[0]), int32(c[1]))
+internal/kernels/stages.go:173   x := int32(in.Texel[0])
+internal/kernels/stages.go:174   y := int32(in.Texel[1])
+internal/kernels/stages.go:210   accel.Fetch(src, int32(c[0]), int32(c[1]))
 ```
 
 **How the error was made, because it generalises.** The check was a grep for

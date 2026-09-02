@@ -11,7 +11,7 @@ import (
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/conformance/parity"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // specs/062-backend-parity.md sections 6.3, 6.4 and 6.5: the fixed-function
@@ -97,8 +97,8 @@ func (p parityPass) run(t *testing.T, d *accel.Device) []byte {
 		}
 		pass.SetPipeline(dr.pipe(t, d))
 		pass.SetVertexBuffer(0, whole(t, vb))
-		pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-		pass.SetFragmentUniform(0, testkernels.StageTint{Colour: dr.tint})
+		pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+		pass.SetFragmentUniform(0, kernels.StageTint{Colour: dr.tint})
 		pass.Draw(accel.Draw{VertexCount: dr.count})
 	}
 	submitOne(t, d, r)
@@ -109,8 +109,8 @@ func (p parityPass) run(t *testing.T, d *accel.Device) []byte {
 // state. Every case in this file differs only in that state, which is what
 // makes the comparison about the state rather than about the shader.
 func tintedPipeline(desc accel.RenderPipelineDescriptor) func(*testing.T, *accel.Device) *accel.RenderPipeline {
-	desc.Vertex = &testkernels.ScaledVSStage
-	desc.Fragment = &testkernels.TintedFSStage
+	desc.Vertex = &kernels.ScaledVSStage
+	desc.Fragment = &kernels.TintedFSStage
 	desc.VertexBuffers = []accel.VertexBufferLayout{{
 		Stride: 12,
 		Attributes: []accel.VertexAttribute{
@@ -586,8 +586,8 @@ func depthOfTwoFlatTriangles(t *testing.T, d *accel.Device, f accel.Format) []fl
 		}
 		p.SetPipeline(dr.pipe(t, d))
 		p.SetVertexBuffer(0, whole(t, vb))
-		p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-		p.SetFragmentUniform(0, testkernels.StageTint{Colour: dr.tint})
+		p.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+		p.SetFragmentUniform(0, kernels.StageTint{Colour: dr.tint})
 		p.Draw(accel.Draw{VertexCount: dr.count})
 	}
 	submitOne(t, d, r)
@@ -619,8 +619,8 @@ func attrFormatParityCases() []parityCase {
 		run: func(t *testing.T, d *accel.Device) []byte {
 			t.Helper()
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-				Vertex:   &testkernels.GeometryVSStage,
-				Fragment: &testkernels.ShadeFSStage,
+				Vertex:   &kernels.GeometryVSStage,
+				Fragment: &kernels.ShadeFSStage,
 				VertexBuffers: []accel.VertexBufferLayout{{
 					Stride: 20, StepMode: accel.StepVertex,
 					Attributes: []accel.VertexAttribute{
@@ -656,7 +656,7 @@ func attrFormatParityCases() []parityCase {
 			})
 			p.SetPipeline(pipe)
 			p.SetVertexBuffer(0, whole(t, vb))
-			p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+			p.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
 			p.Draw(accel.Draw{VertexCount: 3})
 			submitOne(t, d, r)
 			return append(readTargetBytes(t, d, albedo), readTargetBytes(t, d, normal)...)
@@ -746,10 +746,10 @@ func normalizedAttrCase(name string, f accel.AttrFormat, raw []byte, pos []float
 				"varying; the conversion itself is exact"},
 		run: func(t *testing.T, d *accel.Device) []byte {
 			t.Helper()
-			vs, fs := &testkernels.AttributeVSStage, &testkernels.TintFSStage
+			vs, fs := &kernels.AttributeVSStage, &kernels.TintFSStage
 			targets := []accel.ColorTargetState{{Format: accel.RGBA32Float}}
 			if two {
-				vs, fs = &testkernels.GeometryVSStage, &testkernels.ShadeFSStage
+				vs, fs = &kernels.GeometryVSStage, &kernels.ShadeFSStage
 				targets = append(targets, accel.ColorTargetState{Format: accel.RGBA32Float})
 			}
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
@@ -795,7 +795,7 @@ func normalizedAttrCase(name string, f accel.AttrFormat, raw []byte, pos []float
 			p.SetPipeline(pipe)
 			p.SetVertexBuffer(0, whole(t, vb))
 			if two {
-				p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+				p.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
 			}
 			p.Draw(accel.Draw{VertexCount: 3})
 			submitOne(t, d, r)
@@ -880,16 +880,16 @@ func stencilOpCase(name string, op accel.StencilOp, outside, inside uint8, times
 		run: func(t *testing.T, d *accel.Device) []byte {
 			t.Helper()
 			replace := face(accel.StencilReplace, accel.CompareAlways, 0xff)
-			seedAll := stencilPipeline(t, d, &testkernels.FullScreenVSStage, replace, name+" seed all")
+			seedAll := stencilPipeline(t, d, &kernels.FullScreenVSStage, replace, name+" seed all")
 			defer seedAll.Close()
-			seedHalf := stencilPipeline(t, d, &testkernels.HalfTriangleVSStage, replace, name+" seed half")
+			seedHalf := stencilPipeline(t, d, &kernels.HalfTriangleVSStage, replace, name+" seed half")
 			defer seedHalf.Close()
-			apply := stencilPipeline(t, d, &testkernels.FullScreenVSStage,
+			apply := stencilPipeline(t, d, &kernels.FullScreenVSStage,
 				face(op, accel.CompareAlways, 0xff), name+" apply")
 			defer apply.Close()
 			// Equal against the value the operation should have left, with the
 			// reference supplied per pass and nothing written back.
-			test := stencilPipeline(t, d, &testkernels.FullScreenVSStage,
+			test := stencilPipeline(t, d, &kernels.FullScreenVSStage,
 				face(accel.StencilKeep, accel.CompareEqual, 0), name+" test")
 			defer test.Close()
 
@@ -917,7 +917,7 @@ func stencilOpCase(name string, op accel.StencilOp, outside, inside uint8, times
 				})
 				rp.SetPipeline(p)
 				rp.SetStencilReference(ref)
-				rp.SetFragmentUniform(0, testkernels.StageTint{Colour: tint})
+				rp.SetFragmentUniform(0, kernels.StageTint{Colour: tint})
 				for range draws {
 					rp.Draw(accel.Draw{VertexCount: 3})
 				}
@@ -943,7 +943,7 @@ func stencilPipeline(t *testing.T, d *accel.Device, vs *accel.Stage,
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 		Vertex:   vs,
-		Fragment: &testkernels.TintedFSStage,
+		Fragment: &kernels.TintedFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format:  accel.Depth32FloatStencil8,

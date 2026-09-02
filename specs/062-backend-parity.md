@@ -22,11 +22,11 @@ fails when a member of a public enumeration or operator set has no case in it.
 Thirty CPU/Metal agreement tests already run. They are not the problem.
 
 The problem is that **exactly one surface knows what it is missing.**
-`internal/testkernels/differential_darwin_test.go` checks the case table
+`internal/kernels/differential_darwin_test.go` checks the case table
 against the generated corpus:
 
 ```go
-for _, k := range testkernels.Kernels {
+for _, k := range kernels.Kernels {
     if k.MSL != "" && !listed[k.Name] {
         t.Errorf("%s lowers to MSL and is in no differential case", k.Name)
     }

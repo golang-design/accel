@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 func benchDevice(b *testing.B) *accel.Device {
@@ -351,7 +351,7 @@ func BenchmarkDispatchThroughAGraph(b *testing.B) {
 	defer d.Close()
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		b.Fatalf("pipeline: %v", err)

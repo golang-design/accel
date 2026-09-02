@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // LinearOptions configures a gated delta layer.
@@ -214,9 +214,9 @@ func LinearAttention(b *Builder, q, k, v *Tensor, s *State, o LinearOptions) (*T
 	out := b.record(node{
 		op:     "LinearAttention",
 		inputs: []*Tensor{q, k, v, o.Alpha, o.Beta, offsets, readState(b, s)},
-		kernel: &testkernels.LinearAttentionKernel,
+		kernel: &kernels.LinearAttentionKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.LinearDims{
+			return kernels.LinearDims{
 				Batch: uint32(batch), Heads: uint32(heads),
 				KeyDim: uint32(keyDim), ValueDim: uint32(valueDim),
 				GateHeads: uint32(gateHeads),

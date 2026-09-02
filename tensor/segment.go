@@ -6,7 +6,7 @@ package tensor
 
 import (
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // The segmented extent, in its own file because it belongs to no operator.
@@ -34,9 +34,9 @@ func (b *Builder) segmentOffsets(counts *Tensor, rows int) *Tensor {
 	}
 	return b.record(node{
 		op: "SegmentOffsets", inputs: []*Tensor{counts},
-		kernel: &testkernels.SegmentOffsetsKernel,
+		kernel: &kernels.SegmentOffsetsKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.SegmentDims{Rows: uint32(rows)}
+			return kernels.SegmentDims{Rows: uint32(rows)}
 		},
 		grid: func(*Tensor) accel.WorkgroupCount {
 			// One workgroup of one invocation: the scan is serial and rows is a

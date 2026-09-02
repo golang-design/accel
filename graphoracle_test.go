@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // randomGraph builds one graph from a seed, twice: once optimized and once
@@ -112,7 +112,7 @@ func FuzzWholePlanOracle(f *testing.F) {
 	}
 	f.Cleanup(func() { _ = d.Close() })
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		f.Fatalf("pipeline: %v", err)
@@ -213,7 +213,7 @@ func TestTheTwoPlansAreActuallyDifferent(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -289,7 +289,7 @@ func TestTheOracleAgreesOnADiamond(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)

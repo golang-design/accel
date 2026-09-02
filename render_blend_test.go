@@ -9,15 +9,15 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // blendPipeline draws a full-viewport triangle in a by-value colour, blended.
 func blendPipeline(t *testing.T, d *accel.Device, blend accel.BlendState) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.ScaledVSStage,
-		Fragment: &testkernels.TintedFSStage,
+		Vertex:   &kernels.ScaledVSStage,
+		Fragment: &kernels.TintedFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{{
 			Stride: 12,
 			Attributes: []accel.VertexAttribute{
@@ -69,9 +69,9 @@ func blendedOverResult(t *testing.T, first, second [4]float32) [4]float32 {
 		})
 		pass.SetPipeline(pipe)
 		pass.SetVertexBuffer(0, whole(t, vb))
-		pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+		pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
 		for _, c := range [][4]float32{first, second} {
-			pass.SetFragmentUniform(0, testkernels.StageTint{Colour: c})
+			pass.SetFragmentUniform(0, kernels.StageTint{Colour: c})
 			pass.Draw(accel.Draw{VertexCount: 3})
 		}
 
@@ -137,8 +137,8 @@ func TestABlendedDepthTestedPassIsAccepted(t *testing.T) {
 	q := d.Queue()
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.ScaledVSStage,
-		Fragment: &testkernels.TintedFSStage,
+		Vertex:   &kernels.ScaledVSStage,
+		Fragment: &kernels.TintedFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{{
 			Stride: 12,
 			Attributes: []accel.VertexAttribute{
@@ -177,8 +177,8 @@ func TestABlendedDepthTestedPassIsAccepted(t *testing.T) {
 	})
 	pass.SetPipeline(pipe)
 	pass.SetVertexBuffer(0, whole(t, vb))
-	pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-	pass.SetFragmentUniform(0, testkernels.StageTint{Colour: [4]float32{1, 1, 1, 0.5}})
+	pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+	pass.SetFragmentUniform(0, kernels.StageTint{Colour: [4]float32{1, 1, 1, 0.5}})
 	pass.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()
@@ -219,8 +219,8 @@ func TestTheZeroBlendStateReplaces(t *testing.T) {
 	})
 	pass.SetPipeline(pipe)
 	pass.SetVertexBuffer(0, whole(t, vb))
-	pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-	pass.SetFragmentUniform(0, testkernels.StageTint{Colour: tint})
+	pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+	pass.SetFragmentUniform(0, kernels.StageTint{Colour: tint})
 	pass.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()

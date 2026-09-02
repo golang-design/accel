@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 func newSurface(t *testing.T, d *accel.Device, w, h, images int) *accel.Surface {
@@ -48,8 +48,8 @@ func recordFrameGraph(t *testing.T, d *accel.Device, s *accel.Surface, w, h int)
 	})
 	pass.SetPipeline(blendPipeline(t, d, accel.BlendState{}))
 	pass.SetVertexBuffer(0, whole(t, vb))
-	pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-	pass.SetFragmentUniform(0, testkernels.StageTint{Colour: [4]float32{1, 0, 0, 1}})
+	pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+	pass.SetFragmentUniform(0, kernels.StageTint{Colour: [4]float32{1, 0, 0, 1}})
 	pass.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()

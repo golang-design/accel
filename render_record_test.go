@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // solidPipeline is a pipeline nothing refuses, so a test below fails for the
@@ -17,8 +17,8 @@ import (
 func solidPipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		Label:    "solid",
 	})
@@ -212,8 +212,8 @@ func TestRenderPassRefusals(t *testing.T) {
 		name: "a pipeline with more targets than the pass has attachments",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			mrt, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-				Vertex:   &testkernels.GeometryVSStage,
-				Fragment: &testkernels.ShadeFSStage,
+				Vertex:   &kernels.GeometryVSStage,
+				Fragment: &kernels.ShadeFSStage,
 				VertexBuffers: []accel.VertexBufferLayout{{
 					Stride: 32,
 					Attributes: []accel.VertexAttribute{
@@ -253,8 +253,8 @@ func TestRenderPassRefusals(t *testing.T) {
 		name: "a stage whose by-value parameter has no value",
 		record: func(t *testing.T, d *accel.Device, r *accel.Recorder, b *accel.Texture) {
 			pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-				Vertex:   &testkernels.GeometryVSStage,
-				Fragment: &testkernels.ShadeFSStage,
+				Vertex:   &kernels.GeometryVSStage,
+				Fragment: &kernels.ShadeFSStage,
 				VertexBuffers: []accel.VertexBufferLayout{{
 					Stride: 32,
 					Attributes: []accel.VertexAttribute{
@@ -303,8 +303,8 @@ func TestRenderPassRefusals(t *testing.T) {
 func depthPipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format: accel.Depth32Float, Test: true, Write: true,

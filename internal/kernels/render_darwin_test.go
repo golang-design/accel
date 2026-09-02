@@ -1,0 +1,2149 @@
+// Copyright 2026 The golang.design Initiative Authors.
+// All rights reserved. Use of this source code is governed by
+// a BSD-style license that can be found in the LICENSE file.
+
+//go:build darwin
+
+package kernels_test
+
+import (
+	"math"
+	"testing"
+
+	"golang.design/x/accel"
+	"golang.design/x/accel/internal/kernels"
+)
+
+// The Metal backend lowered a texture attachment while these tests were being
+// written, and the skip that waited for it is gone.
+//
+// It read a build error for a named refusal and skipped with the reason, so the
+// comparison would start on the first day it could. That day came: the refusal
+// text exists nowhere in the tree, every entry below compares, and the guard
+// was removed rather than left standing -- a skip that can never fire is a
+// comparison nobody notices is not happening, which is the same defect the
+// entries here exist to catch, one level up.
+
+// The differential the MSL stage target could not have without a render path:
+// the same graph on the CPU rasterizer and on Metal, compared pixel by pixel.
+//
+// This is what makes the CPU backend an oracle for graphics rather than the
+// only implementation. specs/032-stage-abi.md section 12.1 said the MSL target
+// was "emitted and compiled, not differentially verified"; this is the
+// verification, and it is the reason one IR with two lowerings is worth the
+// arrangement — the two are written independently and must still agree.
+//
+// Compared within a bound rather than exactly, and the bound is derived rather
+// than tuned: interpolation is a sum of three products of a weight and a
+// varying, so its error is at most a few ulps of the largest term, and the
+// two rasterizers are free to compute the barycentric weights differently.
+func TestARenderPassAgreesOnBothBackends(t *testing.T) {
+	const w, h = 64, 64
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// Interleaved position and colour, so the vertex layout, the fetch and the
+	// interpolation are all in the comparison rather than only coverage.
+	verts := []float32{
+		-1, -1, 0, 1, 0, 0, 1,
+		1, -1, 0, 0, 1, 0, 1,
+		-1, 1, 0, 0, 0, 1, 1,
+	}
+
+	render := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		q := d.Queue()
+		pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &kernels.AttributeVSStage,
+			Fragment: &kernels.TintFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride: 28,
+				Attributes: []accel.VertexAttribute{
+					{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+					{Location: 1, Format: accel.AttrFloat32x4, Offset: 12},
+				},
+			}},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "differential",
+		})
+		if err != nil {
+			t.Fatalf("pipeline: %v", err)
+		}
+		defer pipe.Close()
+
+		usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+		vb, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(verts), Usage: usage, Label: "verts",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer vb.Close()
+		if err := q.WriteBuffer(vb, 0, verts); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		target := colourTexture(t, d, "colour", w, h)
+
+		vv, err := vb.View(0, vb.Count())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+		tv := wholeOf(t, target)
+
+		r := d.NewRecorder()
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{
+				View: tv, Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
+			}},
+			Width: w, Height: h, Label: "differential",
+		})
+		p.SetPipeline(pipe)
+		p.SetVertexBuffer(0, vv)
+		p.Draw(accel.Draw{VertexCount: 3})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readColourTexture(t, d, target)
+	}
+
+	onCPU := render(t, cpu)
+	onMetal := render(t, metal)
+
+	// One float32 rounding of the largest colour component, doubled for the
+	// two roundings a weighted sum takes. Nothing is tuned: the colours here
+	// are at most 1, so this is 2u.
+	const bound = 2 * 1.1920929e-7
+
+	var covered, coveredMetal, differing int
+	for i := range onCPU {
+		if onCPU[i] != 0 {
+			covered++
+		}
+		if onMetal[i] != 0 {
+			coveredMetal++
+		}
+		if d := math.Abs(float64(onCPU[i] - onMetal[i])); d > bound {
+			differing++
+			if differing < 4 {
+				px := i / 4
+				t.Errorf("pixel (%d,%d) channel %d is %v on the CPU and %v on Metal, "+
+					"which is %v apart and the derived bound is %v",
+					px%w, px/w, i%4, onCPU[i], onMetal[i], d, bound)
+			}
+		}
+	}
+	if differing > 0 {
+		t.Errorf("%d of %d floats differ by more than %v", differing, len(onCPU), bound)
+	}
+	// Both must have drawn. Two blank images agree perfectly, and the CPU check
+	// alone would not catch a Metal path that encoded nothing -- the comparison
+	// would then fail, but only because one side is blank, which is a different
+	// bug from the one this test is for.
+	if covered == 0 {
+		t.Fatal("the CPU backend drew nothing, so agreeing with Metal proves nothing")
+	}
+	if coveredMetal == 0 {
+		t.Fatal("Metal drew nothing")
+	}
+	t.Logf("%d of %d floats non-zero on the CPU, %d on Metal", covered, len(onCPU),
+		coveredMetal)
+}
+
+// The differential over the rest of the render surface.
+//
+// Each case exercises a path the plain triangle does not reach, and every one
+// is a place the two backends could disagree in a way that still produces a
+// picture: a uniform encoded in the wrong layout, a depth compare mapped to the
+// wrong Metal constant, a blend factor off by one in an enumeration, an index
+// buffer read at the wrong width. The oracle is the CPU rasterizer, which is
+// tested directly against the arithmetic elsewhere.
+func TestTheRenderSurfaceAgreesOnBothBackends(t *testing.T) {
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	for _, c := range []struct {
+		name string
+		run  func(t *testing.T, d *accel.Device) []float32
+	}{
+		{"by-value stage parameters", renderWithUniforms},
+		{"depth test and write", renderWithDepth},
+		{"alpha blending over two draws", renderBlended},
+		{"an indexed draw", renderIndexed},
+		{"LoadKeep over prior contents", renderKeeping},
+		{"a depth attachment no draw tests", renderUntestedDepth},
+		{"two draws sharing one pipeline", renderTwice},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			onCPU := c.run(t, cpu)
+			onMetal := c.run(t, metal)
+			compareBackends(t, onCPU, onMetal)
+		})
+	}
+}
+
+// compareBackends asserts the two agree within a derived bound and that neither
+// is blank.
+func compareBackends(t *testing.T, onCPU, onMetal []float32) {
+	t.Helper()
+	// Four roundings of a unit-magnitude value: the interpolated varying, the
+	// blend's two products and their sum. Nothing tuned.
+	const bound = 4 * 1.1920929e-7
+	var live, liveMetal, differing int
+	for i := range onCPU {
+		if onCPU[i] != 0 {
+			live++
+		}
+		if onMetal[i] != 0 {
+			liveMetal++
+		}
+		if d := math.Abs(float64(onCPU[i] - onMetal[i])); d > bound {
+			differing++
+			if differing < 4 {
+				t.Errorf("float %d is %v on the CPU and %v on Metal, %v apart against a "+
+					"derived bound of %v", i, onCPU[i], onMetal[i], d, bound)
+			}
+		}
+	}
+	if differing > 0 {
+		t.Errorf("%d of %d floats differ", differing, len(onCPU))
+	}
+	if live == 0 || liveMetal == 0 {
+		t.Fatalf("one side is blank: %d non-zero on the CPU and %d on Metal; two blank "+
+			"images agree perfectly", live, liveMetal)
+	}
+}
+
+// renderFixture is the shared scaffolding: a pipeline, buffers, one pass, and
+// the readback.
+type renderFixture struct {
+	desc     accel.RenderPipelineDescriptor
+	verts    []float32
+	indices  []uint32
+	depth    bool
+	keep     []float32
+	dontCare bool
+	record   func(p *accel.RenderPass)
+	draws    func(p *accel.RenderPass)
+}
+
+func runFixture(t *testing.T, d *accel.Device, f renderFixture) []float32 {
+	t.Helper()
+	const w, h = 64, 64
+	q := d.Queue()
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+
+	pipe, err := d.NewRenderPipeline(f.desc)
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	newBuf := func(label string, n int) (*accel.Buffer, accel.BufferView) {
+		b, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: n, Usage: usage, Label: label,
+		})
+		if err != nil {
+			t.Fatalf("buffer %s: %v", label, err)
+		}
+		t.Cleanup(func() { _ = b.Close() })
+		v, err := b.View(0, n)
+		if err != nil {
+			t.Fatalf("view %s: %v", label, err)
+		}
+		return b, v
+	}
+
+	_, vv := newBuf("verts", len(f.verts))
+	if err := q.WriteBuffer(vv.Buffer, 0, f.verts); err != nil {
+		t.Fatalf("write verts: %v", err)
+	}
+	target := colourTexture(t, d, "colour", w, h)
+	tv := wholeOf(t, target)
+	var prior accel.BufferView
+	if f.keep != nil {
+		priorBuf, v := newBuf("prior", w*h*4)
+		if err := q.WriteBuffer(priorBuf, 0, f.keep); err != nil {
+			t.Fatalf("write prior: %v", err)
+		}
+		prior = v
+	}
+
+	load := accel.LoadClear
+	if f.keep != nil {
+		load = accel.LoadKeep
+	}
+	if f.dontCare {
+		load = accel.LoadDontCare
+	}
+	desc := accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{
+			View: tv, Load: load, Clear: [4]float32{0, 0, 0, 0},
+		}},
+		Width: w, Height: h, Label: "differential",
+	}
+	if f.depth {
+		dtex, err := d.NewTexture(accel.TextureDescriptor{
+			Format: accel.Depth32Float, Size: accel.Extent{Width: w, Height: h},
+			Usage: accel.TextureRenderTarget | accel.TextureCopySrc, Label: "depth",
+		})
+		if err != nil {
+			t.Fatalf("depth texture: %v", err)
+		}
+		defer dtex.Close()
+		desc.Depth = &accel.DepthAttachment{
+			View: wholeOf(t, dtex), Load: accel.LoadClear, Clear: 1,
+		}
+	}
+
+	r := d.NewRecorder()
+	// There is no host write to a texture, so a pass that loads Keep is given
+	// something to keep by a recorded copy ahead of it.
+	if prior.Buffer != nil {
+		r.CopyBufferToTexture(target, prior)
+	}
+	p := r.RenderPass(desc)
+	p.SetPipeline(pipe)
+	p.SetVertexBuffer(0, vv)
+	if f.indices != nil {
+		packed := make([]float32, len(f.indices))
+		for i, v := range f.indices {
+			packed[i] = math.Float32frombits(v)
+		}
+		_, iv := newBuf("indices", len(packed))
+		if err := q.WriteBuffer(iv.Buffer, 0, packed); err != nil {
+			t.Fatalf("write indices: %v", err)
+		}
+		p.SetIndexBuffer(iv, accel.Index32)
+	}
+	if f.record != nil {
+		f.record(p)
+	}
+	f.draws(p)
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := q.Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	return readColourTexture(t, d, target)
+}
+
+// posOnly is the layout for a stage that reads only a position.
+func posOnly() []accel.VertexBufferLayout {
+	return []accel.VertexBufferLayout{{
+		Stride: 12,
+		Attributes: []accel.VertexAttribute{
+			{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+		},
+	}}
+}
+
+func renderWithUniforms(t *testing.T, d *accel.Device) []float32 {
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.ScaledVSStage,
+			Fragment:      &kernels.TintedFSStage,
+			VertexBuffers: posOnly(),
+			Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:         "uniforms",
+		},
+		verts: []float32{-1, -1, 0, 1, -1, 0, -1, 1, 0},
+		record: func(p *accel.RenderPass) {
+			// A scale and an offset, so both fields of the std140 block have to
+			// land where the MSL struct expects them. A layout that packed
+			// Offset at the wrong byte moves the triangle rather than losing it.
+			p.SetVertexUniform(0, kernels.StageTransform{
+				Scale: 0.75, Offset: accel.Vec2{0.25, -0.125},
+			})
+			p.SetFragmentUniform(0, kernels.StageTint{
+				Colour: accel.Vec4{0.2, 0.4, 0.6, 1},
+			})
+		},
+		draws: func(p *accel.RenderPass) { p.Draw(accel.Draw{VertexCount: 3}) },
+	})
+}
+
+func renderWithDepth(t *testing.T, d *accel.Device) []float32 {
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.AttributeVSStage,
+			Fragment:      &kernels.TintFSStage,
+			VertexBuffers: interleavedLayout(),
+			DepthStencil: &accel.DepthStencilState{
+				Format: accel.Depth32Float, Test: true, Write: true,
+				Compare: accel.CompareLess,
+			},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "depth",
+		},
+		depth: true,
+		// Two overlapping triangles at different depths. The nearer one must
+		// win wherever they overlap, which is what a wrong compare constant
+		// inverts.
+		verts: []float32{
+			-1, -1, 0.5, 1, 0, 0, 1,
+			1, -1, 0.5, 1, 0, 0, 1,
+			-1, 1, 0.5, 1, 0, 0, 1,
+
+			-1, -1, -0.5, 0, 1, 0, 1,
+			1, -1, -0.5, 0, 1, 0, 1,
+			1, 1, -0.5, 0, 1, 0, 1,
+		},
+		draws: func(p *accel.RenderPass) { p.Draw(accel.Draw{VertexCount: 6}) },
+	})
+}
+
+func renderBlended(t *testing.T, d *accel.Device) []float32 {
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.ScaledVSStage,
+			Fragment:      &kernels.TintedFSStage,
+			VertexBuffers: posOnly(),
+			Targets: []accel.ColorTargetState{{
+				Format: accel.RGBA32Float, Blend: accel.AlphaBlend(),
+			}},
+			Label: "blended",
+		},
+		verts: []float32{-1, -1, 0, 3, -1, 0, -1, 3, 0},
+		draws: func(p *accel.RenderPass) {
+			p.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+			for _, c := range []accel.Vec4{{1, 0, 0, 0.5}, {0, 0, 1, 0.5}} {
+				p.SetFragmentUniform(0, kernels.StageTint{Colour: c})
+				p.Draw(accel.Draw{VertexCount: 3})
+			}
+		},
+	})
+}
+
+func renderIndexed(t *testing.T, d *accel.Device) []float32 {
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.AttributeVSStage,
+			Fragment:      &kernels.TintFSStage,
+			VertexBuffers: interleavedLayout(),
+			Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:         "indexed",
+		},
+		verts: []float32{
+			-1, -1, 0, 1, 0, 0, 1,
+			1, -1, 0, 0, 1, 0, 1,
+			1, 1, 0, 0, 0, 1, 1,
+			-1, 1, 0, 1, 1, 0, 1,
+		},
+		indices: []uint32{0, 1, 2, 0, 2, 3},
+		draws: func(p *accel.RenderPass) {
+			p.DrawIndexed(accel.DrawIndexed{IndexCount: 6})
+		},
+	})
+}
+
+func renderKeeping(t *testing.T, d *accel.Device) []float32 {
+	const w, h = 64, 64
+	prior := make([]float32, w*h*4)
+	for i := range prior {
+		prior[i] = float32(i%7) / 7
+	}
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.ScaledVSStage,
+			Fragment:      &kernels.TintedFSStage,
+			VertexBuffers: posOnly(),
+			Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:         "keep",
+		},
+		// A small triangle, so most of the target is prior contents and the
+		// comparison is mostly about what LoadKeep preserved. On Metal that is
+		// a blit into the texture before the pass; on the CPU it is nothing at
+		// all, which is exactly the asymmetry worth comparing.
+		keep:  prior,
+		verts: []float32{-1, -1, 0, 1, -1, 0, -1, 1, 0},
+		record: func(p *accel.RenderPass) {
+			p.SetVertexUniform(0, kernels.StageTransform{Scale: 0.25})
+			p.SetFragmentUniform(0, kernels.StageTint{Colour: accel.Vec4{1, 1, 1, 1}})
+		},
+		draws: func(p *accel.RenderPass) { p.Draw(accel.Draw{VertexCount: 3}) },
+	})
+}
+
+func interleavedLayout() []accel.VertexBufferLayout {
+	return []accel.VertexBufferLayout{{
+		Stride: 28,
+		Attributes: []accel.VertexAttribute{
+			{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+			{Location: 1, Format: accel.AttrFloat32x4, Offset: 12},
+		},
+	}}
+}
+
+// A pass with a depth attachment whose pipeline does not test depth.
+//
+// Metal's default is Always with writes off, and this backend spells that
+// rather than leaving the state unset — so the two backends agree when a pass
+// carries depth that a draw ignores. Left unset, Metal would inherit whatever
+// the previous encoder left, which is a difference that appears only in a
+// second pass.
+func renderUntestedDepth(t *testing.T, d *accel.Device) []float32 {
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.AttributeVSStage,
+			Fragment:      &kernels.TintFSStage,
+			VertexBuffers: interleavedLayout(),
+			DepthStencil: &accel.DepthStencilState{
+				Format: accel.Depth32Float, Test: false, Write: false,
+				Compare: accel.CompareLess,
+			},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "untested depth",
+		},
+		depth: true,
+		// The second triangle is behind the first and must still win, because
+		// nothing is testing depth.
+		verts: []float32{
+			-1, -1, -0.5, 1, 0, 0, 1,
+			1, -1, -0.5, 1, 0, 0, 1,
+			-1, 1, -0.5, 1, 0, 0, 1,
+
+			-1, -1, 0.5, 0, 1, 0, 1,
+			1, -1, 0.5, 0, 1, 0, 1,
+			-1, 1, 0.5, 0, 1, 0, 1,
+		},
+		draws: func(p *accel.RenderPass) { p.Draw(accel.Draw{VertexCount: 6}) },
+	})
+}
+
+// Two draws through one pipeline, which is the case the backend's pipeline
+// cache exists for: a plan replayed compiles nothing, and two draws of one
+// pipeline compile it once.
+func renderTwice(t *testing.T, d *accel.Device) []float32 {
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.ScaledVSStage,
+			Fragment:      &kernels.TintedFSStage,
+			VertexBuffers: posOnly(),
+			Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:         "shared",
+		},
+		verts: []float32{-1, -1, 0, 1, -1, 0, -1, 1, 0},
+		draws: func(p *accel.RenderPass) {
+			for _, c := range []struct {
+				scale float32
+				tint  accel.Vec4
+			}{{1, accel.Vec4{1, 0, 0, 1}}, {0.5, accel.Vec4{0, 1, 0, 1}}} {
+				p.SetVertexUniform(0, kernels.StageTransform{Scale: c.scale})
+				p.SetFragmentUniform(0, kernels.StageTint{Colour: c.tint})
+				p.Draw(accel.Draw{VertexCount: 3})
+			}
+		},
+	})
+}
+
+// LoadDontCare is where the oracle claim stops, and this is the shape of the
+// gap.
+//
+// specs/033-render-api.md says DontCare leaves an attachment's prior contents
+// undefined. Both backends honour that and they honour it differently: the CPU
+// framebuffer aliases the caller's buffer, so untouched pixels keep what was
+// there, while Metal renders into a fresh texture whose untouched pixels are
+// whatever that memory held and blits the whole thing back. Neither is wrong,
+// and comparing them there would be comparing two legal answers.
+//
+// So this asserts what the contract does promise -- the pixels the pass wrote
+// agree exactly -- and nothing about the rest. An earlier version also
+// required the untouched pixels to *differ*, on the argument that a backend
+// quietly preserving contents would be making a promise the API does not.
+// That is not a claim the contract supports: "undefined" admits equality, and
+// a backend whose fresh texture happened to hold the caller's bytes would
+// have failed a test for behaviour the spec allows. What the untouched region
+// did is logged, not asserted.
+func TestLoadDontCareAgreesOnlyWhereThePassWrote(t *testing.T) {
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	onCPU := renderDontCare(t, cpu)
+	onMetal := renderDontCare(t, metal)
+
+	tint := [4]float32{1, 1, 1, 1}
+	var written, agreed, untouchedDiffer int
+	for i := 0; i+3 < len(onCPU); i += 4 {
+		c := [4]float32{onCPU[i], onCPU[i+1], onCPU[i+2], onCPU[i+3]}
+		m := [4]float32{onMetal[i], onMetal[i+1], onMetal[i+2], onMetal[i+3]}
+		if c == tint {
+			written++
+			if m == tint {
+				agreed++
+			} else {
+				t.Errorf("pixel %d was written by the pass and is %v on the CPU and %v "+
+					"on Metal; what a pass writes is defined and must agree", i/4, c, m)
+			}
+			continue
+		}
+		if c != m {
+			untouchedDiffer++
+		}
+	}
+	if written == 0 {
+		t.Fatal("the pass wrote nothing, so agreeing about what it wrote proves nothing")
+	}
+	if written == len(onCPU)/4 {
+		t.Fatal("the pass covered every pixel, so nothing here was left to the load " +
+			"action and the case is about the draw rather than about DontCare")
+	}
+	t.Logf("%d pixels written and agreed, %d untouched pixels differ, which the "+
+		"contract permits and does not require", agreed, untouchedDiffer)
+}
+
+func renderDontCare(t *testing.T, d *accel.Device) []float32 {
+	const w, h = 64, 64
+	prior := make([]float32, w*h*4)
+	for i := range prior {
+		prior[i] = float32(i%5) / 5
+	}
+	return runFixture(t, d, renderFixture{
+		desc: accel.RenderPipelineDescriptor{
+			Vertex:        &kernels.ScaledVSStage,
+			Fragment:      &kernels.TintedFSStage,
+			VertexBuffers: posOnly(),
+			Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:         "dontcare",
+		},
+		keep:     prior,
+		dontCare: true,
+		verts:    []float32{-1, -1, 0, 1, -1, 0, -1, 1, 0},
+		record: func(p *accel.RenderPass) {
+			p.SetVertexUniform(0, kernels.StageTransform{Scale: 0.25})
+			p.SetFragmentUniform(0, kernels.StageTint{Colour: accel.Vec4{1, 1, 1, 1}})
+		},
+		draws: func(p *accel.RenderPass) { p.Draw(accel.Draw{VertexCount: 3}) },
+	})
+}
+
+// StoreDiscard means the attachment is not written back, and this is where that
+// becomes observable.
+//
+// The field was accepted and read by nothing until this test existed, which is
+// the failure mode specs/009-sequencing.md records three times over: a value a
+// caller supplies, the API documents, and no backend reads. It manufactures
+// confidence — a caller discarding a depth buffer every frame believes they are
+// saving a write.
+//
+// On Metal the saving is real: the blit back is skipped. On the CPU there is
+// nothing to skip, because the framebuffer already aliases the caller's buffer.
+// So the two differ again, legally, and the assertion is the same shape as the
+// DontCare one: what the contract promises is that the contents are undefined,
+// and observing them differ is what proves the promise is being used.
+func TestStoreDiscardSkipsTheWriteBack(t *testing.T) {
+	const w, h = 64, 64
+	metal := openMetalDevice(t)
+
+	q := metal.Queue()
+	usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+	target := colourTexture(t, metal, "discarded", w, h)
+	verts, err := metal.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: 9, Usage: usage, Label: "verts",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer verts.Close()
+	if err := q.WriteBuffer(verts, 0, []float32{-1, -1, 0, 3, -1, 0, -1, 3, 0}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// A recognisable pattern, so what survives says whether anything was
+	// written back. It reaches the texture through a recorded copy, because
+	// there is no host write to one.
+	prior := make([]float32, w*h*4)
+	for i := range prior {
+		prior[i] = 0.125
+	}
+	priorBuf, err := metal.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: w * h * 4, Usage: usage, Label: "prior",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer priorBuf.Close()
+	if err := q.WriteBuffer(priorBuf, 0, prior); err != nil {
+		t.Fatalf("write prior: %v", err)
+	}
+	pv, err := priorBuf.View(0, priorBuf.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	pipe, err := metal.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:        &kernels.ScaledVSStage,
+		Fragment:      &kernels.TintedFSStage,
+		VertexBuffers: posOnly(),
+		Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:         "discard",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tv := wholeOf(t, target)
+	vv, err := verts.View(0, verts.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	r := metal.NewRecorder()
+	r.CopyBufferToTexture(target, pv)
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{
+			View: tv, Load: accel.LoadClear, Clear: [4]float32{1, 0, 0, 1},
+			Store: accel.StoreDiscard,
+		}},
+		Width: w, Height: h, Label: "discard",
+	})
+	p.SetPipeline(pipe)
+	p.SetVertexBuffer(0, vv)
+	p.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+	p.SetFragmentUniform(0, kernels.StageTint{Colour: accel.Vec4{0, 1, 0, 1}})
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := q.Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	out := readColourTexture(t, metal, target)
+	// The target is untouched, so it still holds the pattern written before the
+	// pass. Asserted exactly rather than as "not what the draw wrote", because
+	// the store action alone already makes the contents undefined -- so a
+	// backend that kept the blit would copy garbage, which is also not what the
+	// draw wrote and would pass a weaker assertion. Nothing written back is the
+	// claim, and an intact image is what that looks like.
+	for i, v := range out {
+		if v != 0.125 {
+			t.Fatalf("float %d is %v and the target held 0.125 before the pass; "+
+				"StoreDiscard did not skip the write back", i, v)
+		}
+	}
+}
+
+// Renamed from TestMetalRendersEachAttachmentFormat on 2026-08-30, because it
+// renders two of the nine colour formats and "each" claimed the enumeration.
+// specs/062-backend-parity.md section 6.9.
+//
+// It is kept rather than retired, because it asserts something the enumeration
+// does not: that the oracle's f32 attachment holds SolidFS's own constants, so
+// the pair cannot pass by both backends agreeing on something wrong. The
+// enumeration is section 6.2's -- all nine formats, compared byte for byte --
+// and this is the absolute check underneath it.
+
+// Metal renders in the format the attachment declares.
+//
+// The Metal path hardcoded RGBA32Float for every colour attachment until
+// specs/045-texture-attachments.md landed, so a caller who declared RGBA8Unorm
+// got a pipeline that compiled, rendered, and read back sixteen bytes per pixel
+// where they had asked for four.
+//
+// What this asserts is the *format*, and only that: a full-viewport clear, no
+// geometry. That is deliberate. A first version drew a triangle and compared
+// against the CPU oracle, and it failed for both formats with 116 pixels
+// differing in a clean edge pattern -- Metal and the reference rasterizer
+// disagree about coverage at a triangle edge, which is a fill-rule question
+// specs/035-cpu-rasterizer.md section 10 leaves open and which has nothing to
+// do with the format mapping this change made. Testing the two together would
+// have made a format test that fails for a reason it does not name.
+//
+// The extent is 4x4 and that is load-bearing. An RGBA32Float row is 64 bytes
+// there and an RGBA8Unorm row is 16, both far below the 256-byte alignment a
+// device reports for an attachment buffer -- so this is the extent at which
+// Metal's write-back used to put every row after the first in the wrong place,
+// losing three quarters of the image. A larger extent passes either way, which
+// is exactly why the small one is the one to keep.
+//
+// A full-screen triangle covers every pixel, so no pixel sits on an edge and
+// the fill rule cannot enter. The colour is what SolidFS writes, and each of
+// its components is exact in f32 and in 8-bit unorm, so a disagreement is a
+// format fault rather than a rounding one -- a path still assuming RGBA32Float
+// reads four bytes of one f32 as four channels and returns nothing like it.
+func TestAnAttachmentDecodesToWhatTheStageWrote(t *testing.T) {
+	const w, h = 4, 4
+	// What SolidFS writes. The oracle and Metal are compared against each
+	// other rather than against these numbers, because 0.25 is not exact in
+	// 8-bit unorm -- it quantises to 64/255 -- and asserting the literal would
+	// be asserting a rounding rule this test is not about.
+	solid := [4]float32{0.25, 0.5, 0.75, 1}
+
+	for _, f := range []accel.Format{accel.RGBA32Float, accel.RGBA8Unorm} {
+		t.Run(f.String(), func(t *testing.T) {
+			read := func(t *testing.T, d *accel.Device) []float32 {
+				t.Helper()
+				tex, err := d.NewTexture(accel.TextureDescriptor{
+					Format: f, Size: accel.Extent{Width: w, Height: h},
+					Usage: accel.TextureRenderTarget | accel.TextureCopySrc |
+						accel.TextureCopyDst,
+					Kind: accel.MemoryReadback, Label: "target",
+				})
+				if err != nil {
+					t.Fatalf("texture: %v", err)
+				}
+				defer tex.Close()
+
+				pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+					Vertex:   &kernels.FullScreenVSStage,
+					Fragment: &kernels.SolidFSStage,
+					Targets:  []accel.ColorTargetState{{Format: f}},
+					Label:    "format",
+				})
+				if err != nil {
+					t.Fatalf("pipeline: %v", err)
+				}
+				defer pipe.Close()
+
+				r := d.NewRecorder()
+				p := r.RenderPass(accel.RenderPassDescriptor{
+					Color: []accel.ColorAttachment{{
+						View: wholeOf(t, tex), Load: accel.LoadClear,
+						Clear: [4]float32{0, 0, 0, 0},
+					}},
+					Width: w, Height: h, Label: "format",
+				})
+				p.SetPipeline(pipe)
+				p.Draw(accel.Draw{VertexCount: 3})
+				g, err := r.Build()
+				if err != nil {
+					t.Fatalf("build: %v", err)
+				}
+				defer g.Close()
+				if err := d.Queue().Submit(g).Wait(); err != nil {
+					t.Fatalf("submit: %v", err)
+				}
+				return readAttachment(t, d, tex, f)
+			}
+
+			cpu, err := accel.OpenCPU(accel.CPUOptions{})
+			if err != nil {
+				t.Fatalf("OpenCPU: %v", err)
+			}
+			defer cpu.Close()
+
+			want := read(t, cpu)
+			got := read(t, openMetalDevice(t))
+			if len(got) != len(want) {
+				t.Fatalf("Metal returned %d floats and the oracle %d; a wrong format is "+
+					"a wrong byte count before it is a wrong value", len(got), len(want))
+			}
+			// Both must equal the clear value, so this cannot pass by the two
+			// backends agreeing on something wrong.
+			for i := range want {
+				if want[i] != solid[i%4] && f == accel.RGBA32Float {
+					t.Fatalf("the oracle's element %d is %v, want SolidFS's %v",
+						i, want[i], solid[i%4])
+				}
+				if got[i] != want[i] {
+					t.Fatalf("element %d (pixel %d of %d) is %v on Metal and %v on the "+
+						"oracle", i, i/4, w*h, got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// readAttachment reads a texture back as normalised floats, whatever its
+// format. readColourTexture above decodes f32 only, which is all the
+// differential needed while every attachment was RGBA32Float.
+func readAttachment(t *testing.T, d *accel.Device, tex *accel.Texture, f accel.Format) []float32 {
+	t.Helper()
+	sz := tex.Size()
+	raw := make([]byte, sz.Width*sz.Height*f.BytesPerPixel())
+	if err := d.Queue().ReadTexture(tex, raw); err != nil {
+		t.Fatalf("read texture: %v", err)
+	}
+	switch f {
+	case accel.RGBA32Float:
+		out := make([]float32, len(raw)/4)
+		for i := range out {
+			out[i] = math.Float32frombits(uint32(raw[i*4]) | uint32(raw[i*4+1])<<8 |
+				uint32(raw[i*4+2])<<16 | uint32(raw[i*4+3])<<24)
+		}
+		return out
+	case accel.RGBA8Unorm:
+		// v/255 exactly, which is the one obvious definition and the reason
+		// specs/045-texture-attachments.md admits this format at all.
+		out := make([]float32, len(raw))
+		for i, b := range raw {
+			out[i] = float32(b) / 255
+		}
+		return out
+	}
+	t.Fatalf("this test has no decoder for %v", f)
+	return nil
+}
+
+// A depth attachment reaches Metal, and the depth test decides the same pixels
+// on both backends.
+//
+// Nothing exercised the depth branch of the Metal backend's attachment
+// allocation: the render differential draws one triangle with no depth, so a
+// depth attachment on Metal was allocated by code no test reached. Found by
+// reading a coverage report rather than by a failure, which is the point of
+// having the gate at all.
+//
+// Two overlapping triangles at different depths, the nearer one drawn second.
+// With the depth test on, the nearer wins where they overlap; without it, draw
+// order would decide and both backends would still agree -- so the assertion is
+// against the *oracle*, and the ordering is what makes the case non-trivial.
+func TestADepthAttachmentAgreesOnBothBackends(t *testing.T) {
+	const w, h = 64, 64
+
+	render := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &kernels.AttributeVSStage,
+			Fragment: &kernels.TintFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride: 28,
+				Attributes: []accel.VertexAttribute{
+					{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+					{Location: 1, Format: accel.AttrFloat32x4, Offset: 12},
+				},
+			}},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			DepthStencil: &accel.DepthStencilState{
+				Format: accel.Depth32Float, Test: true, Write: true,
+				Compare: accel.CompareLess,
+			},
+			Label: "depth",
+		})
+		if err != nil {
+			t.Fatalf("pipeline: %v", err)
+		}
+		defer pipe.Close()
+
+		colour, err := d.NewTexture(accel.TextureDescriptor{
+			Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+			Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+			Kind:  accel.MemoryReadback, Label: "colour",
+		})
+		if err != nil {
+			t.Fatalf("colour: %v", err)
+		}
+		defer colour.Close()
+
+		depth, err := d.NewTexture(accel.TextureDescriptor{
+			Format: accel.Depth32Float, Size: accel.Extent{Width: w, Height: h},
+			Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+			Kind:  accel.MemoryDevice, Label: "depth",
+		})
+		if err != nil {
+			t.Fatalf("depth: %v", err)
+		}
+		defer depth.Close()
+
+		// Far first, near second: the depth test must let the near one through.
+		// Position then tint, interleaved: far is red, near is green, so which
+		// one won is readable from the pixel rather than inferred.
+		far := []float32{
+			-1, -1, 0.8, 1, 0, 0, 1,
+			1, -1, 0.8, 1, 0, 0, 1,
+			-1, 1, 0.8, 1, 0, 0, 1,
+		}
+		near := []float32{
+			-1, -1, 0.2, 0, 1, 0, 1,
+			1, -1, 0.2, 0, 1, 0, 1,
+			-1, 1, 0.2, 0, 1, 0, 1,
+		}
+		verts := append(append([]float32{}, far...), near...)
+		vb, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(verts),
+			Usage: accel.BufferVertex | accel.BufferCopyDst, Label: "verts",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer vb.Close()
+		if err := d.Queue().WriteBuffer(vb, 0, verts); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		vv, err := vb.View(0, vb.Count())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+
+		r := d.NewRecorder()
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{
+				View: wholeOf(t, colour), Load: accel.LoadClear,
+				Clear: [4]float32{0, 0, 0, 1},
+			}},
+			Depth: &accel.DepthAttachment{
+				View: wholeOf(t, depth), Load: accel.LoadClear, Clear: 1,
+			},
+			Width: w, Height: h, Label: "depth",
+		})
+		p.SetPipeline(pipe)
+		p.SetVertexBuffer(0, vv)
+		p.Draw(accel.Draw{VertexCount: 3})
+		p.Draw(accel.Draw{VertexCount: 3, FirstVertex: 3})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := d.Queue().Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readAttachment(t, d, colour, accel.RGBA32Float)
+	}
+
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	want := render(t, cpu)
+	got := render(t, openMetalDevice(t))
+	var drawn int
+	for i := range want {
+		if want[i] != 0 {
+			drawn++
+		}
+		if got[i] != want[i] {
+			t.Fatalf("element %d (pixel %d) is %v on Metal and %v on the oracle",
+				i, i/4, got[i], want[i])
+		}
+	}
+	if drawn == 0 {
+		t.Fatal("the oracle drew nothing, so the comparison is vacuous")
+	}
+}
+
+// A stage that fetches a texture must fetch what is bound to it, on Metal as on
+// the oracle.
+//
+// specs/045-texture-attachments.md section 4 owns the binding and
+// specs/032-stage-abi.md section 5 owns the fetch. The two halves met only on
+// the CPU: build.go filled driver.RenderDraw.VertexTextures/FragmentTextures,
+// internal/cpu read them, and internal/metal read them nowhere and refused
+// nothing -- so RenderPass.SetTexture was accepted, validated against the
+// stage's declared slots, checked for feedback, and dropped. A caller got the
+// right picture from the rasterizer and a black one from the GPU.
+//
+// # Why the assertion is per device rather than across the two
+//
+// The source pass interpolates, so its image is equal across backends only
+// within a bound. The fetch is not: BlitFS reads its own pixel's texel, so the
+// second pass must reproduce the first *exactly*, on whichever backend ran it.
+// That makes the discriminating comparison a same-device one, and an unbound
+// texture fails it as a black image against a gradient rather than as a
+// rounding.
+//
+// # Why 12 wide
+//
+// 12 texels of RGBA32Float is 192 bytes, and both backends align a copy's rows
+// to 256. A width whose tight pitch is already aligned passes at the wrong
+// pitch, because there is no padding to get wrong -- and the pitch is the one
+// number a buffer-shaped texture makes this backend compute rather than read.
+func TestAStageFetchAgreesOnBothBackends(t *testing.T) {
+	const w, h = 12, 5
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// A gradient rather than a solid colour: a fetch that lands on the wrong
+	// row, or that is dropped for zeros, is a different picture from this one,
+	// and is not from a constant.
+	verts := []float32{
+		-1, -1, 0, 1, 0, 0, 1,
+		3, -1, 0, 0, 1, 0, 1,
+		-1, 3, 0, 0, 0, 1, 1,
+	}
+
+	render := func(t *testing.T, d *accel.Device) (source, fetched []float32) {
+		t.Helper()
+		q := d.Queue()
+		tint, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &kernels.AttributeVSStage,
+			Fragment: &kernels.TintFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride: 28,
+				Attributes: []accel.VertexAttribute{
+					{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+					{Location: 1, Format: accel.AttrFloat32x4, Offset: 12},
+				},
+			}},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "source",
+		})
+		if err != nil {
+			t.Fatalf("source pipeline: %v", err)
+		}
+		defer tint.Close()
+
+		blit, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &kernels.FullScreenVSStage,
+			Fragment: &kernels.BlitFSStage,
+			Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:    "fetch",
+		})
+		if err != nil {
+			t.Fatalf("fetch pipeline: %v", err)
+		}
+		defer blit.Close()
+
+		usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+		vb, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(verts), Usage: usage, Label: "verts",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer vb.Close()
+		if err := q.WriteBuffer(vb, 0, verts); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		vv, err := vb.View(0, vb.Count())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+
+		first := sampledColourTexture(t, d, "first", w, h)
+		second := colourTexture(t, d, "second", w, h)
+
+		r := d.NewRecorder()
+		p1 := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{
+				View: wholeOf(t, first), Load: accel.LoadClear,
+			}},
+			Width: w, Height: h, Label: "source",
+		})
+		p1.SetPipeline(tint)
+		p1.SetVertexBuffer(0, vv)
+		p1.Draw(accel.Draw{VertexCount: 3})
+
+		p2 := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{
+				View: wholeOf(t, second), Load: accel.LoadClear,
+			}},
+			Width: w, Height: h, Label: "fetch",
+		})
+		p2.SetPipeline(blit)
+		p2.SetTexture(0, wholeOf(t, first))
+		p2.Draw(accel.Draw{VertexCount: 3})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readColourTexture(t, d, first), readColourTexture(t, d, second)
+	}
+
+	for _, c := range []struct {
+		name string
+		dev  *accel.Device
+	}{{"cpu", cpu}, {"metal", metal}} {
+		t.Run(c.name, func(t *testing.T) {
+			source, fetched := render(t, c.dev)
+			var nonZero, differing int
+			for i := range source {
+				if source[i] != 0 {
+					nonZero++
+				}
+				if fetched[i] != source[i] {
+					differing++
+					if differing < 4 {
+						px := i / 4
+						t.Errorf("pixel (%d,%d) channel %d is %v in the source pass and "+
+							"%v after the fetch; a fetch reproduces its texel exactly",
+							px%w, px/w, i%4, source[i], fetched[i])
+					}
+				}
+			}
+			if differing > 0 {
+				t.Errorf("%d of %d floats differ", differing, len(source))
+			}
+			// A blank source would make the comparison two black images, which
+			// agree perfectly and prove nothing about the binding.
+			if nonZero == 0 {
+				t.Fatal("the source pass drew nothing, so the fetch has nothing to prove")
+			}
+		})
+	}
+}
+
+// sampledColourTexture is colourTexture plus the usage a stage fetch needs.
+func sampledColourTexture(t *testing.T, d *accel.Device, label string, w, h int) *accel.Texture {
+	t.Helper()
+	tex, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.RGBA32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureSampled |
+			accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind: accel.MemoryReadback, Label: label,
+	})
+	if err != nil {
+		t.Fatalf("texture %s: %v", label, err)
+	}
+	t.Cleanup(func() { _ = tex.Close() })
+	return tex
+}
+
+// A vertex stage's texture is bound too, and it is a different argument table.
+//
+// specs/032-stage-abi.md section 5 gives each stage its own dense texture
+// order, and Metal has one argument table per stage: setVertexTexture: and
+// setFragmentTexture: are different calls, so a backend can bind one, drop the
+// other, or transpose them. DisplacedVS reads its three clip positions from a
+// texture, so an unbound vertex texture is three zero positions -- a degenerate
+// triangle covering nothing -- and that is a failure this can see.
+//
+// # Why the lookup table is painted a column at a time
+//
+// The obvious source, one gradient triangle, cannot work: an interpolated
+// colour along one row is a convex combination of two vertex colours, so every
+// texel in that row lies on a line, and three collinear positions are as
+// degenerate as three zero ones. Painting each column with a by-value colour
+// puts an arbitrary position in each texel instead, and RGBA32Float stores it
+// unclamped, so the table holds exactly the full-screen triangle wanted.
+//
+// # Why coverage rather than colour
+//
+// SampledFS truncates an interpolated varying to an integer and fetches at it,
+// so one ulp of difference in a barycentric weight is a *different texel*
+// rather than a rounder colour. Nothing requires two rasterizers to compute
+// those weights identically, so comparing colours would assert something no
+// spec promises. The covered pixel count is an integer both must agree on, and
+// it is what the vertex fetch decides.
+func TestAVertexStageFetchAgreesOnBothBackends(t *testing.T) {
+	const lutW, lutH = 3, 5
+	const w, h = 32, 32
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// A quad in the space ScaledVS maps: x is scaled to one column's width and
+	// y by the same factor, so the y extent is pre-divided to survive it.
+	quad := []float32{
+		-1, -3, 0, 1, -3, 0, 1, 3, 0,
+		-1, -3, 0, 1, 3, 0, -1, 3, 0,
+	}
+	// One column each, and the colour written is the clip position the vertex
+	// stage will read back out of that texel.
+	columns := []struct {
+		centre float32
+		pos    accel.Vec4
+	}{
+		{-2.0 / 3.0, accel.Vec4{-1, -1, 0, 1}},
+		{0, accel.Vec4{3, -1, 0, 1}},
+		{2.0 / 3.0, accel.Vec4{-1, 3, 0, 1}},
+	}
+
+	render := func(t *testing.T, d *accel.Device) []float32 {
+		t.Helper()
+		q := d.Queue()
+		paint, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &kernels.ScaledVSStage,
+			Fragment: &kernels.TintedFSStage,
+			VertexBuffers: []accel.VertexBufferLayout{{
+				Stride:     12,
+				Attributes: []accel.VertexAttribute{{Location: 0, Format: accel.AttrFloat32x3}},
+			}},
+			Targets: []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:   "paint",
+		})
+		if err != nil {
+			t.Fatalf("paint pipeline: %v", err)
+		}
+		defer paint.Close()
+
+		// Both stages fetch slot 0, which is what makes a transposed pair of
+		// setters visible: the vertex stage would read the fragment's table.
+		displaced, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+			Vertex:   &kernels.DisplacedVSStage,
+			Fragment: &kernels.SampledFSStage,
+			Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+			Label:    "displaced",
+		})
+		if err != nil {
+			t.Fatalf("displaced pipeline: %v", err)
+		}
+		defer displaced.Close()
+
+		usage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
+		vb, err := d.NewBuffer(accel.BufferDescriptor{
+			DType: accel.F32, Count: len(quad), Usage: usage, Label: "quad",
+		})
+		if err != nil {
+			t.Fatalf("buffer: %v", err)
+		}
+		defer vb.Close()
+		if err := q.WriteBuffer(vb, 0, quad); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		vv, err := vb.View(0, vb.Count())
+		if err != nil {
+			t.Fatalf("view: %v", err)
+		}
+
+		lut := sampledColourTexture(t, d, "lut", lutW, lutH)
+		out := colourTexture(t, d, "out", w, h)
+
+		r := d.NewRecorder()
+		for i, c := range columns {
+			load := accel.LoadKeep
+			if i == 0 {
+				load = accel.LoadClear
+			}
+			p := r.RenderPass(accel.RenderPassDescriptor{
+				Color: []accel.ColorAttachment{{View: wholeOf(t, lut), Load: load}},
+				Width: lutW, Height: lutH, Label: "paint",
+			})
+			p.SetPipeline(paint)
+			p.SetVertexBuffer(0, vv)
+			p.SetVertexUniform(0, kernels.StageTransform{
+				Scale: 1.0 / 3.0, Offset: accel.Vec2{c.centre, 0},
+			})
+			p.SetFragmentUniform(0, kernels.StageTint{Colour: c.pos})
+			p.Draw(accel.Draw{VertexCount: 6})
+		}
+
+		p := r.RenderPass(accel.RenderPassDescriptor{
+			Color: []accel.ColorAttachment{{View: wholeOf(t, out), Load: accel.LoadClear}},
+			Width: w, Height: h, Label: "displaced",
+		})
+		p.SetPipeline(displaced)
+		p.SetTexture(0, wholeOf(t, lut))
+		p.Draw(accel.Draw{VertexCount: 3})
+
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		defer g.Close()
+		if err := q.Submit(g).Wait(); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+		return readColourTexture(t, d, out)
+	}
+
+	covered := func(px []float32) int {
+		n := 0
+		for i := 0; i < len(px); i += 4 {
+			if px[i] != 0 || px[i+1] != 0 || px[i+2] != 0 || px[i+3] != 0 {
+				n++
+			}
+		}
+		return n
+	}
+
+	onCPU := covered(render(t, cpu))
+	onMetal := covered(render(t, metal))
+	// The positions come from the texture, so nothing drawn means nothing was
+	// bound -- and two blank images agree with each other perfectly.
+	if onCPU == 0 {
+		t.Fatal("the CPU rasterizer covered nothing, so the vertex fetch placed no triangle")
+	}
+	if onMetal == 0 {
+		t.Fatal("Metal covered nothing: the vertex stage read no texture, so its three " +
+			"positions were zero and the triangle was degenerate")
+	}
+	if onCPU != onMetal {
+		t.Errorf("the triangle covers %d pixels on the CPU and %d on Metal, from the "+
+			"same three positions read out of the same texture", onCPU, onMetal)
+	}
+	t.Logf("%d of %d pixels covered on both", onCPU, w*h)
+}
+
+// The refusal this file used to assert -- a stage texture in a format Metal
+// cannot spell -- is gone, and so is the test.
+//
+// It bound R32Float and required a named refusal. That was correct on
+// 2026-08-29 and wrong the next day: R32Float is renderable and sampleable in
+// the format table, Metal has it, and the backend refused it anyway.
+// specs/062-backend-parity.md section 6.2's enumeration found that, and every
+// sampleable format is now mapped -- so no format a caller can bind to a stage
+// reaches the refusal, and a test asserting one would be asserting against an
+// input nobody can construct.
+//
+// What guards the mapping now is that enumeration rather than this: a format
+// added to the table without a Metal spelling fails there, by name, without
+// anyone remembering to write a case.
+
+// A discard on Metal drops the same fragments the oracle drops.
+//
+// specs/032-stage-abi.md section 4.2. The oracle's own assertion is portable
+// and lives beside the root package's render tests, because it is a statement
+// about the rasterizer; this one is the statement that the MSL lowering agrees,
+// which is the only thing that makes discard_fragment() more than emitted text.
+//
+// Exactly, not within a bound. Every value in the picture is a clear colour or
+// a by-value colour, so nothing here is interpolated and there is no rounding
+// for the two rasterizers to differ over. What can differ is *which* fragments
+// survived, and that is the assertion.
+func TestADiscardAgreesOnBothBackends(t *testing.T) {
+	const w, h = 8, 4
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	onCPU := discardImage(t, cpu, w, h)
+	onMetal := discardImage(t, metal, w, h)
+
+	var kept, dropped int
+	for i := range onCPU {
+		if onMetal[i] != onCPU[i] {
+			px := i / 4
+			t.Fatalf("pixel (%d,%d) channel %d is %v on Metal and %v on the oracle",
+				px%w, px/w, i%4, onMetal[i], onCPU[i])
+		}
+	}
+	// Both outcomes have to be in the picture. Two images where every fragment
+	// survived agree perfectly and say nothing about a discard, and so do two
+	// where none did.
+	for x := range w {
+		if onCPU[x*4+1] == 1 {
+			dropped++
+		} else {
+			kept++
+		}
+	}
+	if kept == 0 || dropped == 0 {
+		t.Fatalf("%d columns kept and %d discarded; the comparison needs both", kept, dropped)
+	}
+}
+
+// A flat varying is flat on Metal too, and both backends pick the same vertex.
+//
+// specs/032-stage-abi.md section 3.1's rule is portable and its *provoking
+// vertex* is not: which of a triangle's three vertices supplies a flat value is
+// a convention, no spec here fixes it, and a divergence would be invisible in
+// any single-backend test. That is what this compares -- the id itself, not
+// only that there is one of it.
+//
+// It is also the first place an integer crosses the stage boundary on a device.
+// The flat form carries it as bits through a []float32 on the CPU and as an
+// `int` member on Metal, which are two different representations that must
+// produce one number.
+func TestAFlatVaryingAgreesOnBothBackends(t *testing.T) {
+	const w, h = 16, 16
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	cpuIDs, cpuCovered := flatIDs(flatImage(t, cpu, w, h), w)
+	metalIDs, metalCovered := flatIDs(flatImage(t, metal, w, h), w)
+
+	if cpuCovered == 0 || metalCovered == 0 {
+		t.Fatalf("covered %d on the oracle and %d on Metal; two blank images agree",
+			cpuCovered, metalCovered)
+	}
+	if len(metalIDs) != 1 {
+		t.Fatalf("Metal produced %d distinct ids over %d covered pixels: %v -- "+
+			"the [[flat]] qualifier did not reach the pipeline", len(metalIDs),
+			metalCovered, metalIDs)
+	}
+	for id := range cpuIDs {
+		if metalIDs[id] == 0 {
+			t.Errorf("the flat id is %v on the oracle and %v on Metal: the two "+
+				"backends disagree about which vertex is provoking, which is a "+
+				"convention divergence for docs/conventions.md rather than a bug "+
+				"in either", id, keysOf(metalIDs))
+		}
+	}
+}
+
+// keysOf names the ids in a histogram, for a diagnostic.
+func keysOf(m map[float32]int) []float32 {
+	out := make([]float32, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// The two interpolation qualifiers agree with the oracle on Metal.
+//
+// specs/032-stage-abi.md section 3.1. Both channels at once: red is
+// perspective-correct and green is screen-linear over the same value, so a
+// backend that applied [[center_no_perspective]] to the wrong member, to both,
+// or to neither disagrees with the oracle in a channel this reads.
+//
+// Within a derived bound rather than exactly, for the reason the plain triangle
+// differential gives: the two rasterizers are free to compute barycentric
+// weights differently, and section 8 puts interpolated values in the bounded
+// half of its split.
+func TestTheInterpolationQualifiersAgreeOnBothBackends(t *testing.T) {
+	const w, h = 32, 32
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	onCPU := perspectiveImage(t, cpu, w, h)
+	onMetal := perspectiveImage(t, metal, w, h)
+
+	// The largest interpolated value here is 2, and a weighted sum of three
+	// terms takes two roundings, so this is 4u. Nothing is tuned.
+	const bound = 4 * 1.1920929e-7
+
+	var covered, differing, qualified int
+	for i := 0; i < len(onCPU); i += 4 {
+		if onCPU[i+2] == 0 {
+			continue
+		}
+		covered++
+		if onCPU[i] != onCPU[i+1] {
+			qualified++
+		}
+		for c := range 3 {
+			if d := math.Abs(float64(onCPU[i+c] - onMetal[i+c])); d > bound {
+				differing++
+				if differing < 4 {
+					px := i / 4
+					t.Errorf("pixel (%d,%d) channel %d is %v on the oracle and %v on "+
+						"Metal, %v apart and the derived bound is %v",
+						px%w, px/w, c, onCPU[i+c], onMetal[i+c], d, bound)
+				}
+			}
+		}
+	}
+	if covered == 0 {
+		t.Fatal("the oracle covered nothing, so the comparison is vacuous")
+	}
+	// Without this the two backends could agree by both ignoring the qualifier.
+	if qualified == 0 {
+		t.Fatal("the two qualifiers produced the same value at every covered pixel on " +
+			"the oracle, so agreeing with Metal says nothing about either")
+	}
+	if differing > 0 {
+		t.Errorf("%d channel values differ by more than %v", differing, bound)
+	}
+}
+
+// A colour write mask means the same channels on Metal as on the oracle.
+//
+// specs/033-render-api.md's ColorWriteMask numbers its channels from red at bit
+// 0; MTLColorWriteMask numbers them from *alpha* at bit 0, red at bit 3. So a
+// backend that passes the value through numerically writes the mirror of what
+// the caller asked for, and WriteAll -- the default, and the only mask any test
+// used -- is 0xF either way, which is why nothing noticed.
+//
+// specs/035-cpu-rasterizer.md section 7.1 requires every pixel-producing corpus
+// entry to run on both backends. The write-mask entry ran on the CPU only.
+//
+// Exactly, not within a bound: a masked channel keeps the clear value and an
+// unmasked one takes the stage's, and both are constants here.
+func TestAColourWriteMaskAgreesOnBothBackends(t *testing.T) {
+	const w, h = 8, 8
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	// Each case names one channel, so a reversed mapping puts the stage's value
+	// in the wrong place rather than in none.
+	for _, c := range []struct {
+		name string
+		mask accel.ColorWriteMask
+	}{
+		{"red only", accel.WriteRed},
+		{"green only", accel.WriteGreen},
+		{"blue only", accel.WriteBlue},
+		{"alpha only", accel.WriteAlpha},
+		{"red and alpha", accel.WriteRed | accel.WriteAlpha},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			onCPU := maskedImage(t, cpu, w, h, c.mask)
+			onMetal := maskedImage(t, metal, w, h, c.mask)
+			for i := range onCPU {
+				if onCPU[i] != onMetal[i] {
+					px := i / 4
+					t.Fatalf("pixel (%d,%d) channel %d is %v on the oracle and %v on "+
+						"Metal: the mask reached the wrong channel",
+						px%w, px/w, i%4, onCPU[i], onMetal[i])
+				}
+			}
+			// SolidFS writes 0.25/0.5/0.75/1 and the clear is zero, so a
+			// channel is the stage's value if masked in and zero if masked out.
+			// Asserting that here means a backend which ignored the mask
+			// entirely fails even though the two would still agree.
+			want := [4]float32{0.25, 0.5, 0.75, 1}
+			for ch := range 4 {
+				got := onCPU[ch]
+				if c.mask&(1<<uint(ch)) == 0 {
+					if got != 0 {
+						t.Errorf("channel %d is masked out and holds %v, not the clear", ch, got)
+					}
+					continue
+				}
+				if got != want[ch] {
+					t.Errorf("channel %d is masked in and holds %v, want %v", ch, got, want[ch])
+				}
+			}
+		})
+	}
+}
+
+// maskedImage draws one full-screen triangle through a pipeline with the given
+// colour write mask, over a target cleared to zero.
+func maskedImage(t *testing.T, d *accel.Device, w, h int, mask accel.ColorWriteMask) []float32 {
+	t.Helper()
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float, Mask: mask}},
+		Label:    "masked",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tex := colourTexture(t, d, "masked", w, h)
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{
+			View: wholeOf(t, tex), Load: accel.LoadClear, Clear: [4]float32{0, 0, 0, 0},
+		}},
+		Width: w, Height: h, Label: "masked",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	return readColourTexture(t, d, tex)
+}
+
+// mrtImage draws one triangle into two colour attachments and returns both.
+//
+// GeometryVS/ShadeFS is the corpus's multiple-render-target entry.
+// specs/032-stage-abi.md section 4.1 maps a fragment stage's result fields onto
+// attachments in declaration order, so which field lands in which attachment is
+// the thing under test -- and it is a mapping each backend applies for itself.
+func mrtImage(t *testing.T, d *accel.Device, w, h int, blends [2]accel.BlendState) [2][]float32 {
+	t.Helper()
+	targets := make([]accel.ColorTargetState, 2)
+	for i := range targets {
+		targets[i] = accel.ColorTargetState{Format: accel.RGBA32Float, Blend: blends[i]}
+	}
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &kernels.GeometryVSStage,
+		Fragment: &kernels.ShadeFSStage,
+		VertexBuffers: []accel.VertexBufferLayout{{
+			Stride: 32,
+			Attributes: []accel.VertexAttribute{
+				{Location: 0, Format: accel.AttrFloat32x3, Offset: 0},
+				{Location: 1, Format: accel.AttrFloat32x2, Offset: 12},
+			},
+		}},
+		Primitive: accel.PrimitiveState{Topology: accel.TriangleList},
+		Targets:   targets,
+		Label:     "mrt",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	// Position then uv, per the layout above. A triangle covering the lower
+	// left, with uv varying so the second attachment is not a constant.
+	verts := []float32{
+		-1, -1, 0.5, 0, 0, 0, 0, 0,
+		1, -1, 0.5, 1, 0, 0, 0, 0,
+		-1, 1, 0.5, 0, 1, 0, 0, 0,
+	}
+	vb, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: len(verts),
+		Usage: accel.BufferVertex | accel.BufferCopyDst, Label: "verts",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer vb.Close()
+	if err := d.Queue().WriteBuffer(vb, 0, verts); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	vv, err := vb.View(0, vb.Count())
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	albedo := colourTexture(t, d, "albedo", w, h)
+	normal := colourTexture(t, d, "normal", w, h)
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{
+			// Different clears, so an attachment pair that was swapped or that
+			// shared one buffer is visible in the untouched corner as well as
+			// in the covered half.
+			{View: wholeOf(t, albedo), Load: accel.LoadClear, Clear: [4]float32{0.1, 0, 0, 1}},
+			{View: wholeOf(t, normal), Load: accel.LoadClear, Clear: [4]float32{0, 0.2, 0, 1}},
+		},
+		Width: w, Height: h, Label: "mrt",
+	})
+	p.SetPipeline(pipe)
+	p.SetVertexBuffer(0, vv)
+	p.SetVertexUniform(0, kernels.StageTransform{Scale: 1, Offset: accel.Vec2{0, 0}})
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := d.Queue().Submit(g).Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	return [2][]float32{
+		readColourTexture(t, d, albedo), readColourTexture(t, d, normal),
+	}
+}
+
+// Two attachments land where the stage declared them, on both backends.
+//
+// specs/035-cpu-rasterizer.md section 7.1 requires every pixel-producing corpus
+// entry to run on both backends and be compared on its declared side. The MRT
+// entry ran on the CPU only, in internal/raster and internal/cpu, so which
+// attachment a field reaches had never been compared against a device.
+func TestMultipleRenderTargetsAgreeOnBothBackends(t *testing.T) {
+	const w, h = 16, 16
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	var none [2]accel.BlendState
+	onCPU := mrtImage(t, cpu, w, h, none)
+	onMetal := mrtImage(t, metal, w, h, none)
+
+	// Interpolated, so within the bound the plain triangle differential
+	// derives: one rounding of the largest value, doubled for a weighted sum.
+	const bound = 2 * 1.1920929e-7
+	for a := range onCPU {
+		var covered int
+		for i := range onCPU[a] {
+			if onCPU[a][i] != 0 {
+				covered++
+			}
+			if d := math.Abs(float64(onCPU[a][i] - onMetal[a][i])); d > bound {
+				px := i / 4
+				t.Fatalf("attachment %d pixel (%d,%d) channel %d is %v on the oracle "+
+					"and %v on Metal", a, px%w, px/w, i%4, onCPU[a][i], onMetal[a][i])
+			}
+		}
+		if covered == 0 {
+			t.Fatalf("attachment %d is blank on the oracle", a)
+		}
+	}
+	// The two attachments must differ, or a backend writing one field to both
+	// would pass. ShadeFS writes the interpolated colour to Albedo and the uv
+	// with the fragment depth to Normal.
+	same := true
+	for i := range onCPU[0] {
+		if onCPU[0][i] != onCPU[1][i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("the two attachments hold identical images, so a backend that wrote " +
+			"one field to both would agree with the oracle")
+	}
+}
+
+// Per-attachment blend: each attachment blends by its own state.
+//
+// One attachment blending and the other replacing, which is the case a backend
+// that applied attachment zero's blend to every attachment gets wrong -- and
+// the case the single-attachment blend entry cannot reach.
+func TestPerAttachmentBlendAgreesOnBothBackends(t *testing.T) {
+	const w, h = 16, 16
+	metal := openMetalDevice(t)
+	cpu, err := accel.OpenCPU(accel.CPUOptions{})
+	if err != nil {
+		t.Fatalf("OpenCPU: %v", err)
+	}
+	defer cpu.Close()
+
+	blends := [2]accel.BlendState{
+		{
+			Enabled:  true,
+			SrcColor: accel.FactorOne, DstColor: accel.FactorOne, ColorOp: accel.BlendAdd,
+			SrcAlpha: accel.FactorOne, DstAlpha: accel.FactorOne, AlphaOp: accel.BlendAdd,
+		},
+		{},
+	}
+	onCPU := mrtImage(t, cpu, w, h, blends)
+	onMetal := mrtImage(t, metal, w, h, blends)
+
+	const bound = 2 * 1.1920929e-7
+	for a := range onCPU {
+		for i := range onCPU[a] {
+			if d := math.Abs(float64(onCPU[a][i] - onMetal[a][i])); d > bound {
+				px := i / 4
+				t.Fatalf("attachment %d pixel (%d,%d) channel %d is %v on the oracle "+
+					"and %v on Metal: the per-attachment blend states did not both apply",
+					a, px%w, px/w, i%4, onCPU[a][i], onMetal[a][i])
+			}
+		}
+	}
+	// Attachment 0 added its clear to the fragment and attachment 1 replaced,
+	// so the covered region must show the clear's contribution in one and not
+	// the other. Without this the test passes on a backend that blends neither.
+	plain := mrtImage(t, cpu, w, h, [2]accel.BlendState{})
+	if equalImages(onCPU[0], plain[0]) {
+		t.Error("attachment 0 blended and unblended are identical, so this case " +
+			"exercises no blend at all")
+	}
+	if !equalImages(onCPU[1], plain[1]) {
+		t.Error("attachment 1 declares no blend and changed anyway, so attachment 0's " +
+			"state reached it")
+	}
+}
+
+func equalImages(a, b []float32) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The determinism entry on Metal, where a GPU has more ways to differ between
+// two runs of one command buffer than the oracle does.
+func TestARenderGraphReplaysIdenticallyOnMetal(t *testing.T) {
+	const w, h = 32, 32
+	a, b := renderTwiceFromOneGraph(t, openMetalDevice(t), w, h)
+	assertDeterministic(t, a, b)
+}
+
+// The origin entry on Metal, which is the backend it exists for.
+//
+// specs/035-cpu-rasterizer.md section 7 and docs/conventions.md: the
+// predecessor's compute-path test passed while its texture path was mirrored,
+// and that is a divergence a single-backend test cannot see. The oracle's own
+// run is portable and lives beside this one.
+func TestTheDeviceAndTheHostAgreeAboutRowZeroOnMetal(t *testing.T) {
+	checkRowZeroAgreement(t, openMetalDevice(t), 12, 5)
+}
+
+// The handoff entry on Metal, where a staged attachment could turn a
+// device-resident G-buffer into a round trip without changing the picture.
+func TestADeferredHandoffStaysOnDeviceOnMetal(t *testing.T) {
+	checkHandoffStaysOnDevice(t, openMetalDevice(t), 8, 8)
+}
+
+// The depth-readback entry on Metal, which is the platform whose private-depth
+// constraint the entry exists for.
+//
+// It skips while this backend refuses a texture copy, rather than being absent:
+// a convention bug is cheapest to catch in the commit that makes it reachable.
+func TestADepthAttachmentIsReadBackThroughATransferNodeOnMetal(t *testing.T) {
+	checkDepthReadbackThroughATransfer(t, openMetalDevice(t), 8, 8, 0.25, 0.625)
+}
+
+// Mip independence on Metal, where the staged texture the backend builds per
+// pass has to be the level's extent rather than the base's.
+func TestTwoMipsAreWrittenAndReadIndependentlyOnMetal(t *testing.T) {
+	checkMipsAreIndependent(t, openMetalDevice(t), 8, 8)
+}
+
+// A colour attachment is rendered into directly, not copied through a staging
+// texture.
+//
+// specs/045-texture-attachments.md section 11. This backend used to allocate a
+// private texture per attachment per pass, blit the caller's bytes in for
+// LoadKeep, render, and blit the result back -- several full-frame round trips
+// per frame at 1080p, and specs/042-surface-completion.md's review noted that
+// none of it was visible as a failing test, because the images are identical
+// either way.
+//
+// That is why the count exists and why this asserts on it. A regression to
+// staging would produce exactly the same picture as the fast path.
+func TestAColourAttachmentIsNotStagedOnMetal(t *testing.T) {
+	const w, h = 16, 16
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "aliased",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	tex := colourTexture(t, d, "target", w, h)
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		// LoadKeep, which is the action that used to cost a copy *in* as well
+		// as the copy out. An aliased attachment keeps what the buffer holds
+		// because the texture is the buffer.
+		Color: []accel.ColorAttachment{{View: wholeOf(t, tex), Load: accel.LoadKeep}},
+		Width: w, Height: h, Label: "aliased",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.StagedAttachments != 0 {
+		t.Errorf("%d attachments were staged; a colour attachment's rows are aligned to "+
+			"256 and Metal's linear-texture alignment for it is 16, so it should render "+
+			"into the caller's bytes", stats.StagedAttachments)
+	}
+
+	// And the picture is right, so "not staged" is not satisfied by a pass that
+	// rendered nowhere.
+	px := readColourTexture(t, d, tex)
+	want := [4]float32{0.25, 0.5, 0.75, 1}
+	for i := range px {
+		if px[i] != want[i%4] {
+			t.Fatalf("element %d is %v, want %v", i, px[i], want[i%4])
+		}
+	}
+}
+
+// A depth attachment is staged, because Metal's linear textures do not support
+// depth or stencil formats.
+//
+// Measured rather than assumed, and the measurement is unusually sharp:
+// -minimumLinearTextureAlignmentForPixelFormat: does not return zero for a
+// depth format, it *asserts* -- "Linear textures do not support depth/stencil
+// pixel formats" -- and takes the process down. Asking is not a question with a
+// safe answer, so the backend does not ask.
+//
+// This is asserted rather than left implicit because it is the reason
+// specs/033-render-api.md section 10.5's layout question survives: a combined
+// depth/stencil attachment cannot be the caller's buffer, so its bytes still
+// have to be copied one aspect at a time.
+func TestADepthAttachmentIsStagedOnMetal(t *testing.T) {
+	const w, h = 16, 16
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		DepthStencil: &accel.DepthStencilState{
+			Format: accel.Depth32Float, Test: true, Write: true,
+			Compare: accel.CompareLess,
+		},
+		Label: "depth",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	colour := colourTexture(t, d, "colour", w, h)
+	depth, err := d.NewTexture(accel.TextureDescriptor{
+		Format: accel.Depth32Float, Size: accel.Extent{Width: w, Height: h},
+		Usage: accel.TextureRenderTarget | accel.TextureCopySrc | accel.TextureCopyDst,
+		Kind:  accel.MemoryDevice, Label: "depth",
+	})
+	if err != nil {
+		t.Fatalf("depth: %v", err)
+	}
+	defer depth.Close()
+	dv, err := depth.Whole()
+	if err != nil {
+		t.Fatalf("depth view: %v", err)
+	}
+
+	r := d.NewRecorder()
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{View: wholeOf(t, colour), Load: accel.LoadClear}},
+		Depth: &accel.DepthAttachment{View: dv, Load: accel.LoadClear, Clear: 1},
+		Width: w, Height: h, Label: "depth",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	// Exactly one: the depth attachment. The colour one beside it aliases, so a
+	// count of two would mean the colour path regressed with it.
+	if stats.StagedAttachments != 1 {
+		t.Errorf("%d attachments were staged, want 1: the depth attachment cannot be a "+
+			"linear texture and the colour one beside it can", stats.StagedAttachments)
+	}
+}
+
+// An attachment whose offset does not meet Metal's linear-texture alignment is
+// staged, and still produces the right picture.
+//
+// A texture attachment always aliases: its rows are aligned to 256 and the
+// requirement is 16. A *slot* attachment is a buffer view at whatever offset
+// the caller bound, so it can miss -- and this binds it deliberately one float
+// in, which is four bytes and not a multiple of sixteen.
+//
+// The fallback is the path that used to be the only path, so this is also what
+// keeps it working: without a case that takes it, it would be code nothing runs
+// until the day a caller's offset happens to land wrong.
+func TestAMisalignedAttachmentIsStagedAndStillCorrect(t *testing.T) {
+	const w, h = 8, 8
+	const n = w * h * 4
+	d := openMetalDevice(t)
+
+	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "misaligned",
+	})
+	if err != nil {
+		t.Fatalf("pipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	// One float of slack at the front, so the view's byte offset is 4.
+	buf, err := d.NewBuffer(accel.BufferDescriptor{
+		DType: accel.F32, Count: n + 1,
+		Usage: accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst,
+		Label: "offset",
+	})
+	if err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	defer buf.Close()
+	view, err := buf.View(1, n)
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+
+	r := d.NewRecorder()
+	slot := r.Slot(accel.SlotDescriptor{
+		Name: "offset", Kind: accel.BindingStorageBuffer,
+		DType: accel.F32, Access: accel.AccessWrite, MinCount: n,
+	})
+	p := r.RenderPass(accel.RenderPassDescriptor{
+		Color: []accel.ColorAttachment{{Slot: slot, Load: accel.LoadClear}},
+		Width: w, Height: h, Label: "misaligned",
+	})
+	p.SetPipeline(pipe)
+	p.Draw(accel.Draw{VertexCount: 3})
+
+	g, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer g.Close()
+	if err := g.Bind(accel.SlotBinding{Slot: slot, Buffer: view}); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	f := d.Queue().Submit(g)
+	if err := f.Wait(); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stats, err := f.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.StagedAttachments != 1 {
+		t.Errorf("%d attachments were staged, want 1: a four-byte offset is not a "+
+			"multiple of the sixteen a linear RGBA32Float texture needs",
+			stats.StagedAttachments)
+	}
+
+	// And the staged path put the bytes where the view named, not where the
+	// buffer starts. An off-by-one-float write would be invisible in a pixel
+	// comparison that read from the same wrong place.
+	got := make([]float32, n+1)
+	if err := d.Queue().ReadBuffer(buf, 0, got); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if got[0] != 0 {
+		t.Errorf("the float before the view is %v, want 0: the pass wrote outside the "+
+			"range it was bound to", got[0])
+	}
+	want := [4]float32{0.25, 0.5, 0.75, 1}
+	for i := range n {
+		if got[i+1] != want[i%4] {
+			t.Fatalf("element %d is %v, want %v", i, got[i+1], want[i%4])
+		}
+	}
+}
+
+// Per-object replay on Metal, where the recorded offset is a buffer binding
+// rather than a decode.
+func TestObjectsReplayAtRecordedUniformOffsetsOnMetal(t *testing.T) {
+	checkPerObjectReplay(t, openMetalDevice(t), 8, 8, 3)
+}

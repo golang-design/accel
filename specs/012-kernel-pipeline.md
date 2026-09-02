@@ -197,7 +197,7 @@ start refusing kernels" has one answer per bump:
 
 ## 5. Where this milestone's corpus lives
 
-`internal/testkernels`, which is **not** the v0 corpus.
+`internal/kernels`, which is **not** the v0 corpus.
 [004](004-kernel-authoring.md) puts that at `tensor/internal/kernels/...`, owned
 by [010](010-kernel-corpus.md) and registered into the tensor runtime. This one
 is the compiler's own development corpus: the smallest kernel that exercises the

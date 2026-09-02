@@ -11,13 +11,13 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 func addPipeline(t *testing.T, d *accel.Device) *accel.ComputePipeline {
 	t.Helper()
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -383,7 +383,7 @@ func TestPipelineLimitRows(t *testing.T) {
 
 	// Add's workgroup is 64 wide, which is over both limits.
 	_, err = d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err == nil {
 		t.Fatal("a 64-wide workgroup should be rejected on an 8-wide device")
@@ -403,7 +403,7 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 		t.Errorf("a descriptor with no kernel should be rejected, got %v", err)
 	}
 
-	stale := testkernels.AddKernel
+	stale := kernels.AddKernel
 	stale.Generator = kernelabi.Version + 1
 	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &stale}); err == nil ||
 		!strings.Contains(err.Error(), "re-run go generate") {
@@ -413,7 +413,7 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 	// A record with neither entry point is an incomplete generated file, not a
 	// cooperative kernel: a kernel has exactly one, chosen by whether its body
 	// reaches a barrier, shared memory, or a subgroup operation.
-	neither := testkernels.AddKernel
+	neither := kernels.AddKernel
 	neither.Flat = nil
 	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &neither}); err == nil ||
 		!strings.Contains(err.Error(), "re-run go generate") {
@@ -422,14 +422,14 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 
 	// And a cooperative one is accepted, since the resumable lowering exists.
 	if p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.ExchangeKernel,
+		Kernel: &kernels.ExchangeKernel,
 	}); err != nil {
 		t.Errorf("a cooperative kernel should be accepted: %v", err)
 	} else if err := p.Close(); err != nil {
 		t.Errorf("close: %v", err)
 	}
 
-	zero := testkernels.AddKernel
+	zero := kernels.AddKernel
 	zero.WorkgroupSize = accel.ID3{X: 0, Y: 1, Z: 1}
 	if _, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &zero}); err == nil ||
 		!strings.Contains(err.Error(), "dispatches nothing") {
@@ -443,7 +443,7 @@ func TestPipelineRejectsAMalformedDescriptor(t *testing.T) {
 	// never pass through it. So the record is mutated rather than a kernel
 	// written, because no real kernel has a 64 KiB struct and one added to the
 	// corpus to fail this test would be a kernel nothing runs.
-	fat := testkernels.AttentionDecodeKernel
+	fat := kernels.AttentionDecodeKernel
 	if len(fat.Uniforms) == 0 {
 		t.Fatal("the fixture kernel declares no uniform, so this case checks nothing")
 	}
@@ -465,7 +465,7 @@ func TestADeviceWillNotCloseUnderAPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &testkernels.AddKernel})
+	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{Kernel: &kernels.AddKernel})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestAKernelRequiringAnAbsentCapabilityIsRefused(t *testing.T) {
 	defer d.Close()
 
 	_, err = d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.SubgroupReduceKernel, Label: "reduce",
+		Kernel: &kernels.SubgroupReduceKernel, Label: "reduce",
 	})
 	if err == nil {
 		t.Fatal("a kernel reducing across lanes should be refused on a device with no " +
@@ -527,7 +527,7 @@ func TestAKernelRequiringAnAbsentCapabilityIsRefused(t *testing.T) {
 	// Without this the refusal above would be passing against a device that
 	// refuses everything.
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.SubgroupReduceFallbackKernel, Label: "fallback",
+		Kernel: &kernels.SubgroupReduceFallbackKernel, Label: "fallback",
 	})
 	if err != nil {
 		t.Fatalf("the fallback requires no capability and should be accepted: %v", err)
@@ -545,7 +545,7 @@ func TestAKernelRequiringAPresentCapabilityIsAccepted(t *testing.T) {
 		t.Skip("the CPU backend's default profile reports no subgroups")
 	}
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.SubgroupReduceKernel, Label: "reduce",
+		Kernel: &kernels.SubgroupReduceKernel, Label: "reduce",
 	})
 	if err != nil {
 		t.Fatalf("the CPU backend emulates subgroups and should accept this: %v", err)
@@ -575,7 +575,7 @@ func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
 	defer d.Close()
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.MatMulTiledKernel, Label: "gemm",
+		Kernel: &kernels.MatMulTiledKernel, Label: "gemm",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -618,9 +618,9 @@ func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
 		{Index: 0, Buffer: whole(t, aBuf)},
 		{Index: 1, Buffer: whole(t, bBuf)},
 		{Index: 2, Buffer: whole(t, outBuf)},
-	}, []accel.UniformValue{{Index: 0, Value: testkernels.GEMMDims{M: m, N: n, K: k}}}, accel.WorkgroupCount{
-		X: (n + testkernels.TileN - 1) / testkernels.TileN,
-		Y: (m + testkernels.TileM - 1) / testkernels.TileM,
+	}, []accel.UniformValue{{Index: 0, Value: kernels.GEMMDims{M: m, N: n, K: k}}}, accel.WorkgroupCount{
+		X: (n + kernels.TileN - 1) / kernels.TileN,
+		Y: (m + kernels.TileM - 1) / kernels.TileM,
 	})
 	g, err := r.Build()
 	if err != nil {
@@ -667,13 +667,13 @@ func TestGraphRunsTheTiledGEMMInStrictMode(t *testing.T) {
 func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
 	d := openDevice(t)
 	scatter, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.ScatterRowsKernel, Label: "scatter"})
+		Kernel: &kernels.ScatterRowsKernel, Label: "scatter"})
 	if err != nil {
 		t.Fatalf("scatter: %v", err)
 	}
 	defer scatter.Close()
 	gather, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.GatherRowsKernel, Label: "gather"})
+		Kernel: &kernels.GatherRowsKernel, Label: "gather"})
 	if err != nil {
 		t.Fatalf("gather: %v", err)
 	}
@@ -695,7 +695,7 @@ func TestKernelMutatedStateIsTrackedByTheGraph(t *testing.T) {
 		t.Fatalf("view: %v", err)
 	}
 
-	p := testkernels.RowParams{Rows: count, Width: width, Capacity: capacity}
+	p := kernels.RowParams{Rows: count, Width: width, Capacity: capacity}
 	r := d.NewRecorder()
 	r.Dispatch(scatter, []accel.Binding{
 		{Index: 0, Buffer: whole(t, rows)},
@@ -767,7 +767,7 @@ func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.ElemScaleKernel, Label: "scale",
+		Kernel: &kernels.ElemScaleKernel, Label: "scale",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -788,7 +788,7 @@ func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
 	node := r.Dispatch(p, []accel.Binding{
 		{Index: 0, Buffer: whole(t, in)},
 		{Index: 1, Buffer: whole(t, out)},
-	}, []accel.UniformValue{{Index: 0, Value: testkernels.ScaleParams{Factor: 2}}}, accel.WorkgroupCount{X: 1})
+	}, []accel.UniformValue{{Index: 0, Value: kernels.ScaleParams{Factor: 2}}}, accel.WorkgroupCount{X: 1})
 	g, err := r.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
@@ -809,7 +809,7 @@ func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
 		}
 	}
 	submit(2)
-	if err := g.SetUniform(node, 0, testkernels.ScaleParams{Factor: 5}); err != nil {
+	if err := g.SetUniform(node, 0, kernels.ScaleParams{Factor: 5}); err != nil {
 		t.Fatalf("SetUniform: %v", err)
 	}
 	submit(5)
@@ -822,11 +822,11 @@ func TestSetUniformChangesWhatTheNextSubmissionComputes(t *testing.T) {
 		want string
 	}{{
 		name: "a node that is not a dispatch",
-		call: func() error { return g.SetUniform(node+1, 0, testkernels.ScaleParams{}) },
+		call: func() error { return g.SetUniform(node+1, 0, kernels.ScaleParams{}) },
 		want: "node 1 of 1",
 	}, {
 		name: "a parameter index the kernel does not have",
-		call: func() error { return g.SetUniform(node, 3, testkernels.ScaleParams{}) },
+		call: func() error { return g.SetUniform(node, 3, kernels.ScaleParams{}) },
 		want: "takes 1 by-value parameters",
 	}, {
 		name: "a different type of the same shape",

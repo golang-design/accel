@@ -13,8 +13,8 @@ import (
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
+	"golang.design/x/accel/internal/kernels"
 	"golang.design/x/accel/internal/metal"
-	"golang.design/x/accel/internal/testkernels"
 )
 
 // BenchmarkSubmitAttribution splits a submission into the host half and the
@@ -122,7 +122,7 @@ func benchExecutable(b testing.TB, n int, barrier bool) driver.Executable {
 		plan.Nodes = append(plan.Nodes, driver.PlanNode{
 			Op: driver.OpDispatch, ID: i, BarrierBefore: barrier && i > 0,
 			Dispatch: &driver.Dispatch{
-				Kernel:   &testkernels.AddKernel,
+				Kernel:   &kernels.AddKernel,
 				Count:    kernel.ID3{X: count / 64, Y: 1, Z: 1},
 				Bindings: []driver.Operand{whole(in1), whole(in2), whole(out)},
 			},

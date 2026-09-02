@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // GroupedMatVec multiplies each token by the weight matrix its segment names.
@@ -93,9 +93,9 @@ func GroupedMatVec(b *Builder, x, w, counts *Tensor) *Tensor {
 
 	return b.record(node{
 		op: "GroupedMatVec", inputs: []*Tensor{x, w, offsets},
-		kernel: &testkernels.GroupedMatVecKernel,
+		kernel: &kernels.GroupedMatVecKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.GroupedDims{
+			return kernels.GroupedDims{
 				Experts: uint32(experts), K: uint32(k), N: uint32(n),
 			}
 		},
@@ -127,7 +127,7 @@ func GroupedMatVec(b *Builder, x, w, counts *Tensor) *Tensor {
 // save — so this puts a workgroup on an (expert, column tile) and walks that
 // expert's whole segment through shared tiles.
 //
-// Each weight is read once per block of [testkernels.TileM] tokens rather than
+// Each weight is read once per block of [kernels.TileM] tokens rather than
 // once per token. specs/049-grouped-gemm.md §5.
 //
 // # It takes the same inputs
@@ -183,12 +183,12 @@ func GroupedMatMul(b *Builder, x, w, counts *Tensor) *Tensor {
 
 	return b.record(node{
 		op: "GroupedMatMul", inputs: []*Tensor{x, w, offsets},
-		kernel: &testkernels.GroupedMatMulKernel,
+		kernel: &kernels.GroupedMatMulKernel,
 		uniform: func(map[string]ScalarValue) any {
 			// Tokens is x's row count, and it is the bound the offsets cannot
 			// give: they are device data, so nothing here can check they sum to
 			// it. specs/049-grouped-gemm.md §5.
-			return testkernels.GroupedTiledDims{
+			return kernels.GroupedTiledDims{
 				Experts: uint32(experts), Tokens: uint32(tokens),
 				K: uint32(k), N: uint32(n),
 			}
@@ -198,13 +198,13 @@ func GroupedMatMul(b *Builder, x, w, counts *Tensor) *Tensor {
 			// block spanning two experts would need two weight matrices in one
 			// tile, which is the tile's whole reason for existing.
 			return accel.WorkgroupCount{
-				X: (n + testkernels.TileN - 1) / testkernels.TileN,
+				X: (n + kernels.TileN - 1) / kernels.TileN,
 				Y: experts,
 			}
 		},
 		reason: fmt.Sprintf("the tiled grouped kernel: %d experts over %d columns, "+
 			"each walking its own segment of %d tokens in blocks of %d",
-			experts, n, tokens, testkernels.TileM),
+			experts, n, tokens, kernels.TileM),
 		rejected: []string{"the grouped row kernel: it reduces one token per " +
 			"workgroup, so an expert's matrix is re-read once per token rather " +
 			"than once per block"},

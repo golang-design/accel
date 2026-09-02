@@ -4,7 +4,7 @@
 
 package tensor
 
-import "golang.design/x/accel/internal/testkernels"
+import "golang.design/x/accel/internal/kernels"
 
 // Contiguous packs a strided view into fresh contiguous storage.
 //
@@ -49,16 +49,16 @@ func Contiguous(b *Builder, x *Tensor) *Tensor {
 			x.dtype)
 	}
 	rank := len(x.shape)
-	if rank > testkernels.PackRank {
+	if rank > kernels.PackRank {
 		return b.fail(1, "Contiguous", "%v has rank %d and the packing kernel carries %d "+
 			"extents and strides in one std140 block, so a higher rank would be a "+
-			"different block per call site", x.shape, rank, testkernels.PackRank)
+			"different block per call site", x.shape, rank, kernels.PackRank)
 	}
 	if rank == 0 {
 		return b.fail(1, "Contiguous", "a rank-zero operand has no layout to pack")
 	}
 
-	var p testkernels.PackParams
+	var p kernels.PackParams
 	p.Rank = uint32(rank)
 	p.Count = uint32(x.shape.Elements())
 	p.Offset = uint32(x.offset)
@@ -78,7 +78,7 @@ func Contiguous(b *Builder, x *Tensor) *Tensor {
 
 	return b.record(node{
 		op: "Contiguous", inputs: []*Tensor{x},
-		kernel:  &testkernels.PackKernel,
+		kernel:  &kernels.PackKernel,
 		strided: true,
 		uniform: func(map[string]ScalarValue) any { return p },
 		reason: "the strided gather of specs/042-surface-completion.md section 2.1; " +

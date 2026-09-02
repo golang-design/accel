@@ -17,7 +17,7 @@ import (
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/conformance/numeq"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // openMetal opens the enumerated Metal adapter by id.
@@ -85,7 +85,7 @@ func TestTheSameGraphAgreesOnCPUAndMetal(t *testing.T) {
 		storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 		p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-			Kernel: &testkernels.AddKernel, Label: "add",
+			Kernel: &kernels.AddKernel, Label: "add",
 		})
 		if err != nil {
 			t.Fatalf("pipeline: %v", err)
@@ -155,13 +155,13 @@ func TestAUniformCarryingKernelAgreesOnBothBackends(t *testing.T) {
 	for i := range in {
 		in[i] = float32(i%17) - 8
 	}
-	params := testkernels.ScaleParams{Factor: 2.5}
+	params := kernels.ScaleParams{Factor: 2.5}
 
 	run := func(t *testing.T, d *accel.Device) []float32 {
 		t.Helper()
 		storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 		p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-			Kernel: &testkernels.ElemScaleKernel, Label: "scale",
+			Kernel: &kernels.ElemScaleKernel, Label: "scale",
 		})
 		if err != nil {
 			t.Fatalf("pipeline: %v", err)
@@ -387,7 +387,7 @@ func indirectRun(t *testing.T, d *accel.Device, n int, supply uint32,
 	t.Helper()
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		t.Fatalf("%v pipeline: %v", d.Info().Backend, err)
@@ -532,7 +532,7 @@ func TestRepeatedEarlyCloseUnderMetal(t *testing.T) {
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)

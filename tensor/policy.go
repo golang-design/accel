@@ -9,7 +9,7 @@ import (
 	"math"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // MinTemperature is the smallest positive temperature [SamplingOptions.Validate]
@@ -320,7 +320,7 @@ func (b *Builder) penalise(logits *Tensor, history, counts *State, vocab int,
 	}
 
 	dims := func(vals map[string]ScalarValue) any {
-		return testkernels.PenaltyDims{
+		return kernels.PenaltyDims{
 			Vocab: uint32(vocab), History: uint32(historyCap),
 			Count:      vals[prefix+".n"].U32,
 			Repetition: vals[prefix+".rep"].F32,
@@ -347,18 +347,18 @@ func (b *Builder) penalise(logits *Tensor, history, counts *State, vocab int,
 	// order nothing: specs/007-tensor-layer.md makes the version chain the
 	// statement of which contents a reader meant.
 	cleared := b.writeCounts(counts, node{
-		op: "PenaltyClear", kernel: &testkernels.PenaltyClearKernel,
-		uniform: dims, reads: reads, grid: overVocab(&testkernels.PenaltyClearKernel),
+		op: "PenaltyClear", kernel: &kernels.PenaltyClearKernel,
+		uniform: dims, reads: reads, grid: overVocab(&kernels.PenaltyClearKernel),
 		reason: "a store of zero over the counts, because the accumulation below is an " +
 			"atomic add and a reused buffer would carry every earlier step's history",
 	})
 
 	counted := b.writeCounts(cleared, node{
 		op: "PenaltyCount", inputs: []*Tensor{readState(b, history)},
-		kernel:  &testkernels.PenaltyCountKernel,
+		kernel:  &kernels.PenaltyCountKernel,
 		uniform: dims, reads: reads,
 		grid: func(*Tensor) accel.WorkgroupCount {
-			wg := int(testkernels.PenaltyCountKernel.WorkgroupSize.X)
+			wg := int(kernels.PenaltyCountKernel.WorkgroupSize.X)
 			return accel.WorkgroupCount{X: (historyCap + wg - 1) / wg}
 		},
 		reason: "one invocation per history entry with an integer atomic increment, " +
@@ -372,9 +372,9 @@ func (b *Builder) penalise(logits *Tensor, history, counts *State, vocab int,
 	return b.record(node{
 		op:      "PenaltyApply",
 		inputs:  []*Tensor{logits, readState(b, counted)},
-		kernel:  &testkernels.PenaltyApplyKernel,
+		kernel:  &kernels.PenaltyApplyKernel,
 		uniform: dims, reads: reads,
-		grid: overVocab(&testkernels.PenaltyApplyKernel),
+		grid: overVocab(&kernels.PenaltyApplyKernel),
 		reason: "one invocation per vocabulary entry, applying one update from a count " +
 			"that is already final",
 	}, accel.F32, logits.shape), true

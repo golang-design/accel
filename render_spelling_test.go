@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Every constant in the render surface spells itself, and spells itself
@@ -127,8 +127,8 @@ func TestAnOmittedWriteMaskWritesEverything(t *testing.T) {
 
 	render := func(t *testing.T, mask accel.ColorWriteMask) []float32 {
 		pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-			Vertex:   &testkernels.HalfTriangleVSStage,
-			Fragment: &testkernels.SolidFSStage,
+			Vertex:   &kernels.HalfTriangleVSStage,
+			Fragment: &kernels.SolidFSStage,
 			Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float, Mask: mask}},
 			Label:    "masked",
 		})

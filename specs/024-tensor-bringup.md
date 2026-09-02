@@ -234,7 +234,7 @@ above inventing its own two-value convention or reaching into `accel`.
 
 ### Carried forward
 
-The corpus lives in `internal/testkernels`, so a public package now depends on
+The corpus lives in `internal/kernels`, so a public package now depends on
 one whose name says "test". [010](010-kernel-corpus.md) owns the corpus and its
 naming; renaming a package is a refactor with its own agreement, and the
 dependency is recorded here so it is not discovered as a surprise.

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // interleaved is one vertex of the layout the tests below declare: three floats
@@ -22,8 +22,8 @@ func interleaved(x, y, z float32, c [4]float32) []float32 {
 func attributePipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.AttributeVSStage,
-		Fragment: &testkernels.TintFSStage,
+		Vertex:   &kernels.AttributeVSStage,
+		Fragment: &kernels.TintFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{{
 			Stride: 28, StepMode: accel.StepVertex,
 			Attributes: []accel.VertexAttribute{
@@ -151,8 +151,8 @@ func TestPerInstanceAttributes(t *testing.T) {
 	q := d.Queue()
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.AttributeVSStage,
-		Fragment: &testkernels.TintFSStage,
+		Vertex:   &kernels.AttributeVSStage,
+		Fragment: &kernels.TintFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{
 			{
 				Stride: 12, StepMode: accel.StepVertex,
@@ -229,8 +229,8 @@ func TestPerInstanceAttributes(t *testing.T) {
 func TestVertexLayoutRefusals(t *testing.T) {
 	base := func() accel.RenderPipelineDescriptor {
 		return accel.RenderPipelineDescriptor{
-			Vertex:   &testkernels.AttributeVSStage,
-			Fragment: &testkernels.TintFSStage,
+			Vertex:   &kernels.AttributeVSStage,
+			Fragment: &kernels.TintFSStage,
 			VertexBuffers: []accel.VertexBufferLayout{{
 				Stride: 28,
 				Attributes: []accel.VertexAttribute{
@@ -293,7 +293,7 @@ func TestVertexLayoutRefusals(t *testing.T) {
 	}, {
 		name: "a layout for a stage that reads no attribute",
 		edit: func(d *accel.RenderPipelineDescriptor) {
-			d.Vertex, d.Fragment = &testkernels.HalfTriangleVSStage, &testkernels.SolidFSStage
+			d.Vertex, d.Fragment = &kernels.HalfTriangleVSStage, &kernels.SolidFSStage
 		},
 		says: "layout declares 2 attributes and HalfTriangleVS reads 0",
 	}} {

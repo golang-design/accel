@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // The load action decides the edge, and it is asserted on the graph rather than
@@ -139,8 +139,8 @@ func TestAPassDeclaresEveryAttachmentItTouches(t *testing.T) {
 	blank := newBuffer(t, d, "blank", w*h*4, usage)
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.GeometryVSStage,
-		Fragment: &testkernels.ShadeFSStage,
+		Vertex:   &kernels.GeometryVSStage,
+		Fragment: &kernels.ShadeFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{{
 			Stride: 20,
 			Attributes: []accel.VertexAttribute{
@@ -180,7 +180,7 @@ func TestAPassDeclaresEveryAttachmentItTouches(t *testing.T) {
 	})
 	p.SetPipeline(pipe)
 	p.SetVertexBuffer(0, whole(t, vb))
-	p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
+	p.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
 	p.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()

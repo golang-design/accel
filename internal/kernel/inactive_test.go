@@ -23,7 +23,7 @@ import (
 // lowering produces one: a subgroup operation inside a conditional is refused,
 // because the state machine has no way to resume inside a branch. So the
 // scheduler is driven directly, which is also the level the rules live at. The
-// generated path is exercised by the corpus kernel in internal/testkernels.
+// generated path is exercised by the corpus kernel in internal/kernels.
 
 // lanes is one lane's view of a rendezvous.
 type laneView struct {

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // TestErrorMessages pins the message surface of spec 001 section 9.
@@ -216,7 +216,7 @@ func TestTypedErrorsAreProducedWhereTheirDocsSay(t *testing.T) {
 		if align <= 1 {
 			t.Skip("every offset is aligned on this device")
 		}
-		codec := testkernels.StageTintCodec{}
+		codec := kernels.StageTintCodec{}
 		// One byte in, which no device aligns to.
 		raw, err := d.NewBuffer(accel.BufferDescriptor{
 			DType: accel.U8, Count: 1 + codec.EncodedSize(),
@@ -230,7 +230,7 @@ func TestTypedErrorsAreProducedWhereTheirDocsSay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("view: %v", err)
 		}
-		pipe := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.TintedFSStage)
+		pipe := texturePipeline(t, d, &kernels.FullScreenVSStage, &kernels.TintedFSStage)
 		tex := renderTexture(t, d, "target", 4, 4)
 		r := d.NewRecorder()
 		p := r.RenderPass(accel.RenderPassDescriptor{

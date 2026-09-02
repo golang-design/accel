@@ -17,7 +17,7 @@ import (
 
 // TestChecksTheCorpusKernel builds spec 012's kernel from its real source.
 func TestChecksTheCorpusKernel(t *testing.T) {
-	pkgs, err := front.Load(repoRoot(t), "golang.design/x/accel/internal/testkernels")
+	pkgs, err := front.Load(repoRoot(t), "golang.design/x/accel/internal/kernels")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

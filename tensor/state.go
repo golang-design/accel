@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Persistent state, and why mutation is explicit in the graph.
@@ -251,9 +251,9 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 		b.fail(1, "ScatterRows", "%s", staleMessage(b, s))
 		return &State{b: b, poison: true, producer: -1}
 	}
-	scatter := &testkernels.ScatterRowsKernel
+	scatter := &kernels.ScatterRowsKernel
 	if s.desc.DType == accel.F16 {
-		scatter = &testkernels.ScatterRowsF16Kernel
+		scatter = &kernels.ScatterRowsF16Kernel
 	}
 	out := b.record(node{
 		op: "ScatterRows", inputs: []*Tensor{rows, ids},
@@ -261,7 +261,7 @@ func ScatterRows(b *Builder, s *State, rows *Tensor, ids *Tensor) *State {
 		outPort: s.desc.Name,
 		outOff:  s.offset,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.RowParams{
+			return kernels.RowParams{
 				Rows: uint32(count), Width: uint32(width), Capacity: uint32(s.shape[0]),
 			}
 		},

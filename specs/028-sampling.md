@@ -193,7 +193,7 @@ distinct values would have compared equal whatever either backend did.
 
 Section 4.1 recorded the kernels. This records the operators, because
 [039](039-sampling-policy.md) §1 found the gap that made the kernels useless:
-they lived in `internal/testkernels` and were reachable only through
+they lived in `internal/kernels` and were reachable only through
 `kernel.Dispatch`, so **no `Plan` could produce a token**. A consumer building
 an inference framework read the whole logits vector back to the host every
 decode step — 608 KB per token on their vocabulary — and sampled in Go. Their

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // A kernel asking for more shared memory than the device reports is refused,
@@ -35,7 +35,7 @@ func TestAKernelOverTheSharedBudgetIsRefused(t *testing.T) {
 	}
 	defer d.Close()
 
-	k := &testkernels.ExchangeKernel
+	k := &kernels.ExchangeKernel
 	if k.SharedBytes == 0 {
 		t.Fatal("the kernel reports no shared bytes, so the rule has nothing to compare")
 	}
@@ -60,7 +60,7 @@ func TestAKernelOverTheSharedBudgetIsRefused(t *testing.T) {
 // a refusal of every cooperative kernel.
 func TestAKernelWithinTheSharedBudgetIsAccepted(t *testing.T) {
 	d := openDevice(t)
-	k := &testkernels.ExchangeKernel
+	k := &kernels.ExchangeKernel
 	if got := d.Limits().MaxSharedMemoryBytes; got <= k.SharedBytes {
 		t.Skipf("the device reports %d shared bytes and the kernel needs %d", got, k.SharedBytes)
 	}

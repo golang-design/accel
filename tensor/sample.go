@@ -8,7 +8,7 @@ import (
 	"math"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Sampling: the operators that turn a row of logits into a token id.
@@ -87,7 +87,7 @@ import (
 // top-k keep fewer entries than it was asked for. specs/028-sampling.md states
 // it: both masks walk the distribution one entry per round, so this is a real
 // limit and not a buffer size.
-const TopMaxRounds = testkernels.TopMaxRounds
+const TopMaxRounds = kernels.TopMaxRounds
 
 // sampleShape splits a logits tensor into its rows and its vocabulary.
 //
@@ -159,9 +159,9 @@ func Argmax(b *Builder, logits *Tensor) *Tensor {
 	rows, vocab, out := sampleShape(logits)
 
 	return b.record(node{
-		op: "Argmax", inputs: []*Tensor{logits}, kernel: &testkernels.SampleArgmaxKernel,
+		op: "Argmax", inputs: []*Tensor{logits}, kernel: &kernels.SampleArgmaxKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.SampleDims{Vocab: uint32(vocab), Rows: uint32(rows)}
+			return kernels.SampleDims{Vocab: uint32(vocab), Rows: uint32(rows)}
 		},
 		// One workgroup per row rather than per output element: the whole
 		// vocabulary reduces together, because a maximum split across two
@@ -234,14 +234,14 @@ func SampleCategorical(b *Builder, weights, draws *Tensor) *Tensor {
 
 	return b.record(node{
 		op: "SampleCategorical", inputs: []*Tensor{weights, draws},
-		kernel: &testkernels.SampleCategoricalKernel,
+		kernel: &kernels.SampleCategoricalKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.SampleDims{Vocab: uint32(vocab), Rows: uint32(rows)}
+			return kernels.SampleDims{Vocab: uint32(vocab), Rows: uint32(rows)}
 		},
 		// One invocation per row, which is what the kernel bounds itself by. A
 		// row's walk is sequential, so there is nothing for a second lane in it
 		// to do.
-		grid: perElement(int(testkernels.SampleCategoricalKernel.WorkgroupSize.X)),
+		grid: perElement(int(kernels.SampleCategoricalKernel.WorkgroupSize.X)),
 		reason: "the sequential cumulative walk, one invocation per row; the draw scales " +
 			"by the row's own total, so a masked distribution needs no renormalizing pass",
 		rejected: []string{"a parallel prefix scan: it is faster and places the boundary " +
@@ -298,9 +298,9 @@ func TopKMask(b *Builder, weights *Tensor, k int) *Tensor {
 	}
 
 	return b.record(node{
-		op: "TopKMask", inputs: []*Tensor{weights}, kernel: &testkernels.TopKMaskKernel,
+		op: "TopKMask", inputs: []*Tensor{weights}, kernel: &kernels.TopKMaskKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.TopDims{Vocab: uint32(vocab), K: uint32(k)}
+			return kernels.TopDims{Vocab: uint32(vocab), K: uint32(k)}
 		},
 		// One workgroup per row, and perRow reads that off the result because
 		// a mask's result is shaped like its input.
@@ -364,9 +364,9 @@ func TopPMask(b *Builder, weights *Tensor, p float32) *Tensor {
 	}
 
 	return b.record(node{
-		op: "TopPMask", inputs: []*Tensor{weights}, kernel: &testkernels.TopPMaskKernel,
+		op: "TopPMask", inputs: []*Tensor{weights}, kernel: &kernels.TopPMaskKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.TopDims{Vocab: uint32(vocab), P: p}
+			return kernels.TopDims{Vocab: uint32(vocab), P: p}
 		},
 		grid: perRow,
 		reason: "the repeated extraction with a mass threshold, one workgroup per row; " +

@@ -37,7 +37,7 @@ three kernel gaps:
 
 | Gap | What exists today | What a batch needs |
 | --- | --- | --- |
-| ~~paged attention at the tensor layer~~ **closed 2026-08-24** | `tensor.Attention` selected only the decode and prefill kernels; the batched and paged kernels lived under `internal/testkernels` and nothing in `tensor/` referenced them | `AttentionOptions` binds `Pages` and `Lengths`, and the operator selects the paged kernel. *Batched* attention — several sequences in one dispatch — is still this spec's, and is what the scheduler needs |
+| ~~paged attention at the tensor layer~~ **closed 2026-08-24** | `tensor.Attention` selected only the decode and prefill kernels; the batched and paged kernels lived under `internal/kernels` and nothing in `tensor/` referenced them | `AttentionOptions` binds `Pages` and `Lengths`, and the operator selects the paged kernel. *Batched* attention — several sequences in one dispatch — is still this spec's, and is what the scheduler needs |
 | ~~position rotation~~ **closed 2026-08-24** | `RoPE` took one scalar `Offset` and computed `pos := r + Offset`, so the *row index* was part of the position | a positions tensor, one entry per row, read as a binding — see [043](043-per-row-values.md) |
 | ~~sampling~~ **closed 2026-08-24** | `SampleDims.Draw` was a scalar and `SampleCategorical` was `workgroup=1` writing `out[0]` | one row and one **independent** draw per slot — built, and `SampleArgmax` is per row too, since one batched sampler beside one single-row sampler would leave a caller choosing |
 
@@ -487,4 +487,4 @@ today:
 - two slots with identical logits and different draws emit different tokens,
   which a shared scalar `Draw` cannot do;
 - a batched decode step reaches the batched paged kernel through
-  `tensor.Attention` rather than through `internal/testkernels`.
+  `tensor.Attention` rather than through `internal/kernels`.

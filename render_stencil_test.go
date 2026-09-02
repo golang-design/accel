@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Stencil written in one pass is read by the next.
@@ -41,8 +41,8 @@ func TestAStencilWrittenInOnePassIsReadByTheNext(t *testing.T) {
 	// Pass 1 marks where it covers: always pass the stencil test, replace with
 	// the reference. HalfTriangleVS covers the lower-left half.
 	mark, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format: accel.Depth32FloatStencil8,
@@ -69,8 +69,8 @@ func TestAStencilWrittenInOnePassIsReadByTheNext(t *testing.T) {
 
 	// Pass 2 covers everything and keeps only what pass 1 marked.
 	test, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.FullScreenVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format: accel.Depth32FloatStencil8,
@@ -183,8 +183,8 @@ func TestAStencilWrittenInOnePassIsReadByTheNext(t *testing.T) {
 func TestAStencilStateNeedsAStencilAspect(t *testing.T) {
 	d := openDevice(t)
 	_, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.FullScreenVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format:  accel.Depth32Float,
@@ -203,8 +203,8 @@ func TestAStencilStateNeedsAStencilAspect(t *testing.T) {
 	}
 	// The accepting half: the same state against a format that has the aspect.
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.FullScreenVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.FullScreenVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format:  accel.Depth32FloatStencil8,

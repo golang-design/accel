@@ -12,8 +12,8 @@ import (
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
+	"golang.design/x/accel/internal/kernels"
 	"golang.design/x/accel/internal/metal"
-	"golang.design/x/accel/internal/testkernels"
 )
 
 // BenchmarkRenderSubmit measures one render pass of many draws, each with a
@@ -98,7 +98,7 @@ func renderExecutable(tb testing.TB, draws int) driver.Executable {
 	}
 	for i := range draws {
 		rp.Draws = append(rp.Draws, driver.RenderDraw{
-			Vertex: &testkernels.ScaledVSStage, Fragment: &testkernels.TintedFSStage,
+			Vertex: &kernels.ScaledVSStage, Fragment: &kernels.TintedFSStage,
 			VertexCount: 3, InstanceCount: 1,
 			Masks:  []uint8{0xf},
 			Blends: []driver.Blend{{}},
@@ -110,8 +110,8 @@ func renderExecutable(tb testing.TB, draws int) driver.Executable {
 				Stride:     12,
 				Attributes: []driver.VertexAttribute{{Location: 0, Offset: 0, Components: 3}},
 			}},
-			VertexUniforms:   []any{testkernels.StageTransform{Scale: 1}},
-			FragmentUniforms: []any{testkernels.StageTint{Colour: [4]float32{1, 0, 0, 1}}},
+			VertexUniforms:   []any{kernels.StageTransform{Scale: 1}},
+			FragmentUniforms: []any{kernels.StageTint{Colour: [4]float32{1, 0, 0, 1}}},
 		})
 	}
 	e, err := d.(driver.GraphCompiler).Compile(&driver.Plan{Label: "render", Nodes: []driver.PlanNode{{
@@ -141,7 +141,7 @@ func indirectExecutable(tb testing.TB, n int) driver.Executable {
 		plan.Nodes = append(plan.Nodes, driver.PlanNode{
 			Op: driver.OpDispatch, ID: i,
 			Dispatch: &driver.Dispatch{
-				Kernel:   &testkernels.AddKernel,
+				Kernel:   &kernels.AddKernel,
 				Count:    kernel.ID3{X: count / 64, Y: 1, Z: 1},
 				Bindings: []driver.Operand{in1, in2, out},
 				Indirect: &driver.Indirect{Count: cop, Max: kernel.ID3{X: count / 64, Y: 1, Z: 1}},

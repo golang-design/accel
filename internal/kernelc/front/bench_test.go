@@ -90,7 +90,7 @@ func BenchmarkLoadAndCheck(b *testing.B) {
 	root := repoRootB(b)
 	b.ReportAllocs()
 	for b.Loop() {
-		pkgs, err := front.Load(root, "golang.design/x/accel/internal/testkernels")
+		pkgs, err := front.Load(root, "golang.design/x/accel/internal/kernels")
 		if err != nil {
 			b.Fatal(err)
 		}

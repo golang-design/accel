@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // indirectGraph records a dispatch whose workgroup count comes from a buffer.
@@ -18,7 +18,7 @@ func indirectGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stat
 	t.Helper()
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -115,7 +115,7 @@ func countGraph(t *testing.T, d *accel.Device, max accel.WorkgroupCount, stats b
 	t.Helper()
 
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.CountWorkgroupsKernel, Label: "count",
+		Kernel: &kernels.CountWorkgroupsKernel, Label: "count",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -299,7 +299,7 @@ func TestIndirectValidationRows(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
 			p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-				Kernel: &testkernels.AddKernel, Label: "add",
+				Kernel: &kernels.AddKernel, Label: "add",
 			})
 			if err != nil {
 				t.Fatalf("pipeline: %v", err)
@@ -340,7 +340,7 @@ func TestIndirectValidationRows(t *testing.T) {
 func TestTheIndirectCountBufferIsChecked(t *testing.T) {
 	d := openDevice(t)
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "add",
+		Kernel: &kernels.AddKernel, Label: "add",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -466,7 +466,7 @@ func TestSubmitAfterWaitsForItsDependencies(t *testing.T) {
 func TestEveryIndirectNodeReportsItsCounters(t *testing.T) {
 	d := openDevice(t)
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.CountWorkgroupsKernel, Label: "count",
+		Kernel: &kernels.CountWorkgroupsKernel, Label: "count",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)

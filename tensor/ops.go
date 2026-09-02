@@ -8,7 +8,7 @@ import (
 	"math"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // The rest of the v0 operator set.
@@ -77,18 +77,18 @@ func GatherRows(b *Builder, table, ids *Tensor) *Tensor {
 	// The result is f32 whatever the table is: what follows an embedding lookup
 	// is a normalize, which specs/010-kernel-corpus.md registers at f32, so
 	// narrowing the output would only make the caller widen it again.
-	gather := &testkernels.GatherRowsKernel
+	gather := &kernels.GatherRowsKernel
 	why := "the gather variant; an id at or above the table's capacity writes zeros, " +
 		"because a GPU cannot report one"
 	if table.dtype == accel.F16 {
-		gather = &testkernels.GatherRowsF16Kernel
+		gather = &kernels.GatherRowsF16Kernel
 		why = "the gather variant over an f16 table, widening on load; an id at or " +
 			"above the table's capacity writes zeros, because a GPU cannot report one"
 	}
 	return b.record(node{
 		op: "GatherRows", inputs: []*Tensor{table, ids}, kernel: gather,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.RowParams{
+			return kernels.RowParams{
 				Rows: uint32(rows), Width: uint32(width), Capacity: uint32(capacity),
 			}
 		},
@@ -125,9 +125,9 @@ func RMSNorm(b *Builder, x, gain *Tensor, eps float32) *Tensor {
 	rows := x.shape.Elements() / width
 
 	return b.record(node{
-		op: "RMSNorm", inputs: []*Tensor{x, gain}, kernel: &testkernels.RMSNormKernel,
+		op: "RMSNorm", inputs: []*Tensor{x, gain}, kernel: &kernels.RMSNormKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.RowDims{Rows: uint32(rows), Width: uint32(width), Eps: eps}
+			return kernels.RowDims{Rows: uint32(rows), Width: uint32(width), Eps: eps}
 		},
 		grid:   perRow,
 		reason: "the cooperative row reduction, one workgroup per row",
@@ -172,9 +172,9 @@ func Softmax(b *Builder, x *Tensor, opts SoftmaxOptions) *Tensor {
 	rows := x.shape.Elements() / width
 
 	return b.record(node{
-		op: "Softmax", inputs: []*Tensor{x}, kernel: &testkernels.SoftmaxKernel,
+		op: "Softmax", inputs: []*Tensor{x}, kernel: &kernels.SoftmaxKernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.RowDims{Rows: uint32(rows), Width: uint32(width)}
+			return kernels.RowDims{Rows: uint32(rows), Width: uint32(width)}
 		},
 		grid:     perRow,
 		reason:   "the cooperative row reduction, one workgroup per row",
@@ -238,11 +238,11 @@ func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, positions *Tens
 	return b.record(node{
 		// Positions first, then the buffer rewritten: operand order is the
 		// kernel's binding order, and the in-place operand is the last.
-		op: "RoPE", inputs: []*Tensor{positions, x}, kernel: &testkernels.RoPEKernel,
+		op: "RoPE", inputs: []*Tensor{positions, x}, kernel: &kernels.RoPEKernel,
 		inPlace: true,
 		reads:   []string{baseName},
 		uniform: func(vals map[string]ScalarValue) any {
-			return testkernels.RoPEParams{
+			return kernels.RoPEParams{
 				Rows: uint32(rows), Width: uint32(width), RotaryDim: uint32(rotaryDim),
 				Base: vals[baseName].F32,
 			}
@@ -251,7 +251,7 @@ func RoPE(b *Builder, x *Tensor, rotaryDim int, baseName string, positions *Tens
 		// itself by Rows*RotaryDim/2 and a grid sized per element would launch
 		// invocations with nothing to do.
 		grid: func(out *Tensor) accel.WorkgroupCount {
-			wg := int(testkernels.RoPEKernel.WorkgroupSize.X)
+			wg := int(kernels.RoPEKernel.WorkgroupSize.X)
 			pairs := rows * rotaryDim / 2
 			return accel.WorkgroupCount{X: (pairs + wg - 1) / wg}
 		},
@@ -295,11 +295,11 @@ func Cast(b *Builder, x *Tensor, to DType) *Tensor {
 	var k *accel.Kernel
 	switch {
 	case x.dtype == accel.F32 && to == accel.F16:
-		k = &testkernels.CastF32ToF16Kernel
+		k = &kernels.CastF32ToF16Kernel
 	case x.dtype == accel.F16 && to == accel.F32:
-		k = &testkernels.CastF16ToF32Kernel
+		k = &kernels.CastF16ToF32Kernel
 	case x.dtype == accel.BF16 && to == accel.F32:
-		k = &testkernels.CastBF16ToF32Kernel
+		k = &kernels.CastBF16ToF32Kernel
 	case x.dtype == accel.BF16:
 		// Named separately from the general refusal, because a caller reaching
 		// here has a bf16 checkpoint and needs to be told the route rather than

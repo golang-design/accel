@@ -12,7 +12,7 @@ import (
 
 	"golang.design/x/accel"
 	"golang.design/x/accel/internal/conformance/parity"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // specs/062-backend-parity.md sections 6.1, 6.2 and 6.8: every dtype and every
@@ -172,8 +172,8 @@ func formatParityCases() []parityCase {
 					accel.TextureRenderTarget|accel.TextureCopySrc|accel.TextureCopyDst,
 					accel.MemoryReadback)
 				pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-					Vertex:   &testkernels.FullScreenVSStage,
-					Fragment: &testkernels.SolidFSStage,
+					Vertex:   &kernels.FullScreenVSStage,
+					Fragment: &kernels.SolidFSStage,
 					Targets:  []accel.ColorTargetState{{Format: f}},
 					Label:    "parity " + f.String(),
 				})

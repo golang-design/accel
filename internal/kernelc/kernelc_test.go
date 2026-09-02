@@ -13,7 +13,7 @@ import (
 	"golang.design/x/accel/internal/kernelc"
 )
 
-const corpus = "./internal/testkernels"
+const corpus = "./internal/kernels"
 
 func root(t testing.TB) string {
 	t.Helper()
@@ -224,12 +224,12 @@ func copyCorpus(t *testing.T) string {
 		write(t, filepath.Join(dir, "go.sum"), string(b))
 	}
 
-	src, err := os.ReadFile(filepath.Join(repo, "internal", "testkernels", "scale.go"))
+	src, err := os.ReadFile(filepath.Join(repo, "internal", "kernels", "scale.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Replace(string(src), "package testkernels", "package kernels", 1)
-	body = strings.Replace(body, "//go:generate go run golang.design/x/accel/cmd/accel-kernel -C ../.. ./internal/testkernels\n", "", 1)
+	body := strings.Replace(string(src), "package kernels", "package kernels", 1)
+	body = strings.Replace(body, "//go:generate go run golang.design/x/accel/cmd/accel-kernel -C ../.. ./internal/kernels\n", "", 1)
 	write(t, filepath.Join(dir, "kernels", "scale.go"), body)
 	return dir
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // Two draws of one pass binding the same texture see the same texels, and the
@@ -23,9 +23,9 @@ func TestTwoDrawsSharingATextureSeeTheSameTexels(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
-	draw := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.SolidFSStage)
+	draw := texturePipeline(t, d, &kernels.FullScreenVSStage, &kernels.SolidFSStage)
 	defer draw.Close()
-	blit := texturePipeline(t, d, &testkernels.FullScreenVSStage, &testkernels.BlitFSStage)
+	blit := texturePipeline(t, d, &kernels.FullScreenVSStage, &kernels.BlitFSStage)
 	defer blit.Close()
 
 	source := renderTexture(t, d, "source", w, h)

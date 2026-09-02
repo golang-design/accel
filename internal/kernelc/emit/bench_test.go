@@ -21,7 +21,7 @@ func BenchmarkGenerate(b *testing.B) {
 	for _, k := range kernels {
 		k.Digest = emit.Digest(k)
 	}
-	pkg := emit.Package{Name: "testkernels", Kernels: kernels}
+	pkg := emit.Package{Name: "kernels", Kernels: kernels}
 
 	b.ReportAllocs()
 	for b.Loop() {
@@ -53,7 +53,7 @@ func BenchmarkGenerateManyKernels(b *testing.B) {
 	for i := range kernels {
 		kernels[i] = one
 	}
-	pkg := emit.Package{Name: "testkernels", Kernels: kernels}
+	pkg := emit.Package{Name: "kernels", Kernels: kernels}
 
 	b.ReportAllocs()
 	for b.Loop() {

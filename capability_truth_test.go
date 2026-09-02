@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // A reported capability agrees with what the device actually accepts.
@@ -42,8 +42,8 @@ func TestCapabilitiesAgreeWithWhatTheDeviceAccepts(t *testing.T) {
 
 			t.Run("graphics", func(t *testing.T) {
 				p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-					Vertex:   &testkernels.HalfTriangleVSStage,
-					Fragment: &testkernels.SolidFSStage,
+					Vertex:   &kernels.HalfTriangleVSStage,
+					Fragment: &kernels.SolidFSStage,
 					Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 					Label:    "capability probe",
 				})

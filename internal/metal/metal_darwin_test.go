@@ -14,8 +14,8 @@ import (
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
+	"golang.design/x/accel/internal/kernels"
 	"golang.design/x/accel/internal/metal"
-	"golang.design/x/accel/internal/testkernels"
 )
 
 // open returns one opened Metal device.
@@ -238,7 +238,7 @@ func TestCompileRefusesWhatItCannotLower(t *testing.T) {
 		node driver.PlanNode
 		want string
 	}{
-		{"an indirect dispatch", dispatchOf(&testkernels.AddKernel, 3, nil,
+		{"an indirect dispatch", dispatchOf(&kernels.AddKernel, 3, nil,
 			&driver.Indirect{Count: op, Max: kernel.ID3{X: 1, Y: 1, Z: 1}}), "indirect"},
 		// A synthetic record rather than a corpus one. Every corpus kernel now
 		// carries MSL, so a test that named one would quietly stop testing the
@@ -246,7 +246,7 @@ func TestCompileRefusesWhatItCannotLower(t *testing.T) {
 		// happened to the version that named ReduceSum.
 		{"a kernel with no MSL", dispatchOf(noMSL, 1, nil, nil), "no MSL artifact"},
 		{"a uniform count that disagrees with the kernel",
-			dispatchOf(&testkernels.ElemScaleKernel, 2, nil, nil), "by-value parameters"},
+			dispatchOf(&kernels.ElemScaleKernel, 2, nil, nil), "by-value parameters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{tc.node}})
@@ -309,7 +309,7 @@ func TestSlotsRebindAndReplay(t *testing.T) {
 		Nodes: []driver.PlanNode{
 			{Op: driver.OpHostWrite, Dst: whole(a), Data: make([]byte, bytes), ID: 0},
 			{Op: driver.OpDispatch, BarrierBefore: true, ID: 1, Dispatch: &driver.Dispatch{
-				Kernel:   &testkernels.AddKernel,
+				Kernel:   &kernels.AddKernel,
 				Count:    kernel.ID3{X: 1, Y: 1, Z: 1},
 				Bindings: []driver.Operand{whole(a), whole(bb), slot},
 			}},
@@ -440,7 +440,7 @@ func TestZeroSizedDispatchIsSkipped(t *testing.T) {
 	}
 	e, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
 		Op: driver.OpDispatch, Dispatch: &driver.Dispatch{
-			Kernel: &testkernels.AddKernel, Count: kernel.ID3{X: 0, Y: 1, Z: 1},
+			Kernel: &kernels.AddKernel, Count: kernel.ID3{X: 0, Y: 1, Z: 1},
 			Bindings: []driver.Operand{op, op, op},
 		},
 	}}})
@@ -586,7 +586,7 @@ func TestEncodersSwitchWithoutABarrier(t *testing.T) {
 	e, err := c.Compile(&driver.Plan{Nodes: []driver.PlanNode{
 		{Op: driver.OpCopy, Dst: whole(mid), Src: whole(a), ID: 0},
 		{Op: driver.OpDispatch, ID: 1, Dispatch: &driver.Dispatch{
-			Kernel: &testkernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
+			Kernel: &kernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
 			Bindings: []driver.Operand{whole(mid), whole(bb), whole(out)},
 		}},
 		{Op: driver.OpCopy, Dst: whole(mid), Src: whole(out), ID: 2},
@@ -681,7 +681,7 @@ func TestIndirectCountMustHoldThreeCounts(t *testing.T) {
 
 	_, err = c.Compile(&driver.Plan{Nodes: []driver.PlanNode{{
 		Op: driver.OpDispatch, ID: 0, Dispatch: &driver.Dispatch{
-			Kernel: &testkernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
+			Kernel: &kernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
 			Bindings: []driver.Operand{full, full, full},
 			Indirect: &driver.Indirect{Count: short, Max: kernel.ID3{X: 1, Y: 1, Z: 1}},
 		},
@@ -719,7 +719,7 @@ func TestIndirectStatsAreOptional(t *testing.T) {
 	}
 	node := driver.PlanNode{
 		Op: driver.OpDispatch, ID: 0, Dispatch: &driver.Dispatch{
-			Kernel: &testkernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
+			Kernel: &kernels.AddKernel, Count: kernel.ID3{X: 1, Y: 1, Z: 1},
 			Bindings: []driver.Operand{full, full, full},
 			Indirect: &driver.Indirect{Count: count, Max: kernel.ID3{X: 1, Y: 1, Z: 1}},
 		},
@@ -863,8 +863,8 @@ func TestARenderPassWithAnUnboundAttachmentIsReported(t *testing.T) {
 				ColorStore:  []driver.StoreOp{driver.StoreKeep},
 				ColorClear:  [][4]float32{{}},
 				Draws: []driver.RenderDraw{{
-					Vertex:      &testkernels.FullScreenVSStage,
-					Fragment:    &testkernels.SolidFSStage,
+					Vertex:      &kernels.FullScreenVSStage,
+					Fragment:    &kernels.SolidFSStage,
 					VertexCount: 3, InstanceCount: 1,
 					Masks:  []uint8{0xf},
 					Blends: []driver.Blend{{}},

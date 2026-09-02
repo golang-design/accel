@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // worked builds specs/003-command-graph.md's worked example: eight nodes, one
@@ -36,7 +36,7 @@ func worked(t *testing.T, d *accel.Device) workedGraph {
 	// One pipeline stands in for the spec's five: the assertions are about the
 	// graph's shape, and five identical kernels would say nothing more.
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -179,7 +179,7 @@ func TestWorkedGraphSubRangeVariant(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "gemm",
+		Kernel: &kernels.AddKernel, Label: "gemm",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -289,7 +289,7 @@ func TestWorkedGraphMemoryNumbers(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -392,7 +392,7 @@ func TestAliasingAddsNoBarrier(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)

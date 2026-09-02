@@ -20,7 +20,7 @@ import (
 
 // stageTestVS and stageTestFS are the smallest pair of stages a pipeline
 // accepts. Nothing runs them: every test here stops at the plan, and the
-// package cannot import internal/testkernels because that package imports this
+// package cannot import internal/kernels because that package imports this
 // one.
 var (
 	stageTestVS = Stage{

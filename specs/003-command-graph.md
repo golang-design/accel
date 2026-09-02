@@ -536,7 +536,7 @@ come apart the moment an atomic is not commutative.
 
 `ExchangeU32`, `ExchangeI32`, `CompareExchangeU32` and `CompareExchangeI32` are
 in the intrinsic table and reachable from the corpus
-(`internal/testkernels/atomic.go:53,104`). Two nodes that each exchange a
+(`internal/kernels/atomic.go:53,104`). Two nodes that each exchange a
 different value into one location produce a result that depends entirely on which
 ran last. Today they get a write-write edge and the caller gets the order they
 recorded. Under this rule the edge disappears and the answer becomes whichever

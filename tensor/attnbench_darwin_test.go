@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // What an empty block costs.
@@ -35,14 +35,14 @@ func BenchmarkAttentionEmptyBlocks(b *testing.B) {
 
 	d := openMetalBenchDevice(b)
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AttentionDecodeKernel, Label: "attn",
+		Kernel: &kernels.AttentionDecodeKernel, Label: "attn",
 	})
 	if err != nil {
 		b.Fatalf("pipeline: %v", err)
 	}
 	defer p.Close()
 
-	dims := testkernels.AttnDims{
+	dims := kernels.AttnDims{
 		QHeads: qHeads, KVHeads: kvHeads, HeadDim: headDim,
 		Scale: float32(1 / math.Sqrt(headDim)),
 	}

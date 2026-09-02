@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // specs/035-cpu-rasterizer.md §8 step 1: a clip-space triangle renders to an
@@ -25,8 +25,8 @@ func TestATriangleRendersOffscreen(t *testing.T) {
 	q := d.Queue()
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		Label:    "solid half",
 	})
@@ -122,8 +122,8 @@ func TestARenderPassClearsAndWritesDepth(t *testing.T) {
 	q := d.Queue()
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		DepthStencil: &accel.DepthStencilState{
 			Format: accel.Depth32Float, Test: true, Write: true,
@@ -187,8 +187,8 @@ func TestARenderPassKeepsWhatWasThere(t *testing.T) {
 	q := d.Queue()
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.HalfTriangleVSStage,
-		Fragment: &testkernels.SolidFSStage,
+		Vertex:   &kernels.HalfTriangleVSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		Label:    "keep",
 	})
@@ -250,7 +250,7 @@ func TestAPanickingStageBecomesAnError(t *testing.T) {
 	}
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 		Vertex:   &boom,
-		Fragment: &testkernels.SolidFSStage,
+		Fragment: &kernels.SolidFSStage,
 		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 		Label:    "boom",
 	})

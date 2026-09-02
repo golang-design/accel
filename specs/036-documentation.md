@@ -85,7 +85,7 @@ package documentation is the current word on both.
 **Every page's code is verified, not by `Example` functions.** §3.1 asked for
 those, and §4.1's finding is why they do not fit: a kernel-bearing example needs
 a generated kernel in its own package, and the only such package in this
-repository is `internal/testkernels`, which a reader cannot import. Teaching
+repository is `internal/kernels`, which a reader cannot import. Teaching
 from it would show an import that does not work.
 
 So the check is the one the README already uses, and it is stronger than

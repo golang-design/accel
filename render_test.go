@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 func rgba() accel.ColorTargetState {
@@ -25,8 +25,8 @@ func rgba() accel.ColorTargetState {
 func TestRenderPipelineCompiles(t *testing.T) {
 	d := openDevice(t)
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.GeometryVSStage,
-		Fragment: &testkernels.ShadeFSStage,
+		Vertex:   &kernels.GeometryVSStage,
+		Fragment: &kernels.ShadeFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{{
 			Stride: 32,
 			Attributes: []accel.VertexAttribute{
@@ -55,8 +55,8 @@ func TestRenderPipelineRefusals(t *testing.T) {
 	d := openDevice(t)
 	base := func() accel.RenderPipelineDescriptor {
 		return accel.RenderPipelineDescriptor{
-			Vertex:   &testkernels.GeometryVSStage,
-			Fragment: &testkernels.ShadeFSStage,
+			Vertex:   &kernels.GeometryVSStage,
+			Fragment: &kernels.ShadeFSStage,
 			VertexBuffers: []accel.VertexBufferLayout{{
 				Stride: 32,
 				Attributes: []accel.VertexAttribute{
@@ -80,7 +80,7 @@ func TestRenderPipelineRefusals(t *testing.T) {
 		{"no fragment stage", func(d *accel.RenderPipelineDescriptor) { d.Fragment = nil },
 			"no fragment stage"},
 		{"stages swapped", func(d *accel.RenderPipelineDescriptor) {
-			d.Vertex, d.Fragment = &testkernels.ShadeFSStage, &testkernels.GeometryVSStage
+			d.Vertex, d.Fragment = &kernels.ShadeFSStage, &kernels.GeometryVSStage
 		}, "takes a vertex stage"},
 		{"one target for two attachments", func(d *accel.RenderPipelineDescriptor) {
 			d.Targets = []accel.ColorTargetState{rgba()}
@@ -97,7 +97,7 @@ func TestRenderPipelineRefusals(t *testing.T) {
 			d.Primitive.Topology = accel.LineList
 		}, "leaves its fill rule unstated"},
 		{"stages that disagree about varyings", func(d *accel.RenderPipelineDescriptor) {
-			d.Vertex = &testkernels.FullScreenVSStage
+			d.Vertex = &kernels.FullScreenVSStage
 		}, "the two stages exchange one type"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -141,8 +141,8 @@ func TestAVertexLayoutIsRefusedAgainstTheDevicesLimit(t *testing.T) {
 		return out
 	}
 	_, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.AttributeVSStage,
-		Fragment: &testkernels.TintFSStage,
+		Vertex:   &kernels.AttributeVSStage,
+		Fragment: &kernels.TintFSStage,
 		Targets:  []accel.ColorTargetState{rgba()},
 		// One past the limit, which is where an off-by-one shows; a wildly
 		// oversized layout is refused by a wrong comparison too.

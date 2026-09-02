@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 	"golang.design/x/accel/quant"
 )
 
@@ -128,9 +128,9 @@ func Int4MatVec(b *Builder, a *Tensor, w Int4) *Tensor {
 
 	return b.record(node{
 		op: "Int4MatVec", inputs: []*Tensor{a, w.Codes, w.Scales, w.Zeros},
-		kernel: &testkernels.QuantMatVecInt4Kernel,
+		kernel: &kernels.QuantMatVecInt4Kernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.GEMMDims{K: uint32(k), N: uint32(n)}
+			return kernels.GEMMDims{K: uint32(k), N: uint32(n)}
 		},
 		grid: func(*Tensor) accel.WorkgroupCount {
 			// One workgroup per output column, each reducing over K. The row
@@ -192,20 +192,20 @@ func Int4MatMul(b *Builder, a *Tensor, w Int4) *Tensor {
 
 	return b.record(node{
 		op: "Int4MatMul", inputs: []*Tensor{a, w.Codes, w.Scales, w.Zeros},
-		kernel: &testkernels.QuantMatMulInt4Kernel,
+		kernel: &kernels.QuantMatMulInt4Kernel,
 		uniform: func(map[string]ScalarValue) any {
-			return testkernels.GEMMDims{M: uint32(m), K: uint32(k), N: uint32(n)}
+			return kernels.GEMMDims{M: uint32(m), K: uint32(k), N: uint32(n)}
 		},
 		grid: func(*Tensor) accel.WorkgroupCount {
 			// One workgroup per output tile. The tile is the reason this
 			// operator exists: every weight it unpacks is read TileM times.
 			return accel.WorkgroupCount{
-				X: (n + testkernels.TileN - 1) / testkernels.TileN,
-				Y: (m + testkernels.TileM - 1) / testkernels.TileM,
+				X: (n + kernels.TileN - 1) / kernels.TileN,
+				Y: (m + kernels.TileM - 1) / kernels.TileM,
 			}
 		},
 		reason: fmt.Sprintf("the tiled 4-bit kernel: %d rows over %d columns, each "+
-			"weight unpacked once per tile and read %d times", m, n, testkernels.TileM),
+			"weight unpacked once per tile and read %d times", m, n, kernels.TileM),
 		rejected: []string{"the 4-bit row kernel: it reduces one row per workgroup, so " +
 			"a batch would re-read and re-unpack the whole matrix per token"},
 	}, accel.F32, Shape{m, n})

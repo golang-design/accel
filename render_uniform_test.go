@@ -10,14 +10,14 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 func uniformPipeline(t *testing.T, d *accel.Device) *accel.RenderPipeline {
 	t.Helper()
 	p, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:   &testkernels.ScaledVSStage,
-		Fragment: &testkernels.TintedFSStage,
+		Vertex:   &kernels.ScaledVSStage,
+		Fragment: &kernels.TintedFSStage,
 		VertexBuffers: []accel.VertexBufferLayout{{
 			Stride: 12,
 			Attributes: []accel.VertexAttribute{
@@ -68,8 +68,8 @@ func TestEachStageGetsItsOwnUniforms(t *testing.T) {
 	})
 	pass.SetPipeline(pipe)
 	pass.SetVertexBuffer(0, whole(t, vb))
-	pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 0.5})
-	pass.SetFragmentUniform(0, testkernels.StageTint{Colour: [4]float32{0.2, 0.4, 0.6, 1}})
+	pass.SetVertexUniform(0, kernels.StageTransform{Scale: 0.5})
+	pass.SetFragmentUniform(0, kernels.StageTint{Colour: [4]float32{0.2, 0.4, 0.6, 1}})
 	pass.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()
@@ -124,14 +124,14 @@ func TestRenderUniformRefusals(t *testing.T) {
 	}{{
 		name: "a stage parameter with no value",
 		record: func(t *testing.T, d *accel.Device, p *accel.RenderPass, pipe *accel.RenderPipeline) {
-			p.SetFragmentUniform(0, testkernels.StageTint{})
+			p.SetFragmentUniform(0, kernels.StageTint{})
 		},
 		says: `ScaledVS takes "xf" at index 0 and no value was set`,
 	}, {
 		name: "a value of the wrong type",
 		record: func(t *testing.T, d *accel.Device, p *accel.RenderPass, pipe *accel.RenderPipeline) {
-			p.SetVertexUniform(0, testkernels.StageTint{})
-			p.SetFragmentUniform(0, testkernels.StageTint{})
+			p.SetVertexUniform(0, kernels.StageTint{})
+			p.SetFragmentUniform(0, kernels.StageTint{})
 		},
 		says: "ScaledVS takes StageTransform as \"xf\" at index 0 and a StageTint was set",
 	}, {
@@ -143,7 +143,7 @@ func TestRenderUniformRefusals(t *testing.T) {
 	}, {
 		name: "a negative index",
 		record: func(t *testing.T, d *accel.Device, p *accel.RenderPass, pipe *accel.RenderPipeline) {
-			p.SetFragmentUniform(-1, testkernels.StageTint{})
+			p.SetFragmentUniform(-1, kernels.StageTint{})
 		},
 		says: "SetFragmentUniform at index -1",
 	}} {
@@ -193,7 +193,7 @@ func TestAUniformSetForAStageThatTakesNone(t *testing.T) {
 		Width: 4, Height: 4, Label: "spurious",
 	})
 	p.SetPipeline(solidPipeline(t, d))
-	p.SetVertexUniform(0, testkernels.StageTransform{})
+	p.SetVertexUniform(0, kernels.StageTransform{})
 	p.Draw(accel.Draw{VertexCount: 3})
 
 	_, err := r.Build()
@@ -236,14 +236,14 @@ func TestUniformsAreCapturedPerDraw(t *testing.T) {
 	})
 	pass.SetPipeline(pipe)
 	pass.SetVertexBuffer(0, whole(t, vb))
-	pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-	pass.SetFragmentUniform(0, testkernels.StageTint{Colour: first})
+	pass.SetVertexUniform(0, kernels.StageTransform{Scale: 1})
+	pass.SetFragmentUniform(0, kernels.StageTint{Colour: first})
 	pass.Draw(accel.Draw{VertexCount: 3})
 
 	// The second draw is scaled to zero, so it covers nothing and the first
 	// draw's colour survives.
-	pass.SetVertexUniform(0, testkernels.StageTransform{Scale: 0})
-	pass.SetFragmentUniform(0, testkernels.StageTint{Colour: second})
+	pass.SetVertexUniform(0, kernels.StageTransform{Scale: 0})
+	pass.SetFragmentUniform(0, kernels.StageTint{Colour: second})
 	pass.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()

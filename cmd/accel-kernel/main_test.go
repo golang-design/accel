@@ -24,7 +24,7 @@ func repoRoot(t *testing.T) string {
 // TestCheckPassesOnTheCommittedTree is the invocation CI runs.
 func TestCheckPassesOnTheCommittedTree(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := run([]string{"-C", repoRoot(t), "-check", "./internal/testkernels"}, &out, &errOut)
+	code := run([]string{"-C", repoRoot(t), "-check", "./internal/kernels"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, out.String(), errOut.String())
 	}
@@ -149,13 +149,13 @@ func throwawayModule(t *testing.T) string {
 		write(filepath.Join(dir, "go.sum"), string(b))
 	}
 
-	src, err := os.ReadFile(filepath.Join(repo, "internal", "testkernels", "scale.go"))
+	src, err := os.ReadFile(filepath.Join(repo, "internal", "kernels", "scale.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Replace(string(src), "package testkernels", "package kernels", 1)
+	body := strings.Replace(string(src), "package kernels", "package kernels", 1)
 	body = strings.Replace(body,
-		"//go:generate go run golang.design/x/accel/cmd/accel-kernel -C ../.. ./internal/testkernels\n", "", 1)
+		"//go:generate go run golang.design/x/accel/cmd/accel-kernel -C ../.. ./internal/kernels\n", "", 1)
 	write(filepath.Join(dir, "kernels", "scale.go"), body)
 	return dir
 }

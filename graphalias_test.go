@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
-	"golang.design/x/accel/internal/testkernels"
+	"golang.design/x/accel/internal/kernels"
 )
 
 // The diamond of specs/017-graph-aliasing.md section 2, which is the case
@@ -28,7 +28,7 @@ func TestTheDiamondDoesNotAliasUnorderedTransients(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -106,7 +106,7 @@ func TestOrderedTransientsAlias(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -174,7 +174,7 @@ func TestTransientsSharingAUserDoNotAlias(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -244,7 +244,7 @@ func TestThePeakNeverExceedsThePool(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -294,7 +294,7 @@ func TestMemoryFieldsSeparateUnderAliasing(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -453,7 +453,7 @@ func TestReadingAnUnwrittenTransientIsRefused(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			d := openDevice(t)
 			p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-				Kernel: &testkernels.AddKernel, Label: "op",
+				Kernel: &kernels.AddKernel, Label: "op",
 			})
 			if err != nil {
 				t.Fatalf("pipeline: %v", err)
@@ -482,7 +482,7 @@ func TestInPlaceWorkOnAWrittenTransientIsFine(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -541,7 +541,7 @@ func TestATransientLivingBetweenTwoUsersDoesNotAlias(t *testing.T) {
 	d := openDevice(t)
 	storage := accel.BufferStorage | accel.BufferCopySrc | accel.BufferCopyDst
 	p, err := d.NewComputePipeline(accel.ComputePipelineDescriptor{
-		Kernel: &testkernels.AddKernel, Label: "op",
+		Kernel: &kernels.AddKernel, Label: "op",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)

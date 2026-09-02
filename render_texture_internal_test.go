@@ -17,7 +17,7 @@ import (
 // In-package for the reason the stage-mask tests are: a declared access and its
 // stage are not public values, and the mask is what the barrier between a pass
 // that writes an attachment and a pass that fetches it is made of. The stages
-// are hand-written here because internal/testkernels imports this package.
+// are hand-written here because internal/kernels imports this package.
 
 // texturedStage is a stage record declaring one texture at slot 0.
 //

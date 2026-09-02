@@ -21,7 +21,7 @@ the unbuilt targets, was a milestone out of date.
 **The graphics directives too — corrected 2026-08-27.** The paragraph that stood
 here also listed `//accel:vertex` and `//accel:fragment` among the unbuilt, on
 the grounds that [000](000-decisions.md) keeps them reserved while graphics is
-post-v0. They are built: `front.go:81` parses both, `internal/testkernels/stages.go`
+post-v0. They are built: `front.go:81` parses both, `internal/kernels/stages.go`
 carries the stage corpus, and six vertex and six fragment artifacts lower to MSL.
 The same mistake as the MSL sentence above, one milestone later, and it is why
 this spec now names its outstanding work in [STATUS.md](STATUS.md) rather than in
