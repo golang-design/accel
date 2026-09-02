@@ -844,6 +844,19 @@ func (c *checker) binary(e *ast.BinaryExpr) ir.Value {
 			"every target (specs/008-numerics.md)", e.Op, x.Type(), exprText(e.X), e.Op, exprText(e.Y))
 		return nil
 	}
+	// A shift by a constant count outside [0, 31] is a build error,
+	// specs/008-numerics.md section 3: Go admits it (the result is zero, or
+	// the sign) and the exact portable range does not. A constant zero
+	// divisor never arrives here, since Go's type checker refuses it. The
+	// same cases with a variable operand are execution errors, which the CPU
+	// reports as a panic and Metal through its fault word.
+	if k, ok := y.(*ir.Const); ok && k.Val != nil && (e.Op == token.SHL || e.Op == token.SHR) {
+		if n, exact := constant.Int64Val(constant.ToInt(k.Val)); !exact || n < 0 || n > 31 {
+			c.errorf(e.Y.Pos(), "a shift by %s is outside [0, 31], which is the exact "+
+				"portable range (specs/008-numerics.md section 3)", exprText(e.Y))
+			return nil
+		}
+	}
 	return ir.NewBinary(e.Pos(), t, e.Op, x, y)
 }
 

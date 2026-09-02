@@ -43,6 +43,15 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 	}
 
 	e := &executable{dev: d, plan: p, bound: make([]driver.SlotBinding, p.Slots+1)}
+	// One fault word per node, specs/008-numerics.md section 3: a dispatch
+	// records its excluded integer cases here and Wait reads them back.
+	// Shared storage, since the host zeroes it before each submission and
+	// reads it after, and the GPU touches it once per fault.
+	faults, err := d.dev.NewBuffer(max(4*len(p.Nodes), 4), mtl.StorageShared)
+	if err != nil {
+		return nil, fmt.Errorf("accel: fault words: %w", err)
+	}
+	e.faults = faults
 	for i := range p.Nodes {
 		n := &p.Nodes[i]
 		switch n.Op {
@@ -168,6 +177,9 @@ type executable struct {
 	plan *driver.Plan
 
 	staging []*mtl.Buffer
+
+	// faults holds one uint per plan node; see Compile.
+	faults  *mtl.Buffer
 	stageAt []stagedWrite
 
 	// stagedAttachments counts the attachments that could not alias the
@@ -324,6 +336,10 @@ func (e *executable) Submit() (driver.Fence, error) {
 		e.cur.close()
 	}
 
+	// The fault words are cleared on the host before the buffer is committed,
+	// which orders the clear before every dispatch in it.
+	clear(e.faults.Bytes())
+
 	cb := e.dev.queue.Begin()
 	enc := &pass{cb: cb}
 	if err := e.encode(enc); err != nil {
@@ -334,6 +350,7 @@ func (e *executable) Submit() (driver.Fence, error) {
 	enc.end()
 	cb.Commit()
 	f := newFence(cb, e.dev)
+	f.faults = e.faultReport
 	e.cur = f
 	return f, nil
 }
@@ -489,6 +506,7 @@ func (e *executable) dispatch(p *pass, n *driver.PlanNode) error {
 		lens[i] = uint32(r.size / elemBytes(k.Bindings[i].DType))
 	}
 	enc.SetBytes(u32Bytes(lens), mslabi.LengthsIndex(len(d.Bindings)))
+	enc.SetBuffer(e.faults, 4*e.nodeIndex(n), mslabi.FaultIndex(len(d.Bindings), len(k.Uniforms)))
 
 	// The uniform blocks follow the lengths slot, in signature order, which is
 	// the layout the emitter fixed and exported so there is one copy of it.
@@ -655,6 +673,10 @@ func (e *executable) Close() error {
 		s.Close()
 	}
 	e.staging = nil
+	if e.faults != nil {
+		e.faults.Close()
+		e.faults = nil
+	}
 	for _, s := range e.indirect {
 		s.close()
 	}
@@ -740,6 +762,10 @@ type fence struct {
 	// cb is nil once close released it.
 	cb *mtl.CommandBuffer
 
+	// faults reads the executable's fault words once the command buffer has
+	// completed, and is nil for a fence with none to read.
+	faults func() error
+
 	// waiting counts the goroutines inside cb.Wait with mu released, and idle
 	// is signalled when it drops to zero. Wait releases mu across the GPU
 	// wait so that Done, and everything busy() gates, stays non-blocking; the
@@ -791,6 +817,9 @@ func (f *fence) Wait() error {
 
 	cb.Wait()
 	err := cb.Err()
+	if err == nil && f.faults != nil {
+		err = f.faults()
+	}
 
 	f.mu.Lock()
 	f.waiting--
@@ -848,4 +877,41 @@ func noMSL(k *kernel.Kernel) error {
 	}
 	return fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal; "+
 		"it is outside the subset specs/021-metal-bringup.md section 5 lowers", k.Name)
+}
+
+// nodeIndex is n's position in the plan, which is its fault word's.
+func (e *executable) nodeIndex(n *driver.PlanNode) int {
+	for i := range e.plan.Nodes {
+		if &e.plan.Nodes[i] == n {
+			return i
+		}
+	}
+	return 0
+}
+
+// faultReport reads the fault words after a submission and names the first
+// node that recorded one. A fault is the kernel's error, not the device's:
+// the device stays usable and the next submission clears the words.
+func (e *executable) faultReport() error {
+	words := e.faults.Bytes()
+	for i := range e.plan.Nodes {
+		if 4*i+4 > len(words) {
+			break
+		}
+		code := uint32(words[4*i]) | uint32(words[4*i+1])<<8 | uint32(words[4*i+2])<<16 | uint32(words[4*i+3])<<24
+		if code == mslabi.FaultNone {
+			continue
+		}
+		n := &e.plan.Nodes[i]
+		name := n.Op.String()
+		if n.Dispatch != nil && n.Dispatch.Kernel != nil {
+			name = n.Dispatch.Kernel.Name
+		}
+		if code == mslabi.FaultDivByZero {
+			return fmt.Errorf("accel: node %d: kernel %s divided an integer by zero on the "+
+				"device (specs/008-numerics.md section 3): the result is not a value", n.ID, name)
+		}
+		return fmt.Errorf("accel: node %d: kernel %s recorded fault %d on the device", n.ID, name, code)
+	}
+	return nil
 }

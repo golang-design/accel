@@ -47,6 +47,22 @@ func LengthsIndex(n int) int { return n }
 // bindings.
 func UniformIndex(n, i int) int { return n + 1 + i }
 
+// FaultIndex reports the buffer index the fault word occupies for a kernel
+// with n bindings and u uniforms: one uint the kernel's excluded integer
+// cases write into, which the backend reads after the submission completes.
+//
+// specs/008-numerics.md section 3 makes integer division by zero an execution
+// error rather than a value. Metal has no trap, so the error is a word the
+// kernel sets and the host reads, and it is reserved for every kernel so the
+// layout does not depend on whether the body divides.
+func FaultIndex(n, u int) int { return n + 1 + u }
+
+// Fault codes a kernel writes into its fault word.
+const (
+	FaultNone      = 0
+	FaultDivByZero = 1
+)
+
 // StageVertexBufferLimit is how many vertex buffers a render pipeline may bind.
 //
 // The limit exists because a vertex stage's uniforms and its vertex buffers

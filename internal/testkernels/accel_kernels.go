@@ -700,6 +700,7 @@ kernel void Add(
     const device float *b [[buffer(1)]],
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -757,6 +758,7 @@ kernel void Histogram(
     const device float *in [[buffer(0)]],
     device atomic_uint *counts [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -832,6 +834,7 @@ kernel void AtomicOps(
     device atomic_uint *state [[buffer(0)]],
     device uint *prev [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -883,6 +886,7 @@ using namespace metal;
 kernel void CountWorkgroups(
     device atomic_uint *counts [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
+    device atomic_uint *_fault [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -943,6 +947,7 @@ kernel void AtomicOpsI32(
     device atomic_int *state [[buffer(0)]],
     device int *prev [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -1221,6 +1226,11 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct AttnDims {
     uint QHeads;
     uint KVHeads;
@@ -1236,6 +1246,7 @@ kernel void AttentionDecode(
     device float *out [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
     constant AttnDims &d [[buffer(6)]],
+    device atomic_uint *_fault [[buffer(7)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -1248,9 +1259,9 @@ kernel void AttentionDecode(
     uint h = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint group = (d.QHeads / d.KVHeads);
-    uint kvHead = (h / group);
-    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    uint group = _accel_div_u32(d.QHeads, d.KVHeads, _fault);
+    uint kvHead = _accel_div_u32(h, group, _fault);
+    uint capacity = _accel_div_u32(uint(int(_lens[1])), (d.KVHeads * d.HeadDim), _fault);
     if ((kvLen > capacity)) {
         kvLen = capacity;
     }
@@ -1272,7 +1283,7 @@ kernel void AttentionDecode(
         scores[lane] = s;
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -1289,7 +1300,7 @@ kernel void AttentionDecode(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -1564,6 +1575,11 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct AttnDims {
     uint QHeads;
     uint KVHeads;
@@ -1579,6 +1595,7 @@ kernel void AttentionDecodeF16(
     device float *out [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
     constant AttnDims &d [[buffer(6)]],
+    device atomic_uint *_fault [[buffer(7)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -1591,9 +1608,9 @@ kernel void AttentionDecodeF16(
     uint h = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint group = (d.QHeads / d.KVHeads);
-    uint kvHead = (h / group);
-    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    uint group = _accel_div_u32(d.QHeads, d.KVHeads, _fault);
+    uint kvHead = _accel_div_u32(h, group, _fault);
+    uint capacity = _accel_div_u32(uint(int(_lens[1])), (d.KVHeads * d.HeadDim), _fault);
     float m = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
     float l = float(0);
     float o = float(0);
@@ -1612,7 +1629,7 @@ kernel void AttentionDecodeF16(
         scores[lane] = s;
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -1629,7 +1646,7 @@ kernel void AttentionDecodeF16(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -1829,6 +1846,7 @@ kernel void PublishStorage(
     device uint *scratch [[buffer(0)]],
     device uint *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -1913,9 +1931,15 @@ var PublishSharedKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 kernel void PublishShared(
     device uint *out [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
+    device atomic_uint *_fault [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -1928,7 +1952,7 @@ kernel void PublishShared(
     uint lane = _lid.x;
     sh[lane] = ((g * uint(1000)) + lane);
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    out[((g * uint3(32, 1, 1).x) + lane)] = sh[((lane + uint(1)) % uint3(32, 1, 1).x)];
+    out[((g * uint3(32, 1, 1).x) + lane)] = sh[_accel_rem_u32((lane + uint(1)), uint3(32, 1, 1).x, _fault)];
 }
 `,
 	OrderIndependent: true,
@@ -2011,6 +2035,7 @@ using namespace metal;
 kernel void SubgroupPublish(
     device float *out [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
+    device atomic_uint *_fault [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2123,6 +2148,7 @@ using namespace metal;
 kernel void SubgroupStagger(
     device float *out [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
+    device atomic_uint *_fault [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2399,6 +2425,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct BatchedDims {
     uint Batch;
     uint QHeads;
@@ -2419,6 +2455,7 @@ kernel void AttentionDecodeBatched(
     device float *out [[buffer(5)]],
     constant uint *_lens [[buffer(6)]],
     constant BatchedDims &d [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2430,9 +2467,9 @@ kernel void AttentionDecodeBatched(
     threadgroup float red[128];
     uint group = _wid.x;
     uint lane = _lid.x;
-    uint seq = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint seq = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint kvLen = lengths[seq];
     uint pageBase = (seq * d.MaxPages);
     uint qBase = (((seq * d.QHeads) + h) * d.HeadDim);
@@ -2447,7 +2484,7 @@ kernel void AttentionDecodeBatched(
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
-            uint phys = ((pages[(pageBase + (pos / d.Block))] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[(pageBase + _accel_div_u32(pos, d.Block, _fault))] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 dot_ = (dot_ + (q[(qBase + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
@@ -2458,7 +2495,7 @@ kernel void AttentionDecodeBatched(
         scores[lane] = s;
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -2475,7 +2512,7 @@ kernel void AttentionDecodeBatched(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -2487,7 +2524,7 @@ kernel void AttentionDecodeBatched(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if (((base + j) < kvLen)) {
-                    uint phys = ((pages[(pageBase + ((base + j) / d.Block))] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[(pageBase + _accel_div_u32((base + j), d.Block, _fault))] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
@@ -2555,6 +2592,7 @@ kernel void CastF32ToF16(
     const device float *in [[buffer(0)]],
     device half *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2604,6 +2642,7 @@ kernel void CastF16ToF32(
     const device half *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2653,6 +2692,7 @@ kernel void CastBF16ToF32(
     const device ushort *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2719,6 +2759,7 @@ kernel void SaturatingConvert(
     device int *outI [[buffer(1)]],
     device uint *outU [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2806,6 +2847,7 @@ kernel void Exchange(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2932,10 +2974,16 @@ var ReduceLoopKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 kernel void ReduceLoop(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -2948,7 +2996,7 @@ kernel void ReduceLoop(
     uint gid = _gid.x;
     sh[lid] = in[gid];
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(32); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(32); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -3107,6 +3155,7 @@ kernel void ReduceUnrolled(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3214,6 +3263,7 @@ kernel void DispatchShape(
     device uint *out [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
     constant ShapeDims &d [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3339,6 +3389,7 @@ kernel void ShapeBoundedSum(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3411,6 +3462,7 @@ kernel void ElemAdd(
     const device float *b [[buffer(1)]],
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3462,6 +3514,7 @@ kernel void ElemMul(
     const device float *b [[buffer(1)]],
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3517,6 +3570,7 @@ kernel void ElemScale(
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant ScaleParams &p [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3572,6 +3626,7 @@ kernel void SiLU(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3625,6 +3680,7 @@ kernel void SwiGLU(
     const device float *b [[buffer(1)]],
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3679,6 +3735,16 @@ var GatherRowsKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RowParams {
     uint Rows;
     uint Width;
@@ -3692,6 +3758,7 @@ kernel void GatherRows(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant RowParams &p [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3701,8 +3768,8 @@ kernel void GatherRows(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
-        uint r = (i / p.Width);
-        uint c = (i % p.Width);
+        uint r = _accel_div_u32(i, p.Width, _fault);
+        uint c = _accel_rem_u32(i, p.Width, _fault);
         uint id = ids[r];
         if ((id < p.Capacity)) {
             out[i] = table[((id * p.Width) + c)];
@@ -3757,6 +3824,16 @@ var GatherRowsF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RowParams {
     uint Rows;
     uint Width;
@@ -3770,6 +3847,7 @@ kernel void GatherRowsF16(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant RowParams &p [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3779,8 +3857,8 @@ kernel void GatherRowsF16(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
-        uint r = (i / p.Width);
-        uint c = (i % p.Width);
+        uint r = _accel_div_u32(i, p.Width, _fault);
+        uint c = _accel_rem_u32(i, p.Width, _fault);
         uint id = ids[r];
         if ((id < p.Capacity)) {
             out[i] = float(table[((id * p.Width) + c)]);
@@ -3833,6 +3911,16 @@ var ScatterRowsKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RowParams {
     uint Rows;
     uint Width;
@@ -3846,6 +3934,7 @@ kernel void ScatterRows(
     device float *state [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant RowParams &p [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3855,8 +3944,8 @@ kernel void ScatterRows(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
-        uint r = (i / p.Width);
-        uint c = (i % p.Width);
+        uint r = _accel_div_u32(i, p.Width, _fault);
+        uint c = _accel_rem_u32(i, p.Width, _fault);
         uint id = ids[r];
         if ((id < p.Capacity)) {
             state[((id * p.Width) + c)] = rows[i];
@@ -3907,6 +3996,16 @@ var ScatterRowsF16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RowParams {
     uint Rows;
     uint Width;
@@ -3920,6 +4019,7 @@ kernel void ScatterRowsF16(
     device half *state [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant RowParams &p [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -3929,8 +4029,8 @@ kernel void ScatterRowsF16(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
-        uint r = (i / p.Width);
-        uint c = (i % p.Width);
+        uint r = _accel_div_u32(i, p.Width, _fault);
+        uint c = _accel_rem_u32(i, p.Width, _fault);
         uint id = ids[r];
         if ((id < p.Capacity)) {
             state[((id * p.Width) + c)] = rows[i];
@@ -3989,6 +4089,16 @@ var RoPEKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RoPEParams {
     uint Rows;
     uint Width;
@@ -4001,6 +4111,7 @@ kernel void RoPE(
     device float *inout [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant RoPEParams &p [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -4009,10 +4120,10 @@ kernel void RoPE(
     uint _sglane [[thread_index_in_simdgroup]],
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
-    uint pairs = (p.RotaryDim / uint(2));
+    uint pairs = _accel_div_u32(p.RotaryDim, uint(2), _fault);
     if ((i < (p.Rows * pairs))) {
-        uint r = (i / pairs);
-        uint k = (i % pairs);
+        uint r = _accel_div_u32(i, pairs, _fault);
+        uint k = _accel_rem_u32(i, pairs, _fault);
         float pos = float(positions[r]);
         float exponent = ((float(-2) * float(k)) / float(p.RotaryDim));
         float freq = precise::exp((exponent * precise::log(p.Base)));
@@ -4079,6 +4190,7 @@ kernel void ElemBias(
     device int *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant BiasParams &p [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -4196,6 +4308,7 @@ kernel void FloatReduce(
     device float *minF [[buffer(1)]],
     device float *maxF [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -4356,6 +4469,16 @@ var MatMulTiledKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -4369,6 +4492,7 @@ kernel void MatMulTiled(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant GEMMDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -4391,8 +4515,8 @@ kernel void MatMulTiled(
         } else {
             tileA[tid] = zero;
         }
-        uint kk = (tid / uint(16));
-        uint nn = (tid % uint(16));
+        uint kk = _accel_div_u32(tid, uint(16), _fault);
+        uint nn = _accel_rem_u32(tid, uint(16), _fault);
         if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
             tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
         } else {
@@ -4575,6 +4699,16 @@ var MatMulTiledF32Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -4588,6 +4722,7 @@ kernel void MatMulTiledF32(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant GEMMDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -4610,8 +4745,8 @@ kernel void MatMulTiledF32(
         } else {
             tileA[tid] = zero;
         }
-        uint kk = (tid / uint(16));
-        uint nn = (tid % uint(16));
+        uint kk = _accel_div_u32(tid, uint(16), _fault);
+        uint nn = _accel_rem_u32(tid, uint(16), _fault);
         if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
             tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
         } else {
@@ -4796,6 +4931,16 @@ var MatMulTiledF32F16Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -4809,6 +4954,7 @@ kernel void MatMulTiledF32F16(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant GEMMDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -4832,8 +4978,8 @@ kernel void MatMulTiledF32F16(
         } else {
             tileA[tid] = zeroA;
         }
-        uint kk = (tid / uint(16));
-        uint nn = (tid % uint(16));
+        uint kk = _accel_div_u32(tid, uint(16), _fault);
+        uint nn = _accel_rem_u32(tid, uint(16), _fault);
         if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
             tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
         } else {
@@ -5004,6 +5150,16 @@ var GroupedMatVecKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GroupedDims {
     uint Experts;
     uint K;
@@ -5018,6 +5174,7 @@ kernel void GroupedMatVec(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GroupedDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -5028,8 +5185,8 @@ kernel void GroupedMatVec(
     threadgroup float sh[128];
     uint group = _wid.x;
     uint lid = _lid.x;
-    uint tok = (group / d.N);
-    uint col = (group % d.N);
+    uint tok = _accel_div_u32(group, d.N, _fault);
+    uint col = _accel_rem_u32(group, d.N, _fault);
     uint e = uint(0);
     for (uint r = uint(0); (r < d.Experts); r = (r + uint(1))) {
         if ((offsets[(r + uint(1))] <= tok)) {
@@ -5049,7 +5206,7 @@ kernel void GroupedMatVec(
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -5243,6 +5400,16 @@ var GroupedMatMulKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GroupedTiledDims {
     uint Experts;
     uint Tokens;
@@ -5257,6 +5424,7 @@ kernel void GroupedMatMul(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GroupedTiledDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -5287,8 +5455,8 @@ kernel void GroupedMatMul(
             } else {
                 tileA[tid] = zero;
             }
-            uint kk = (tid / uint(16));
-            uint nn = (tid % uint(16));
+            uint kk = _accel_div_u32(tid, uint(16), _fault);
+            uint nn = _accel_rem_u32(tid, uint(16), _fault);
             if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
                 tileB[tid] = w[(((wBase + ((k0 + kk) * d.N)) + (_wid.x * uint(16))) + nn)];
             } else {
@@ -5370,6 +5538,7 @@ using namespace metal;
 kernel void IndexShape(
     device uint *out [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
+    device atomic_uint *_fault [[buffer(2)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -5506,6 +5675,18 @@ var QuantMatVecInt4Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_shr_u32(uint x, uint n) { return n >= 32u ? 0u : (x >> n); }
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -5521,6 +5702,7 @@ kernel void QuantMatVecInt4(
     device float *out [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
     constant GEMMDims &d [[buffer(6)]],
+    device atomic_uint *_fault [[buffer(7)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -5535,8 +5717,8 @@ kernel void QuantMatVecInt4(
     if ((col < d.N)) {
         for (uint k = lid; (k < d.K); k = (k + uint(128))) {
             uint w = ((k * d.N) + col);
-            uint code = ((bq[(w / uint(8))] >> (uint(4) * (w % uint(8)))) & uint(15));
-            uint g = (w / uint(128));
+            uint code = (_accel_shr_u32(bq[_accel_div_u32(w, uint(8), _fault)], uint((uint(4) * _accel_rem_u32(w, uint(8), _fault)))) & uint(15));
+            uint g = _accel_div_u32(w, uint(128), _fault);
             float s = float(bs[g]);
             float z = float(bz[g]);
             float wv = ((float(code) - z) * s);
@@ -5548,7 +5730,7 @@ kernel void QuantMatVecInt4(
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -5747,6 +5929,18 @@ var QuantMatMulInt4Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_shr_u32(uint x, uint n) { return n >= 32u ? 0u : (x >> n); }
+
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -5762,6 +5956,7 @@ kernel void QuantMatMulInt4(
     device float *out [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
     constant GEMMDims &d [[buffer(6)]],
+    device atomic_uint *_fault [[buffer(7)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -5784,12 +5979,12 @@ kernel void QuantMatMulInt4(
         } else {
             tileA[tid] = zero;
         }
-        uint kk = (tid / uint(16));
-        uint nn = (tid % uint(16));
+        uint kk = _accel_div_u32(tid, uint(16), _fault);
+        uint nn = _accel_rem_u32(tid, uint(16), _fault);
         if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
             uint w = ((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn);
-            uint code = ((bq[(w / uint(8))] >> (uint(4) * (w % uint(8)))) & uint(15));
-            uint g = (w / uint(128));
+            uint code = (_accel_shr_u32(bq[_accel_div_u32(w, uint(8), _fault)], uint((uint(4) * _accel_rem_u32(w, uint(8), _fault)))) & uint(15));
+            uint g = _accel_div_u32(w, uint(128), _fault);
             float s = float(bs[g]);
             float z = float(bz[g]);
             float wv = ((float(code) - z) * s);
@@ -5803,8 +5998,8 @@ kernel void QuantMatMulInt4(
         uint kk2 = (kk + uint(8));
         if ((((k0 + kk2) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
             uint w = ((((k0 + kk2) * d.N) + (_wid.x * uint(16))) + nn);
-            uint code = ((bq[(w / uint(8))] >> (uint(4) * (w % uint(8)))) & uint(15));
-            uint g = (w / uint(128));
+            uint code = (_accel_shr_u32(bq[_accel_div_u32(w, uint(8), _fault)], uint((uint(4) * _accel_rem_u32(w, uint(8), _fault)))) & uint(15));
+            uint g = _accel_div_u32(w, uint(128), _fault);
             float s2 = float(bs[g]);
             float z2 = float(bz[g]);
             float wv2 = ((float(code) - z2) * s2);
@@ -5967,6 +6162,7 @@ kernel void IntReduce(
     device uint *minU [[buffer(3)]],
     device uint *maxU [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6138,6 +6334,7 @@ kernel void BitReduce(
     device uint *orU [[buffer(5)]],
     device uint *xorU [[buffer(6)]],
     constant uint *_lens [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6275,6 +6472,7 @@ kernel void MulReduce(
     device int *outI [[buffer(3)]],
     device uint *outU [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6380,6 +6578,16 @@ var LinearAttentionKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct LinearDims {
     uint Batch;
     uint Heads;
@@ -6400,6 +6608,7 @@ kernel void LinearAttention(
     device float *out [[buffer(7)]],
     constant uint *_lens [[buffer(8)]],
     constant LinearDims &d [[buffer(9)]],
+    device atomic_uint *_fault [[buffer(10)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6409,13 +6618,13 @@ kernel void LinearAttention(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint group = _wid.x;
     uint lane = _lid.x;
-    uint seq = (group / d.Heads);
-    uint h = (group % d.Heads);
+    uint seq = _accel_div_u32(group, d.Heads, _fault);
+    uint h = _accel_rem_u32(group, d.Heads, _fault);
     uint a = lane;
     uint sBase = ((((seq * d.Heads) + h) * d.ValueDim) * d.KeyDim);
     uint first = offsets[seq];
     uint last = offsets[(seq + uint(1))];
-    uint gh = (h % d.GateHeads);
+    uint gh = _accel_rem_u32(h, d.GateHeads, _fault);
     for (uint tok = first; (tok < last); tok = (tok + uint(1))) {
         if ((a >= d.ValueDim)) {
             continue;
@@ -6490,6 +6699,16 @@ var MatrixShapesKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct MatrixParams {
     float Wide[2][4];
     float Tall[4][4];
@@ -6500,6 +6719,7 @@ kernel void MatrixShapes(
     device float *out [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
     constant MatrixParams &p [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6512,11 +6732,11 @@ kernel void MatrixShapes(
         return;
     }
     if ((i < uint(8))) {
-        out[i] = p.Wide[(i / uint(4))][(i % uint(4))];
+        out[i] = p.Wide[_accel_div_u32(i, uint(4), _fault)][_accel_rem_u32(i, uint(4), _fault)];
         return;
     }
     if ((i < uint(16))) {
-        out[i] = p.Tall[((i - uint(8)) / uint(2))][((i - uint(8)) % uint(2))];
+        out[i] = p.Tall[_accel_div_u32((i - uint(8)), uint(2), _fault)][_accel_rem_u32((i - uint(8)), uint(2), _fault)];
         return;
     }
     if ((i < uint(22))) {
@@ -6634,6 +6854,11 @@ var MatVecKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -6647,6 +6872,7 @@ kernel void MatVec(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant GEMMDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6665,7 +6891,7 @@ kernel void MatVec(
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -6805,6 +7031,11 @@ var QuantMatVecKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -6819,6 +7050,7 @@ kernel void QuantMatVec(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GEMMDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -6834,13 +7066,13 @@ kernel void QuantMatVec(
         for (uint k = lid; (k < d.K); k = (k + uint(128))) {
             uint w = ((k * d.N) + col);
             float q = float(bq[w]);
-            float s = float(bs[(w / uint(32))]);
+            float s = float(bs[_accel_div_u32(w, uint(32), _fault)]);
             acc = (acc + (float(a[k]) * (q * s)));
         }
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -6980,6 +7212,11 @@ var QuantMatVecF32Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -6994,6 +7231,7 @@ kernel void QuantMatVecF32(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GEMMDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -7009,13 +7247,13 @@ kernel void QuantMatVecF32(
         for (uint k = lid; (k < d.K); k = (k + uint(128))) {
             uint w = ((k * d.N) + col);
             float q = float(bq[w]);
-            float s = float(bs[(w / uint(32))]);
+            float s = float(bs[_accel_div_u32(w, uint(32), _fault)]);
             acc = (acc + (a[k] * (q * s)));
         }
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -7183,6 +7421,16 @@ var LinearTiledKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -7197,6 +7445,7 @@ kernel void LinearTiled(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GEMMDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -7219,8 +7468,8 @@ kernel void LinearTiled(
         } else {
             tileA[tid] = zero;
         }
-        uint kk = (tid / uint(16));
-        uint nn = (tid % uint(16));
+        uint kk = _accel_div_u32(tid, uint(16), _fault);
+        uint nn = _accel_rem_u32(tid, uint(16), _fault);
         if ((((k0 + kk) < d.K) && (((_wid.x * uint(16)) + nn) < d.N))) {
             tileB[tid] = b[((((k0 + kk) * d.N) + (_wid.x * uint(16))) + nn)];
         } else {
@@ -7379,6 +7628,11 @@ var RMSNormKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct RowDims {
     uint Rows;
     uint Width;
@@ -7392,6 +7646,7 @@ kernel void RMSNorm(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant RowDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -7410,7 +7665,7 @@ kernel void RMSNorm(
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -7611,6 +7866,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RowDims {
     uint Rows;
     uint Width;
@@ -7623,6 +7888,7 @@ kernel void Softmax(
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant RowDims &d [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -7634,14 +7900,14 @@ kernel void Softmax(
     uint row = _wid.x;
     uint lid = _lid.x;
     uint base = (row * d.Width);
-    float m = x[(base + (lid % d.Width))];
+    float m = x[(base + _accel_rem_u32(lid, d.Width, _fault))];
     for (uint i = lid; (i < d.Width); i = (i + uint(128))) {
         float v = x[(base + i)];
         m = _accel_fmax(m, v);
     }
     sh[lid] = m;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = _accel_fmax(sh[lid], sh[(lid + stride)]);
         }
@@ -7655,7 +7921,7 @@ kernel void Softmax(
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -7734,6 +8000,16 @@ var PackKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PackParams {
     uint Rank;
     uint Count;
@@ -7748,6 +8024,7 @@ kernel void Pack(
     device float *dst [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant PackParams &p [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -7764,8 +8041,8 @@ kernel void Pack(
             if ((a < p.Rank)) {
                 uint e = p.Extent[a][0];
                 if ((e > uint(0))) {
-                    uint c = (rem % e);
-                    rem = (rem / e);
+                    uint c = _accel_rem_u32(rem, e, _fault);
+                    rem = _accel_div_u32(rem, e, _fault);
                     at = (at + (c * p.Stride[a][0]));
                 }
             }
@@ -8017,6 +8294,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PagedDims {
     uint QHeads;
     uint KVHeads;
@@ -8035,6 +8322,7 @@ kernel void AttentionDecodePaged(
     device float *out [[buffer(5)]],
     constant uint *_lens [[buffer(6)]],
     constant PagedDims &d [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -8047,8 +8335,8 @@ kernel void AttentionDecodePaged(
     uint h = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint group = (d.QHeads / d.KVHeads);
-    uint kvHead = (h / group);
+    uint group = _accel_div_u32(d.QHeads, d.KVHeads, _fault);
+    uint kvHead = _accel_div_u32(h, group, _fault);
     uint capacity = (uint(int(_lens[3])) * d.Block);
     if ((kvLen > capacity)) {
         kvLen = capacity;
@@ -8060,7 +8348,7 @@ kernel void AttentionDecodePaged(
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
-            uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[_accel_div_u32(pos, d.Block, _fault)] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
@@ -8071,7 +8359,7 @@ kernel void AttentionDecodePaged(
         scores[lane] = s;
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -8088,7 +8376,7 @@ kernel void AttentionDecodePaged(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -8100,7 +8388,7 @@ kernel void AttentionDecodePaged(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if (((base + j) < kvLen)) {
-                    uint phys = ((pages[((base + j) / d.Block)] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[_accel_div_u32((base + j), d.Block, _fault)] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
@@ -8370,6 +8658,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PagedDims {
     uint QHeads;
     uint KVHeads;
@@ -8388,6 +8686,7 @@ kernel void AttentionDecodePagedF16(
     device float *out [[buffer(5)]],
     constant uint *_lens [[buffer(6)]],
     constant PagedDims &d [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -8400,8 +8699,8 @@ kernel void AttentionDecodePagedF16(
     uint h = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint group = (d.QHeads / d.KVHeads);
-    uint kvHead = (h / group);
+    uint group = _accel_div_u32(d.QHeads, d.KVHeads, _fault);
+    uint kvHead = _accel_div_u32(h, group, _fault);
     uint capacity = (uint(int(_lens[3])) * d.Block);
     if ((kvLen > capacity)) {
         kvLen = capacity;
@@ -8413,7 +8712,7 @@ kernel void AttentionDecodePagedF16(
         uint pos = (base + lane);
         float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         if ((pos < kvLen)) {
-            uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[_accel_div_u32(pos, d.Block, _fault)] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
@@ -8424,7 +8723,7 @@ kernel void AttentionDecodePagedF16(
         scores[lane] = s;
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -8441,7 +8740,7 @@ kernel void AttentionDecodePagedF16(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -8453,7 +8752,7 @@ kernel void AttentionDecodePagedF16(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if (((base + j) < kvLen)) {
-                    uint phys = ((pages[((base + j) / d.Block)] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[_accel_div_u32((base + j), d.Block, _fault)] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * float(v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
                 }
             }
@@ -8738,6 +9037,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PagedPrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -8758,6 +9067,7 @@ kernel void AttentionPrefillPagedF16(
     device float *out [[buffer(5)]],
     constant uint *_lens [[buffer(6)]],
     constant PagedPrefillDims &d [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -8770,9 +9080,9 @@ kernel void AttentionPrefillPagedF16(
     uint group = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint s = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint s = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint limit = (d.Base + s);
     uint capacity = (uint(int(_lens[3])) * d.Block);
     uint bound = (limit + uint(1));
@@ -8790,7 +9100,7 @@ kernel void AttentionPrefillPagedF16(
         float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
-            uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[_accel_div_u32(pos, d.Block, _fault)] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
@@ -8803,7 +9113,7 @@ kernel void AttentionPrefillPagedF16(
         scores[lane] = score;
         red[lane] = score;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -8820,7 +9130,7 @@ kernel void AttentionPrefillPagedF16(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -8832,7 +9142,7 @@ kernel void AttentionPrefillPagedF16(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if ((((base + j) <= limit) && ((base + j) < kvLen))) {
-                    uint phys = ((pages[((base + j) / d.Block)] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[_accel_div_u32((base + j), d.Block, _fault)] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * float(v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
                 }
             }
@@ -8914,6 +9224,7 @@ kernel void PenaltyCount(
     device atomic_uint *counts [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant PenaltyDims &d [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -8999,6 +9310,7 @@ kernel void PenaltyApply(
     device float *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant PenaltyDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -9076,6 +9388,7 @@ kernel void PenaltyClear(
     device uint *counts [[buffer(0)]],
     constant uint *_lens [[buffer(1)]],
     constant PenaltyDims &d [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -9342,6 +9655,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -9360,6 +9683,7 @@ kernel void AttentionPrefill(
     device float *out [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
     constant PrefillDims &d [[buffer(6)]],
+    device atomic_uint *_fault [[buffer(7)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -9372,11 +9696,11 @@ kernel void AttentionPrefill(
     uint group = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint s = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint s = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint limit = (d.Base + s);
-    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    uint capacity = _accel_div_u32(uint(int(_lens[1])), (d.KVHeads * d.HeadDim), _fault);
     uint bound = (limit + uint(1));
     if ((bound > capacity)) {
         bound = capacity;
@@ -9404,7 +9728,7 @@ kernel void AttentionPrefill(
         scores[lane] = score;
         red[lane] = score;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -9421,7 +9745,7 @@ kernel void AttentionPrefill(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -9712,6 +10036,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -9730,6 +10064,7 @@ kernel void AttentionPrefillF16(
     device float *out [[buffer(4)]],
     constant uint *_lens [[buffer(5)]],
     constant PrefillDims &d [[buffer(6)]],
+    device atomic_uint *_fault [[buffer(7)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -9742,11 +10077,11 @@ kernel void AttentionPrefillF16(
     uint group = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint s = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint s = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint limit = (d.Base + s);
-    uint capacity = (uint(int(_lens[1])) / (d.KVHeads * d.HeadDim));
+    uint capacity = _accel_div_u32(uint(int(_lens[1])), (d.KVHeads * d.HeadDim), _fault);
     uint bound = (limit + uint(1));
     if ((bound > capacity)) {
         bound = capacity;
@@ -9774,7 +10109,7 @@ kernel void AttentionPrefillF16(
         scores[lane] = score;
         red[lane] = score;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -9791,7 +10126,7 @@ kernel void AttentionPrefillF16(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -10087,6 +10422,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct PagedPrefillDims {
     uint QHeads;
     uint KVHeads;
@@ -10107,6 +10452,7 @@ kernel void AttentionPrefillPaged(
     device float *out [[buffer(5)]],
     constant uint *_lens [[buffer(6)]],
     constant PagedPrefillDims &d [[buffer(7)]],
+    device atomic_uint *_fault [[buffer(8)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -10119,9 +10465,9 @@ kernel void AttentionPrefillPaged(
     uint group = _wid.x;
     uint kvLen = lengths[int(0)];
     uint lane = _lid.x;
-    uint s = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint s = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint limit = (d.Base + s);
     uint capacity = (uint(int(_lens[3])) * d.Block);
     uint bound = (limit + uint(1));
@@ -10139,7 +10485,7 @@ kernel void AttentionPrefillPaged(
         float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
-            uint phys = ((pages[(pos / d.Block)] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[_accel_div_u32(pos, d.Block, _fault)] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
                 float qi = q[((((s * d.QHeads) + h) * d.HeadDim) + i)];
@@ -10152,7 +10498,7 @@ kernel void AttentionPrefillPaged(
         scores[lane] = score;
         red[lane] = score;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -10169,7 +10515,7 @@ kernel void AttentionPrefillPaged(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -10181,7 +10527,7 @@ kernel void AttentionPrefillPaged(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if ((((base + j) <= limit) && ((base + j) < kvLen))) {
-                    uint phys = ((pages[((base + j) / d.Block)] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[_accel_div_u32((base + j), d.Block, _fault)] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
@@ -10259,6 +10605,16 @@ var QuantMatMulKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -10273,6 +10629,7 @@ kernel void QuantMatMul(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GEMMDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -10282,13 +10639,13 @@ kernel void QuantMatMul(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (d.M * d.N))) {
-        uint row = (i / d.N);
-        uint col = (i % d.N);
+        uint row = _accel_div_u32(i, d.N, _fault);
+        uint col = _accel_rem_u32(i, d.N, _fault);
         float acc = float(0);
         for (uint k = uint(0); (k < d.K); k = (k + uint(1))) {
             uint w = ((k * d.N) + col);
             float q = float(bq[w]);
-            float s = float(bs[(w / uint(32))]);
+            float s = float(bs[_accel_div_u32(w, uint(32), _fault)]);
             acc = (acc + (float(a[((row * d.K) + k)]) * (q * s)));
         }
         out[i] = acc;
@@ -10342,6 +10699,16 @@ var QuantRowsKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RowParams {
     uint Rows;
     uint Width;
@@ -10356,6 +10723,7 @@ kernel void QuantRows(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant RowParams &p [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -10365,12 +10733,12 @@ kernel void QuantRows(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (p.Rows * p.Width))) {
-        uint r = (i / p.Width);
-        uint c = (i % p.Width);
+        uint r = _accel_div_u32(i, p.Width, _fault);
+        uint c = _accel_rem_u32(i, p.Width, _fault);
         uint id = ids[r];
         if ((id < p.Capacity)) {
             uint w = ((id * p.Width) + c);
-            out[i] = (float(tq[w]) * float(ts[(w / uint(32))]));
+            out[i] = (float(tq[w]) * float(ts[_accel_div_u32(w, uint(32), _fault)]));
         } else {
             out[i] = float(0);
         }
@@ -10428,6 +10796,16 @@ var QuantMatMulF32Kernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct GEMMDims {
     uint M;
     uint N;
@@ -10442,6 +10820,7 @@ kernel void QuantMatMulF32(
     device float *out [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
     constant GEMMDims &d [[buffer(5)]],
+    device atomic_uint *_fault [[buffer(6)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -10451,13 +10830,13 @@ kernel void QuantMatMulF32(
     uint _sgid [[simdgroup_index_in_threadgroup]]) {
     uint i = _gid.x;
     if ((i < (d.M * d.N))) {
-        uint row = (i / d.N);
-        uint col = (i % d.N);
+        uint row = _accel_div_u32(i, d.N, _fault);
+        uint col = _accel_rem_u32(i, d.N, _fault);
         float acc = float(0);
         for (uint k = uint(0); (k < d.K); k = (k + uint(1))) {
             uint w = ((k * d.N) + col);
             float q = float(bq[w]);
-            float s = float(bs[(w / uint(32))]);
+            float s = float(bs[_accel_div_u32(w, uint(32), _fault)]);
             acc = (acc + (a[((row * d.K) + k)] * (q * s)));
         }
         out[i] = acc;
@@ -10750,6 +11129,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RaggedDims {
     uint Batch;
     uint QHeads;
@@ -10771,6 +11160,7 @@ kernel void AttentionRagged(
     device float *out [[buffer(6)]],
     constant uint *_lens [[buffer(7)]],
     constant RaggedDims &d [[buffer(8)]],
+    device atomic_uint *_fault [[buffer(9)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -10782,9 +11172,9 @@ kernel void AttentionRagged(
     threadgroup float red[128];
     uint group = _wid.x;
     uint lane = _lid.x;
-    uint tok = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint tok = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint qBase = (((tok * d.QHeads) + h) * d.HeadDim);
     uint seq = uint(0);
     for (uint r = uint(0); (r < d.Batch); r = (r + uint(1))) {
@@ -10825,7 +11215,7 @@ kernel void AttentionRagged(
         float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
-            uint phys = ((pages[(pageBase + (pos / d.Block))] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[(pageBase + _accel_div_u32(pos, d.Block, _fault))] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint j = uint(0); (j < d.HeadDim); j = (j + uint(1))) {
                 dot_ = (dot_ + (q[(qBase + j)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + j)]));
@@ -10836,7 +11226,7 @@ kernel void AttentionRagged(
         scores[lane] = score;
         red[lane] = score;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -10853,7 +11243,7 @@ kernel void AttentionRagged(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -10865,7 +11255,7 @@ kernel void AttentionRagged(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if ((((base + j) <= limit) && ((base + j) < kvLen))) {
-                    uint phys = ((pages[(pageBase + ((base + j) / d.Block))] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[(pageBase + _accel_div_u32((base + j), d.Block, _fault))] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
@@ -11178,6 +11568,16 @@ static float _accel_fmax(float a, float b) {
     return fmax(a, b);
 }
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 struct RaggedDims {
     uint Batch;
     uint QHeads;
@@ -11199,6 +11599,7 @@ kernel void AttentionRaggedF16(
     device float *out [[buffer(6)]],
     constant uint *_lens [[buffer(7)]],
     constant RaggedDims &d [[buffer(8)]],
+    device atomic_uint *_fault [[buffer(9)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11210,9 +11611,9 @@ kernel void AttentionRaggedF16(
     threadgroup float red[128];
     uint group = _wid.x;
     uint lane = _lid.x;
-    uint tok = (group / d.QHeads);
-    uint h = (group % d.QHeads);
-    uint kvHead = (h / (d.QHeads / d.KVHeads));
+    uint tok = _accel_div_u32(group, d.QHeads, _fault);
+    uint h = _accel_rem_u32(group, d.QHeads, _fault);
+    uint kvHead = _accel_div_u32(h, _accel_div_u32(d.QHeads, d.KVHeads, _fault), _fault);
     uint qBase = (((tok * d.QHeads) + h) * d.HeadDim);
     uint seq = uint(0);
     for (uint r = uint(0); (r < d.Batch); r = (r + uint(1))) {
@@ -11253,7 +11654,7 @@ kernel void AttentionRaggedF16(
         float score = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
         bool visible = ((pos <= limit) && (pos < kvLen));
         if (visible) {
-            uint phys = ((pages[(pageBase + (pos / d.Block))] * d.Block) + (pos % d.Block));
+            uint phys = ((pages[(pageBase + _accel_div_u32(pos, d.Block, _fault))] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
             float dot_ = float(0);
             for (uint j = uint(0); (j < d.HeadDim); j = (j + uint(1))) {
                 dot_ = (dot_ + (q[(qBase + j)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + j)])));
@@ -11264,7 +11665,7 @@ kernel void AttentionRaggedF16(
         scores[lane] = score;
         red[lane] = score;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
             }
@@ -11281,7 +11682,7 @@ kernel void AttentionRaggedF16(
         scores[lane] = e;
         red[lane] = e;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 red[lane] = (red[lane] + red[(lane + stride)]);
             }
@@ -11293,7 +11694,7 @@ kernel void AttentionRaggedF16(
             o = (alpha * o);
             for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
                 if ((((base + j) <= limit) && ((base + j) < kvLen))) {
-                    uint phys = ((pages[(pageBase + ((base + j) / d.Block))] * d.Block) + ((base + j) % d.Block));
+                    uint phys = ((pages[(pageBase + _accel_div_u32((base + j), d.Block, _fault))] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
                     o = (o + (scores[j] * float(v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
                 }
             }
@@ -11384,6 +11785,7 @@ kernel void SegmentSum(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11460,6 +11862,7 @@ kernel void CountAbove(
     const device float *in [[buffer(0)]],
     device int *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11534,6 +11937,7 @@ kernel void Normalize(
     device float *out [[buffer(1)]],
     device float *scratch [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11615,6 +12019,7 @@ kernel void PairAverage(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11730,10 +12135,16 @@ var ReduceSumKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 kernel void ReduceSum(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11750,7 +12161,7 @@ kernel void ReduceSum(
     }
     sh[lid] = acc;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lid < stride)) {
             sh[lid] = (sh[lid] + sh[(lid + stride)]);
         }
@@ -11897,6 +12308,11 @@ var SampleArgmaxKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct SampleDims {
     uint Vocab;
     uint Rows;
@@ -11908,6 +12324,7 @@ kernel void SampleArgmax(
     device uint *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant SampleDims &d [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -11932,7 +12349,7 @@ kernel void SampleArgmax(
     best[lane] = v;
     at[lane] = idx;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lane < stride)) {
             float a = best[lane];
             float b = best[(lane + stride)];
@@ -12047,6 +12464,7 @@ kernel void SampleCategorical(
     device uint *out [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
     constant SampleDims &d [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -12125,6 +12543,7 @@ kernel void Scale(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -12191,6 +12610,7 @@ kernel void Transform(
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant Params &p [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -12261,6 +12681,7 @@ kernel void SegmentOffsets(
     device uint *offsets [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant SegmentDims &d [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -13434,6 +13855,7 @@ kernel void SubgroupReduce(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -13513,11 +13935,22 @@ var SubgroupReduceFallbackKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 kernel void SubgroupReduceFallback(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     const device uint *width [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -13528,8 +13961,8 @@ kernel void SubgroupReduceFallback(
     uint lid = _lid.x;
     uint gid = _gid.x;
     uint w = width[int(0)];
-    uint sid = (lid / w);
-    uint lane = (lid % w);
+    uint sid = _accel_div_u32(lid, w, _fault);
+    uint lane = _accel_rem_u32(lid, w, _fault);
     if ((lane == uint(0))) {
         float acc = float(0);
         for (uint l = uint(0); (l < w); l = (l + uint(1))) {
@@ -13684,6 +14117,7 @@ kernel void SubgroupShuffleMix(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
+    device atomic_uint *_fault [[buffer(3)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -13784,11 +14218,17 @@ var SubgroupShuffleMixFallbackKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 kernel void SubgroupShuffleMixFallback(
     const device float *in [[buffer(0)]],
     device float *out [[buffer(1)]],
     const device uint *width [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -13799,7 +14239,7 @@ kernel void SubgroupShuffleMixFallback(
     uint gid = _gid.x;
     uint lid = _lid.x;
     uint w = width[int(0)];
-    uint lane = (lid % w);
+    uint lane = _accel_rem_u32(lid, w, _fault);
     uint base = (gid - lane);
     uint n = uint(int(_lens[0]));
     uint revIdx = (((base + w) - uint(1)) - lane);
@@ -13919,6 +14359,7 @@ kernel void SubgroupScan(
     device float *incl [[buffer(1)]],
     device float *excl [[buffer(2)]],
     constant uint *_lens [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -14021,12 +14462,18 @@ var SubgroupScanFallbackKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+
 kernel void SubgroupScanFallback(
     const device float *in [[buffer(0)]],
     device float *incl [[buffer(1)]],
     device float *excl [[buffer(2)]],
     const device uint *width [[buffer(3)]],
     constant uint *_lens [[buffer(4)]],
+    device atomic_uint *_fault [[buffer(5)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -14037,7 +14484,7 @@ kernel void SubgroupScanFallback(
     uint gid = _gid.x;
     uint lid = _lid.x;
     uint w = width[int(0)];
-    uint lane = (lid % w);
+    uint lane = _accel_rem_u32(lid, w, _fault);
     uint base = (gid - lane);
     uint n = uint(int(_lens[0]));
     float inclusive = float(0);
@@ -14256,6 +14703,11 @@ var TopKMaskKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct TopDims {
     uint Vocab;
     uint K;
@@ -14268,6 +14720,7 @@ kernel void TopKMask(
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant TopDims &d [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -14308,7 +14761,7 @@ kernel void TopKMask(
         best[lane] = v;
         at[lane] = idx;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 float a = best[lane];
                 float b = best[(lane + stride)];
@@ -14599,6 +15052,11 @@ var TopPMaskKernel = kernelabi.Kernel{
 using namespace metal;
 #pragma METAL fp contract(off)
 
+static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+
 struct TopDims {
     uint Vocab;
     uint K;
@@ -14611,6 +15069,7 @@ kernel void TopPMask(
     device float *out [[buffer(1)]],
     constant uint *_lens [[buffer(2)]],
     constant TopDims &d [[buffer(3)]],
+    device atomic_uint *_fault [[buffer(4)]],
     uint3 _gid [[thread_position_in_grid]],
     uint3 _lid [[thread_position_in_threadgroup]],
     uint3 _wid [[threadgroup_position_in_grid]],
@@ -14628,7 +15087,7 @@ kernel void TopPMask(
     }
     best[lane] = sum;
     threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+    for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
         if ((lane < stride)) {
             best[lane] = (best[lane] + best[(lane + stride)]);
         }
@@ -14662,7 +15121,7 @@ kernel void TopPMask(
         best[lane] = v;
         at[lane] = idx;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = (stride / uint(2))) {
+        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
             if ((lane < stride)) {
                 float a = best[lane];
                 float b = best[(lane + stride)];

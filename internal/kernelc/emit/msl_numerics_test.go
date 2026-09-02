@@ -99,11 +99,25 @@ func TestSignedArithmeticWrapsInMSL(t *testing.T) {
 			t.Errorf("signed %v should be emitted as %s, got:\n%s", op, want, src)
 		}
 	}
-	for _, op := range []token.Token{token.SHL, token.QUO, token.REM} {
-		want := "(a " + op.String() + " b)"
+	// Shifts and division are not wrapping operations: they go through the
+	// helpers that spell Go's result where MSL's is undefined, and record a
+	// fault where Go's is a panic (specs/008-numerics.md section 3).
+	for op, want := range map[token.Token]string{
+		token.SHL: "_accel_shl_i32(a, uint(b))",
+		token.SHR: "_accel_shr_i32(a, uint(b))",
+		token.QUO: "_accel_div_i32(a, b, _fault)",
+		token.REM: "_accel_rem_i32(a, b, _fault)",
+	} {
 		if src := emitted(t, i32, op); !strings.Contains(src, want) {
-			t.Errorf("signed %v is not a wrapping operation and should stay %s, got:\n%s",
-				op, want, src)
+			t.Errorf("signed %v should be emitted as %s, got:\n%s", op, want, src)
+		}
+	}
+	for op, want := range map[token.Token]string{
+		token.SHL: "_accel_shl_u32(a, uint(b))",
+		token.QUO: "_accel_div_u32(a, b, _fault)",
+	} {
+		if src := emitted(t, u32, op); !strings.Contains(src, want) {
+			t.Errorf("unsigned %v should be emitted as %s, got:\n%s", op, want, src)
 		}
 	}
 	// Unsigned arithmetic already wraps and needs no cast.

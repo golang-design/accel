@@ -57,6 +57,10 @@ func MSLLengthsIndex(n int) int { return mslabi.LengthsIndex(n) }
 // n bindings.
 func MSLUniformIndex(n, i int) int { return mslabi.UniformIndex(n, i) }
 
+// MSLFaultIndex reports the buffer index the fault word occupies for a kernel
+// with n bindings and u uniforms.
+func MSLFaultIndex(n, u int) int { return mslabi.FaultIndex(n, u) }
+
 // MSL lowers one kernel to Metal Shading Language.
 func MSL(k *ir.Func) (string, error) {
 	m := &msl{fn: k, binding: map[string]int{}}
@@ -279,6 +283,62 @@ var mslPrelude = []struct{ name, text string }{
     return simd_max(x);
 }
 `},
+	// Integer division and shifts, specs/008-numerics.md section 3.
+	//
+	// Go defines a shift by a count at or above the width (zero, or the sign
+	// for a signed right shift) and MSL does not, so the helpers spell Go's
+	// result and the differential is exact on every count. Division by zero
+	// is an execution error in Go and undefined in MSL: the kernel records
+	// mslabi.FaultDivByZero in its fault word and yields zero, and the backend
+	// reports the word after the submission. MinInt32 / -1 wraps in Go and
+	// traps or is undefined in C; it wraps here, since Go's result is defined
+	// and exact. A stage has no fault word, so its division yields zero and
+	// records nothing (specs/022-msl-target.md section 5).
+	{"shl_u32", `static uint _accel_shl_u32(uint x, uint n) { return n >= 32u ? 0u : (x << n); }
+`},
+	{"shr_u32", `static uint _accel_shr_u32(uint x, uint n) { return n >= 32u ? 0u : (x >> n); }
+`},
+	{"shl_i32", `static int _accel_shl_i32(int x, uint n) { return n >= 32u ? 0 : int(uint(x) << n); }
+`},
+	{"shr_i32", `static int _accel_shr_i32(int x, uint n) {
+    if (n >= 32u) { return x < 0 ? -1 : 0; }
+    return x < 0 ? ~((~x) >> n) : (x >> n);
+}
+`},
+	{"div_i32", `static int _accel_div_i32(int a, int b, device atomic_uint *fault) {
+    if (b == 0) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0; }
+    if (a == INT_MIN && b == -1) { return INT_MIN; }
+    return a / b;
+}
+`},
+	{"rem_i32", `static int _accel_rem_i32(int a, int b, device atomic_uint *fault) {
+    if (b == 0) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0; }
+    if (b == -1) { return 0; }
+    return a % b;
+}
+`},
+	{"div_u32", `static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a / b;
+}
+`},
+	{"rem_u32", `static uint _accel_rem_u32(uint a, uint b, device atomic_uint *fault) {
+    if (b == 0u) { atomic_store_explicit(fault, 1u, memory_order_relaxed); return 0u; }
+    return a % b;
+}
+`},
+	{"sdiv_i32", `static int _accel_sdiv_i32(int a, int b) {
+    if (b == 0) { return 0; }
+    if (a == INT_MIN && b == -1) { return INT_MIN; }
+    return a / b;
+}
+`},
+	{"srem_i32", `static int _accel_srem_i32(int a, int b) { return (b == 0 || b == -1) ? 0 : (a % b); }
+`},
+	{"sdiv_u32", `static uint _accel_sdiv_u32(uint a, uint b) { return b == 0u ? 0u : (a / b); }
+`},
+	{"srem_u32", `static uint _accel_srem_u32(uint a, uint b) { return b == 0u ? 0u : (a % b); }
+`},
 	{"cas_u32", `static uint _accel_cas_u32(device atomic_uint *p, uint expected, uint desired) {
     uint e = expected;
     while (!atomic_compare_exchange_weak_explicit(p, &e, desired,
@@ -354,6 +414,9 @@ func (m *msl) body(k *ir.Func) {
 	// The workgroup extent is *not* here: it is a compile-time constant from
 	// the accel:kernel directive, so specs/052-dispatch-shape.md §2 lowers it
 	// to a literal at each use rather than to a fifth attribute.
+	// The fault word, specs/008-numerics.md section 3: reserved whether or
+	// not the body divides, for the reason the lengths slot is.
+	m.printf("\n    device atomic_uint *_fault [[buffer(%d)]],", MSLFaultIndex(nb, len(k.Uniforms)))
 	m.printf("\n    uint3 _gid [[thread_position_in_grid]],")
 	m.printf("\n    uint3 _lid [[thread_position_in_threadgroup]],")
 	m.printf("\n    uint3 _wid [[threadgroup_position_in_grid]],")
@@ -1073,6 +1136,46 @@ func (m *msl) binary(v *ir.Binary) {
 		m.printf("))")
 		return
 	}
+	// Integer shifts and division go through helpers that spell Go's result
+	// where MSL's is undefined, and record a fault where Go's is a panic.
+	if v.Type() != nil && (v.Type().Kind == ir.I32 || v.Type().Kind == ir.U32) {
+		suffix := "u32"
+		if v.Type().Kind == ir.I32 {
+			suffix = "i32"
+		}
+		switch v.Op {
+		case token.SHL, token.SHR:
+			name := "shl_" + suffix
+			if v.Op == token.SHR {
+				name = "shr_" + suffix
+			}
+			m.need[name] = true
+			m.printf("_accel_%s(", name)
+			m.value(v.X)
+			m.printf(", uint(")
+			m.value(v.Y)
+			m.printf("))")
+			return
+		case token.QUO, token.REM:
+			name := "div_" + suffix
+			if v.Op == token.REM {
+				name = "rem_" + suffix
+			}
+			if m.fn.Stage != ir.StageCompute {
+				name = "s" + name
+			}
+			m.need[name] = true
+			m.printf("_accel_%s(", name)
+			m.value(v.X)
+			m.printf(", ")
+			m.value(v.Y)
+			if m.fn.Stage == ir.StageCompute {
+				m.printf(", _fault")
+			}
+			m.printf(")")
+			return
+		}
+	}
 	m.printf("(")
 	m.value(v.X)
 	m.printf(" %s ", v.Op)
@@ -1081,9 +1184,7 @@ func (m *msl) binary(v *ir.Binary) {
 }
 
 // wrapsOnOverflow reports whether an integer operator is one specs/008 defines
-// as wrapping. Shifts and division are not: the spec makes their excluded
-// cases build errors or strict-mode execution errors, and neither exists on
-// this target yet.
+// as wrapping. Shifts and division are not, and go through the helpers above.
 func wrapsOnOverflow(op token.Token) bool {
 	return op == token.ADD || op == token.SUB || op == token.MUL
 }
