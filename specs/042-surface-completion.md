@@ -417,6 +417,13 @@ thing a tutorial can drift from.
 
 ## 8. Open questions
 
+- **The memory budget field on the open path.** [060](060-cuda-bringup.md) §6
+  needs a caller-supplied absolute budget that replaces an adapter's derived
+  `MaxPoolBytes`, and argues it is backend-neutral — a shared discrete GPU
+  wants one identically — so it is one field on the existing public open path
+  and not a `CUDAOptions` type, per layering rule 3. 060 defers the spelling
+  here. It is not yet in §2's inventory, and until it is, 060's pointer names
+  a decision this spec has not taken.
 - **Whether the CPU backend should implement everything.** It is the oracle, so
   an operation it cannot perform is one no differential can check. That argues
   for yes. Against: a CPU implementation of a hardware feature can be a

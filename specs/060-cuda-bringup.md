@@ -126,8 +126,14 @@ truncates every allocation above 4 GB.
 
 `cuGetProcAddress` is the documented forward-compatible alternative and is
 **not** used at v0: it needs a CUDA version and flags per symbol, which is a
-second version-negotiation surface for no benefit while every symbol this child
-needs has existed since CUDA 4.
+second version-negotiation surface for no benefit. The floor is the newest
+symbol in the table, not the oldest: `cuLaunchKernel` is CUDA 4.0, but
+`cuMemAllocManaged` and `cuGetErrorName` are 6.0, `cuDevicePrimaryCtxRetain` is
+7.0, and `cuDeviceGetUuid_v2` is 11.4. So the table's `since` column is what
+sets the minimum driver, it is 11.4, and an earlier statement here that every
+symbol dated from CUDA 4 was wrong by three major versions. A driver older than
+11.4 fails at `dlsym`, which R1 reports as a `ProbeLoadLibrary` diagnostic
+naming the symbol, never as a fake device.
 
 **Resolving symbols and installing them are separate jobs**, which is
 [021](021-metal-bringup.md)'s recorded bug: Metal's first resolver wrote the
@@ -304,7 +310,7 @@ are where a fabricated constant goes.
 | `MaxWorkgroupCount` | `MAX_GRID_DIM_{X,Y,Z}` (5, 6, 7) |
 | `MaxSharedMemoryBytes` | `MAX_SHARED_MEMORY_PER_BLOCK` (8) — measured 49152 |
 | `MinSubgroupSize`, `MaxSubgroupSize` | `WARP_SIZE` (10) for both — measured 32 |
-| `MaxUniformBlockBytes` | `TOTAL_CONSTANT_MEMORY` (9) |
+| `MaxUniformBlockBytes` | **not `TOTAL_CONSTANT_MEMORY`** — a uniform is a launch parameter (§7), so its ceiling is the parameter budget, derived with `MaxBindingsPerKind` |
 | `MaxPools` | **no attribute** — see below |
 | `MaxBufferBytes` | **no attribute** — `cuDeviceTotalMem_v2`, and §6 |
 | `MaxPoolBytes` | **no attribute, and no honest answer** — §6 is the whole section |
@@ -457,12 +463,23 @@ two consequences it has:
   descriptor range, and CUDA has no descriptor range to disagree with. The
   numbering is what has to be shared, and it is.
 
-**The parameter block has a ceiling, and it is neither number the
-documentation offers.** Measured by bisection on this driver: **4352 bytes**
-for the whole entry function, which `ptxas` reports as `0x1100 max`, unchanged
-across `.target` sm_70, sm_80 and sm_90. The documented values are 4 KB below
-CUDA 12.1 and 32,764 above it, and 4352 is neither — which is the reason a spec
-measures a limit it could have transcribed.
+**The parameter block has a ceiling, and it is set by `.version`, not by
+`.target`.** Measured by bisection on this driver: **4352 bytes** for the whole
+entry function, which `ptxas` reports as `0x1100 max`, unchanged across
+`.target` sm_70, sm_80 and sm_90. An earlier version of this paragraph read
+that as a number no document offers. It is not: the PTX ISA's `.entry`
+section tables the parameter limit *per PTX ISA version* — 4352 bytes from
+ISA 1.5, **32,764 bytes from ISA 8.1** — and separately the driver's limit per
+architecture, 32,764 for sm_70 and above. The probe varied `.target` and held
+`.version` at 7.0, so it measured the pre-8.1 row, and the constancy across
+targets is the table's, not a discovery. What the measurement does establish
+is that the ceiling is the ISA table's and not the CUDA Programming Guide's
+4 KB, and that the driver enforces it at JIT.
+
+So the budget is a function of the header [061](061-ptx-target.md) §1 emits:
+4352 bytes at `.version` below 8.1, and 32,764 on sm_70+ once the emitter
+writes `.version 8.1`, which is a header change and not an instruction. The
+higher row is transcribed and **unmeasured**; §14 item 16 measures it.
 
 `MaxBindingsPerKind` and `MaxUniformBlockBytes` are therefore derived from one
 shared budget rather than declared independently, [061](061-ptx-target.md) §5
@@ -560,10 +577,22 @@ and no claim of the form "verified on CUDA" is made from a single-stream run.**
 
 `CUDA_ERROR_ILLEGAL_ADDRESS`, `CUDA_ERROR_LAUNCH_FAILED` and
 `CUDA_ERROR_LAUNCH_TIMEOUT` are **sticky by the driver's own design**: once one
-is returned, the context is unusable and every later call in it returns
-`CUDA_ERROR_LAUNCH_FAILED`. So [023](023-metal-graph.md) §4's classifier
+is returned, every later call returns *the same error* — not a generic
+`CUDA_ERROR_LAUNCH_FAILED`, which an earlier draft here said and which a
+classifier keyed on it would miss. So [023](023-metal-graph.md) §4's classifier
 transfers with less work than Vulkan's, and [001](001-device-resources.md) §7.4's
 terminal loss matches the hardware.
+
+**The documented scope is the process, not the context.** The driver API
+reference says of each sticky error that it *"leaves the process in an
+inconsistent state"* and that *"to continue using CUDA, the process must be
+terminated and relaunched"*. 001 §7.4 promises that `Enumerate` and
+`OpenDevice` work after a loss and *may* return a working device. On this
+backend that promise is not made until it is measured: whether
+`cuDevicePrimaryCtxReset` followed by a fresh `cuDevicePrimaryCtxRetain` yields
+a context that launches is §14 item 14's second half, and until it passes a
+re-open after loss returns `ErrDeviceLost` naming the sticky error rather than
+a device that fails at its first launch.
 
 `CUDA_ERROR_OUT_OF_MEMORY` is **not** loss, and *"the half of the test asserting
 that is the more important half"*: reporting an allocation failure as loss turns
@@ -577,11 +606,12 @@ project has.
 ## 11. The kernel record
 
 PTX is the third target, and [038](038-spirv-target.md) §8's flattening is
-already ratified: `PTX string` sits beside `MSL string` (`kernel.go:455`),
-and `kernel.MissingArtifact(name, target)` covers both. **PTX is text**, so
-unlike SPIR-V it needs no embedded file and no separate disassembly — it lives in
-the generated Go file the way MSL does, subject to the same backquote guard
-`emit.go:317` already applies.
+already ratified: `PTX string` sits beside `MSL string`
+(`internal/kernel/kernel.go:463`), and `kernel.MissingArtifact(name, target)`
+covers both. **PTX is text**, so unlike SPIR-V it needs no embedded file and no
+separate disassembly — it lives in the generated Go file the way MSL does,
+subject to the same backquote guard `internal/kernelc/emit/emit.go:750` already
+applies.
 
 A CUDA dispatch of a kernel whose `PTX` is empty is a build error naming the
 kernel and the target, never a fallback to the Go lowering — which would be
@@ -672,12 +702,18 @@ Each is a checkable assertion, and each names what it catches.
     both triples** — the quarter-grid dispatch.
 13. **`Fence.Done()` is false for a submission still in flight** — a
     `cuCtxSynchronize` left in the submission path.
-14. **Device loss from an illegal address is sticky and reported by every later
-    call; out-of-memory is not loss** — the classifier that turns a recoverable
-    bug into a permanently discarded device.
+14. **Device loss from an illegal address is sticky, every later call reports
+    the same error, and out-of-memory is not loss** — the classifier that turns
+    a recoverable bug into a permanently discarded device. The second half:
+    whether `OpenDevice` after the loss returns a device whose first launch
+    succeeds, which decides whether 001 §7.4's re-open holds on this backend or
+    is refused by name (§10).
 15. **E2E through the public API only**: `Enumerate` finds a CUDA adapter,
     `OpenDevice` opens it by id, a pool allocates, a graph records upload →
     dispatch of the fixture → readback, submits, and the fence completes.
+16. **The parameter ceiling at `.version 8.1` is 32,764 bytes on this device,
+    measured by the same bisection that found 4352 at 7.0** — §7's transcribed
+    row, and the header change that lifts the budget, before 061 relies on it.
 
 ## 15. What this child does not build
 
@@ -711,7 +747,9 @@ Each is a checkable assertion, and each names what it catches.
    moves underneath. Either the limit is re-sampled and the contract says a limit
    may shrink, or it is a reservation the adapter actually takes at open. The
    first weakens `Limits`, the second makes opening a device an allocation.
-3. **Whether §7's 4352-byte parameter budget holds for every kernel in**
-   [010](010-kernel-corpus.md), now that the ceiling is measured and only the
-   widest kernel is unknown. The fallback is a uniform buffer for the kernels
-   that overflow, at the cost [061](061-ptx-target.md) §5 names.
+3. **Whether any kernel in** [010](010-kernel-corpus.md) **exceeds 32,764
+   bytes of parameters.** The 4352-byte row is the pre-8.1 ISA table's and a
+   header change lifts it (§7), so the question is against the higher ceiling,
+   once §14 item 16 has measured it. Only if a kernel exceeds that does the
+   fallback — a uniform buffer for the kernels that overflow, at the cost
+   [061](061-ptx-target.md) §5 names — become work.

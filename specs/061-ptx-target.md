@@ -51,7 +51,7 @@ What is *harder* than MSL is exactly one thing, and it is §7.
 
 | Directive | Value | Why |
 | --- | --- | --- |
-| `.version` | **6.2**, raised only by an instruction that needs more | Measured, not read off a table: at 6.0 and 6.1 the JIT rejects the baseline warp kernel with *"Feature 'activemask' requires PTX ISA .version 6.2 or later"*, and 6.2 through 8.0 all accept it. A newer driver accepts an older `.version`; the reverse is a JIT error, so the floor is what the corpus needs and never what the developer's driver has. |
+| `.version` | **6.2**, raised only by an instruction that needs more, or by the parameter budget (§5) | Measured, not read off a table: at 6.0 and 6.1 the JIT rejects the baseline warp kernel with *"Feature 'activemask' requires PTX ISA .version 6.2 or later"*, and 6.2 through 8.0 all accept it. A newer driver accepts an older `.version`; the reverse is a JIT error, so the floor is what the corpus needs and never what the developer's driver has. |
 | `.target` | **`sm_70`**, derived, §6 | Independent thread scheduling, and therefore the point below which 002 §5.3's active-set semantics are not expressible. |
 | `.address_size` | **64** | `CUdeviceptr` is 64-bit and [060](060-cuda-bringup.md) §3 gates the backend to 64-bit hosts. |
 
@@ -159,7 +159,7 @@ is §9's most valuable injected fault, because it *passes*.
 | `n+1+i` | `.param .align 16 .b8 uniform<i>[size]` | `ld.param.<t> [uniform<i>+off]` |
 
 `emit.MSLLengthsIndex(n)` and `emit.MSLUniformIndex(n, i)` carry the numbering
-(`msl.go:54-58`). They are MSL-prefixed because MSL was the only target when they
+(`internal/kernelc/emit/msl.go:54-58`). They are MSL-prefixed because MSL was the only target when they
 were written; [038](038-spirv-target.md) §5 proposes the rename that makes them
 shared and this target is the second caller that makes it worth doing. **Three
 copies of a numbering is two too many.**
@@ -180,18 +180,28 @@ $$\texttt{len}_k = \left\lfloor \frac{\texttt{bindings}[k].\texttt{Len}}{\texttt
 space does not require them.** Natural packing would be tighter and would fork
 the host fill three ways; one layout owner is worth the padding.
 
-**The padding is not free, and the budget is smaller than either documented
-number.** Measured on this driver by bisection, the whole parameter space of an
-entry function is **4352 bytes** (`ptxas` reports `0x1100 max`), and it does not
-move with `.target` — sm_70, sm_80 and sm_90 all report the same ceiling. So the
-sum
+**The padding is not free, and the budget is set by the `.version` this
+emitter writes.** Measured on this driver by bisection, the whole parameter
+space of an entry function is **4352 bytes** (`ptxas` reports `0x1100 max`),
+and it does not move with `.target` — sm_70, sm_80 and sm_90 all report the
+same ceiling. An earlier version of this paragraph called that a number no
+document offers. The PTX ISA's `.entry` section tables it per ISA version:
+4352 bytes from ISA 1.5 and **32,764 bytes from ISA 8.1**, with the driver
+allowing 32,764 on sm_70 and above. The probe's header was `.version 7.0`, so
+it measured the lower row, and the constancy across targets is what the table
+predicts. [060](060-cuda-bringup.md) §7 carries the correction and §14 item 16
+measures the higher row. So the sum
 
-$$8n \;+\; 4n \;+\; \sum_i \texttt{std140size}(\texttt{uniform}_i) \;\le\; 4352$$
+$$8n \;+\; 4n \;+\; \sum_i \texttt{std140size}(\texttt{uniform}_i) \;\le\; P(\texttt{.version})$$
 
-is a real constraint the emitter checks, not a formality: *n* pointers, *n*
-lengths, and every uniform block with its std140 padding. Neither of the values
-the documentation offers — 4 KB below CUDA 12.1, 32,764 above it — is this
-number, which is why it is measured here and asserted in §10.
+with $P = 4352$ below 8.1 and $P = 32{,}764$ at 8.1 and above on the sm_70
+baseline, is a real constraint the emitter checks, not a formality: *n*
+pointers, *n* lengths, and every uniform block with its std140 padding. The
+emitter raises `.version` to 8.1 when the sum exceeds 4352, for the same reason
+§1 raises it for an instruction, and refuses above 32,764 naming the total and
+the ceiling. PTX ISA 8.1 is CUDA 12.1's, so a driver older than R530 rejects
+the header at JIT with its own message; that is the `.version` floor rule
+working, not a new failure class.
 
 ### Barriers
 
@@ -232,7 +242,7 @@ than `cap`, in both storage and shared.
 
 ### Warp operations
 
-`compute.go:126-135`'s capability split maps one to one, and the widths differ
+`compute.go:152-161`'s capability split maps one to one, and the widths differ
 from every other target:
 
 | `Capability` | PTX | Width |
@@ -274,10 +284,15 @@ Hand-listing an architecture per kernel is two sources for one fact, which 002
 | f16 arithmetic (`add.rn.f16`, `fma.rn.f16x2`) | sm_53 | no |
 | `dp4a` packed 8-bit dot product | sm_61 | no |
 | bf16 storage conversions | none — integer shift/mask | no |
+| `tanh.approx.f32` | sm_75 | **yes** — §7 decides whether it is reached at all |
 | `redux.sync` integer warp reductions | sm_80 | **yes** |
 | bf16 arithmetic | sm_80 | refused by 006 regardless |
 
-Only one row is above the baseline, and **this target does not take it**.
+Two rows are above the baseline. `tanh.approx` is §7's: if the probe shows it
+meets the ceiling, `Tanh` is generated from `ex2.approx` at sm_70 rather than
+raising the target, and if it does not, the instruction is never emitted, so
+either way the baseline holds. The other row is the one this section is
+about, and **this target does not take it**.
 [059](059-subgroup-reductions.md)'s reductions lower to a
 $\log_2(\text{warp})$ butterfly of `shfl.sync.bfly` on every architecture,
 including the integer ones `redux.sync` would do in a single instruction at
@@ -375,15 +390,15 @@ carry the same explicit rounding modifiers the emitter emits, and
 
 ## 8. Where the artifact lives
 
-`PTX string` sits beside `MSL string` (`kernel.go:455`), which
-[038](038-spirv-target.md) §8 already ratified as the shape, and
+`PTX string` sits beside `MSL string` (`internal/kernel/kernel.go:463`),
+which [038](038-spirv-target.md) §8 already ratified as the shape, and
 `kernel.MissingArtifact(name, target)` covers both.
 
 **PTX is text, so generation writes one file and not three.** 038 needs a `.spv`
 plus a `.spvasm` golden plus an embedded SHA-256, because *"a golden of an opaque
 binary is a golden nobody reviews"*. PTX goes into `accel_kernels.go` the way MSL
-does, subject to the same backquote guard `emit.go:317` already applies to
-`mslArtifact`, and **the emitted text is the golden**. A reviewer reads the diff.
+does, subject to the same backquote guard `internal/kernelc/emit/emit.go:750`
+already applies to `mslArtifact`, and **the emitted text is the golden**. A reviewer reads the diff.
 
 There is no vendored grammar, no generated opcode table and no recorded
 SPIRV-Headers tag, because PTX has no opcode numbers to transcribe. 038 §8's
@@ -465,10 +480,12 @@ because both are correct-looking everywhere else.
     reference, at Tier 4 — the generated reduction and polynomial.
 12. **A deliberately corrupted artifact is rejected with the JIT's own log
     reaching the caller** — [060](060-cuda-bringup.md) §14 item 10 from this side.
-13. **A kernel whose pointers, lengths and std140 uniforms exceed 4352 bytes is
-    refused by the emitter, naming the total and the ceiling** — §5's budget,
-    which `ptxas` otherwise reports against generated line numbers the author
-    cannot read.
+13. **A kernel whose pointers, lengths and std140 uniforms exceed 4352 bytes
+    is emitted at `.version 8.1`, and one exceeding 32,764 is refused by the
+    emitter, naming the total and the ceiling** — §5's budget, which `ptxas`
+    otherwise reports against generated line numbers the author cannot read.
+    The 8.1 row is asserted on the text at Tier 1 and against the device at
+    Tier 4, after 060 §14 item 16.
 
 ## What this target does not build
 
@@ -495,8 +512,9 @@ because both are correct-looking everywhere else.
    instruction the emitter reaches has its own introducing version, and the JIT
    names it precisely when it is wrong — so this is a transcription exercise the
    corpus completes, not a risk. It fails on old drivers only.
-3. **Whether §5's 4352-byte parameter space fits the widest kernel in**
-   [010](010-kernel-corpus.md). The ceiling is now measured and the arithmetic is
-   in §5; what is unknown is the widest kernel. If it does not fit, the fallback
-   is a uniform *buffer* for the kernels that overflow, which forks the host fill
-   exactly where §5 said one layout owner was worth avoiding.
+3. **Whether §5's 32,764-byte parameter space fits the widest kernel in**
+   [010](010-kernel-corpus.md). The arithmetic is in §5 and the higher row is
+   transcribed until 060 §14 item 16 measures it; what is unknown is the widest
+   kernel. If it does not fit, the fallback is a uniform *buffer* for the
+   kernels that overflow, which forks the host fill exactly where §5 said one
+   layout owner was worth avoiding.

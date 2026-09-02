@@ -94,8 +94,8 @@ numbered in.
 | [035-cpu-rasterizer.md](035-cpu-rasterizer.md) | In progress | 005's fourth child: the reference rasterizer, the fill rule, interpolation, and the conformance corpus with its exact-versus-bounded split |
 | [037-vulkan-bringup.md](037-vulkan-bringup.md) | Drafted | The cgo-free Vulkan backend through purego: loader, device, memory, descriptors, submission and device loss |
 | [038-spirv-target.md](038-spirv-target.md) | Drafted | Emitting SPIR-V from the shared IR, and how a binary target with no source level is verified |
-| [060-cuda-bringup.md](060-cuda-bringup.md) | Drafted | The cgo-free CUDA backend through purego: the loader, the context's thread affinity and the pool of locked threads it forces, a unified pool that is not a budget, and one dispatch from a hand-written `.ptx` |
-| [061-ptx-target.md](061-ptx-target.md) | Drafted | Emitting PTX from the shared IR: a text target that keeps every check SPIR-V lost, an active-set warp mask, and contraction expressed as a rounding modifier |
+| [060-cuda-bringup.md](060-cuda-bringup.md) | Drafted | The cgo-free CUDA backend through purego: the loader, a context armed inline for the setup calls that need one while submission stays free-threaded, a unified pool that is not a budget, and one dispatch from a hand-written `.ptx` |
+| [061-ptx-target.md](061-ptx-target.md) | Drafted | Emitting PTX from the shared IR: a text target that keeps every check SPIR-V lost, an active-set warp mask, and a parameter budget set by the `.version` it writes |
 | [041-msaa.md](041-msaa.md) | Drafted | 005's fifth child: sample positions, resolve, and what the CPU oracle can still prove once a sample pattern exists |
 | [003-command-graph.md](003-command-graph.md) | In progress | Recording, immutability, validation, memory planning, computed barriers, submission and fences |
 | [004-kernel-authoring.md](004-kernel-authoring.md) | In progress | The Go subset that is the kernel language, `go/types` checking, lowering to MSL / GLSL / SPIR-V / HLSL / Go |
