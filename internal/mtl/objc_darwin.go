@@ -204,6 +204,8 @@ var (
 	selRelease              = objc.RegisterName("release")
 	selRegistryID           = objc.RegisterName("registryID")
 	selLocalizedDescription = objc.RegisterName("localizedDescription")
+	selDomain               = objc.RegisterName("domain")
+	selCode                 = objc.RegisterName("code")
 	selStringWithUTF8String = objc.RegisterName("stringWithUTF8String:")
 	selCount                = objc.RegisterName("count")
 	selObjectAtIndex        = objc.RegisterName("objectAtIndex:")

@@ -8,10 +8,12 @@ package metal
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"golang.design/x/accel/internal/driver"
 	"golang.design/x/accel/internal/kernel"
+	"golang.design/x/accel/internal/mtl"
 )
 
 // Every dtype's element stride is its size, which is what a binding's generated
@@ -54,26 +56,61 @@ func TestElementStrides(t *testing.T) {
 // from beside it.
 func TestDeviceLossClassification(t *testing.T) {
 	for _, tc := range []struct {
+		code int
 		msg  string
 		lost bool
 	}{
-		{"Execution of the command buffer was aborted due to an error during " +
-			"execution. Caused GPU Hang Error (IOAF code 3)", true},
-		{"Device Removed", true},
-		{"the device was lost", true},
+		{mtl.CommandBufferErrorDeviceRemoved, "Device Removed", true},
+		{mtl.CommandBufferErrorAccessRevoked, "Access to the GPU was revoked", true},
 		// The half that matters more. Each of these is a bug in the work and
 		// leaves the device usable, and reporting one as loss would turn a
 		// recoverable kernel bug into a device the caller must discard --
 		// which specs/001-device-resources.md section 7.4 makes permanent.
-		{"Insufficient Memory", false},
-		{"Invalid Resource", false},
-		{"Not Permitted", false},
-		{"the compute function exceeded the maximum threadgroup size", false},
+		//
+		// The timeout is the one that was wrong. Its text says "Caused GPU
+		// Hang", the classifier matched that text, and a kernel with an
+		// infinite loop made the device unusable for good.
+		{mtl.CommandBufferErrorTimeout, "Execution of the command buffer was aborted due " +
+			"to an error during execution. Caused GPU Hang Error (IOAF code 3)", false},
+		{mtl.CommandBufferErrorPageFault, "Caused GPU Address Fault Error (IOAF code 11)", false},
+		{mtl.CommandBufferErrorOutOfMemory, "Insufficient Memory", false},
+		{mtl.CommandBufferErrorInvalidResource, "Invalid Resource", false},
+		{mtl.CommandBufferErrorNotPermitted, "Not Permitted", false},
+		{mtl.CommandBufferErrorInternal, "Internal Error", false},
 	} {
-		if got := isDeviceLoss(errors.New(tc.msg)); got != tc.lost {
-			t.Errorf("%q classified as lost=%v, want %v", tc.msg, got, tc.lost)
+		err := &mtl.CommandBufferError{Domain: mtl.CommandBufferErrorDomain, Code: tc.code, Message: tc.msg}
+		if got := isDeviceLoss(err); got != tc.lost {
+			t.Errorf("code %d %q classified as lost=%v, want %v", tc.code, tc.msg, got, tc.lost)
+		}
+		// Wrapped, as a fence reports it.
+		if got := isDeviceLoss(fmt.Errorf("submit: %w", err)); got != tc.lost {
+			t.Errorf("wrapped code %d classified as lost=%v, want %v", tc.code, got, tc.lost)
 		}
 	}
+
+	// A code from another domain says nothing about the device, and neither
+	// does an error that is not a command buffer's -- even one whose text
+	// happens to say the words.
+	other := &mtl.CommandBufferError{Domain: "NSCocoaErrorDomain",
+		Code: mtl.CommandBufferErrorDeviceRemoved, Message: "Device Removed"}
+	if isDeviceLoss(other) {
+		t.Error("a DeviceRemoved code from another domain was classified as loss")
+	}
+	if isDeviceLoss(errors.New("Device Removed")) {
+		t.Error("a plain error saying Device Removed was classified as loss")
+	}
+}
+
+// deviceRemoved is the synthetic error a lost device would report.
+func deviceRemoved() error {
+	return &mtl.CommandBufferError{Domain: mtl.CommandBufferErrorDomain,
+		Code: mtl.CommandBufferErrorDeviceRemoved, Message: "Device Removed"}
+}
+
+// timedOut is the synthetic error a hung kernel reports.
+func timedOut() error {
+	return &mtl.CommandBufferError{Domain: mtl.CommandBufferErrorDomain,
+		Code: mtl.CommandBufferErrorTimeout, Message: "Caused GPU Hang Error"}
 }
 
 // Loss is sticky, and the first report is the one kept.
@@ -85,12 +122,12 @@ func TestDeviceLossIsSticky(t *testing.T) {
 
 	// Neither of these is loss, so neither may make the device unusable.
 	d.noteSubmissionError(nil)
-	d.noteSubmissionError(errors.New("Invalid Resource"))
+	d.noteSubmissionError(timedOut())
 	if err := d.Lost(); err != nil {
 		t.Fatalf("an ordinary submission failure was treated as device loss: %v", err)
 	}
 
-	d.noteSubmissionError(errors.New("Device Removed"))
+	d.noteSubmissionError(deviceRemoved())
 	first := d.Lost()
 	if first == nil {
 		t.Fatal("a lost device still reports healthy")
@@ -102,7 +139,8 @@ func TestDeviceLossIsSticky(t *testing.T) {
 
 	// A later, different loss does not replace the first. The first is what a
 	// caller was told and what explains everything that failed after it.
-	d.noteSubmissionError(errors.New("Caused GPU Hang"))
+	d.noteSubmissionError(&mtl.CommandBufferError{Domain: mtl.CommandBufferErrorDomain,
+		Code: mtl.CommandBufferErrorAccessRevoked, Message: "Access revoked"})
 	if d.Lost() != first {
 		t.Error("a second loss replaced the first; the original cause is what explains " +
 			"every failure that followed it")

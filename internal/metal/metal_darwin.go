@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"sync"
 
 	"golang.design/x/accel/internal/driver"
@@ -201,26 +200,28 @@ func (d *device) noteSubmissionError(err error) {
 // isDeviceLoss reports whether a command buffer error means the device is gone
 // rather than the work being wrong.
 //
-// Matched on the status Metal reports rather than on message text where
-// possible, and on text where not: MTLCommandBufferError distinguishes
-// NotPermitted, OutOfMemory, InvalidResource and Timeout from the two that mean
-// the device itself went away.
+// Classified by the MTLCommandBufferError code, which is what Metal assigns
+// to say exactly this. Two codes mean the device: DeviceRemoved, an eGPU
+// unplugged, and AccessRevoked, the process barred from the GPU after too many
+// hangs. Everything else is about one submission: Timeout is a kernel that ran
+// too long, PageFault one that read off the end of a buffer, and the device
+// runs the next command buffer as if nothing happened. This used to match
+// message text, and matched "Caused GPU Hang" -- the timeout's usual wording
+// -- so a kernel with an infinite loop made the device unusable for good,
+// which is the opposite of what [device.Lost] promises.
 //
 // Narrow on purpose. A false positive here is worse than a false negative,
 // because it turns a recoverable kernel bug into a device a caller must throw
 // away, and specs/001-device-resources.md section 7.4 makes that unrecoverable
-// by design.
+// by design. An error that is not a command buffer's at all is not loss.
 func isDeviceLoss(err error) bool {
-	msg := err.Error()
-	for _, s := range []string{
-		"Caused GPU Hang", // MTLCommandBufferErrorTimeout's usual text
-		"IOAF code",       // the family of errors a reset produces
-		"Device Removed",  // an eGPU unplugged
-		"device was lost", //
-	} {
-		if strings.Contains(msg, s) {
-			return true
-		}
+	var cbe *mtl.CommandBufferError
+	if !errors.As(err, &cbe) || cbe.Domain != mtl.CommandBufferErrorDomain {
+		return false
+	}
+	switch cbe.Code {
+	case mtl.CommandBufferErrorDeviceRemoved, mtl.CommandBufferErrorAccessRevoked:
+		return true
 	}
 	return false
 }

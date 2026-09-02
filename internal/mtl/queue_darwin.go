@@ -7,6 +7,7 @@
 package mtl
 
 import (
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -220,12 +221,58 @@ func (cb *CommandBuffer) Done() bool {
 	return s == StatusCompleted || s == StatusError
 }
 
+// CommandBufferErrorDomain is the NSError domain of a failed submission.
+const CommandBufferErrorDomain = "MTLCommandBufferErrorDomain"
+
+// The MTLCommandBufferError codes, from Metal/MTLCommandBuffer.h.
+//
+// Written out because the code is what says whether the *device* failed or
+// the *work* did, and that distinction is one a backend has to make: a
+// timeout or a page fault is a kernel that misbehaved and leaves the device
+// usable, while a removed device or revoked access is a device nothing will
+// run on again. The message text says the same thing less reliably.
+const (
+	CommandBufferErrorNone            = 0
+	CommandBufferErrorInternal        = 1
+	CommandBufferErrorTimeout         = 2
+	CommandBufferErrorPageFault       = 3
+	CommandBufferErrorAccessRevoked   = 4
+	CommandBufferErrorNotPermitted    = 7
+	CommandBufferErrorOutOfMemory     = 8
+	CommandBufferErrorInvalidResource = 9
+	CommandBufferErrorMemoryless      = 10
+	CommandBufferErrorDeviceRemoved   = 11
+	CommandBufferErrorStackOverflow   = 12
+)
+
+// CommandBufferError is what a failed submission reported.
+//
+// It carries the NSError's domain and code beside its text, so a caller
+// classifies by the code Metal assigned and not by matching the description,
+// which is localized and has changed between releases.
+type CommandBufferError struct {
+	Domain  string
+	Code    int
+	Message string
+}
+
+func (e *CommandBufferError) Error() string {
+	return fmt.Sprintf("accel/mtl: the submission failed: %s (%s code %d)",
+		e.Message, e.Domain, e.Code)
+}
+
 // Err reports why the submission failed, or nil.
 func (cb *CommandBuffer) Err() error {
 	var err error
 	withPool(func() {
-		if e := cb.id.Send(selError); e != 0 {
-			err = describe("the submission", e)
+		e := cb.id.Send(selError)
+		if e == 0 {
+			return
+		}
+		err = &CommandBufferError{
+			Domain:  utf8(e.Send(selDomain)),
+			Code:    int(e.Send(selCode)),
+			Message: utf8(e.Send(selLocalizedDescription)),
 		}
 	})
 	return err
