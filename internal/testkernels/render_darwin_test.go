@@ -565,11 +565,13 @@ func renderTwice(t *testing.T, d *accel.Device) []float32 {
 // and comparing them there would be comparing two legal answers.
 //
 // So this asserts what the contract does promise -- the pixels the pass wrote
-// agree exactly -- and asserts that the untouched region is *not* required to
-// agree, by observing that on this pair it does not. That second half is the
-// part worth having: a backend that quietly started preserving contents would
-// be making a promise the API does not, and the next backend would then have to
-// keep it.
+// agree exactly -- and nothing about the rest. An earlier version also
+// required the untouched pixels to *differ*, on the argument that a backend
+// quietly preserving contents would be making a promise the API does not.
+// That is not a claim the contract supports: "undefined" admits equality, and
+// a backend whose fresh texture happened to hold the caller's bytes would
+// have failed a test for behaviour the spec allows. What the untouched region
+// did is logged, not asserted.
 func TestLoadDontCareAgreesOnlyWhereThePassWrote(t *testing.T) {
 	metal := openMetalDevice(t)
 	cpu, err := accel.OpenCPU(accel.CPUOptions{})
@@ -603,13 +605,12 @@ func TestLoadDontCareAgreesOnlyWhereThePassWrote(t *testing.T) {
 	if written == 0 {
 		t.Fatal("the pass wrote nothing, so agreeing about what it wrote proves nothing")
 	}
-	if untouchedDiffer == 0 {
-		t.Errorf("every untouched pixel matched across the two backends, so one of them " +
-			"is preserving contents that specs/033-render-api.md leaves undefined; that " +
-			"is a promise the API does not make and the next backend would inherit")
+	if written == len(onCPU)/4 {
+		t.Fatal("the pass covered every pixel, so nothing here was left to the load " +
+			"action and the case is about the draw rather than about DontCare")
 	}
-	t.Logf("%d pixels written and agreed, %d untouched pixels differ as the contract "+
-		"permits", agreed, untouchedDiffer)
+	t.Logf("%d pixels written and agreed, %d untouched pixels differ, which the "+
+		"contract permits and does not require", agreed, untouchedDiffer)
 }
 
 func renderDontCare(t *testing.T, d *accel.Device) []float32 {
