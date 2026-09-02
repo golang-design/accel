@@ -480,7 +480,11 @@ func (r *Recorder) PresentSlot(s *Surface, name string) Slot {
 		r.fail("PresentSlot %q: surface %q belongs to a different device", name, s.label)
 		return 0
 	}
-	w, h := s.Extent()
+	// The extent and the generation are one reading, because they are one
+	// fact: a resize changes both. Read under two acquisitions they could be
+	// the old extent against the new number, and a frame of that generation
+	// then passed the generation check and failed the size check.
+	w, h, gen := s.configuration()
 	slot := r.slotImpl(SlotDescriptor{
 		Name: name, Kind: BindingStorageBuffer, DType: F32,
 		Access: AccessWrite, MinCount: w * h * 4,
@@ -491,10 +495,15 @@ func (r *Recorder) PresentSlot(s *Surface, name string) Slot {
 	if r.state.present == nil {
 		r.state.present = map[Slot]presentSlot{}
 	}
-	r.state.present[slot] = presentSlot{
-		surface: s, gen: s.Generation(), width: w, height: h,
-	}
+	r.state.present[slot] = presentSlot{surface: s, gen: gen, width: w, height: h}
 	return slot
+}
+
+// configuration is the surface's extent and generation as one reading.
+func (s *Surface) configuration() (w, h int, gen uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.width, s.height, s.gen
 }
 
 // presentSlot is what a present slot records beyond an ordinary one.

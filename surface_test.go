@@ -7,6 +7,7 @@ package accel_test
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -481,6 +482,83 @@ func TestAWindowSurfaceNeedsAnImageCount(t *testing.T) {
 		if !strings.Contains(err.Error(), "images") {
 			t.Errorf("the refusal should say what is wrong: %v", err)
 		}
+	}
+}
+
+// A present slot records one generation's extent with that generation's number.
+//
+// PresentSlot read the extent and the generation under two lock acquisitions,
+// so a resize between them recorded the old extent against the new number. A
+// frame of that generation then passed the generation check and failed the
+// size check, which reads as a graph too small for a surface it was built
+// against. A resizer runs beside the recorder and the invariant is checked
+// for every graph: a frame from the recorded generation binds.
+func TestPresentSlotRecordsOneGenerationsExtent(t *testing.T) {
+	d := openDevice(t)
+	s := newSurface(t, d, 16, 16, 2)
+
+	// Several resizers, so that one is nearly always waiting on the surface's
+	// lock: a waiter is what turns the gap between two acquisitions into a
+	// resize, since a contended mutex hands off to whoever is queued.
+	stop := make(chan struct{})
+	var resizers sync.WaitGroup
+	for n := 0; n < 8; n++ {
+		resizers.Add(1)
+		go func() {
+			defer resizers.Done()
+			// Alternating so that a stale extent is the larger one half of
+			// the time, which is the half a size check can see.
+			big := false
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				w := 4
+				if big {
+					w = 16
+				}
+				big = !big
+				// Refused while a frame is outstanding, which is fine: the
+				// recorder below acquires and discards between graphs.
+				_ = s.Resize(w, w)
+			}
+		}()
+	}
+	defer func() { close(stop); resizers.Wait() }()
+
+	for i := 0; i < 500; i++ {
+		r := d.NewRecorder()
+		slot := r.PresentSlot(s, "swapchain")
+		if slot == 0 {
+			t.Fatal("PresentSlot failed")
+		}
+		// One element, which every extent covers, so the graph is built for
+		// whatever the slot recorded.
+		r.UploadToSlot(slot, 0, 1, []float32{0})
+		g, err := r.Build()
+		if err != nil {
+			t.Fatalf("build %d: %v", i, err)
+		}
+		f, err := s.Acquire(time.Second)
+		if err != nil {
+			_ = g.Close()
+			if errors.Is(err, accel.ErrSurfaceOutOfDate) {
+				continue
+			}
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		err = g.BindPresent(slot, f)
+		if errors.Is(err, accel.ErrTooSmall) {
+			t.Fatalf("graph %d: the frame is from the recorded generation and the "+
+				"recorded extent is another generation's: %v", i, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "generation") {
+			t.Fatalf("graph %d: BindPresent: %v", i, err)
+		}
+		_ = s.Discard(f)
+		_ = g.Close()
 	}
 }
 
