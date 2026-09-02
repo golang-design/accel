@@ -34,6 +34,7 @@ package emit
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/format"
@@ -726,17 +727,24 @@ func (e *emitter) registry(kernels []*ir.Func) {
 }
 
 // mslArtifact emits the Metal target's source, when this kernel is inside the
-// subset that target can lower.
+// subset that target can lower, and the refusal when it is not.
 //
-// A kernel outside it emits nothing rather than failing the whole generation.
-// The MSL subset is narrower than the Go one by construction and widens over
+// A kernel outside it does not fail the whole generation. The MSL subset is
+// narrower than the Go one by construction and widens over
 // specs/022-msl-target.md, so a refusal here is a statement about how far the
-// Metal target has got, not about whether the kernel is legal. What makes the
-// gap visible rather than silent is the golden: a kernel losing its MSL shows up
-// as a diff.
+// Metal target has got, not about whether the kernel is legal. The refusal is
+// recorded as NoMSL with its position, so the generated file says why rather
+// than merely lacking a line, and a Metal caller's error can say so too. An
+// emitter failure that is not a refusal is a defect and fails the generation.
 func (e *emitter) mslArtifact(k *ir.Func) {
 	src, err := MSL(k)
 	if err != nil {
+		var r *Refusal
+		if !errors.As(err, &r) {
+			e.fail("lowering %s to MSL: %v", k.Name, err)
+			return
+		}
+		e.printf("\tNoMSL: %q,\n", r.Message(e.position(r.Pos)))
 		return
 	}
 	if strings.Contains(src, "`") {

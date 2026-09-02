@@ -112,8 +112,7 @@ func (d *device) Compile(p *driver.Plan) (driver.Executable, error) {
 // nothing and asking it twice is free.
 func (d *device) SupportsKernel(k *kernel.Kernel) error {
 	if k.MSL == "" {
-		return fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal; "+
-			"it is outside the subset specs/021-metal-bringup.md section 5 lowers", k.Name)
+		return noMSL(k)
 	}
 	return nil
 }
@@ -134,8 +133,7 @@ func (d *device) pipelineFor(k *kernel.Kernel) (*mtl.Pipeline, error) {
 		// Never a fallback to the Go lowering. Running the CPU kernel on a
 		// device the caller selected specifically would be correct, fast enough
 		// to miss, and would mean the GPU was never exercised.
-		return nil, fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal; "+
-			"it is outside the subset specs/021-metal-bringup.md section 5 lowers", k.Name)
+		return nil, noMSL(k)
 	}
 	d.pipeMu.Lock()
 	defer d.pipeMu.Unlock()
@@ -839,4 +837,15 @@ func (f *fence) close() {
 	f.gpu = f.cb.GPUTime()
 	f.cb.Close()
 	f.cb = nil
+}
+
+// noMSL is the error for a kernel with no Metal lowering, carrying the
+// emitter's reason when the generated record has one.
+func noMSL(k *kernel.Kernel) error {
+	if k.NoMSL != "" {
+		return fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal: %s",
+			k.Name, k.NoMSL)
+	}
+	return fmt.Errorf("kernel %s carries no MSL artifact, so it cannot run on Metal; "+
+		"it is outside the subset specs/021-metal-bringup.md section 5 lowers", k.Name)
 }

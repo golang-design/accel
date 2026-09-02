@@ -461,6 +461,16 @@ type Kernel struct {
 	// caller selected specifically would be correct, fast enough to miss, and
 	// would mean the GPU was never exercised.
 	MSL string
+
+	// NoMSL is why MSL is empty: the emitter's refusal, with the position of
+	// the construct it could not lower. It is set exactly when MSL is not.
+	//
+	// It exists so that a kernel losing its Metal lowering is a statement in
+	// the generated file rather than an absence. Before it, the emitter
+	// dropped the refusal, the golden showed a missing line a reader had to
+	// notice, and the Metal backend's error at pipeline creation could name
+	// the kernel and not the reason.
+	NoMSL string
 }
 
 // Poison fills workgroup-shared storage with a pattern no sensible kernel

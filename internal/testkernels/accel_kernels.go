@@ -985,6 +985,7 @@ var AtomicAddF32Kernel = kernelabi.Kernel{
 	Digest:    "f4d097a64f082d78cda31f395367aa2a",
 	Generator: kernelabi.Version,
 	Caps:      128,
+	NoMSL:     "an f32 atomic (atomic<float> is a Metal version capability) is not in the MSL subset (specs/022-msl-target.md), at atomic.go:132:1",
 	Flat: func(t accel.Thread, a kernelabi.Args) {
 		atomicAddF32Flat(t, kernelabi.Slice[float32](a, 0), kernelabi.Slice[float32](a, 1))
 	},
@@ -1747,6 +1748,7 @@ var BallotKernel = kernelabi.Kernel{
 	},
 	Digest:           "52763e304dfd6e0dc56c83c0810b8def",
 	Generator:        kernelabi.Version,
+	NoMSL:            "the mask type is not in the MSL subset (specs/022-msl-target.md), at ballot.go:33:1",
 	Caps:             5,
 	OrderIndependent: true,
 	Suspensions:      1,

@@ -6,6 +6,7 @@ package testkernels_test
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"golang.design/x/accel/internal/testkernels"
@@ -67,6 +68,13 @@ func TestEveryKernelLowersToMSLOrSaysWhyNot(t *testing.T) {
 		}
 		if _, ok := unlowered[k.Name]; !ok {
 			missing = append(missing, k.Name)
+		}
+		// The generated record says why, with a position. The emitter used
+		// to drop its refusal, so the only evidence a kernel had lost its
+		// MSL was a line missing from the golden.
+		if !strings.Contains(k.NoMSL, ".go:") {
+			t.Errorf("%s carries no MSL and its NoMSL does not say where the refusal is: %q",
+				k.Name, k.NoMSL)
 		}
 	}
 	sort.Strings(missing)

@@ -119,8 +119,33 @@ func (m *msl) fail(format string, args ...any) {
 // target-specific rejection names the target." A kernel legal on the CPU and
 // not yet on Metal is a different fact from a kernel that is illegal.
 func (m *msl) refuse(what string, pos token.Pos) {
-	m.fail("%s is not in the MSL subset of specs/021-metal-bringup.md and belongs to "+
-		"specs/022-msl-target.md (kernel %s, position %v)", what, m.fn.Name, pos)
+	if m.err == nil {
+		m.err = &Refusal{Kernel: m.fn.Name, What: what, Pos: pos}
+	}
+}
+
+// Refusal is the MSL emitter's report of a construct outside its subset.
+//
+// A type rather than a formatted string so that the generator, which has the
+// file set, can print the position as file:line:col; the emitter has only the
+// token.Pos.
+type Refusal struct {
+	Kernel string
+	What   string
+	Pos    token.Pos
+}
+
+func (r *Refusal) Error() string {
+	return fmt.Sprintf("accel: %s is not in the MSL subset of specs/021-metal-bringup.md and "+
+		"belongs to specs/022-msl-target.md (kernel %s, position %v)", r.What, r.Kernel, r.Pos)
+}
+
+// Message is the refusal for the generated record, with its position already
+// resolved by the caller to the file:line:col the other generated positions
+// use.
+func (r *Refusal) Message(pos string) string {
+	return fmt.Sprintf("%s is not in the MSL subset (specs/022-msl-target.md), at %s",
+		r.What, pos)
 }
 
 func (m *msl) printf(format string, args ...any) {
@@ -763,7 +788,10 @@ func (m *msl) dtype(t *ir.Type) string {
 			return fmt.Sprintf("%s%d", m.dtype(t.Elem), t.Len)
 		}
 	}
-	m.fail("dtype %v has no MSL spelling in the subset of specs/021-metal-bringup.md", t.Kind)
+	// A refusal rather than a failure: a type the subset has no spelling for
+	// (the ballot mask, specs/058-ballot.md) is a statement about how far the
+	// target has got, and it is recorded as NoMSL rather than dropped.
+	m.refuse(fmt.Sprintf("the %v type", t.Kind), m.fn.Pos())
 	return "void"
 }
 
