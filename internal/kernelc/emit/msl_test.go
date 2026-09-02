@@ -60,18 +60,6 @@ func TestMSLRefusals(t *testing.T) {
 		},
 		want: "bfloat",
 	}, {
-		name: "an f32 atomic",
-		mut: func(k *ir.Func) {
-			// atomic<float> is a Metal *version* capability, so the binding's
-			// type cannot be chosen without a family query this table does not
-			// make.
-			k.Body = &ir.Block{List: []ir.Stmt{ir.NewExprStmt(k.Pos(),
-				ir.NewIntrinsic(k.Pos(), &ir.Type{Kind: ir.F32}, ir.OpAtomicAddF32,
-					nil, []ir.Value{k.Params[1], ir.NewConst(k.Pos(), &ir.Type{Kind: ir.U32},
-						constant.MakeInt64(0))}))}}
-		},
-		want: "atomic",
-	}, {
 		name: "a subgroup ballot",
 		mut: func(k *ir.Func) {
 			k.Body = &ir.Block{List: []ir.Stmt{ir.NewExprStmt(k.Pos(),
@@ -186,6 +174,29 @@ func TestABarrierLowersToTheScopeTheSpecStates(t *testing.T) {
 			t.Errorf("§2.5 makes Barrier order shared and storage, and the lowering "+
 				"omits %s — a kernel publishing through a buffer across a barrier "+
 				"is then undefined on this backend:\n%s", want, src)
+		}
+	}
+}
+
+// The f32 atomic lowers to atomic<float>, and a device without the capability
+// refuses it at pipeline creation rather than here.
+//
+// Until 2026-09-02 the emitter refused it by name because the backend's
+// capability table never asked the device; the table asks now, so the source
+// is emitted for the devices that have it.
+func TestTheF32AtomicLowersToAtomicFloat(t *testing.T) {
+	k := corpusKernel(t, "Add")
+	k.Body = &ir.Block{List: []ir.Stmt{ir.NewExprStmt(k.Pos(),
+		ir.NewIntrinsic(k.Pos(), &ir.Type{Kind: ir.F32}, ir.OpAtomicAddF32,
+			nil, []ir.Value{k.Params[1], ir.NewConst(k.Pos(), &ir.Type{Kind: ir.U32},
+				constant.MakeInt64(0)), ir.NewConst(k.Pos(), &ir.Type{Kind: ir.F32}, constant.MakeFloat64(1))}))}}
+	src, err := emit.MSL(k)
+	if err != nil {
+		t.Fatalf("the f32 atomic was refused: %v", err)
+	}
+	for _, want := range []string{"atomic<float>", "atomic_fetch_add_explicit"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the MSL does not contain %q:\n%s", want, src)
 		}
 	}
 }
