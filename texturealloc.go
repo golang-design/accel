@@ -34,6 +34,12 @@ func (p *Pool) allocTexture(desc TextureDescriptor) (*Texture, error) {
 	align := p.dev.info.Limits.MinTexturePlacementAlignment
 
 	p.mu.Lock()
+	// Under the lock, for AllocBuffer's reason: Close marks the pool closed
+	// under it, after counting children under it.
+	if err := p.state.checkOpen("AllocTexture"); err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
 	a, err := p.alloc.Alloc(size, align)
 	if err != nil {
 		s := p.alloc.Stats()

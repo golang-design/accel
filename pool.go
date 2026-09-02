@@ -256,6 +256,14 @@ func (p *Pool) AllocBuffer(desc BufferDescriptor) (*Buffer, error) {
 	align := p.dev.allocAlignment(desc.Usage)
 
 	p.mu.Lock()
+	// Checked again under the lock, because Close marks the pool closed under
+	// it: the check at the top is a fast path, and this one is the answer.
+	// Without it an allocation that passed the fast path appended a live
+	// buffer to a pool Close had just found empty.
+	if err := p.state.checkOpen("AllocBuffer"); err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
 	a, err := p.alloc.Alloc(size, align)
 	if err != nil {
 		s := p.alloc.Stats()
@@ -337,6 +345,9 @@ func (p *Pool) Reset() error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := p.state.checkOpen("Reset"); err != nil {
+		return err
+	}
 	// Textures are children exactly as buffers are, and the rule is the same
 	// for both: a hold beyond the caller's handle refuses the reset, and a
 	// successful reset closes every handle. Handling only the buffers was the
@@ -400,9 +411,14 @@ func (p *Pool) Close() error {
 		p.mu.Unlock()
 		return &LifetimeError{Op: "Close", Resource: p.desc.Label, Reason: reasonChildren, Children: n}
 	}
+	// The transition happens under the same lock as the count, and every
+	// allocation checks the closed flag under that lock too. Releasing between
+	// the two let an allocation append a live buffer to a pool this had just
+	// found empty, and the pool closed over it.
+	closing := p.state.beginClose()
 	p.mu.Unlock()
 
-	if !p.state.beginClose() {
+	if !closing {
 		return nil
 	}
 	if p.state.release() {
