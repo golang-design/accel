@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"golang.design/x/accel"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"golang.design/x/accel/internal/testkernels"
 )
 
@@ -25,15 +26,25 @@ import (
 //
 // # What it asserts
 //
-// A full-screen triangle at a known clip depth, and the buffer holding the
-// window depth the convention says it should -- z_window = (z_ndc + 1)/2, so
-// clip z = 0 at w = 1 is 0.5. Exact: the depth write is a store, not an
-// interpolation of anything the two backends may weight differently.
+// A full-screen triangle at one clip depth and a lower-left triangle at a
+// nearer one, and the buffer holding the window depth the convention says
+// each should -- z_window = (z_ndc + 1)/2, so clip z = 0 at w = 1 is 0.5.
+//
+// Two depths rather than one, because a buffer holding one constant is the
+// same buffer in any row order: a copy that flipped or transposed the depth
+// aspect matched the single-triangle version of this test exactly.
+//
+// Within specs/008-numerics.md section 8.1's depth budget rather than exact.
+// A flat triangle's depth is still the barycentric sum of three equal values,
+// and the CPU rasterizer returned 0.24999999 for a triangle at 0.25 at one
+// pixel of sixty-four; the budget is gamma(2)*|z|, which is at most two ulps
+// of z. A flipped copy is off by the difference between the two depths, which
+// is not two ulps of anything.
 func TestADepthAttachmentIsReadBackThroughATransferNode(t *testing.T) {
 	const w, h = 8, 8
-	// The clip depth the triangle is drawn at, and the window depth it becomes.
-	// Neither is the depth clear of 1, so a buffer that was never written by
-	// the pass fails rather than matching by accident.
+	// The clip depth the full triangle is drawn at, and the window depth it
+	// becomes. Neither is the depth clear of 1, so a buffer that was never
+	// written by the pass fails rather than matching by accident.
 	const clipZ, wantWindow = 0.25, 0.625
 
 	d, err := accel.OpenCPU(accel.CPUOptions{})
@@ -53,6 +64,8 @@ func TestADepthAttachmentIsReadBackThroughATransferNode(t *testing.T) {
 func checkDepthReadbackThroughATransfer(t *testing.T, d *accel.Device, w, h int, clipZ, wantWindow float32) {
 	t.Helper()
 	q := d.Queue()
+	// The nearer triangle's depths, which pass CompareLess against the first.
+	const nearClipZ, nearWindow = -0.5, 0.25
 
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 		Vertex:   &testkernels.ScaledVSStage,
@@ -73,7 +86,14 @@ func checkDepthReadbackThroughATransfer(t *testing.T, d *accel.Device, w, h int,
 	}
 	defer pipe.Close()
 
-	verts := []float32{-1, -1, clipZ, 3, -1, clipZ, -1, 3, clipZ}
+	// The full-viewport triangle, then a nearer one over the lower-left
+	// corner. Its diagonal is x + y = -0.1 in NDC, which passes through no
+	// pixel centre at 8x8, so which pixels it covers is not a tie-break
+	// question: pixel (x, y) in top-origin rows is covered exactly when x < y.
+	verts := []float32{
+		-1, -1, clipZ, 3, -1, clipZ, -1, 3, clipZ,
+		-1, -1, nearClipZ, 0.9, -1, nearClipZ, -1, 0.9, nearClipZ,
+	}
 	vb, err := d.NewBuffer(accel.BufferDescriptor{
 		DType: accel.F32, Count: len(verts),
 		Usage: accel.BufferVertex | accel.BufferCopyDst, Label: "verts",
@@ -153,6 +173,7 @@ func checkDepthReadbackThroughATransfer(t *testing.T, d *accel.Device, w, h int,
 	p.SetVertexBuffer(0, vv)
 	p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1, Offset: accel.Vec2{0, 0}})
 	p.Draw(accel.Draw{VertexCount: 3})
+	p.Draw(accel.Draw{VertexCount: 3, FirstVertex: 3})
 	r.CopyTextureToBuffer(ov, depth)
 
 	g, err := r.Build()
@@ -183,10 +204,19 @@ func checkDepthReadbackThroughATransfer(t *testing.T, d *accel.Device, w, h int,
 	if err := q.ReadBuffer(out, 0, got); err != nil {
 		t.Fatalf("readback: %v", err)
 	}
-	for i, z := range got {
-		if z != wantWindow {
-			t.Fatalf("pixel %d has depth %v, want %v: window depth is (z_ndc+1)/2 and "+
-				"the triangle was drawn at clip z %v", i, z, wantWindow, clipZ)
+	want := make([]float32, w*h)
+	for i := range want {
+		want[i] = wantWindow
+		if x, y := i%w, i/w; x < y {
+			want[i] = nearWindow
 		}
+	}
+	// gamma(2)*|z| <= 2 ulp(z): the depth budget of 008 section 8.1.
+	const depthULPs = 2
+	if r := numeq.WithinULP(got, want, depthULPs); !r.Equal {
+		i := r.FirstDiff
+		t.Fatalf("pixel (%d,%d) has depth %v, want %v within %d ulps: window depth is "+
+			"(z_ndc+1)/2, the full triangle was drawn at clip z %v and the lower-left "+
+			"one at %v (%v)", i%w, i/w, got[i], want[i], depthULPs, clipZ, nearClipZ, r)
 	}
 }

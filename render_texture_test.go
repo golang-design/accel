@@ -108,12 +108,16 @@ func TestTheHighestTextureSlotIsAccepted(t *testing.T) {
 // first pass's image exactly. Exactly, not within a budget: a fetch returns the
 // texel, and a copy that is off by a row or a channel is a different picture
 // rather than a rounder one.
+//
+// The first pass draws RowFS, which writes each pixel's own coordinate, rather
+// than a solid colour: a solid image is equal to itself flipped, transposed or
+// shifted by a row, so a fetch with any of those faults reproduced it exactly.
 func TestAPassReadsWhatAnEarlierPassDrew(t *testing.T) {
 	const w, h = 8, 8
 	d := openDevice(t)
 
 	draw := texturePipeline(t, d, &testkernels.FullScreenVSStage,
-		&testkernels.SolidFSStage)
+		&testkernels.RowFSStage)
 	defer draw.Close()
 	blit := texturePipeline(t, d, &testkernels.FullScreenVSStage,
 		&testkernels.BlitFSStage)
@@ -156,18 +160,18 @@ func TestAPassReadsWhatAnEarlierPassDrew(t *testing.T) {
 
 	a := readRenderTexture(t, d, first)
 	b := readRenderTexture(t, d, second)
-	var nonZero int
-	for i := range a {
-		if a[i] != 0 {
-			nonZero++
+	for p := range w * h {
+		x, y := p%w, p/w
+		// RowFS writes (x+0.5, y+0.5, 0, 1) at pixel (x, y), in the caller's
+		// top-origin row order. This is what makes the comparison below
+		// about the fetch: the first image is known, not merely non-zero.
+		if want := [4]float32{float32(x) + 0.5, float32(y) + 0.5, 0, 1}; [4]float32(a[p*4:p*4+4]) != want {
+			t.Fatalf("pixel (%d,%d) of the first pass is %v, want %v", x, y, a[p*4:p*4+4], want)
 		}
-		if b[i] != a[i] {
-			t.Fatalf("element %d is %v in the second pass and %v in the first",
-				i, b[i], a[i])
+		if [4]float32(b[p*4:p*4+4]) != [4]float32(a[p*4:p*4+4]) {
+			t.Fatalf("pixel (%d,%d) is %v in the second pass and %v in the first",
+				x, y, b[p*4:p*4+4], a[p*4:p*4+4])
 		}
-	}
-	if nonZero == 0 {
-		t.Fatal("the first pass drew nothing, so the comparison is vacuous")
 	}
 }
 

@@ -47,9 +47,12 @@ func checkHandoffStaysOnDevice(t *testing.T, d *accel.Device, w, h int) {
 		t.Helper()
 		q := d.Queue()
 
+		// RowFS rather than SolidFS: a G-buffer of one constant is the same
+		// bytes in any row order, so a handoff that transposed or flipped
+		// the attachment would still tonemap to the right answer.
 		geometry, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
 			Vertex:   &testkernels.FullScreenVSStage,
-			Fragment: &testkernels.SolidFSStage,
+			Fragment: &testkernels.RowFSStage,
 			Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
 			Label:    "geometry",
 		})
@@ -148,16 +151,18 @@ func checkHandoffStaysOnDevice(t *testing.T, d *accel.Device, w, h int) {
 		}
 
 		// The values, so "no transfer" is not satisfied by a graph that did
-		// nothing. SolidFS writes 0.25/0.5/0.75/1 and Scale doubles.
+		// nothing. RowFS writes (x+0.5, y+0.5, 0, 1) at pixel (x, y) in
+		// top-origin row order, and Scale doubles.
 		got := make([]float32, n)
 		if err := q.ReadBuffer(toned, 0, got); err != nil {
 			t.Fatalf("readback: %v", err)
 		}
-		want := [4]float32{0.5, 1, 1.5, 2}
-		for i := range got {
-			if got[i] != want[i%4] {
-				t.Fatalf("element %d is %v, want %v: the tonemap did not read the pass's "+
-					"output", i, got[i], want[i%4])
+		for p := range w * h {
+			x, y := p%w, p/w
+			want := [4]float32{2 * (float32(x) + 0.5), 2 * (float32(y) + 0.5), 0, 2}
+			if [4]float32(got[p*4:p*4+4]) != want {
+				t.Fatalf("pixel (%d,%d) is %v, want %v: the tonemap did not read the "+
+					"pass's output where the pass wrote it", x, y, got[p*4:p*4+4], want)
 			}
 		}
 	}

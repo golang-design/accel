@@ -73,14 +73,20 @@ func TestTheFrameLoopAgainstAMetalLayer(t *testing.T) {
 		}
 
 		// What the graph rendered is still readable: presenting converts a copy
-		// into the drawable and does not consume the frame's buffer.
+		// into the drawable and does not consume the frame's buffer. RowFS
+		// wrote each pixel's own coordinate, so the whole image is checked in
+		// the caller's top-origin row order rather than one pixel of a solid.
 		out := make([]float32, w*h*4)
 		if err := d.Queue().ReadBuffer(f.View().Buffer, f.View().Offset, out); err != nil {
 			t.Fatalf("frame %d: readback: %v", frame, err)
 		}
-		if out[0] != 0.25 {
-			t.Fatalf("frame %d: pixel (0,0) is %v, want what the pass drew",
-				frame, out[:4])
+		for p := range w * h {
+			x, y := p%w, p/w
+			want := [4]float32{float32(x) + 0.5, float32(y) + 0.5, 0, 1}
+			if [4]float32(out[p*4:p*4+4]) != want {
+				t.Fatalf("frame %d: pixel (%d,%d) is %v, want %v", frame, x, y,
+					out[p*4:p*4+4], want)
+			}
 		}
 
 		if err := s.Present(f, fence); err != nil {
@@ -90,32 +96,14 @@ func TestTheFrameLoopAgainstAMetalLayer(t *testing.T) {
 }
 
 // presentGraph records the frame graph the loop replays: one pass filling the
-// present slot.
+// present slot with RowFS, so every pixel of a frame names its own position.
 func presentGraph(t *testing.T, d *accel.Device, s *accel.Surface, w, h int) (*accel.Graph, accel.Slot) {
 	t.Helper()
-	q := d.Queue()
-	verts, err := d.NewBuffer(accel.BufferDescriptor{
-		DType: accel.F32, Count: 9,
-		Usage: accel.BufferStorage | accel.BufferCopyDst, Label: "verts",
-	})
-	if err != nil {
-		t.Fatalf("buffer: %v", err)
-	}
-	t.Cleanup(func() { _ = verts.Close() })
-	if err := q.WriteBuffer(verts, 0, []float32{-1, -1, 0, 3, -1, 0, -1, 3, 0}); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	vv, err := verts.View(0, verts.Count())
-	if err != nil {
-		t.Fatalf("view: %v", err)
-	}
-
 	pipe, err := d.NewRenderPipeline(accel.RenderPipelineDescriptor{
-		Vertex:        &testkernels.ScaledVSStage,
-		Fragment:      &testkernels.TintedFSStage,
-		VertexBuffers: posOnly(),
-		Targets:       []accel.ColorTargetState{{Format: accel.RGBA32Float}},
-		Label:         "present",
+		Vertex:   &testkernels.FullScreenVSStage,
+		Fragment: &testkernels.RowFSStage,
+		Targets:  []accel.ColorTargetState{{Format: accel.RGBA32Float}},
+		Label:    "present",
 	})
 	if err != nil {
 		t.Fatalf("pipeline: %v", err)
@@ -129,9 +117,6 @@ func presentGraph(t *testing.T, d *accel.Device, s *accel.Surface, w, h int) (*a
 		Width: w, Height: h, Label: "frame",
 	})
 	p.SetPipeline(pipe)
-	p.SetVertexBuffer(0, vv)
-	p.SetVertexUniform(0, testkernels.StageTransform{Scale: 1})
-	p.SetFragmentUniform(0, testkernels.StageTint{Colour: accel.Vec4{0.25, 0.5, 0.75, 1}})
 	p.Draw(accel.Draw{VertexCount: 3})
 
 	g, err := r.Build()

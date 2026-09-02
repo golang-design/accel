@@ -89,8 +89,11 @@ func TestLocalsSurviveTheSuspension(t *testing.T) {
 	const n = 64
 	in := make([]float32, n)
 	out := make([]float32, n)
+	// A gradient, not one constant: with every input equal, an invocation
+	// that resumed with its ids zeroed reads lane 0's value, which is the
+	// same number, and the fault this test exists for is invisible.
 	for i := range in {
-		in[i] = 42
+		in[i] = float32(i)*0.5 + 1
 	}
 	args := kernelabi.Args{Slices: []any{in, out}}
 	if err := kernel.DispatchCooperative(&testkernels.ExchangeKernel,
@@ -98,9 +101,9 @@ func TestLocalsSurviveTheSuspension(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 	for i, got := range out {
-		if got != 42 {
-			t.Fatalf("element %d is %v, want 42: the ids computed before the "+
-				"barrier did not survive it", i, got)
+		if want := in[(i+1)%n]; got != want {
+			t.Fatalf("element %d is %v, want its neighbour's %v: the ids computed before "+
+				"the barrier did not survive it", i, got, want)
 		}
 	}
 }
