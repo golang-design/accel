@@ -169,6 +169,10 @@ func Broadcast(b *Builder, x *Tensor, shape Shape) *Tensor {
 	strides := make([]int, len(shape))
 	off := len(shape) - len(x.shape)
 	for i := range shape {
+		if shape[i] < 0 {
+			return b.fail(1, "Broadcast", "dimension %d is %d; a view cannot have a negative extent",
+				i, shape[i])
+		}
 		if i < off {
 			// A new leading axis reads the whole operand for every index.
 			strides[i] = 0

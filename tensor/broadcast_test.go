@@ -171,3 +171,21 @@ func TestABroadcastThatIsNotARunIsRefusedWhereItWasWritten(t *testing.T) {
 		})
 	}
 }
+
+func TestBroadcastRejectsNegativeDimensions(t *testing.T) {
+	for _, shape := range []tensor.Shape{{-1, 1, 4}, {-1, 4}} {
+		t.Run(shape.String(), func(t *testing.T) {
+			rt := newRuntime(t)
+			b := rt.NewBuilder("negative broadcast")
+			x := tensor.Input(b, tensor.ValueDesc{Name: "x", DType: accel.F32, Shape: tensor.Shape{1, 4}})
+			tensor.Output(b, "out", tensor.Contiguous(b, tensor.Broadcast(b, x, shape)))
+			if err := b.Err(); err == nil || !strings.Contains(err.Error(), "Broadcast") {
+				t.Fatalf("expected Broadcast to reject %v, got %v", shape, err)
+			}
+			if p, err := b.Compile(rt, tensor.CompileOptions{}); err == nil {
+				p.Close()
+				t.Fatal("Compile accepted negative dimensions")
+			}
+		})
+	}
+}
