@@ -6,6 +6,7 @@ package kernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"math"
 	"math/rand/v2"
 	"testing"
@@ -303,14 +304,15 @@ func TestTheAttentionKernelDeclaresItsShape(t *testing.T) {
 	// Two trees and the barriers around them, counted in the source: a barrier
 	// inside a loop counts once however many rounds it runs.
 	//
-	// Eight since 2026-09-05: the six barriers, one of them the block loop's
+	// Eleven since 2026-09-05: the six barriers, one of them the block loop's
 	// (a barrier at the top of the body, separating a pass's writes to the
-	// shared arrays from the previous pass's reads of them), plus the two
-	// states a subgroup rendezvous costs -- the per-position dot product is
-	// a subgroup sum, and the lowering suspends once to contribute a lane's
-	// value and once to read the combined one back.
-	if got := k.Suspensions; got != 8 {
-		t.Errorf("it has %d suspension points, want 8", got)
+	// shared arrays from the previous pass's reads of them), plus what the
+	// four subgroup sums of the dot-product round cost -- each rendezvous
+	// suspends to contribute a lane's value and resumes to read the combined
+	// one back, and the lowering shares the resume of one with the
+	// contribution of the next.
+	if got := k.Suspensions; got != 11 {
+		t.Errorf("it has %d suspension points, want 11", got)
 	}
 }
 
@@ -485,11 +487,19 @@ func TestOneBlockIsExactlyTheSinglePassForm(t *testing.T) {
 								v[j*kvHeads*headDim+kvHead*headDim+lane]))
 						}
 					}
+					// Within the reassociation of the block's sums rather than
+					// exact, since 2026-09-05: the mass and each output element
+					// are 128-term sums the kernel folds as subgroup partials and
+					// four interleaved chains, while this reference folds them in
+					// order. The running softmax still reduces to the single-pass
+					// form at one block -- alpha is exp(-inf) and the empty
+					// accumulators are multiplied away -- and a 128-term f32 sum
+					// reassociated moves by at most (n-1)u relative, 127 ULP, on
+					// terms of mixed magnitude (specs/008-numerics.md section 8).
 					want := o / total
-					if g := got[h*headDim+lane]; g != want {
-						t.Fatalf("head %d element %d is %v, want exactly %v: at one "+
-							"block the running softmax reduces to the single-pass "+
-							"form, so this is equality and not a tolerance",
+					if g := got[h*headDim+lane]; numeq.ULPDistance(g, want) > 128 {
+						t.Fatalf("head %d element %d is %v, want %v within 128 ULP: at one "+
+							"block the running softmax reduces to the single-pass form",
 							h, lane, g, want)
 					}
 				}

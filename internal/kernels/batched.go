@@ -124,36 +124,157 @@ func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []floa
 		sgw := t.SubgroupSize()
 		sgl := t.SubgroupLane()
 		nsg := AttnBlock / sgw
-		for j := t.SubgroupIndex(); j < AttnBlock; j += nsg {
-			jpos := base + j
-			part := float32(0)
-			if jpos < kvLen {
-				phys := pages[pageBase+jpos/d.Block]*d.Block + jpos%d.Block
-				for i := sgl; i < d.HeadDim; i += sgw {
-					part = part + q[qBase+i]*k[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+		// Four positions per round, their loads issued before any of the four
+		// sums: a round's loads are independent of the round before, and a
+		// subgroup that waited on one position's sum before loading the next
+		// paid the memory latency once per position. 128 is a multiple of
+		// 4*nsg for every subgroup width the model admits.
+		for j := t.SubgroupIndex(); j < AttnBlock; j += 4 * nsg {
+			jpos0 := base + j + 0*nsg
+			part0 := float32(0)
+			if jpos0 < kvLen {
+				phys0 := pages[pageBase+jpos0/d.Block]*d.Block + jpos0%d.Block
+				// Four independent partials over the row: one chain of dependent
+				// adds through a load each was the phase's latency, since a lane
+				// waited on each load before issuing the next.
+				pa0 := float32(0)
+				pb0 := float32(0)
+				pc0 := float32(0)
+				pd0 := float32(0)
+				i := sgl
+				for i+3*sgw < d.HeadDim {
+					pa0 = pa0 + q[qBase+i]*k[phys0*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					pb0 = pb0 + q[qBase+i+sgw]*k[phys0*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+sgw]
+					pc0 = pc0 + q[qBase+i+2*sgw]*k[phys0*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+2*sgw]
+					pd0 = pd0 + q[qBase+i+3*sgw]*k[phys0*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+3*sgw]
+					i = i + 4*sgw
 				}
+				for i < d.HeadDim {
+					pa0 = pa0 + q[qBase+i]*k[phys0*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					i = i + sgw
+				}
+				part0 = (pa0 + pb0) + (pc0 + pd0)
 			}
-			dot := t.SubgroupAddF32(part)
-			if sgl == 0 {
-				sj := float32(-3.4e38)
-				if jpos < kvLen {
-					sj = dot * d.Scale
+			jpos1 := base + j + 1*nsg
+			part1 := float32(0)
+			if jpos1 < kvLen {
+				phys1 := pages[pageBase+jpos1/d.Block]*d.Block + jpos1%d.Block
+				// Four independent partials over the row: one chain of dependent
+				// adds through a load each was the phase's latency, since a lane
+				// waited on each load before issuing the next.
+				pa1 := float32(0)
+				pb1 := float32(0)
+				pc1 := float32(0)
+				pd1 := float32(0)
+				i := sgl
+				for i+3*sgw < d.HeadDim {
+					pa1 = pa1 + q[qBase+i]*k[phys1*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					pb1 = pb1 + q[qBase+i+sgw]*k[phys1*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+sgw]
+					pc1 = pc1 + q[qBase+i+2*sgw]*k[phys1*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+2*sgw]
+					pd1 = pd1 + q[qBase+i+3*sgw]*k[phys1*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+3*sgw]
+					i = i + 4*sgw
 				}
-				scores[j] = sj
+				for i < d.HeadDim {
+					pa1 = pa1 + q[qBase+i]*k[phys1*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					i = i + sgw
+				}
+				part1 = (pa1 + pb1) + (pc1 + pd1)
+			}
+			jpos2 := base + j + 2*nsg
+			part2 := float32(0)
+			if jpos2 < kvLen {
+				phys2 := pages[pageBase+jpos2/d.Block]*d.Block + jpos2%d.Block
+				// Four independent partials over the row: one chain of dependent
+				// adds through a load each was the phase's latency, since a lane
+				// waited on each load before issuing the next.
+				pa2 := float32(0)
+				pb2 := float32(0)
+				pc2 := float32(0)
+				pd2 := float32(0)
+				i := sgl
+				for i+3*sgw < d.HeadDim {
+					pa2 = pa2 + q[qBase+i]*k[phys2*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					pb2 = pb2 + q[qBase+i+sgw]*k[phys2*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+sgw]
+					pc2 = pc2 + q[qBase+i+2*sgw]*k[phys2*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+2*sgw]
+					pd2 = pd2 + q[qBase+i+3*sgw]*k[phys2*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+3*sgw]
+					i = i + 4*sgw
+				}
+				for i < d.HeadDim {
+					pa2 = pa2 + q[qBase+i]*k[phys2*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					i = i + sgw
+				}
+				part2 = (pa2 + pb2) + (pc2 + pd2)
+			}
+			jpos3 := base + j + 3*nsg
+			part3 := float32(0)
+			if jpos3 < kvLen {
+				phys3 := pages[pageBase+jpos3/d.Block]*d.Block + jpos3%d.Block
+				// Four independent partials over the row: one chain of dependent
+				// adds through a load each was the phase's latency, since a lane
+				// waited on each load before issuing the next.
+				pa3 := float32(0)
+				pb3 := float32(0)
+				pc3 := float32(0)
+				pd3 := float32(0)
+				i := sgl
+				for i+3*sgw < d.HeadDim {
+					pa3 = pa3 + q[qBase+i]*k[phys3*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					pb3 = pb3 + q[qBase+i+sgw]*k[phys3*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+sgw]
+					pc3 = pc3 + q[qBase+i+2*sgw]*k[phys3*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+2*sgw]
+					pd3 = pd3 + q[qBase+i+3*sgw]*k[phys3*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i+3*sgw]
+					i = i + 4*sgw
+				}
+				for i < d.HeadDim {
+					pa3 = pa3 + q[qBase+i]*k[phys3*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+					i = i + sgw
+				}
+				part3 = (pa3 + pb3) + (pc3 + pd3)
+			}
+			dot0 := t.SubgroupAddF32(part0)
+			dot1 := t.SubgroupAddF32(part1)
+			dot2 := t.SubgroupAddF32(part2)
+			dot3 := t.SubgroupAddF32(part3)
+			if sgl == 0 {
+				sj0 := float32(-3.4e38)
+				if jpos0 < kvLen {
+					sj0 = dot0 * d.Scale
+				}
+				scores[j+0*nsg] = sj0
+				sj1 := float32(-3.4e38)
+				if jpos1 < kvLen {
+					sj1 = dot1 * d.Scale
+				}
+				scores[j+1*nsg] = sj1
+				sj2 := float32(-3.4e38)
+				if jpos2 < kvLen {
+					sj2 = dot2 * d.Scale
+				}
+				scores[j+2*nsg] = sj2
+				sj3 := float32(-3.4e38)
+				if jpos3 < kvLen {
+					sj3 = dot3 * d.Scale
+				}
+				scores[j+3*nsg] = sj3
 			}
 		}
 		t.Barrier()
 		s := scores[lane]
-		red[lane] = s
-		t.Barrier()
 
-		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
-			if lane < stride {
-				red[lane] = kmath.Max(red[lane], red[lane+stride])
-			}
-			t.Barrier()
+		// The block's maximum and the block's mass: a subgroup reduction each,
+		// one partial per subgroup into red, one barrier, and every lane folds
+		// the partials. The shared-memory trees they replace cost seven
+		// barriers apiece, and with one workgroup per head on a device that
+		// wants many, the barriers were the block's latency rather than its
+		// loads: the time per decode was flat from 8 to 64 workgroups.
+		sgMax := t.SubgroupMaxF32(s)
+		if sgl == 0 {
+			red[t.SubgroupIndex()] = sgMax
 		}
+		t.Barrier()
 		blockMax := red[0]
+		for g := uint32(1); g < nsg; g++ {
+			blockMax = kmath.Max(blockMax, red[g])
+		}
 
 		next := kmath.Max(m, blockMax)
 		alpha := kmath.Exp(m - next)
@@ -162,18 +283,21 @@ func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []floa
 		if pos < kvLen {
 			e = kmath.Exp(s - next)
 		}
+		sgSum := t.SubgroupAddF32(e)
+		// Every lane has read red for the maximum before any lane writes the
+		// masses into it; scores likewise was read into s by every lane
+		// before the weights overwrite it.
 		t.Barrier()
 		scores[lane] = e
-		red[lane] = e
-		t.Barrier()
-
-		for stride := uint32(AttnBlock / 2); stride > 0; stride /= 2 {
-			if lane < stride {
-				red[lane] = red[lane] + red[lane+stride]
-			}
-			t.Barrier()
+		if sgl == 0 {
+			red[t.SubgroupIndex()] = sgSum
 		}
-		l = alpha*l + red[0]
+		t.Barrier()
+		blockSum := red[0]
+		for g := uint32(1); g < nsg; g++ {
+			blockSum = blockSum + red[g]
+		}
+		l = alpha*l + blockSum
 		m = next
 
 		// The weighted sum of V, parallel over the head's dimensions. Each lane
@@ -186,12 +310,37 @@ func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []floa
 		// as an out-of-range index and a device would not report at all.
 		if lane < d.HeadDim {
 			o = alpha * o
-			for j := uint32(0); j < AttnBlock; j++ {
-				if base+j < kvLen {
-					phys := pages[pageBase+(base+j)/d.Block]*d.Block + (base+j)%d.Block
-					o = o + scores[j]*v[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+			// Four positions per step into four independent accumulators, so
+			// four loads are in flight where one dependent chain of adds through
+			// a load each let one be. The masked positions past the length are
+			// zero-weight and skipped by the guard as before.
+			o0 := float32(0)
+			o1 := float32(0)
+			o2 := float32(0)
+			o3 := float32(0)
+			for j := uint32(0); j < AttnBlock; j += 4 {
+				jj0 := base + j + 0
+				if jj0 < kvLen {
+					phys0 := pages[pageBase+(jj0)/d.Block]*d.Block + (jj0)%d.Block
+					o0 = o0 + scores[j+0]*v[phys0*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+				}
+				jj1 := base + j + 1
+				if jj1 < kvLen {
+					phys1 := pages[pageBase+(jj1)/d.Block]*d.Block + (jj1)%d.Block
+					o1 = o1 + scores[j+1]*v[phys1*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+				}
+				jj2 := base + j + 2
+				if jj2 < kvLen {
+					phys2 := pages[pageBase+(jj2)/d.Block]*d.Block + (jj2)%d.Block
+					o2 = o2 + scores[j+2]*v[phys2*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
+				}
+				jj3 := base + j + 3
+				if jj3 < kvLen {
+					phys3 := pages[pageBase+(jj3)/d.Block]*d.Block + (jj3)%d.Block
+					o3 = o3 + scores[j+3]*v[phys3*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+lane]
 				}
 			}
+			o = o + ((o0 + o1) + (o2 + o3))
 		}
 	}
 

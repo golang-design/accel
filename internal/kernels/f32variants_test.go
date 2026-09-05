@@ -6,6 +6,7 @@ package kernels_test
 
 import (
 	"fmt"
+	"golang.design/x/accel/internal/conformance/numeq"
 	"math"
 	"testing"
 
@@ -580,8 +581,13 @@ func TestTheNewVariantsMatchTheirAuthoredForms(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dispatch: %v", err)
 		}
+		// Within a few ULP for the reason int4_test.go's comparison carries a
+		// bound: the weighted sum's terms are softmax weights, which are not
+		// exact, and ordinary Go may fuse the authored multiply and add where
+		// the generated lowering rounds each product. The last bit is
+		// fusion's, not the lowering's.
 		for i := range authored {
-			if authored[i] != generated[i] {
+			if numeq.ULPDistance(authored[i], generated[i]) > 4 {
 				t.Fatalf("element %d is %v authored and %v generated", i,
 					authored[i], generated[i])
 			}

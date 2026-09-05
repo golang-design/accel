@@ -1058,20 +1058,65 @@ type attentionDecodeFrame struct {
 	sgl12      uint32
 	nsg13      uint32
 	j14        uint32
-	jpos15     uint32
-	part16     float32
-	phys17     uint32
-	i18        uint32
-	dot19      float32
-	sj20       float32
-	s21        float32
-	stride22   uint32
-	blockMax23 float32
-	next24     float32
-	alpha25    float32
-	e26        float32
-	stride27   uint32
-	j28        uint32
+	jpos015    uint32
+	part016    float32
+	phys017    uint32
+	pa018      float32
+	pb019      float32
+	pc020      float32
+	pd021      float32
+	i22        uint32
+	jpos123    uint32
+	part124    float32
+	phys125    uint32
+	pa126      float32
+	pb127      float32
+	pc128      float32
+	pd129      float32
+	i30        uint32
+	jpos231    uint32
+	part232    float32
+	phys233    uint32
+	pa234      float32
+	pb235      float32
+	pc236      float32
+	pd237      float32
+	i38        uint32
+	jpos339    uint32
+	part340    float32
+	phys341    uint32
+	pa342      float32
+	pb343      float32
+	pc344      float32
+	pd345      float32
+	i46        uint32
+	dot047     float32
+	dot148     float32
+	dot249     float32
+	dot350     float32
+	sj051      float32
+	sj152      float32
+	sj253      float32
+	sj354      float32
+	s55        float32
+	sgMax56    float32
+	blockMax57 float32
+	g58        uint32
+	next59     float32
+	alpha60    float32
+	e61        float32
+	sgSum62    float32
+	blockSum63 float32
+	g64        uint32
+	o065       float32
+	o166       float32
+	o267       float32
+	o368       float32
+	j69        uint32
+	jj070      uint32
+	jj171      uint32
+	jj272      uint32
+	jj373      uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -1104,7 +1149,7 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 31
+			f.pc = 32
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
@@ -1122,173 +1167,304 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 5:
 			f.j14 = t.SubgroupIndex()
-			f.pc = 11
+			f.pc = 17
 			continue
 		case 6:
-			f.jpos15 = (f.base9 + f.j14)
-			f.part16 = float32(0)
-			if f.jpos15 < f.kvLen1 {
-				f.phys17 = (((f.jpos15 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
-				{
-					f.i18 = f.sgl12
-					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
-						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[(f.phys17+f.i18)]))
-					}
+			f.jpos015 = ((f.base9 + f.j14) + (uint32(0) * f.nsg13))
+			f.part016 = float32(0)
+			if f.jpos015 < f.kvLen1 {
+				f.phys017 = (((f.jpos015 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa018 = float32(0)
+				f.pb019 = float32(0)
+				f.pc020 = float32(0)
+				f.pd021 = float32(0)
+				f.i22 = f.sgl12
+				for (f.i22 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[(f.phys017+f.i22)]))
+					f.pb019 = float32(f.pb019 + float32(q[(((f.h0*d.HeadDim)+f.i22)+f.sgw11)]*k[((f.phys017+f.i22)+f.sgw11)]))
+					f.pc020 = float32(f.pc020 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(2)*f.sgw11))]*k[((f.phys017+f.i22)+(uint32(2)*f.sgw11))]))
+					f.pd021 = float32(f.pd021 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(3)*f.sgw11))]*k[((f.phys017+f.i22)+(uint32(3)*f.sgw11))]))
+					f.i22 = (f.i22 + (uint32(4) * f.sgw11))
 				}
+				for f.i22 < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[(f.phys017+f.i22)]))
+					f.i22 = (f.i22 + f.sgw11)
+				}
+				f.part016 = float32(float32(f.pa018+f.pb019) + float32(f.pc020+f.pd021))
+			}
+			f.jpos123 = ((f.base9 + f.j14) + (uint32(1) * f.nsg13))
+			f.part124 = float32(0)
+			if f.jpos123 < f.kvLen1 {
+				f.phys125 = (((f.jpos123 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa126 = float32(0)
+				f.pb127 = float32(0)
+				f.pc128 = float32(0)
+				f.pd129 = float32(0)
+				f.i30 = f.sgl12
+				for (f.i30 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[(f.phys125+f.i30)]))
+					f.pb127 = float32(f.pb127 + float32(q[(((f.h0*d.HeadDim)+f.i30)+f.sgw11)]*k[((f.phys125+f.i30)+f.sgw11)]))
+					f.pc128 = float32(f.pc128 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(2)*f.sgw11))]*k[((f.phys125+f.i30)+(uint32(2)*f.sgw11))]))
+					f.pd129 = float32(f.pd129 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(3)*f.sgw11))]*k[((f.phys125+f.i30)+(uint32(3)*f.sgw11))]))
+					f.i30 = (f.i30 + (uint32(4) * f.sgw11))
+				}
+				for f.i30 < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[(f.phys125+f.i30)]))
+					f.i30 = (f.i30 + f.sgw11)
+				}
+				f.part124 = float32(float32(f.pa126+f.pb127) + float32(f.pc128+f.pd129))
+			}
+			f.jpos231 = ((f.base9 + f.j14) + (uint32(2) * f.nsg13))
+			f.part232 = float32(0)
+			if f.jpos231 < f.kvLen1 {
+				f.phys233 = (((f.jpos231 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa234 = float32(0)
+				f.pb235 = float32(0)
+				f.pc236 = float32(0)
+				f.pd237 = float32(0)
+				f.i38 = f.sgl12
+				for (f.i38 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[(f.phys233+f.i38)]))
+					f.pb235 = float32(f.pb235 + float32(q[(((f.h0*d.HeadDim)+f.i38)+f.sgw11)]*k[((f.phys233+f.i38)+f.sgw11)]))
+					f.pc236 = float32(f.pc236 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(2)*f.sgw11))]*k[((f.phys233+f.i38)+(uint32(2)*f.sgw11))]))
+					f.pd237 = float32(f.pd237 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(3)*f.sgw11))]*k[((f.phys233+f.i38)+(uint32(3)*f.sgw11))]))
+					f.i38 = (f.i38 + (uint32(4) * f.sgw11))
+				}
+				for f.i38 < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[(f.phys233+f.i38)]))
+					f.i38 = (f.i38 + f.sgw11)
+				}
+				f.part232 = float32(float32(f.pa234+f.pb235) + float32(f.pc236+f.pd237))
+			}
+			f.jpos339 = ((f.base9 + f.j14) + (uint32(3) * f.nsg13))
+			f.part340 = float32(0)
+			if f.jpos339 < f.kvLen1 {
+				f.phys341 = (((f.jpos339 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa342 = float32(0)
+				f.pb343 = float32(0)
+				f.pc344 = float32(0)
+				f.pd345 = float32(0)
+				f.i46 = f.sgl12
+				for (f.i46 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[(f.phys341+f.i46)]))
+					f.pb343 = float32(f.pb343 + float32(q[(((f.h0*d.HeadDim)+f.i46)+f.sgw11)]*k[((f.phys341+f.i46)+f.sgw11)]))
+					f.pc344 = float32(f.pc344 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(2)*f.sgw11))]*k[((f.phys341+f.i46)+(uint32(2)*f.sgw11))]))
+					f.pd345 = float32(f.pd345 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(3)*f.sgw11))]*k[((f.phys341+f.i46)+(uint32(3)*f.sgw11))]))
+					f.i46 = (f.i46 + (uint32(4) * f.sgw11))
+				}
+				for f.i46 < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[(f.phys341+f.i46)]))
+					f.i46 = (f.i46 + f.sgw11)
+				}
+				f.part340 = float32(float32(f.pa342+f.pb343) + float32(f.pc344+f.pd345))
 			}
 			f.pc = 7
 			continue
 		case 7:
 			frame.Sub = kernelabi.SubAddF32
-			frame.SubF32 = f.part16
+			frame.SubF32 = f.part016
 			f.pc = 8
-			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "attention.go:185:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "attention.go:282:4"}
 			return true
 		case 8:
-			f.dot19 = frame.SubF32
+			f.dot047 = frame.SubF32
 			f.pc = 9
 			continue
 		case 9:
-			if f.sgl12 == uint32(0) {
-				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-				if f.jpos15 < f.kvLen1 {
-					f.sj20 = float32(f.dot19 * d.Scale)
-				}
-				tr.Write(0, int(f.j14))
-				scores[f.j14] = f.sj20
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part124
 			f.pc = 10
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "attention.go:283:4"}
+			return true
 		case 10:
-			f.j14 = (f.j14 + f.nsg13)
+			f.dot148 = frame.SubF32
 			f.pc = 11
 			continue
 		case 11:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part232
+			f.pc = 12
+			frame.Barrier = kernelabi.BarrierID{Index: 11, Pos: "attention.go:284:4"}
+			return true
+		case 12:
+			f.dot249 = frame.SubF32
+			f.pc = 13
+			continue
+		case 13:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part340
+			f.pc = 14
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "attention.go:285:4"}
+			return true
+		case 14:
+			f.dot350 = frame.SubF32
+			f.pc = 15
+			continue
+		case 15:
+			if f.sgl12 == uint32(0) {
+				f.sj051 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos015 < f.kvLen1 {
+					f.sj051 = float32(f.dot047 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(0) * f.nsg13))))
+				scores[(f.j14 + (uint32(0) * f.nsg13))] = f.sj051
+				f.sj152 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos123 < f.kvLen1 {
+					f.sj152 = float32(f.dot148 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(1) * f.nsg13))))
+				scores[(f.j14 + (uint32(1) * f.nsg13))] = f.sj152
+				f.sj253 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos231 < f.kvLen1 {
+					f.sj253 = float32(f.dot249 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(2) * f.nsg13))))
+				scores[(f.j14 + (uint32(2) * f.nsg13))] = f.sj253
+				f.sj354 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos339 < f.kvLen1 {
+					f.sj354 = float32(f.dot350 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(3) * f.nsg13))))
+				scores[(f.j14 + (uint32(3) * f.nsg13))] = f.sj354
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.j14 = (f.j14 + (uint32(4) * f.nsg13))
+			f.pc = 17
+			continue
+		case 17:
 			if f.j14 < uint32(128) {
 				f.pc = 6
 				continue
 			}
-			f.pc = 12
-			continue
-		case 12:
-			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:194:3"}
-			return true
-		case 13:
-			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s21
-			f.pc = 14
-			continue
-		case 14:
-			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:197:3"}
-			return true
-		case 15:
-			f.stride22 = uint32(64)
-			f.pc = 19
-			continue
-		case 16:
-			if f.lane2 < f.stride22 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
-			}
-			f.pc = 17
-			continue
-		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:203:4"}
-			return true
-		case 18:
-			f.stride22 = (f.stride22 / uint32(2))
-			f.pc = 19
 			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "attention.go:309:3"}
+			return true
 		case 19:
-			if f.stride22 > uint32(0) {
-				f.pc = 16
-				continue
-			}
+			f.s55 = scores[tr.ReadAt(0, int(f.lane2))]
 			f.pc = 20
 			continue
 		case 20:
-			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next24 = kmath.Max(f.m6, f.blockMax23)
-			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
-			f.e26 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
-			}
+			frame.Sub = kernelabi.SubMaxF32
+			frame.SubF32 = f.s55
 			f.pc = 21
-			continue
-		case 21:
-			f.pc = 22
-			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "attention.go:220:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 20, Pos: "attention.go:318:3"}
 			return true
+		case 21:
+			f.sgMax56 = frame.SubF32
+			f.pc = 22
+			continue
 		case 22:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e26
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e26
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgMax56
+			}
 			f.pc = 23
 			continue
 		case 23:
 			f.pc = 24
-			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "attention.go:223:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "attention.go:322:3"}
 			return true
 		case 24:
-			f.stride27 = uint32(64)
-			f.pc = 28
+			f.blockMax57 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g58 = uint32(1)
+				for ; f.g58 < f.nsg13; f.g58 = (f.g58 + uint32(1)) {
+					f.blockMax57 = kmath.Max(f.blockMax57, red[tr.ReadAt(1, int(f.g58))])
+				}
+			}
+			f.next59 = kmath.Max(f.m6, f.blockMax57)
+			f.alpha60 = kmath.Exp(float32(f.m6 - f.next59))
+			f.e61 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e61 = kmath.Exp(float32(f.s55 - f.next59))
+			}
+			f.pc = 25
 			continue
 		case 25:
-			if f.lane2 < f.stride27 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.e61
 			f.pc = 26
-			continue
-		case 26:
-			f.pc = 27
-			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "attention.go:229:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 25, Pos: "attention.go:335:3"}
 			return true
-		case 27:
-			f.stride27 = (f.stride27 / uint32(2))
-			f.pc = 28
+		case 26:
+			f.sgSum62 = frame.SubF32
+			f.pc = 27
 			continue
+		case 27:
+			f.pc = 28
+			frame.Barrier = kernelabi.BarrierID{Index: 27, Pos: "attention.go:339:3"}
+			return true
 		case 28:
-			if f.stride27 > uint32(0) {
-				f.pc = 25
-				continue
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e61
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgSum62
 			}
 			f.pc = 29
 			continue
 		case 29:
-			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next24
+			f.pc = 30
+			frame.Barrier = kernelabi.BarrierID{Index: 29, Pos: "attention.go:344:3"}
+			return true
+		case 30:
+			f.blockSum63 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g64 = uint32(1)
+				for ; f.g64 < f.nsg13; f.g64 = (f.g64 + uint32(1)) {
+					f.blockSum63 = float32(f.blockSum63 + red[tr.ReadAt(1, int(f.g64))])
+				}
+			}
+			f.l7 = float32(float32(f.alpha60*f.l7) + f.blockSum63)
+			f.m6 = f.next59
 			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha25 * f.o8)
+				f.o8 = float32(f.alpha60 * f.o8)
+				f.o065 = float32(0)
+				f.o166 = float32(0)
+				f.o267 = float32(0)
+				f.o368 = float32(0)
 				{
-					f.j28 = uint32(0)
-					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
-						if (f.base9 + f.j28) < f.kvLen1 {
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[(((((f.base9+f.j28)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+					f.j69 = uint32(0)
+					for ; f.j69 < uint32(128); f.j69 = (f.j69 + uint32(4)) {
+						f.jj070 = ((f.base9 + f.j69) + uint32(0))
+						if f.jj070 < f.kvLen1 {
+							f.o065 = float32(f.o065 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(0))))]*v[((((f.jj070*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+						f.jj171 = ((f.base9 + f.j69) + uint32(1))
+						if f.jj171 < f.kvLen1 {
+							f.o166 = float32(f.o166 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(1))))]*v[((((f.jj171*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+						f.jj272 = ((f.base9 + f.j69) + uint32(2))
+						if f.jj272 < f.kvLen1 {
+							f.o267 = float32(f.o267 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(2))))]*v[((((f.jj272*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+						f.jj373 = ((f.base9 + f.j69) + uint32(3))
+						if f.jj373 < f.kvLen1 {
+							f.o368 = float32(f.o368 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(3))))]*v[((((f.jj373*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
 						}
 					}
 				}
+				f.o8 = float32(f.o8 + float32(float32(f.o065+f.o166)+float32(f.o267+f.o368)))
 			}
-			f.pc = 30
-			continue
-		case 30:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 31
 			continue
 		case 31:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 32
+			continue
+		case 32:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 32
+			f.pc = 33
 			continue
-		case 32:
+		case 33:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -1309,7 +1485,7 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b97381812e7cb83413bb633bd722ddc5",
+	Digest:    "43a8b56bea9d5ffb3f9e13d9ffa79129",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1318,6 +1494,11 @@ using namespace metal;
 static float _accel_fmax(float a, float b) {
     if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
     return fmax(a, b);
+}
+
+static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
 }
 
 static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
@@ -1368,60 +1549,177 @@ kernel void AttentionDecode(
         uint sgw = _sgsize;
         uint sgl = _sglane;
         uint nsg = _accel_div_u32(uint(128), sgw, _fault);
-        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
-            uint jpos = (base + j);
-            float part = float(0);
-            if ((jpos < kvLen)) {
-                uint phys = (((jpos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
-                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
-                    part = (part + (q[((h * d.HeadDim) + i)] * k[(phys + i)]));
+        for (uint j = _sgid; (j < uint(128)); j = (j + (uint(4) * nsg))) {
+            uint jpos0 = ((base + j) + (uint(0) * nsg));
+            float part0 = float(0);
+            if ((jpos0 < kvLen)) {
+                uint phys0 = (((jpos0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa0 = float(0);
+                float pb0 = float(0);
+                float pc0 = float(0);
+                float pd0 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * k[(phys0 + i)]));
+                    pb0 = (pb0 + (q[(((h * d.HeadDim) + i) + sgw)] * k[((phys0 + i) + sgw)]));
+                    pc0 = (pc0 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[((phys0 + i) + (uint(2) * sgw))]));
+                    pd0 = (pd0 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[((phys0 + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
                 }
+                for (; (i < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * k[(phys0 + i)]));
+                    i = (i + sgw);
+                }
+                part0 = ((pa0 + pb0) + (pc0 + pd0));
             }
-            float dot_ = simd_sum(part);
-            if ((sgl == uint(0))) {
-                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-                if ((jpos < kvLen)) {
-                    sj = (dot_ * d.Scale);
+            uint jpos1 = ((base + j) + (uint(1) * nsg));
+            float part1 = float(0);
+            if ((jpos1 < kvLen)) {
+                uint phys1 = (((jpos1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa1 = float(0);
+                float pb1 = float(0);
+                float pc1 = float(0);
+                float pd1 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * k[(phys1 + i)]));
+                    pb1 = (pb1 + (q[(((h * d.HeadDim) + i) + sgw)] * k[((phys1 + i) + sgw)]));
+                    pc1 = (pc1 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[((phys1 + i) + (uint(2) * sgw))]));
+                    pd1 = (pd1 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[((phys1 + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
                 }
-                scores[j] = sj;
+                for (; (i < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * k[(phys1 + i)]));
+                    i = (i + sgw);
+                }
+                part1 = ((pa1 + pb1) + (pc1 + pd1));
+            }
+            uint jpos2 = ((base + j) + (uint(2) * nsg));
+            float part2 = float(0);
+            if ((jpos2 < kvLen)) {
+                uint phys2 = (((jpos2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa2 = float(0);
+                float pb2 = float(0);
+                float pc2 = float(0);
+                float pd2 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * k[(phys2 + i)]));
+                    pb2 = (pb2 + (q[(((h * d.HeadDim) + i) + sgw)] * k[((phys2 + i) + sgw)]));
+                    pc2 = (pc2 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[((phys2 + i) + (uint(2) * sgw))]));
+                    pd2 = (pd2 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[((phys2 + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * k[(phys2 + i)]));
+                    i = (i + sgw);
+                }
+                part2 = ((pa2 + pb2) + (pc2 + pd2));
+            }
+            uint jpos3 = ((base + j) + (uint(3) * nsg));
+            float part3 = float(0);
+            if ((jpos3 < kvLen)) {
+                uint phys3 = (((jpos3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa3 = float(0);
+                float pb3 = float(0);
+                float pc3 = float(0);
+                float pd3 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * k[(phys3 + i)]));
+                    pb3 = (pb3 + (q[(((h * d.HeadDim) + i) + sgw)] * k[((phys3 + i) + sgw)]));
+                    pc3 = (pc3 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[((phys3 + i) + (uint(2) * sgw))]));
+                    pd3 = (pd3 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[((phys3 + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * k[(phys3 + i)]));
+                    i = (i + sgw);
+                }
+                part3 = ((pa3 + pb3) + (pc3 + pd3));
+            }
+            float dot0 = simd_sum(part0);
+            float dot1 = simd_sum(part1);
+            float dot2 = simd_sum(part2);
+            float dot3 = simd_sum(part3);
+            if ((sgl == uint(0))) {
+                float sj0 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos0 < kvLen)) {
+                    sj0 = (dot0 * d.Scale);
+                }
+                scores[(j + (uint(0) * nsg))] = sj0;
+                float sj1 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos1 < kvLen)) {
+                    sj1 = (dot1 * d.Scale);
+                }
+                scores[(j + (uint(1) * nsg))] = sj1;
+                float sj2 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos2 < kvLen)) {
+                    sj2 = (dot2 * d.Scale);
+                }
+                scores[(j + (uint(2) * nsg))] = sj2;
+                float sj3 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos3 < kvLen)) {
+                    sj3 = (dot3 * d.Scale);
+                }
+                scores[(j + (uint(3) * nsg))] = sj3;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float s = scores[lane];
-        red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float sgMax = _accel_simd_fmax(s);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgMax;
         }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float blockMax = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockMax = _accel_fmax(blockMax, red[g]);
+        }
         float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
+        float sgSum = simd_sum(e);
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
-        red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = (red[lane] + red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgSum;
         }
-        l = ((alpha * l) + red[int(0)]);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float blockSum = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockSum = (blockSum + red[g]);
+        }
+        l = ((alpha * l) + blockSum);
         m = next;
         if ((lane < d.HeadDim)) {
             o = (alpha * o);
-            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
-                if (((base + j) < kvLen)) {
-                    o = (o + (scores[j] * v[(((((base + j) * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+            float o0 = float(0);
+            float o1 = float(0);
+            float o2 = float(0);
+            float o3 = float(0);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(4))) {
+                uint jj0 = ((base + j) + uint(0));
+                if ((jj0 < kvLen)) {
+                    o0 = (o0 + (scores[(j + uint(0))] * v[((((jj0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj1 = ((base + j) + uint(1));
+                if ((jj1 < kvLen)) {
+                    o1 = (o1 + (scores[(j + uint(1))] * v[((((jj1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj2 = ((base + j) + uint(2));
+                if ((jj2 < kvLen)) {
+                    o2 = (o2 + (scores[(j + uint(2))] * v[((((jj2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj3 = ((base + j) + uint(3));
+                if ((jj3 < kvLen)) {
+                    o3 = (o3 + (scores[(j + uint(3))] * v[((((jj3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
+            o = (o + ((o0 + o1) + (o2 + o3)));
         }
     }
     if ((lane < d.HeadDim)) {
@@ -1431,7 +1729,7 @@ kernel void AttentionDecode(
 `,
 	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      8,
+	Suspensions:      11,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -1478,20 +1776,65 @@ type attentionDecodeF16Frame struct {
 	sgl12      uint32
 	nsg13      uint32
 	j14        uint32
-	jpos15     uint32
-	part16     float32
-	phys17     uint32
-	i18        uint32
-	dot19      float32
-	sj20       float32
-	s21        float32
-	stride22   uint32
-	blockMax23 float32
-	next24     float32
-	alpha25    float32
-	e26        float32
-	stride27   uint32
-	j28        uint32
+	jpos015    uint32
+	part016    float32
+	phys017    uint32
+	pa018      float32
+	pb019      float32
+	pc020      float32
+	pd021      float32
+	i22        uint32
+	jpos123    uint32
+	part124    float32
+	phys125    uint32
+	pa126      float32
+	pb127      float32
+	pc128      float32
+	pd129      float32
+	i30        uint32
+	jpos231    uint32
+	part232    float32
+	phys233    uint32
+	pa234      float32
+	pb235      float32
+	pc236      float32
+	pd237      float32
+	i38        uint32
+	jpos339    uint32
+	part340    float32
+	phys341    uint32
+	pa342      float32
+	pb343      float32
+	pc344      float32
+	pd345      float32
+	i46        uint32
+	dot047     float32
+	dot148     float32
+	dot249     float32
+	dot350     float32
+	sj051      float32
+	sj152      float32
+	sj253      float32
+	sj354      float32
+	s55        float32
+	sgMax56    float32
+	blockMax57 float32
+	g58        uint32
+	next59     float32
+	alpha60    float32
+	e61        float32
+	sgSum62    float32
+	blockSum63 float32
+	g64        uint32
+	o065       float32
+	o166       float32
+	o267       float32
+	o368       float32
+	j69        uint32
+	jj070      uint32
+	jj171      uint32
+	jj272      uint32
+	jj373      uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -1524,7 +1867,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 31
+			f.pc = 32
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
@@ -1532,7 +1875,7 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:335:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:475:3"}
 			return true
 		case 4:
 			f.sgw11 = t.SubgroupSize()
@@ -1542,173 +1885,304 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 5:
 			f.j14 = t.SubgroupIndex()
-			f.pc = 11
+			f.pc = 17
 			continue
 		case 6:
-			f.jpos15 = (f.base9 + f.j14)
-			f.part16 = float32(0)
-			if f.jpos15 < f.kvLen1 {
-				f.phys17 = (((f.jpos15 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
-				{
-					f.i18 = f.sgl12
-					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
-						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[(f.phys17+f.i18)].F32()))
-					}
+			f.jpos015 = ((f.base9 + f.j14) + (uint32(0) * f.nsg13))
+			f.part016 = float32(0)
+			if f.jpos015 < f.kvLen1 {
+				f.phys017 = (((f.jpos015 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa018 = float32(0)
+				f.pb019 = float32(0)
+				f.pc020 = float32(0)
+				f.pd021 = float32(0)
+				f.i22 = f.sgl12
+				for (f.i22 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[(f.phys017+f.i22)].F32()))
+					f.pb019 = float32(f.pb019 + float32(q[(((f.h0*d.HeadDim)+f.i22)+f.sgw11)]*k[((f.phys017+f.i22)+f.sgw11)].F32()))
+					f.pc020 = float32(f.pc020 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(2)*f.sgw11))]*k[((f.phys017+f.i22)+(uint32(2)*f.sgw11))].F32()))
+					f.pd021 = float32(f.pd021 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(3)*f.sgw11))]*k[((f.phys017+f.i22)+(uint32(3)*f.sgw11))].F32()))
+					f.i22 = (f.i22 + (uint32(4) * f.sgw11))
 				}
+				for f.i22 < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[(f.phys017+f.i22)].F32()))
+					f.i22 = (f.i22 + f.sgw11)
+				}
+				f.part016 = float32(float32(f.pa018+f.pb019) + float32(f.pc020+f.pd021))
+			}
+			f.jpos123 = ((f.base9 + f.j14) + (uint32(1) * f.nsg13))
+			f.part124 = float32(0)
+			if f.jpos123 < f.kvLen1 {
+				f.phys125 = (((f.jpos123 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa126 = float32(0)
+				f.pb127 = float32(0)
+				f.pc128 = float32(0)
+				f.pd129 = float32(0)
+				f.i30 = f.sgl12
+				for (f.i30 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[(f.phys125+f.i30)].F32()))
+					f.pb127 = float32(f.pb127 + float32(q[(((f.h0*d.HeadDim)+f.i30)+f.sgw11)]*k[((f.phys125+f.i30)+f.sgw11)].F32()))
+					f.pc128 = float32(f.pc128 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(2)*f.sgw11))]*k[((f.phys125+f.i30)+(uint32(2)*f.sgw11))].F32()))
+					f.pd129 = float32(f.pd129 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(3)*f.sgw11))]*k[((f.phys125+f.i30)+(uint32(3)*f.sgw11))].F32()))
+					f.i30 = (f.i30 + (uint32(4) * f.sgw11))
+				}
+				for f.i30 < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[(f.phys125+f.i30)].F32()))
+					f.i30 = (f.i30 + f.sgw11)
+				}
+				f.part124 = float32(float32(f.pa126+f.pb127) + float32(f.pc128+f.pd129))
+			}
+			f.jpos231 = ((f.base9 + f.j14) + (uint32(2) * f.nsg13))
+			f.part232 = float32(0)
+			if f.jpos231 < f.kvLen1 {
+				f.phys233 = (((f.jpos231 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa234 = float32(0)
+				f.pb235 = float32(0)
+				f.pc236 = float32(0)
+				f.pd237 = float32(0)
+				f.i38 = f.sgl12
+				for (f.i38 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[(f.phys233+f.i38)].F32()))
+					f.pb235 = float32(f.pb235 + float32(q[(((f.h0*d.HeadDim)+f.i38)+f.sgw11)]*k[((f.phys233+f.i38)+f.sgw11)].F32()))
+					f.pc236 = float32(f.pc236 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(2)*f.sgw11))]*k[((f.phys233+f.i38)+(uint32(2)*f.sgw11))].F32()))
+					f.pd237 = float32(f.pd237 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(3)*f.sgw11))]*k[((f.phys233+f.i38)+(uint32(3)*f.sgw11))].F32()))
+					f.i38 = (f.i38 + (uint32(4) * f.sgw11))
+				}
+				for f.i38 < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[(f.phys233+f.i38)].F32()))
+					f.i38 = (f.i38 + f.sgw11)
+				}
+				f.part232 = float32(float32(f.pa234+f.pb235) + float32(f.pc236+f.pd237))
+			}
+			f.jpos339 = ((f.base9 + f.j14) + (uint32(3) * f.nsg13))
+			f.part340 = float32(0)
+			if f.jpos339 < f.kvLen1 {
+				f.phys341 = (((f.jpos339 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				f.pa342 = float32(0)
+				f.pb343 = float32(0)
+				f.pc344 = float32(0)
+				f.pd345 = float32(0)
+				f.i46 = f.sgl12
+				for (f.i46 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[(f.phys341+f.i46)].F32()))
+					f.pb343 = float32(f.pb343 + float32(q[(((f.h0*d.HeadDim)+f.i46)+f.sgw11)]*k[((f.phys341+f.i46)+f.sgw11)].F32()))
+					f.pc344 = float32(f.pc344 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(2)*f.sgw11))]*k[((f.phys341+f.i46)+(uint32(2)*f.sgw11))].F32()))
+					f.pd345 = float32(f.pd345 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(3)*f.sgw11))]*k[((f.phys341+f.i46)+(uint32(3)*f.sgw11))].F32()))
+					f.i46 = (f.i46 + (uint32(4) * f.sgw11))
+				}
+				for f.i46 < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[(f.phys341+f.i46)].F32()))
+					f.i46 = (f.i46 + f.sgw11)
+				}
+				f.part340 = float32(float32(f.pa342+f.pb343) + float32(f.pc344+f.pd345))
 			}
 			f.pc = 7
 			continue
 		case 7:
 			frame.Sub = kernelabi.SubAddF32
-			frame.SubF32 = f.part16
+			frame.SubF32 = f.part016
 			f.pc = 8
-			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "attention.go:360:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "attention.go:597:4"}
 			return true
 		case 8:
-			f.dot19 = frame.SubF32
+			f.dot047 = frame.SubF32
 			f.pc = 9
 			continue
 		case 9:
-			if f.sgl12 == uint32(0) {
-				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-				if f.jpos15 < f.kvLen1 {
-					f.sj20 = float32(f.dot19 * d.Scale)
-				}
-				tr.Write(0, int(f.j14))
-				scores[f.j14] = f.sj20
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part124
 			f.pc = 10
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "attention.go:598:4"}
+			return true
 		case 10:
-			f.j14 = (f.j14 + f.nsg13)
+			f.dot148 = frame.SubF32
 			f.pc = 11
 			continue
 		case 11:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part232
+			f.pc = 12
+			frame.Barrier = kernelabi.BarrierID{Index: 11, Pos: "attention.go:599:4"}
+			return true
+		case 12:
+			f.dot249 = frame.SubF32
+			f.pc = 13
+			continue
+		case 13:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part340
+			f.pc = 14
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "attention.go:600:4"}
+			return true
+		case 14:
+			f.dot350 = frame.SubF32
+			f.pc = 15
+			continue
+		case 15:
+			if f.sgl12 == uint32(0) {
+				f.sj051 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos015 < f.kvLen1 {
+					f.sj051 = float32(f.dot047 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(0) * f.nsg13))))
+				scores[(f.j14 + (uint32(0) * f.nsg13))] = f.sj051
+				f.sj152 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos123 < f.kvLen1 {
+					f.sj152 = float32(f.dot148 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(1) * f.nsg13))))
+				scores[(f.j14 + (uint32(1) * f.nsg13))] = f.sj152
+				f.sj253 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos231 < f.kvLen1 {
+					f.sj253 = float32(f.dot249 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(2) * f.nsg13))))
+				scores[(f.j14 + (uint32(2) * f.nsg13))] = f.sj253
+				f.sj354 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos339 < f.kvLen1 {
+					f.sj354 = float32(f.dot350 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(3) * f.nsg13))))
+				scores[(f.j14 + (uint32(3) * f.nsg13))] = f.sj354
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.j14 = (f.j14 + (uint32(4) * f.nsg13))
+			f.pc = 17
+			continue
+		case 17:
 			if f.j14 < uint32(128) {
 				f.pc = 6
 				continue
 			}
-			f.pc = 12
-			continue
-		case 12:
-			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:369:3"}
-			return true
-		case 13:
-			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s21
-			f.pc = 14
-			continue
-		case 14:
-			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:372:3"}
-			return true
-		case 15:
-			f.stride22 = uint32(64)
-			f.pc = 19
-			continue
-		case 16:
-			if f.lane2 < f.stride22 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
-			}
-			f.pc = 17
-			continue
-		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:378:4"}
-			return true
-		case 18:
-			f.stride22 = (f.stride22 / uint32(2))
-			f.pc = 19
 			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "attention.go:624:3"}
+			return true
 		case 19:
-			if f.stride22 > uint32(0) {
-				f.pc = 16
-				continue
-			}
+			f.s55 = scores[tr.ReadAt(0, int(f.lane2))]
 			f.pc = 20
 			continue
 		case 20:
-			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next24 = kmath.Max(f.m6, f.blockMax23)
-			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
-			f.e26 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
-			}
+			frame.Sub = kernelabi.SubMaxF32
+			frame.SubF32 = f.s55
 			f.pc = 21
-			continue
-		case 21:
-			f.pc = 22
-			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "attention.go:395:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 20, Pos: "attention.go:633:3"}
 			return true
+		case 21:
+			f.sgMax56 = frame.SubF32
+			f.pc = 22
+			continue
 		case 22:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e26
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e26
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgMax56
+			}
 			f.pc = 23
 			continue
 		case 23:
 			f.pc = 24
-			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "attention.go:398:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "attention.go:637:3"}
 			return true
 		case 24:
-			f.stride27 = uint32(64)
-			f.pc = 28
+			f.blockMax57 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g58 = uint32(1)
+				for ; f.g58 < f.nsg13; f.g58 = (f.g58 + uint32(1)) {
+					f.blockMax57 = kmath.Max(f.blockMax57, red[tr.ReadAt(1, int(f.g58))])
+				}
+			}
+			f.next59 = kmath.Max(f.m6, f.blockMax57)
+			f.alpha60 = kmath.Exp(float32(f.m6 - f.next59))
+			f.e61 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e61 = kmath.Exp(float32(f.s55 - f.next59))
+			}
+			f.pc = 25
 			continue
 		case 25:
-			if f.lane2 < f.stride27 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.e61
 			f.pc = 26
-			continue
-		case 26:
-			f.pc = 27
-			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "attention.go:404:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 25, Pos: "attention.go:650:3"}
 			return true
-		case 27:
-			f.stride27 = (f.stride27 / uint32(2))
-			f.pc = 28
+		case 26:
+			f.sgSum62 = frame.SubF32
+			f.pc = 27
 			continue
+		case 27:
+			f.pc = 28
+			frame.Barrier = kernelabi.BarrierID{Index: 27, Pos: "attention.go:654:3"}
+			return true
 		case 28:
-			if f.stride27 > uint32(0) {
-				f.pc = 25
-				continue
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e61
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgSum62
 			}
 			f.pc = 29
 			continue
 		case 29:
-			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next24
+			f.pc = 30
+			frame.Barrier = kernelabi.BarrierID{Index: 29, Pos: "attention.go:659:3"}
+			return true
+		case 30:
+			f.blockSum63 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g64 = uint32(1)
+				for ; f.g64 < f.nsg13; f.g64 = (f.g64 + uint32(1)) {
+					f.blockSum63 = float32(f.blockSum63 + red[tr.ReadAt(1, int(f.g64))])
+				}
+			}
+			f.l7 = float32(float32(f.alpha60*f.l7) + f.blockSum63)
+			f.m6 = f.next59
 			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha25 * f.o8)
+				f.o8 = float32(f.alpha60 * f.o8)
+				f.o065 = float32(0)
+				f.o166 = float32(0)
+				f.o267 = float32(0)
+				f.o368 = float32(0)
 				{
-					f.j28 = uint32(0)
-					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
-						if (f.base9 + f.j28) < f.kvLen1 {
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[(((((f.base9+f.j28)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+					f.j69 = uint32(0)
+					for ; f.j69 < uint32(128); f.j69 = (f.j69 + uint32(4)) {
+						f.jj070 = ((f.base9 + f.j69) + uint32(0))
+						if f.jj070 < f.kvLen1 {
+							f.o065 = float32(f.o065 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(0))))]*v[((((f.jj070*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+						f.jj171 = ((f.base9 + f.j69) + uint32(1))
+						if f.jj171 < f.kvLen1 {
+							f.o166 = float32(f.o166 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(1))))]*v[((((f.jj171*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+						f.jj272 = ((f.base9 + f.j69) + uint32(2))
+						if f.jj272 < f.kvLen1 {
+							f.o267 = float32(f.o267 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(2))))]*v[((((f.jj272*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+						f.jj373 = ((f.base9 + f.j69) + uint32(3))
+						if f.jj373 < f.kvLen1 {
+							f.o368 = float32(f.o368 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(3))))]*v[((((f.jj373*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
 						}
 					}
 				}
+				f.o8 = float32(f.o8 + float32(float32(f.o065+f.o166)+float32(f.o267+f.o368)))
 			}
-			f.pc = 30
-			continue
-		case 30:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 31
 			continue
 		case 31:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 32
+			continue
+		case 32:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 32
+			f.pc = 33
 			continue
-		case 32:
+		case 33:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -1729,7 +2203,7 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "f7911ef6c8e417727679da4123b1c1ed",
+	Digest:    "fc8f0bb4b31b4449731c5dc87a3dd701",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1738,6 +2212,11 @@ using namespace metal;
 static float _accel_fmax(float a, float b) {
     if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
     return fmax(a, b);
+}
+
+static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
 }
 
 static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
@@ -1788,60 +2267,177 @@ kernel void AttentionDecodeF16(
         uint sgw = _sgsize;
         uint sgl = _sglane;
         uint nsg = _accel_div_u32(uint(128), sgw, _fault);
-        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
-            uint jpos = (base + j);
-            float part = float(0);
-            if ((jpos < kvLen)) {
-                uint phys = (((jpos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
-                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
-                    part = (part + (q[((h * d.HeadDim) + i)] * float(k[(phys + i)])));
+        for (uint j = _sgid; (j < uint(128)); j = (j + (uint(4) * nsg))) {
+            uint jpos0 = ((base + j) + (uint(0) * nsg));
+            float part0 = float(0);
+            if ((jpos0 < kvLen)) {
+                uint phys0 = (((jpos0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa0 = float(0);
+                float pb0 = float(0);
+                float pc0 = float(0);
+                float pd0 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * float(k[(phys0 + i)])));
+                    pb0 = (pb0 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[((phys0 + i) + sgw)])));
+                    pc0 = (pc0 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[((phys0 + i) + (uint(2) * sgw))])));
+                    pd0 = (pd0 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[((phys0 + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
                 }
+                for (; (i < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * float(k[(phys0 + i)])));
+                    i = (i + sgw);
+                }
+                part0 = ((pa0 + pb0) + (pc0 + pd0));
             }
-            float dot_ = simd_sum(part);
-            if ((sgl == uint(0))) {
-                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-                if ((jpos < kvLen)) {
-                    sj = (dot_ * d.Scale);
+            uint jpos1 = ((base + j) + (uint(1) * nsg));
+            float part1 = float(0);
+            if ((jpos1 < kvLen)) {
+                uint phys1 = (((jpos1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa1 = float(0);
+                float pb1 = float(0);
+                float pc1 = float(0);
+                float pd1 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * float(k[(phys1 + i)])));
+                    pb1 = (pb1 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[((phys1 + i) + sgw)])));
+                    pc1 = (pc1 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[((phys1 + i) + (uint(2) * sgw))])));
+                    pd1 = (pd1 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[((phys1 + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
                 }
-                scores[j] = sj;
+                for (; (i < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * float(k[(phys1 + i)])));
+                    i = (i + sgw);
+                }
+                part1 = ((pa1 + pb1) + (pc1 + pd1));
+            }
+            uint jpos2 = ((base + j) + (uint(2) * nsg));
+            float part2 = float(0);
+            if ((jpos2 < kvLen)) {
+                uint phys2 = (((jpos2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa2 = float(0);
+                float pb2 = float(0);
+                float pc2 = float(0);
+                float pd2 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * float(k[(phys2 + i)])));
+                    pb2 = (pb2 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[((phys2 + i) + sgw)])));
+                    pc2 = (pc2 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[((phys2 + i) + (uint(2) * sgw))])));
+                    pd2 = (pd2 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[((phys2 + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * float(k[(phys2 + i)])));
+                    i = (i + sgw);
+                }
+                part2 = ((pa2 + pb2) + (pc2 + pd2));
+            }
+            uint jpos3 = ((base + j) + (uint(3) * nsg));
+            float part3 = float(0);
+            if ((jpos3 < kvLen)) {
+                uint phys3 = (((jpos3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                float pa3 = float(0);
+                float pb3 = float(0);
+                float pc3 = float(0);
+                float pd3 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * float(k[(phys3 + i)])));
+                    pb3 = (pb3 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[((phys3 + i) + sgw)])));
+                    pc3 = (pc3 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[((phys3 + i) + (uint(2) * sgw))])));
+                    pd3 = (pd3 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[((phys3 + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * float(k[(phys3 + i)])));
+                    i = (i + sgw);
+                }
+                part3 = ((pa3 + pb3) + (pc3 + pd3));
+            }
+            float dot0 = simd_sum(part0);
+            float dot1 = simd_sum(part1);
+            float dot2 = simd_sum(part2);
+            float dot3 = simd_sum(part3);
+            if ((sgl == uint(0))) {
+                float sj0 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos0 < kvLen)) {
+                    sj0 = (dot0 * d.Scale);
+                }
+                scores[(j + (uint(0) * nsg))] = sj0;
+                float sj1 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos1 < kvLen)) {
+                    sj1 = (dot1 * d.Scale);
+                }
+                scores[(j + (uint(1) * nsg))] = sj1;
+                float sj2 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos2 < kvLen)) {
+                    sj2 = (dot2 * d.Scale);
+                }
+                scores[(j + (uint(2) * nsg))] = sj2;
+                float sj3 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos3 < kvLen)) {
+                    sj3 = (dot3 * d.Scale);
+                }
+                scores[(j + (uint(3) * nsg))] = sj3;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float s = scores[lane];
-        red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float sgMax = _accel_simd_fmax(s);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgMax;
         }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float blockMax = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockMax = _accel_fmax(blockMax, red[g]);
+        }
         float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
+        float sgSum = simd_sum(e);
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
-        red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = (red[lane] + red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgSum;
         }
-        l = ((alpha * l) + red[int(0)]);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float blockSum = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockSum = (blockSum + red[g]);
+        }
+        l = ((alpha * l) + blockSum);
         m = next;
         if ((lane < d.HeadDim)) {
             o = (alpha * o);
-            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
-                if (((base + j) < kvLen)) {
-                    o = (o + (scores[j] * float(v[(((((base + j) * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+            float o0 = float(0);
+            float o1 = float(0);
+            float o2 = float(0);
+            float o3 = float(0);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(4))) {
+                uint jj0 = ((base + j) + uint(0));
+                if ((jj0 < kvLen)) {
+                    o0 = (o0 + (scores[(j + uint(0))] * float(v[((((jj0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+                uint jj1 = ((base + j) + uint(1));
+                if ((jj1 < kvLen)) {
+                    o1 = (o1 + (scores[(j + uint(1))] * float(v[((((jj1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+                uint jj2 = ((base + j) + uint(2));
+                if ((jj2 < kvLen)) {
+                    o2 = (o2 + (scores[(j + uint(2))] * float(v[((((jj2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+                uint jj3 = ((base + j) + uint(3));
+                if ((jj3 < kvLen)) {
+                    o3 = (o3 + (scores[(j + uint(3))] * float(v[((((jj3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
                 }
             }
+            o = (o + ((o0 + o1) + (o2 + o3)));
         }
     }
     if ((lane < d.HeadDim)) {
@@ -1851,7 +2447,7 @@ kernel void AttentionDecodeF16(
 `,
 	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      8,
+	Suspensions:      11,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -2393,21 +2989,69 @@ type attentionDecodeBatchedFrame struct {
 	sgl15      uint32
 	nsg16      uint32
 	j17        uint32
-	jpos18     uint32
-	part19     float32
-	phys20     uint32
-	i21        uint32
-	dot22      float32
-	sj23       float32
-	s24        float32
-	stride25   uint32
-	blockMax26 float32
-	next27     float32
-	alpha28    float32
-	e29        float32
-	stride30   uint32
-	j31        uint32
-	phys32     uint32
+	jpos018    uint32
+	part019    float32
+	phys020    uint32
+	pa021      float32
+	pb022      float32
+	pc023      float32
+	pd024      float32
+	i25        uint32
+	jpos126    uint32
+	part127    float32
+	phys128    uint32
+	pa129      float32
+	pb130      float32
+	pc131      float32
+	pd132      float32
+	i33        uint32
+	jpos234    uint32
+	part235    float32
+	phys236    uint32
+	pa237      float32
+	pb238      float32
+	pc239      float32
+	pd240      float32
+	i41        uint32
+	jpos342    uint32
+	part343    float32
+	phys344    uint32
+	pa345      float32
+	pb346      float32
+	pc347      float32
+	pd348      float32
+	i49        uint32
+	dot050     float32
+	dot151     float32
+	dot252     float32
+	dot353     float32
+	sj054      float32
+	sj155      float32
+	sj256      float32
+	sj357      float32
+	s58        float32
+	sgMax59    float32
+	blockMax60 float32
+	g61        uint32
+	next62     float32
+	alpha63    float32
+	e64        float32
+	sgSum65    float32
+	blockSum66 float32
+	g67        uint32
+	o068       float32
+	o169       float32
+	o270       float32
+	o371       float32
+	j72        uint32
+	jj073      uint32
+	phys074    uint32
+	jj175      uint32
+	phys176    uint32
+	jj277      uint32
+	phys278    uint32
+	jj379      uint32
+	phys380    uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -2443,7 +3087,7 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 1:
 			f.base12 = uint32(0)
-			f.pc = 31
+			f.pc = 32
 			continue
 		case 2:
 			f.pos13 = (f.base12 + f.lane1)
@@ -2461,174 +3105,308 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 5:
 			f.j17 = t.SubgroupIndex()
-			f.pc = 11
+			f.pc = 17
 			continue
 		case 6:
-			f.jpos18 = (f.base12 + f.j17)
-			f.part19 = float32(0)
-			if f.jpos18 < f.kvLen5 {
-				f.phys20 = ((pages[(f.pageBase6+(f.jpos18/d.Block))] * d.Block) + (f.jpos18 % d.Block))
-				{
-					f.i21 = f.sgl15
-					for ; f.i21 < d.HeadDim; f.i21 = (f.i21 + f.sgw14) {
-						f.part19 = float32(f.part19 + float32(q[(f.qBase7+f.i21)]*k[((((f.phys20*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i21)]))
-					}
+			f.jpos018 = ((f.base12 + f.j17) + (uint32(0) * f.nsg16))
+			f.part019 = float32(0)
+			if f.jpos018 < f.kvLen5 {
+				f.phys020 = ((pages[(f.pageBase6+(f.jpos018/d.Block))] * d.Block) + (f.jpos018 % d.Block))
+				f.pa021 = float32(0)
+				f.pb022 = float32(0)
+				f.pc023 = float32(0)
+				f.pd024 = float32(0)
+				f.i25 = f.sgl15
+				for (f.i25 + (uint32(3) * f.sgw14)) < d.HeadDim {
+					f.pa021 = float32(f.pa021 + float32(q[(f.qBase7+f.i25)]*k[((((f.phys020*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i25)]))
+					f.pb022 = float32(f.pb022 + float32(q[((f.qBase7+f.i25)+f.sgw14)]*k[(((((f.phys020*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i25)+f.sgw14)]))
+					f.pc023 = float32(f.pc023 + float32(q[((f.qBase7+f.i25)+(uint32(2)*f.sgw14))]*k[(((((f.phys020*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i25)+(uint32(2)*f.sgw14))]))
+					f.pd024 = float32(f.pd024 + float32(q[((f.qBase7+f.i25)+(uint32(3)*f.sgw14))]*k[(((((f.phys020*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i25)+(uint32(3)*f.sgw14))]))
+					f.i25 = (f.i25 + (uint32(4) * f.sgw14))
 				}
+				for f.i25 < d.HeadDim {
+					f.pa021 = float32(f.pa021 + float32(q[(f.qBase7+f.i25)]*k[((((f.phys020*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i25)]))
+					f.i25 = (f.i25 + f.sgw14)
+				}
+				f.part019 = float32(float32(f.pa021+f.pb022) + float32(f.pc023+f.pd024))
+			}
+			f.jpos126 = ((f.base12 + f.j17) + (uint32(1) * f.nsg16))
+			f.part127 = float32(0)
+			if f.jpos126 < f.kvLen5 {
+				f.phys128 = ((pages[(f.pageBase6+(f.jpos126/d.Block))] * d.Block) + (f.jpos126 % d.Block))
+				f.pa129 = float32(0)
+				f.pb130 = float32(0)
+				f.pc131 = float32(0)
+				f.pd132 = float32(0)
+				f.i33 = f.sgl15
+				for (f.i33 + (uint32(3) * f.sgw14)) < d.HeadDim {
+					f.pa129 = float32(f.pa129 + float32(q[(f.qBase7+f.i33)]*k[((((f.phys128*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i33)]))
+					f.pb130 = float32(f.pb130 + float32(q[((f.qBase7+f.i33)+f.sgw14)]*k[(((((f.phys128*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i33)+f.sgw14)]))
+					f.pc131 = float32(f.pc131 + float32(q[((f.qBase7+f.i33)+(uint32(2)*f.sgw14))]*k[(((((f.phys128*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i33)+(uint32(2)*f.sgw14))]))
+					f.pd132 = float32(f.pd132 + float32(q[((f.qBase7+f.i33)+(uint32(3)*f.sgw14))]*k[(((((f.phys128*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i33)+(uint32(3)*f.sgw14))]))
+					f.i33 = (f.i33 + (uint32(4) * f.sgw14))
+				}
+				for f.i33 < d.HeadDim {
+					f.pa129 = float32(f.pa129 + float32(q[(f.qBase7+f.i33)]*k[((((f.phys128*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i33)]))
+					f.i33 = (f.i33 + f.sgw14)
+				}
+				f.part127 = float32(float32(f.pa129+f.pb130) + float32(f.pc131+f.pd132))
+			}
+			f.jpos234 = ((f.base12 + f.j17) + (uint32(2) * f.nsg16))
+			f.part235 = float32(0)
+			if f.jpos234 < f.kvLen5 {
+				f.phys236 = ((pages[(f.pageBase6+(f.jpos234/d.Block))] * d.Block) + (f.jpos234 % d.Block))
+				f.pa237 = float32(0)
+				f.pb238 = float32(0)
+				f.pc239 = float32(0)
+				f.pd240 = float32(0)
+				f.i41 = f.sgl15
+				for (f.i41 + (uint32(3) * f.sgw14)) < d.HeadDim {
+					f.pa237 = float32(f.pa237 + float32(q[(f.qBase7+f.i41)]*k[((((f.phys236*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i41)]))
+					f.pb238 = float32(f.pb238 + float32(q[((f.qBase7+f.i41)+f.sgw14)]*k[(((((f.phys236*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i41)+f.sgw14)]))
+					f.pc239 = float32(f.pc239 + float32(q[((f.qBase7+f.i41)+(uint32(2)*f.sgw14))]*k[(((((f.phys236*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i41)+(uint32(2)*f.sgw14))]))
+					f.pd240 = float32(f.pd240 + float32(q[((f.qBase7+f.i41)+(uint32(3)*f.sgw14))]*k[(((((f.phys236*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i41)+(uint32(3)*f.sgw14))]))
+					f.i41 = (f.i41 + (uint32(4) * f.sgw14))
+				}
+				for f.i41 < d.HeadDim {
+					f.pa237 = float32(f.pa237 + float32(q[(f.qBase7+f.i41)]*k[((((f.phys236*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i41)]))
+					f.i41 = (f.i41 + f.sgw14)
+				}
+				f.part235 = float32(float32(f.pa237+f.pb238) + float32(f.pc239+f.pd240))
+			}
+			f.jpos342 = ((f.base12 + f.j17) + (uint32(3) * f.nsg16))
+			f.part343 = float32(0)
+			if f.jpos342 < f.kvLen5 {
+				f.phys344 = ((pages[(f.pageBase6+(f.jpos342/d.Block))] * d.Block) + (f.jpos342 % d.Block))
+				f.pa345 = float32(0)
+				f.pb346 = float32(0)
+				f.pc347 = float32(0)
+				f.pd348 = float32(0)
+				f.i49 = f.sgl15
+				for (f.i49 + (uint32(3) * f.sgw14)) < d.HeadDim {
+					f.pa345 = float32(f.pa345 + float32(q[(f.qBase7+f.i49)]*k[((((f.phys344*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i49)]))
+					f.pb346 = float32(f.pb346 + float32(q[((f.qBase7+f.i49)+f.sgw14)]*k[(((((f.phys344*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i49)+f.sgw14)]))
+					f.pc347 = float32(f.pc347 + float32(q[((f.qBase7+f.i49)+(uint32(2)*f.sgw14))]*k[(((((f.phys344*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i49)+(uint32(2)*f.sgw14))]))
+					f.pd348 = float32(f.pd348 + float32(q[((f.qBase7+f.i49)+(uint32(3)*f.sgw14))]*k[(((((f.phys344*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i49)+(uint32(3)*f.sgw14))]))
+					f.i49 = (f.i49 + (uint32(4) * f.sgw14))
+				}
+				for f.i49 < d.HeadDim {
+					f.pa345 = float32(f.pa345 + float32(q[(f.qBase7+f.i49)]*k[((((f.phys344*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i49)]))
+					f.i49 = (f.i49 + f.sgw14)
+				}
+				f.part343 = float32(float32(f.pa345+f.pb346) + float32(f.pc347+f.pd348))
 			}
 			f.pc = 7
 			continue
 		case 7:
 			frame.Sub = kernelabi.SubAddF32
-			frame.SubF32 = f.part19
+			frame.SubF32 = f.part019
 			f.pc = 8
-			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "batched.go:136:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "batched.go:233:4"}
 			return true
 		case 8:
-			f.dot22 = frame.SubF32
+			f.dot050 = frame.SubF32
 			f.pc = 9
 			continue
 		case 9:
-			if f.sgl15 == uint32(0) {
-				f.sj23 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-				if f.jpos18 < f.kvLen5 {
-					f.sj23 = float32(f.dot22 * d.Scale)
-				}
-				tr.Write(0, int(f.j17))
-				scores[f.j17] = f.sj23
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part127
 			f.pc = 10
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "batched.go:234:4"}
+			return true
 		case 10:
-			f.j17 = (f.j17 + f.nsg16)
+			f.dot151 = frame.SubF32
 			f.pc = 11
 			continue
 		case 11:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part235
+			f.pc = 12
+			frame.Barrier = kernelabi.BarrierID{Index: 11, Pos: "batched.go:235:4"}
+			return true
+		case 12:
+			f.dot252 = frame.SubF32
+			f.pc = 13
+			continue
+		case 13:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part343
+			f.pc = 14
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "batched.go:236:4"}
+			return true
+		case 14:
+			f.dot353 = frame.SubF32
+			f.pc = 15
+			continue
+		case 15:
+			if f.sgl15 == uint32(0) {
+				f.sj054 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos018 < f.kvLen5 {
+					f.sj054 = float32(f.dot050 * d.Scale)
+				}
+				tr.Write(0, int((f.j17 + (uint32(0) * f.nsg16))))
+				scores[(f.j17 + (uint32(0) * f.nsg16))] = f.sj054
+				f.sj155 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos126 < f.kvLen5 {
+					f.sj155 = float32(f.dot151 * d.Scale)
+				}
+				tr.Write(0, int((f.j17 + (uint32(1) * f.nsg16))))
+				scores[(f.j17 + (uint32(1) * f.nsg16))] = f.sj155
+				f.sj256 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos234 < f.kvLen5 {
+					f.sj256 = float32(f.dot252 * d.Scale)
+				}
+				tr.Write(0, int((f.j17 + (uint32(2) * f.nsg16))))
+				scores[(f.j17 + (uint32(2) * f.nsg16))] = f.sj256
+				f.sj357 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos342 < f.kvLen5 {
+					f.sj357 = float32(f.dot353 * d.Scale)
+				}
+				tr.Write(0, int((f.j17 + (uint32(3) * f.nsg16))))
+				scores[(f.j17 + (uint32(3) * f.nsg16))] = f.sj357
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.j17 = (f.j17 + (uint32(4) * f.nsg16))
+			f.pc = 17
+			continue
+		case 17:
 			if f.j17 < uint32(128) {
 				f.pc = 6
 				continue
 			}
-			f.pc = 12
-			continue
-		case 12:
-			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "batched.go:145:3"}
-			return true
-		case 13:
-			f.s24 = scores[tr.ReadAt(0, int(f.lane1))]
-			tr.Write(1, int(f.lane1))
-			red[f.lane1] = f.s24
-			f.pc = 14
-			continue
-		case 14:
-			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "batched.go:148:3"}
-			return true
-		case 15:
-			f.stride25 = uint32(64)
-			f.pc = 19
-			continue
-		case 16:
-			if f.lane1 < f.stride25 {
-				tr.Write(1, int(f.lane1))
-				red[f.lane1] = kmath.Max(red[tr.ReadAt(1, int(f.lane1))], red[tr.ReadAt(1, int((f.lane1+f.stride25)))])
-			}
-			f.pc = 17
-			continue
-		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "batched.go:154:4"}
-			return true
-		case 18:
-			f.stride25 = (f.stride25 / uint32(2))
-			f.pc = 19
 			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "batched.go:260:3"}
+			return true
 		case 19:
-			if f.stride25 > uint32(0) {
-				f.pc = 16
-				continue
-			}
+			f.s58 = scores[tr.ReadAt(0, int(f.lane1))]
 			f.pc = 20
 			continue
 		case 20:
-			f.blockMax26 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next27 = kmath.Max(f.m9, f.blockMax26)
-			f.alpha28 = kmath.Exp(float32(f.m9 - f.next27))
-			f.e29 = float32(0)
-			if f.pos13 < f.kvLen5 {
-				f.e29 = kmath.Exp(float32(f.s24 - f.next27))
-			}
+			frame.Sub = kernelabi.SubMaxF32
+			frame.SubF32 = f.s58
 			f.pc = 21
-			continue
-		case 21:
-			f.pc = 22
-			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "batched.go:165:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 20, Pos: "batched.go:269:3"}
 			return true
+		case 21:
+			f.sgMax59 = frame.SubF32
+			f.pc = 22
+			continue
 		case 22:
-			tr.Write(0, int(f.lane1))
-			scores[f.lane1] = f.e29
-			tr.Write(1, int(f.lane1))
-			red[f.lane1] = f.e29
+			if f.sgl15 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgMax59
+			}
 			f.pc = 23
 			continue
 		case 23:
 			f.pc = 24
-			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "batched.go:168:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "batched.go:273:3"}
 			return true
 		case 24:
-			f.stride30 = uint32(64)
-			f.pc = 28
+			f.blockMax60 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g61 = uint32(1)
+				for ; f.g61 < f.nsg16; f.g61 = (f.g61 + uint32(1)) {
+					f.blockMax60 = kmath.Max(f.blockMax60, red[tr.ReadAt(1, int(f.g61))])
+				}
+			}
+			f.next62 = kmath.Max(f.m9, f.blockMax60)
+			f.alpha63 = kmath.Exp(float32(f.m9 - f.next62))
+			f.e64 = float32(0)
+			if f.pos13 < f.kvLen5 {
+				f.e64 = kmath.Exp(float32(f.s58 - f.next62))
+			}
+			f.pc = 25
 			continue
 		case 25:
-			if f.lane1 < f.stride30 {
-				tr.Write(1, int(f.lane1))
-				red[f.lane1] = float32(red[tr.ReadAt(1, int(f.lane1))] + red[tr.ReadAt(1, int((f.lane1+f.stride30)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.e64
 			f.pc = 26
-			continue
-		case 26:
-			f.pc = 27
-			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "batched.go:174:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 25, Pos: "batched.go:286:3"}
 			return true
-		case 27:
-			f.stride30 = (f.stride30 / uint32(2))
-			f.pc = 28
+		case 26:
+			f.sgSum65 = frame.SubF32
+			f.pc = 27
 			continue
+		case 27:
+			f.pc = 28
+			frame.Barrier = kernelabi.BarrierID{Index: 27, Pos: "batched.go:290:3"}
+			return true
 		case 28:
-			if f.stride30 > uint32(0) {
-				f.pc = 25
-				continue
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.e64
+			if f.sgl15 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgSum65
 			}
 			f.pc = 29
 			continue
 		case 29:
-			f.l10 = float32(float32(f.alpha28*f.l10) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m9 = f.next27
+			f.pc = 30
+			frame.Barrier = kernelabi.BarrierID{Index: 29, Pos: "batched.go:295:3"}
+			return true
+		case 30:
+			f.blockSum66 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g67 = uint32(1)
+				for ; f.g67 < f.nsg16; f.g67 = (f.g67 + uint32(1)) {
+					f.blockSum66 = float32(f.blockSum66 + red[tr.ReadAt(1, int(f.g67))])
+				}
+			}
+			f.l10 = float32(float32(f.alpha63*f.l10) + f.blockSum66)
+			f.m9 = f.next62
 			if f.lane1 < d.HeadDim {
-				f.o11 = float32(f.alpha28 * f.o11)
+				f.o11 = float32(f.alpha63 * f.o11)
+				f.o068 = float32(0)
+				f.o169 = float32(0)
+				f.o270 = float32(0)
+				f.o371 = float32(0)
 				{
-					f.j31 = uint32(0)
-					for ; f.j31 < uint32(128); f.j31 = (f.j31 + uint32(1)) {
-						if (f.base12 + f.j31) < f.kvLen5 {
-							f.phys32 = ((pages[(f.pageBase6+((f.base12+f.j31)/d.Block))] * d.Block) + ((f.base12 + f.j31) % d.Block))
-							f.o11 = float32(f.o11 + float32(scores[tr.ReadAt(0, int(f.j31))]*v[((((f.phys32*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+					f.j72 = uint32(0)
+					for ; f.j72 < uint32(128); f.j72 = (f.j72 + uint32(4)) {
+						f.jj073 = ((f.base12 + f.j72) + uint32(0))
+						if f.jj073 < f.kvLen5 {
+							f.phys074 = ((pages[(f.pageBase6+(f.jj073/d.Block))] * d.Block) + (f.jj073 % d.Block))
+							f.o068 = float32(f.o068 + float32(scores[tr.ReadAt(0, int((f.j72+uint32(0))))]*v[((((f.phys074*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+						}
+						f.jj175 = ((f.base12 + f.j72) + uint32(1))
+						if f.jj175 < f.kvLen5 {
+							f.phys176 = ((pages[(f.pageBase6+(f.jj175/d.Block))] * d.Block) + (f.jj175 % d.Block))
+							f.o169 = float32(f.o169 + float32(scores[tr.ReadAt(0, int((f.j72+uint32(1))))]*v[((((f.phys176*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+						}
+						f.jj277 = ((f.base12 + f.j72) + uint32(2))
+						if f.jj277 < f.kvLen5 {
+							f.phys278 = ((pages[(f.pageBase6+(f.jj277/d.Block))] * d.Block) + (f.jj277 % d.Block))
+							f.o270 = float32(f.o270 + float32(scores[tr.ReadAt(0, int((f.j72+uint32(2))))]*v[((((f.phys278*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+						}
+						f.jj379 = ((f.base12 + f.j72) + uint32(3))
+						if f.jj379 < f.kvLen5 {
+							f.phys380 = ((pages[(f.pageBase6+(f.jj379/d.Block))] * d.Block) + (f.jj379 % d.Block))
+							f.o371 = float32(f.o371 + float32(scores[tr.ReadAt(0, int((f.j72+uint32(3))))]*v[((((f.phys380*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
 						}
 					}
 				}
+				f.o11 = float32(f.o11 + float32(float32(f.o068+f.o169)+float32(f.o270+f.o371)))
 			}
-			f.pc = 30
-			continue
-		case 30:
-			f.base12 = (f.base12 + uint32(128))
 			f.pc = 31
 			continue
 		case 31:
+			f.base12 = (f.base12 + uint32(128))
+			f.pc = 32
+			continue
+		case 32:
 			if f.base12 < f.kvLen5 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 32
+			f.pc = 33
 			continue
-		case 32:
+		case 33:
 			if f.lane1 < d.HeadDim {
 				out[(f.qBase7 + f.lane1)] = float32(f.o11 / f.l10)
 			}
@@ -2650,7 +3428,7 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "7653b8922753276c54df364cce4bab03",
+	Digest:    "34448e128774741719dc99a72da21926",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2659,6 +3437,11 @@ using namespace metal;
 static float _accel_fmax(float a, float b) {
     if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
     return fmax(a, b);
+}
+
+static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
 }
 
 static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
@@ -2722,61 +3505,181 @@ kernel void AttentionDecodeBatched(
         uint sgw = _sgsize;
         uint sgl = _sglane;
         uint nsg = _accel_div_u32(uint(128), sgw, _fault);
-        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
-            uint jpos = (base + j);
-            float part = float(0);
-            if ((jpos < kvLen)) {
-                uint phys = ((pages[(pageBase + _accel_div_u32(jpos, d.Block, _fault))] * d.Block) + _accel_rem_u32(jpos, d.Block, _fault));
-                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
-                    part = (part + (q[(qBase + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+        for (uint j = _sgid; (j < uint(128)); j = (j + (uint(4) * nsg))) {
+            uint jpos0 = ((base + j) + (uint(0) * nsg));
+            float part0 = float(0);
+            if ((jpos0 < kvLen)) {
+                uint phys0 = ((pages[(pageBase + _accel_div_u32(jpos0, d.Block, _fault))] * d.Block) + _accel_rem_u32(jpos0, d.Block, _fault));
+                float pa0 = float(0);
+                float pb0 = float(0);
+                float pc0 = float(0);
+                float pd0 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[(qBase + i)] * k[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb0 = (pb0 + (q[((qBase + i) + sgw)] * k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc0 = (pc0 + (q[((qBase + i) + (uint(2) * sgw))] * k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd0 = (pd0 + (q[((qBase + i) + (uint(3) * sgw))] * k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
                 }
+                for (; (i < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[(qBase + i)] * k[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part0 = ((pa0 + pb0) + (pc0 + pd0));
             }
-            float dot_ = simd_sum(part);
-            if ((sgl == uint(0))) {
-                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-                if ((jpos < kvLen)) {
-                    sj = (dot_ * d.Scale);
+            uint jpos1 = ((base + j) + (uint(1) * nsg));
+            float part1 = float(0);
+            if ((jpos1 < kvLen)) {
+                uint phys1 = ((pages[(pageBase + _accel_div_u32(jpos1, d.Block, _fault))] * d.Block) + _accel_rem_u32(jpos1, d.Block, _fault));
+                float pa1 = float(0);
+                float pb1 = float(0);
+                float pc1 = float(0);
+                float pd1 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[(qBase + i)] * k[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb1 = (pb1 + (q[((qBase + i) + sgw)] * k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc1 = (pc1 + (q[((qBase + i) + (uint(2) * sgw))] * k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd1 = (pd1 + (q[((qBase + i) + (uint(3) * sgw))] * k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
                 }
-                scores[j] = sj;
+                for (; (i < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[(qBase + i)] * k[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part1 = ((pa1 + pb1) + (pc1 + pd1));
+            }
+            uint jpos2 = ((base + j) + (uint(2) * nsg));
+            float part2 = float(0);
+            if ((jpos2 < kvLen)) {
+                uint phys2 = ((pages[(pageBase + _accel_div_u32(jpos2, d.Block, _fault))] * d.Block) + _accel_rem_u32(jpos2, d.Block, _fault));
+                float pa2 = float(0);
+                float pb2 = float(0);
+                float pc2 = float(0);
+                float pd2 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[(qBase + i)] * k[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb2 = (pb2 + (q[((qBase + i) + sgw)] * k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc2 = (pc2 + (q[((qBase + i) + (uint(2) * sgw))] * k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd2 = (pd2 + (q[((qBase + i) + (uint(3) * sgw))] * k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[(qBase + i)] * k[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part2 = ((pa2 + pb2) + (pc2 + pd2));
+            }
+            uint jpos3 = ((base + j) + (uint(3) * nsg));
+            float part3 = float(0);
+            if ((jpos3 < kvLen)) {
+                uint phys3 = ((pages[(pageBase + _accel_div_u32(jpos3, d.Block, _fault))] * d.Block) + _accel_rem_u32(jpos3, d.Block, _fault));
+                float pa3 = float(0);
+                float pb3 = float(0);
+                float pc3 = float(0);
+                float pd3 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[(qBase + i)] * k[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb3 = (pb3 + (q[((qBase + i) + sgw)] * k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc3 = (pc3 + (q[((qBase + i) + (uint(2) * sgw))] * k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd3 = (pd3 + (q[((qBase + i) + (uint(3) * sgw))] * k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[(qBase + i)] * k[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part3 = ((pa3 + pb3) + (pc3 + pd3));
+            }
+            float dot0 = simd_sum(part0);
+            float dot1 = simd_sum(part1);
+            float dot2 = simd_sum(part2);
+            float dot3 = simd_sum(part3);
+            if ((sgl == uint(0))) {
+                float sj0 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos0 < kvLen)) {
+                    sj0 = (dot0 * d.Scale);
+                }
+                scores[(j + (uint(0) * nsg))] = sj0;
+                float sj1 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos1 < kvLen)) {
+                    sj1 = (dot1 * d.Scale);
+                }
+                scores[(j + (uint(1) * nsg))] = sj1;
+                float sj2 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos2 < kvLen)) {
+                    sj2 = (dot2 * d.Scale);
+                }
+                scores[(j + (uint(2) * nsg))] = sj2;
+                float sj3 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos3 < kvLen)) {
+                    sj3 = (dot3 * d.Scale);
+                }
+                scores[(j + (uint(3) * nsg))] = sj3;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float s = scores[lane];
-        red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float sgMax = _accel_simd_fmax(s);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgMax;
         }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float blockMax = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockMax = _accel_fmax(blockMax, red[g]);
+        }
         float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
+        float sgSum = simd_sum(e);
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
-        red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = (red[lane] + red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgSum;
         }
-        l = ((alpha * l) + red[int(0)]);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float blockSum = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockSum = (blockSum + red[g]);
+        }
+        l = ((alpha * l) + blockSum);
         m = next;
         if ((lane < d.HeadDim)) {
             o = (alpha * o);
-            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
-                if (((base + j) < kvLen)) {
-                    uint phys = ((pages[(pageBase + _accel_div_u32((base + j), d.Block, _fault))] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
-                    o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+            float o0 = float(0);
+            float o1 = float(0);
+            float o2 = float(0);
+            float o3 = float(0);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(4))) {
+                uint jj0 = ((base + j) + uint(0));
+                if ((jj0 < kvLen)) {
+                    uint phys0 = ((pages[(pageBase + _accel_div_u32(jj0, d.Block, _fault))] * d.Block) + _accel_rem_u32(jj0, d.Block, _fault));
+                    o0 = (o0 + (scores[(j + uint(0))] * v[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj1 = ((base + j) + uint(1));
+                if ((jj1 < kvLen)) {
+                    uint phys1 = ((pages[(pageBase + _accel_div_u32(jj1, d.Block, _fault))] * d.Block) + _accel_rem_u32(jj1, d.Block, _fault));
+                    o1 = (o1 + (scores[(j + uint(1))] * v[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj2 = ((base + j) + uint(2));
+                if ((jj2 < kvLen)) {
+                    uint phys2 = ((pages[(pageBase + _accel_div_u32(jj2, d.Block, _fault))] * d.Block) + _accel_rem_u32(jj2, d.Block, _fault));
+                    o2 = (o2 + (scores[(j + uint(2))] * v[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj3 = ((base + j) + uint(3));
+                if ((jj3 < kvLen)) {
+                    uint phys3 = ((pages[(pageBase + _accel_div_u32(jj3, d.Block, _fault))] * d.Block) + _accel_rem_u32(jj3, d.Block, _fault));
+                    o3 = (o3 + (scores[(j + uint(3))] * v[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
+            o = (o + ((o0 + o1) + (o2 + o3)));
         }
     }
     if ((lane < d.HeadDim)) {
@@ -2786,7 +3689,7 @@ kernel void AttentionDecodeBatched(
 `,
 	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      8,
+	Suspensions:      11,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -8556,21 +9459,69 @@ type attentionDecodePagedFrame struct {
 	sgl12      uint32
 	nsg13      uint32
 	j14        uint32
-	jpos15     uint32
-	part16     float32
-	phys17     uint32
-	i18        uint32
-	dot19      float32
-	sj20       float32
-	s21        float32
-	stride22   uint32
-	blockMax23 float32
-	next24     float32
-	alpha25    float32
-	e26        float32
-	stride27   uint32
-	j28        uint32
-	phys29     uint32
+	jpos015    uint32
+	part016    float32
+	phys017    uint32
+	pa018      float32
+	pb019      float32
+	pc020      float32
+	pd021      float32
+	i22        uint32
+	jpos123    uint32
+	part124    float32
+	phys125    uint32
+	pa126      float32
+	pb127      float32
+	pc128      float32
+	pd129      float32
+	i30        uint32
+	jpos231    uint32
+	part232    float32
+	phys233    uint32
+	pa234      float32
+	pb235      float32
+	pc236      float32
+	pd237      float32
+	i38        uint32
+	jpos339    uint32
+	part340    float32
+	phys341    uint32
+	pa342      float32
+	pb343      float32
+	pc344      float32
+	pd345      float32
+	i46        uint32
+	dot047     float32
+	dot148     float32
+	dot249     float32
+	dot350     float32
+	sj051      float32
+	sj152      float32
+	sj253      float32
+	sj354      float32
+	s55        float32
+	sgMax56    float32
+	blockMax57 float32
+	g58        uint32
+	next59     float32
+	alpha60    float32
+	e61        float32
+	sgSum62    float32
+	blockSum63 float32
+	g64        uint32
+	o065       float32
+	o166       float32
+	o267       float32
+	o368       float32
+	j69        uint32
+	jj070      uint32
+	phys071    uint32
+	jj172      uint32
+	phys173    uint32
+	jj274      uint32
+	phys275    uint32
+	jj376      uint32
+	phys377    uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -8603,7 +9554,7 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 31
+			f.pc = 32
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
@@ -8621,174 +9572,308 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 5:
 			f.j14 = t.SubgroupIndex()
-			f.pc = 11
+			f.pc = 17
 			continue
 		case 6:
-			f.jpos15 = (f.base9 + f.j14)
-			f.part16 = float32(0)
-			if f.jpos15 < f.kvLen1 {
-				f.phys17 = ((pages[(f.jpos15/d.Block)] * d.Block) + (f.jpos15 % d.Block))
-				{
-					f.i18 = f.sgl12
-					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
-						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[((((f.phys17*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i18)]))
-					}
+			f.jpos015 = ((f.base9 + f.j14) + (uint32(0) * f.nsg13))
+			f.part016 = float32(0)
+			if f.jpos015 < f.kvLen1 {
+				f.phys017 = ((pages[(f.jpos015/d.Block)] * d.Block) + (f.jpos015 % d.Block))
+				f.pa018 = float32(0)
+				f.pb019 = float32(0)
+				f.pc020 = float32(0)
+				f.pd021 = float32(0)
+				f.i22 = f.sgl12
+				for (f.i22 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)]))
+					f.pb019 = float32(f.pb019 + float32(q[(((f.h0*d.HeadDim)+f.i22)+f.sgw11)]*k[(((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)+f.sgw11)]))
+					f.pc020 = float32(f.pc020 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(2)*f.sgw11))]*k[(((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)+(uint32(2)*f.sgw11))]))
+					f.pd021 = float32(f.pd021 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(3)*f.sgw11))]*k[(((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)+(uint32(3)*f.sgw11))]))
+					f.i22 = (f.i22 + (uint32(4) * f.sgw11))
 				}
+				for f.i22 < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)]))
+					f.i22 = (f.i22 + f.sgw11)
+				}
+				f.part016 = float32(float32(f.pa018+f.pb019) + float32(f.pc020+f.pd021))
+			}
+			f.jpos123 = ((f.base9 + f.j14) + (uint32(1) * f.nsg13))
+			f.part124 = float32(0)
+			if f.jpos123 < f.kvLen1 {
+				f.phys125 = ((pages[(f.jpos123/d.Block)] * d.Block) + (f.jpos123 % d.Block))
+				f.pa126 = float32(0)
+				f.pb127 = float32(0)
+				f.pc128 = float32(0)
+				f.pd129 = float32(0)
+				f.i30 = f.sgl12
+				for (f.i30 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)]))
+					f.pb127 = float32(f.pb127 + float32(q[(((f.h0*d.HeadDim)+f.i30)+f.sgw11)]*k[(((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)+f.sgw11)]))
+					f.pc128 = float32(f.pc128 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(2)*f.sgw11))]*k[(((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)+(uint32(2)*f.sgw11))]))
+					f.pd129 = float32(f.pd129 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(3)*f.sgw11))]*k[(((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)+(uint32(3)*f.sgw11))]))
+					f.i30 = (f.i30 + (uint32(4) * f.sgw11))
+				}
+				for f.i30 < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)]))
+					f.i30 = (f.i30 + f.sgw11)
+				}
+				f.part124 = float32(float32(f.pa126+f.pb127) + float32(f.pc128+f.pd129))
+			}
+			f.jpos231 = ((f.base9 + f.j14) + (uint32(2) * f.nsg13))
+			f.part232 = float32(0)
+			if f.jpos231 < f.kvLen1 {
+				f.phys233 = ((pages[(f.jpos231/d.Block)] * d.Block) + (f.jpos231 % d.Block))
+				f.pa234 = float32(0)
+				f.pb235 = float32(0)
+				f.pc236 = float32(0)
+				f.pd237 = float32(0)
+				f.i38 = f.sgl12
+				for (f.i38 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)]))
+					f.pb235 = float32(f.pb235 + float32(q[(((f.h0*d.HeadDim)+f.i38)+f.sgw11)]*k[(((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)+f.sgw11)]))
+					f.pc236 = float32(f.pc236 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(2)*f.sgw11))]*k[(((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)+(uint32(2)*f.sgw11))]))
+					f.pd237 = float32(f.pd237 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(3)*f.sgw11))]*k[(((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)+(uint32(3)*f.sgw11))]))
+					f.i38 = (f.i38 + (uint32(4) * f.sgw11))
+				}
+				for f.i38 < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)]))
+					f.i38 = (f.i38 + f.sgw11)
+				}
+				f.part232 = float32(float32(f.pa234+f.pb235) + float32(f.pc236+f.pd237))
+			}
+			f.jpos339 = ((f.base9 + f.j14) + (uint32(3) * f.nsg13))
+			f.part340 = float32(0)
+			if f.jpos339 < f.kvLen1 {
+				f.phys341 = ((pages[(f.jpos339/d.Block)] * d.Block) + (f.jpos339 % d.Block))
+				f.pa342 = float32(0)
+				f.pb343 = float32(0)
+				f.pc344 = float32(0)
+				f.pd345 = float32(0)
+				f.i46 = f.sgl12
+				for (f.i46 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)]))
+					f.pb343 = float32(f.pb343 + float32(q[(((f.h0*d.HeadDim)+f.i46)+f.sgw11)]*k[(((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)+f.sgw11)]))
+					f.pc344 = float32(f.pc344 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(2)*f.sgw11))]*k[(((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)+(uint32(2)*f.sgw11))]))
+					f.pd345 = float32(f.pd345 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(3)*f.sgw11))]*k[(((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)+(uint32(3)*f.sgw11))]))
+					f.i46 = (f.i46 + (uint32(4) * f.sgw11))
+				}
+				for f.i46 < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)]))
+					f.i46 = (f.i46 + f.sgw11)
+				}
+				f.part340 = float32(float32(f.pa342+f.pb343) + float32(f.pc344+f.pd345))
 			}
 			f.pc = 7
 			continue
 		case 7:
 			frame.Sub = kernelabi.SubAddF32
-			frame.SubF32 = f.part16
+			frame.SubF32 = f.part016
 			f.pc = 8
-			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "paged.go:125:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "paged.go:222:4"}
 			return true
 		case 8:
-			f.dot19 = frame.SubF32
+			f.dot047 = frame.SubF32
 			f.pc = 9
 			continue
 		case 9:
-			if f.sgl12 == uint32(0) {
-				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-				if f.jpos15 < f.kvLen1 {
-					f.sj20 = float32(f.dot19 * d.Scale)
-				}
-				tr.Write(0, int(f.j14))
-				scores[f.j14] = f.sj20
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part124
 			f.pc = 10
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "paged.go:223:4"}
+			return true
 		case 10:
-			f.j14 = (f.j14 + f.nsg13)
+			f.dot148 = frame.SubF32
 			f.pc = 11
 			continue
 		case 11:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part232
+			f.pc = 12
+			frame.Barrier = kernelabi.BarrierID{Index: 11, Pos: "paged.go:224:4"}
+			return true
+		case 12:
+			f.dot249 = frame.SubF32
+			f.pc = 13
+			continue
+		case 13:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part340
+			f.pc = 14
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "paged.go:225:4"}
+			return true
+		case 14:
+			f.dot350 = frame.SubF32
+			f.pc = 15
+			continue
+		case 15:
+			if f.sgl12 == uint32(0) {
+				f.sj051 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos015 < f.kvLen1 {
+					f.sj051 = float32(f.dot047 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(0) * f.nsg13))))
+				scores[(f.j14 + (uint32(0) * f.nsg13))] = f.sj051
+				f.sj152 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos123 < f.kvLen1 {
+					f.sj152 = float32(f.dot148 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(1) * f.nsg13))))
+				scores[(f.j14 + (uint32(1) * f.nsg13))] = f.sj152
+				f.sj253 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos231 < f.kvLen1 {
+					f.sj253 = float32(f.dot249 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(2) * f.nsg13))))
+				scores[(f.j14 + (uint32(2) * f.nsg13))] = f.sj253
+				f.sj354 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos339 < f.kvLen1 {
+					f.sj354 = float32(f.dot350 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(3) * f.nsg13))))
+				scores[(f.j14 + (uint32(3) * f.nsg13))] = f.sj354
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.j14 = (f.j14 + (uint32(4) * f.nsg13))
+			f.pc = 17
+			continue
+		case 17:
 			if f.j14 < uint32(128) {
 				f.pc = 6
 				continue
 			}
-			f.pc = 12
-			continue
-		case 12:
-			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:134:3"}
-			return true
-		case 13:
-			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s21
-			f.pc = 14
-			continue
-		case 14:
-			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:137:3"}
-			return true
-		case 15:
-			f.stride22 = uint32(64)
-			f.pc = 19
-			continue
-		case 16:
-			if f.lane2 < f.stride22 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
-			}
-			f.pc = 17
-			continue
-		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:143:4"}
-			return true
-		case 18:
-			f.stride22 = (f.stride22 / uint32(2))
-			f.pc = 19
 			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "paged.go:249:3"}
+			return true
 		case 19:
-			if f.stride22 > uint32(0) {
-				f.pc = 16
-				continue
-			}
+			f.s55 = scores[tr.ReadAt(0, int(f.lane2))]
 			f.pc = 20
 			continue
 		case 20:
-			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next24 = kmath.Max(f.m6, f.blockMax23)
-			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
-			f.e26 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
-			}
+			frame.Sub = kernelabi.SubMaxF32
+			frame.SubF32 = f.s55
 			f.pc = 21
-			continue
-		case 21:
-			f.pc = 22
-			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "paged.go:154:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 20, Pos: "paged.go:258:3"}
 			return true
+		case 21:
+			f.sgMax56 = frame.SubF32
+			f.pc = 22
+			continue
 		case 22:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e26
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e26
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgMax56
+			}
 			f.pc = 23
 			continue
 		case 23:
 			f.pc = 24
-			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "paged.go:157:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "paged.go:262:3"}
 			return true
 		case 24:
-			f.stride27 = uint32(64)
-			f.pc = 28
+			f.blockMax57 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g58 = uint32(1)
+				for ; f.g58 < f.nsg13; f.g58 = (f.g58 + uint32(1)) {
+					f.blockMax57 = kmath.Max(f.blockMax57, red[tr.ReadAt(1, int(f.g58))])
+				}
+			}
+			f.next59 = kmath.Max(f.m6, f.blockMax57)
+			f.alpha60 = kmath.Exp(float32(f.m6 - f.next59))
+			f.e61 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e61 = kmath.Exp(float32(f.s55 - f.next59))
+			}
+			f.pc = 25
 			continue
 		case 25:
-			if f.lane2 < f.stride27 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.e61
 			f.pc = 26
-			continue
-		case 26:
-			f.pc = 27
-			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "paged.go:163:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 25, Pos: "paged.go:275:3"}
 			return true
-		case 27:
-			f.stride27 = (f.stride27 / uint32(2))
-			f.pc = 28
+		case 26:
+			f.sgSum62 = frame.SubF32
+			f.pc = 27
 			continue
+		case 27:
+			f.pc = 28
+			frame.Barrier = kernelabi.BarrierID{Index: 27, Pos: "paged.go:279:3"}
+			return true
 		case 28:
-			if f.stride27 > uint32(0) {
-				f.pc = 25
-				continue
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e61
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgSum62
 			}
 			f.pc = 29
 			continue
 		case 29:
-			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next24
+			f.pc = 30
+			frame.Barrier = kernelabi.BarrierID{Index: 29, Pos: "paged.go:284:3"}
+			return true
+		case 30:
+			f.blockSum63 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g64 = uint32(1)
+				for ; f.g64 < f.nsg13; f.g64 = (f.g64 + uint32(1)) {
+					f.blockSum63 = float32(f.blockSum63 + red[tr.ReadAt(1, int(f.g64))])
+				}
+			}
+			f.l7 = float32(float32(f.alpha60*f.l7) + f.blockSum63)
+			f.m6 = f.next59
 			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha25 * f.o8)
+				f.o8 = float32(f.alpha60 * f.o8)
+				f.o065 = float32(0)
+				f.o166 = float32(0)
+				f.o267 = float32(0)
+				f.o368 = float32(0)
 				{
-					f.j28 = uint32(0)
-					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
-						if (f.base9 + f.j28) < f.kvLen1 {
-							f.phys29 = ((pages[((f.base9+f.j28)/d.Block)] * d.Block) + ((f.base9 + f.j28) % d.Block))
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[((((f.phys29*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+					f.j69 = uint32(0)
+					for ; f.j69 < uint32(128); f.j69 = (f.j69 + uint32(4)) {
+						f.jj070 = ((f.base9 + f.j69) + uint32(0))
+						if f.jj070 < f.kvLen1 {
+							f.phys071 = ((pages[(f.jj070/d.Block)] * d.Block) + (f.jj070 % d.Block))
+							f.o065 = float32(f.o065 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(0))))]*v[((((f.phys071*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+						f.jj172 = ((f.base9 + f.j69) + uint32(1))
+						if f.jj172 < f.kvLen1 {
+							f.phys173 = ((pages[(f.jj172/d.Block)] * d.Block) + (f.jj172 % d.Block))
+							f.o166 = float32(f.o166 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(1))))]*v[((((f.phys173*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+						f.jj274 = ((f.base9 + f.j69) + uint32(2))
+						if f.jj274 < f.kvLen1 {
+							f.phys275 = ((pages[(f.jj274/d.Block)] * d.Block) + (f.jj274 % d.Block))
+							f.o267 = float32(f.o267 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(2))))]*v[((((f.phys275*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+						f.jj376 = ((f.base9 + f.j69) + uint32(3))
+						if f.jj376 < f.kvLen1 {
+							f.phys377 = ((pages[(f.jj376/d.Block)] * d.Block) + (f.jj376 % d.Block))
+							f.o368 = float32(f.o368 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(3))))]*v[((((f.phys377*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
 						}
 					}
 				}
+				f.o8 = float32(f.o8 + float32(float32(f.o065+f.o166)+float32(f.o267+f.o368)))
 			}
-			f.pc = 30
-			continue
-		case 30:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 31
 			continue
 		case 31:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 32
+			continue
+		case 32:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 32
+			f.pc = 33
 			continue
-		case 32:
+		case 33:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -8810,7 +9895,7 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "77a1c6be336657767ab2d9d75611f59a",
+	Digest:    "b1cdf500df8f15511ccae8971cef822f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8819,6 +9904,11 @@ using namespace metal;
 static float _accel_fmax(float a, float b) {
     if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
     return fmax(a, b);
+}
+
+static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
 }
 
 static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
@@ -8877,61 +9967,181 @@ kernel void AttentionDecodePaged(
         uint sgw = _sgsize;
         uint sgl = _sglane;
         uint nsg = _accel_div_u32(uint(128), sgw, _fault);
-        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
-            uint jpos = (base + j);
-            float part = float(0);
-            if ((jpos < kvLen)) {
-                uint phys = ((pages[_accel_div_u32(jpos, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos, d.Block, _fault));
-                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
-                    part = (part + (q[((h * d.HeadDim) + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+        for (uint j = _sgid; (j < uint(128)); j = (j + (uint(4) * nsg))) {
+            uint jpos0 = ((base + j) + (uint(0) * nsg));
+            float part0 = float(0);
+            if ((jpos0 < kvLen)) {
+                uint phys0 = ((pages[_accel_div_u32(jpos0, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos0, d.Block, _fault));
+                float pa0 = float(0);
+                float pb0 = float(0);
+                float pc0 = float(0);
+                float pd0 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * k[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb0 = (pb0 + (q[(((h * d.HeadDim) + i) + sgw)] * k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc0 = (pc0 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd0 = (pd0 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
                 }
+                for (; (i < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * k[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part0 = ((pa0 + pb0) + (pc0 + pd0));
             }
-            float dot_ = simd_sum(part);
-            if ((sgl == uint(0))) {
-                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-                if ((jpos < kvLen)) {
-                    sj = (dot_ * d.Scale);
+            uint jpos1 = ((base + j) + (uint(1) * nsg));
+            float part1 = float(0);
+            if ((jpos1 < kvLen)) {
+                uint phys1 = ((pages[_accel_div_u32(jpos1, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos1, d.Block, _fault));
+                float pa1 = float(0);
+                float pb1 = float(0);
+                float pc1 = float(0);
+                float pd1 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * k[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb1 = (pb1 + (q[(((h * d.HeadDim) + i) + sgw)] * k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc1 = (pc1 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd1 = (pd1 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
                 }
-                scores[j] = sj;
+                for (; (i < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * k[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part1 = ((pa1 + pb1) + (pc1 + pd1));
+            }
+            uint jpos2 = ((base + j) + (uint(2) * nsg));
+            float part2 = float(0);
+            if ((jpos2 < kvLen)) {
+                uint phys2 = ((pages[_accel_div_u32(jpos2, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos2, d.Block, _fault));
+                float pa2 = float(0);
+                float pb2 = float(0);
+                float pc2 = float(0);
+                float pd2 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * k[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb2 = (pb2 + (q[(((h * d.HeadDim) + i) + sgw)] * k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc2 = (pc2 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd2 = (pd2 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * k[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part2 = ((pa2 + pb2) + (pc2 + pd2));
+            }
+            uint jpos3 = ((base + j) + (uint(3) * nsg));
+            float part3 = float(0);
+            if ((jpos3 < kvLen)) {
+                uint phys3 = ((pages[_accel_div_u32(jpos3, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos3, d.Block, _fault));
+                float pa3 = float(0);
+                float pb3 = float(0);
+                float pc3 = float(0);
+                float pd3 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * k[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    pb3 = (pb3 + (q[(((h * d.HeadDim) + i) + sgw)] * k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)]));
+                    pc3 = (pc3 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))]));
+                    pd3 = (pd3 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))]));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * k[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                    i = (i + sgw);
+                }
+                part3 = ((pa3 + pb3) + (pc3 + pd3));
+            }
+            float dot0 = simd_sum(part0);
+            float dot1 = simd_sum(part1);
+            float dot2 = simd_sum(part2);
+            float dot3 = simd_sum(part3);
+            if ((sgl == uint(0))) {
+                float sj0 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos0 < kvLen)) {
+                    sj0 = (dot0 * d.Scale);
+                }
+                scores[(j + (uint(0) * nsg))] = sj0;
+                float sj1 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos1 < kvLen)) {
+                    sj1 = (dot1 * d.Scale);
+                }
+                scores[(j + (uint(1) * nsg))] = sj1;
+                float sj2 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos2 < kvLen)) {
+                    sj2 = (dot2 * d.Scale);
+                }
+                scores[(j + (uint(2) * nsg))] = sj2;
+                float sj3 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos3 < kvLen)) {
+                    sj3 = (dot3 * d.Scale);
+                }
+                scores[(j + (uint(3) * nsg))] = sj3;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float s = scores[lane];
-        red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float sgMax = _accel_simd_fmax(s);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgMax;
         }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float blockMax = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockMax = _accel_fmax(blockMax, red[g]);
+        }
         float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
+        float sgSum = simd_sum(e);
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
-        red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = (red[lane] + red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgSum;
         }
-        l = ((alpha * l) + red[int(0)]);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float blockSum = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockSum = (blockSum + red[g]);
+        }
+        l = ((alpha * l) + blockSum);
         m = next;
         if ((lane < d.HeadDim)) {
             o = (alpha * o);
-            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
-                if (((base + j) < kvLen)) {
-                    uint phys = ((pages[_accel_div_u32((base + j), d.Block, _fault)] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
-                    o = (o + (scores[j] * v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+            float o0 = float(0);
+            float o1 = float(0);
+            float o2 = float(0);
+            float o3 = float(0);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(4))) {
+                uint jj0 = ((base + j) + uint(0));
+                if ((jj0 < kvLen)) {
+                    uint phys0 = ((pages[_accel_div_u32(jj0, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj0, d.Block, _fault));
+                    o0 = (o0 + (scores[(j + uint(0))] * v[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj1 = ((base + j) + uint(1));
+                if ((jj1 < kvLen)) {
+                    uint phys1 = ((pages[_accel_div_u32(jj1, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj1, d.Block, _fault));
+                    o1 = (o1 + (scores[(j + uint(1))] * v[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj2 = ((base + j) + uint(2));
+                if ((jj2 < kvLen)) {
+                    uint phys2 = ((pages[_accel_div_u32(jj2, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj2, d.Block, _fault));
+                    o2 = (o2 + (scores[(j + uint(2))] * v[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
+                }
+                uint jj3 = ((base + j) + uint(3));
+                if ((jj3 < kvLen)) {
+                    uint phys3 = ((pages[_accel_div_u32(jj3, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj3, d.Block, _fault));
+                    o3 = (o3 + (scores[(j + uint(3))] * v[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)]));
                 }
             }
+            o = (o + ((o0 + o1) + (o2 + o3)));
         }
     }
     if ((lane < d.HeadDim)) {
@@ -8941,7 +10151,7 @@ kernel void AttentionDecodePaged(
 `,
 	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      8,
+	Suspensions:      11,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -8988,21 +10198,69 @@ type attentionDecodePagedF16Frame struct {
 	sgl12      uint32
 	nsg13      uint32
 	j14        uint32
-	jpos15     uint32
-	part16     float32
-	phys17     uint32
-	i18        uint32
-	dot19      float32
-	sj20       float32
-	s21        float32
-	stride22   uint32
-	blockMax23 float32
-	next24     float32
-	alpha25    float32
-	e26        float32
-	stride27   uint32
-	j28        uint32
-	phys29     uint32
+	jpos015    uint32
+	part016    float32
+	phys017    uint32
+	pa018      float32
+	pb019      float32
+	pc020      float32
+	pd021      float32
+	i22        uint32
+	jpos123    uint32
+	part124    float32
+	phys125    uint32
+	pa126      float32
+	pb127      float32
+	pc128      float32
+	pd129      float32
+	i30        uint32
+	jpos231    uint32
+	part232    float32
+	phys233    uint32
+	pa234      float32
+	pb235      float32
+	pc236      float32
+	pd237      float32
+	i38        uint32
+	jpos339    uint32
+	part340    float32
+	phys341    uint32
+	pa342      float32
+	pb343      float32
+	pc344      float32
+	pd345      float32
+	i46        uint32
+	dot047     float32
+	dot148     float32
+	dot249     float32
+	dot350     float32
+	sj051      float32
+	sj152      float32
+	sj253      float32
+	sj354      float32
+	s55        float32
+	sgMax56    float32
+	blockMax57 float32
+	g58        uint32
+	next59     float32
+	alpha60    float32
+	e61        float32
+	sgSum62    float32
+	blockSum63 float32
+	g64        uint32
+	o065       float32
+	o166       float32
+	o267       float32
+	o368       float32
+	j69        uint32
+	jj070      uint32
+	phys071    uint32
+	jj172      uint32
+	phys173    uint32
+	jj274      uint32
+	phys275    uint32
+	jj376      uint32
+	phys377    uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -9035,7 +10293,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 31
+			f.pc = 32
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
@@ -9043,7 +10301,7 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:266:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:415:3"}
 			return true
 		case 4:
 			f.sgw11 = t.SubgroupSize()
@@ -9053,174 +10311,308 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 5:
 			f.j14 = t.SubgroupIndex()
-			f.pc = 11
+			f.pc = 17
 			continue
 		case 6:
-			f.jpos15 = (f.base9 + f.j14)
-			f.part16 = float32(0)
-			if f.jpos15 < f.kvLen1 {
-				f.phys17 = ((pages[(f.jpos15/d.Block)] * d.Block) + (f.jpos15 % d.Block))
-				{
-					f.i18 = f.sgl12
-					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
-						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[((((f.phys17*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i18)].F32()))
-					}
+			f.jpos015 = ((f.base9 + f.j14) + (uint32(0) * f.nsg13))
+			f.part016 = float32(0)
+			if f.jpos015 < f.kvLen1 {
+				f.phys017 = ((pages[(f.jpos015/d.Block)] * d.Block) + (f.jpos015 % d.Block))
+				f.pa018 = float32(0)
+				f.pb019 = float32(0)
+				f.pc020 = float32(0)
+				f.pd021 = float32(0)
+				f.i22 = f.sgl12
+				for (f.i22 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)].F32()))
+					f.pb019 = float32(f.pb019 + float32(q[(((f.h0*d.HeadDim)+f.i22)+f.sgw11)]*k[(((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)+f.sgw11)].F32()))
+					f.pc020 = float32(f.pc020 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(2)*f.sgw11))]*k[(((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)+(uint32(2)*f.sgw11))].F32()))
+					f.pd021 = float32(f.pd021 + float32(q[(((f.h0*d.HeadDim)+f.i22)+(uint32(3)*f.sgw11))]*k[(((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)+(uint32(3)*f.sgw11))].F32()))
+					f.i22 = (f.i22 + (uint32(4) * f.sgw11))
 				}
+				for f.i22 < d.HeadDim {
+					f.pa018 = float32(f.pa018 + float32(q[((f.h0*d.HeadDim)+f.i22)]*k[((((f.phys017*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i22)].F32()))
+					f.i22 = (f.i22 + f.sgw11)
+				}
+				f.part016 = float32(float32(f.pa018+f.pb019) + float32(f.pc020+f.pd021))
+			}
+			f.jpos123 = ((f.base9 + f.j14) + (uint32(1) * f.nsg13))
+			f.part124 = float32(0)
+			if f.jpos123 < f.kvLen1 {
+				f.phys125 = ((pages[(f.jpos123/d.Block)] * d.Block) + (f.jpos123 % d.Block))
+				f.pa126 = float32(0)
+				f.pb127 = float32(0)
+				f.pc128 = float32(0)
+				f.pd129 = float32(0)
+				f.i30 = f.sgl12
+				for (f.i30 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)].F32()))
+					f.pb127 = float32(f.pb127 + float32(q[(((f.h0*d.HeadDim)+f.i30)+f.sgw11)]*k[(((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)+f.sgw11)].F32()))
+					f.pc128 = float32(f.pc128 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(2)*f.sgw11))]*k[(((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)+(uint32(2)*f.sgw11))].F32()))
+					f.pd129 = float32(f.pd129 + float32(q[(((f.h0*d.HeadDim)+f.i30)+(uint32(3)*f.sgw11))]*k[(((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)+(uint32(3)*f.sgw11))].F32()))
+					f.i30 = (f.i30 + (uint32(4) * f.sgw11))
+				}
+				for f.i30 < d.HeadDim {
+					f.pa126 = float32(f.pa126 + float32(q[((f.h0*d.HeadDim)+f.i30)]*k[((((f.phys125*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i30)].F32()))
+					f.i30 = (f.i30 + f.sgw11)
+				}
+				f.part124 = float32(float32(f.pa126+f.pb127) + float32(f.pc128+f.pd129))
+			}
+			f.jpos231 = ((f.base9 + f.j14) + (uint32(2) * f.nsg13))
+			f.part232 = float32(0)
+			if f.jpos231 < f.kvLen1 {
+				f.phys233 = ((pages[(f.jpos231/d.Block)] * d.Block) + (f.jpos231 % d.Block))
+				f.pa234 = float32(0)
+				f.pb235 = float32(0)
+				f.pc236 = float32(0)
+				f.pd237 = float32(0)
+				f.i38 = f.sgl12
+				for (f.i38 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)].F32()))
+					f.pb235 = float32(f.pb235 + float32(q[(((f.h0*d.HeadDim)+f.i38)+f.sgw11)]*k[(((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)+f.sgw11)].F32()))
+					f.pc236 = float32(f.pc236 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(2)*f.sgw11))]*k[(((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)+(uint32(2)*f.sgw11))].F32()))
+					f.pd237 = float32(f.pd237 + float32(q[(((f.h0*d.HeadDim)+f.i38)+(uint32(3)*f.sgw11))]*k[(((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)+(uint32(3)*f.sgw11))].F32()))
+					f.i38 = (f.i38 + (uint32(4) * f.sgw11))
+				}
+				for f.i38 < d.HeadDim {
+					f.pa234 = float32(f.pa234 + float32(q[((f.h0*d.HeadDim)+f.i38)]*k[((((f.phys233*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i38)].F32()))
+					f.i38 = (f.i38 + f.sgw11)
+				}
+				f.part232 = float32(float32(f.pa234+f.pb235) + float32(f.pc236+f.pd237))
+			}
+			f.jpos339 = ((f.base9 + f.j14) + (uint32(3) * f.nsg13))
+			f.part340 = float32(0)
+			if f.jpos339 < f.kvLen1 {
+				f.phys341 = ((pages[(f.jpos339/d.Block)] * d.Block) + (f.jpos339 % d.Block))
+				f.pa342 = float32(0)
+				f.pb343 = float32(0)
+				f.pc344 = float32(0)
+				f.pd345 = float32(0)
+				f.i46 = f.sgl12
+				for (f.i46 + (uint32(3) * f.sgw11)) < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)].F32()))
+					f.pb343 = float32(f.pb343 + float32(q[(((f.h0*d.HeadDim)+f.i46)+f.sgw11)]*k[(((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)+f.sgw11)].F32()))
+					f.pc344 = float32(f.pc344 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(2)*f.sgw11))]*k[(((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)+(uint32(2)*f.sgw11))].F32()))
+					f.pd345 = float32(f.pd345 + float32(q[(((f.h0*d.HeadDim)+f.i46)+(uint32(3)*f.sgw11))]*k[(((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)+(uint32(3)*f.sgw11))].F32()))
+					f.i46 = (f.i46 + (uint32(4) * f.sgw11))
+				}
+				for f.i46 < d.HeadDim {
+					f.pa342 = float32(f.pa342 + float32(q[((f.h0*d.HeadDim)+f.i46)]*k[((((f.phys341*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i46)].F32()))
+					f.i46 = (f.i46 + f.sgw11)
+				}
+				f.part340 = float32(float32(f.pa342+f.pb343) + float32(f.pc344+f.pd345))
 			}
 			f.pc = 7
 			continue
 		case 7:
 			frame.Sub = kernelabi.SubAddF32
-			frame.SubF32 = f.part16
+			frame.SubF32 = f.part016
 			f.pc = 8
-			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "paged.go:291:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "paged.go:537:4"}
 			return true
 		case 8:
-			f.dot19 = frame.SubF32
+			f.dot047 = frame.SubF32
 			f.pc = 9
 			continue
 		case 9:
-			if f.sgl12 == uint32(0) {
-				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-				if f.jpos15 < f.kvLen1 {
-					f.sj20 = float32(f.dot19 * d.Scale)
-				}
-				tr.Write(0, int(f.j14))
-				scores[f.j14] = f.sj20
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part124
 			f.pc = 10
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 9, Pos: "paged.go:538:4"}
+			return true
 		case 10:
-			f.j14 = (f.j14 + f.nsg13)
+			f.dot148 = frame.SubF32
 			f.pc = 11
 			continue
 		case 11:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part232
+			f.pc = 12
+			frame.Barrier = kernelabi.BarrierID{Index: 11, Pos: "paged.go:539:4"}
+			return true
+		case 12:
+			f.dot249 = frame.SubF32
+			f.pc = 13
+			continue
+		case 13:
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part340
+			f.pc = 14
+			frame.Barrier = kernelabi.BarrierID{Index: 13, Pos: "paged.go:540:4"}
+			return true
+		case 14:
+			f.dot350 = frame.SubF32
+			f.pc = 15
+			continue
+		case 15:
+			if f.sgl12 == uint32(0) {
+				f.sj051 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos015 < f.kvLen1 {
+					f.sj051 = float32(f.dot047 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(0) * f.nsg13))))
+				scores[(f.j14 + (uint32(0) * f.nsg13))] = f.sj051
+				f.sj152 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos123 < f.kvLen1 {
+					f.sj152 = float32(f.dot148 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(1) * f.nsg13))))
+				scores[(f.j14 + (uint32(1) * f.nsg13))] = f.sj152
+				f.sj253 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos231 < f.kvLen1 {
+					f.sj253 = float32(f.dot249 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(2) * f.nsg13))))
+				scores[(f.j14 + (uint32(2) * f.nsg13))] = f.sj253
+				f.sj354 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos339 < f.kvLen1 {
+					f.sj354 = float32(f.dot350 * d.Scale)
+				}
+				tr.Write(0, int((f.j14 + (uint32(3) * f.nsg13))))
+				scores[(f.j14 + (uint32(3) * f.nsg13))] = f.sj354
+			}
+			f.pc = 16
+			continue
+		case 16:
+			f.j14 = (f.j14 + (uint32(4) * f.nsg13))
+			f.pc = 17
+			continue
+		case 17:
 			if f.j14 < uint32(128) {
 				f.pc = 6
 				continue
 			}
-			f.pc = 12
-			continue
-		case 12:
-			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:300:3"}
-			return true
-		case 13:
-			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s21
-			f.pc = 14
-			continue
-		case 14:
-			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:303:3"}
-			return true
-		case 15:
-			f.stride22 = uint32(64)
-			f.pc = 19
-			continue
-		case 16:
-			if f.lane2 < f.stride22 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
-			}
-			f.pc = 17
-			continue
-		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:309:4"}
-			return true
-		case 18:
-			f.stride22 = (f.stride22 / uint32(2))
-			f.pc = 19
 			continue
+		case 18:
+			f.pc = 19
+			frame.Barrier = kernelabi.BarrierID{Index: 18, Pos: "paged.go:564:3"}
+			return true
 		case 19:
-			if f.stride22 > uint32(0) {
-				f.pc = 16
-				continue
-			}
+			f.s55 = scores[tr.ReadAt(0, int(f.lane2))]
 			f.pc = 20
 			continue
 		case 20:
-			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next24 = kmath.Max(f.m6, f.blockMax23)
-			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
-			f.e26 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
-			}
+			frame.Sub = kernelabi.SubMaxF32
+			frame.SubF32 = f.s55
 			f.pc = 21
-			continue
-		case 21:
-			f.pc = 22
-			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "paged.go:320:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 20, Pos: "paged.go:573:3"}
 			return true
+		case 21:
+			f.sgMax56 = frame.SubF32
+			f.pc = 22
+			continue
 		case 22:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e26
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e26
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgMax56
+			}
 			f.pc = 23
 			continue
 		case 23:
 			f.pc = 24
-			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "paged.go:323:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "paged.go:577:3"}
 			return true
 		case 24:
-			f.stride27 = uint32(64)
-			f.pc = 28
+			f.blockMax57 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g58 = uint32(1)
+				for ; f.g58 < f.nsg13; f.g58 = (f.g58 + uint32(1)) {
+					f.blockMax57 = kmath.Max(f.blockMax57, red[tr.ReadAt(1, int(f.g58))])
+				}
+			}
+			f.next59 = kmath.Max(f.m6, f.blockMax57)
+			f.alpha60 = kmath.Exp(float32(f.m6 - f.next59))
+			f.e61 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e61 = kmath.Exp(float32(f.s55 - f.next59))
+			}
+			f.pc = 25
 			continue
 		case 25:
-			if f.lane2 < f.stride27 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.e61
 			f.pc = 26
-			continue
-		case 26:
-			f.pc = 27
-			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "paged.go:329:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 25, Pos: "paged.go:590:3"}
 			return true
-		case 27:
-			f.stride27 = (f.stride27 / uint32(2))
-			f.pc = 28
+		case 26:
+			f.sgSum62 = frame.SubF32
+			f.pc = 27
 			continue
+		case 27:
+			f.pc = 28
+			frame.Barrier = kernelabi.BarrierID{Index: 27, Pos: "paged.go:594:3"}
+			return true
 		case 28:
-			if f.stride27 > uint32(0) {
-				f.pc = 25
-				continue
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e61
+			if f.sgl12 == uint32(0) {
+				tr.Write(1, int(t.SubgroupIndex()))
+				red[t.SubgroupIndex()] = f.sgSum62
 			}
 			f.pc = 29
 			continue
 		case 29:
-			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next24
+			f.pc = 30
+			frame.Barrier = kernelabi.BarrierID{Index: 29, Pos: "paged.go:599:3"}
+			return true
+		case 30:
+			f.blockSum63 = red[tr.ReadAt(1, int(int32(0)))]
+			{
+				f.g64 = uint32(1)
+				for ; f.g64 < f.nsg13; f.g64 = (f.g64 + uint32(1)) {
+					f.blockSum63 = float32(f.blockSum63 + red[tr.ReadAt(1, int(f.g64))])
+				}
+			}
+			f.l7 = float32(float32(f.alpha60*f.l7) + f.blockSum63)
+			f.m6 = f.next59
 			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha25 * f.o8)
+				f.o8 = float32(f.alpha60 * f.o8)
+				f.o065 = float32(0)
+				f.o166 = float32(0)
+				f.o267 = float32(0)
+				f.o368 = float32(0)
 				{
-					f.j28 = uint32(0)
-					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
-						if (f.base9 + f.j28) < f.kvLen1 {
-							f.phys29 = ((pages[((f.base9+f.j28)/d.Block)] * d.Block) + ((f.base9 + f.j28) % d.Block))
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[((((f.phys29*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+					f.j69 = uint32(0)
+					for ; f.j69 < uint32(128); f.j69 = (f.j69 + uint32(4)) {
+						f.jj070 = ((f.base9 + f.j69) + uint32(0))
+						if f.jj070 < f.kvLen1 {
+							f.phys071 = ((pages[(f.jj070/d.Block)] * d.Block) + (f.jj070 % d.Block))
+							f.o065 = float32(f.o065 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(0))))]*v[((((f.phys071*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+						f.jj172 = ((f.base9 + f.j69) + uint32(1))
+						if f.jj172 < f.kvLen1 {
+							f.phys173 = ((pages[(f.jj172/d.Block)] * d.Block) + (f.jj172 % d.Block))
+							f.o166 = float32(f.o166 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(1))))]*v[((((f.phys173*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+						f.jj274 = ((f.base9 + f.j69) + uint32(2))
+						if f.jj274 < f.kvLen1 {
+							f.phys275 = ((pages[(f.jj274/d.Block)] * d.Block) + (f.jj274 % d.Block))
+							f.o267 = float32(f.o267 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(2))))]*v[((((f.phys275*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+						f.jj376 = ((f.base9 + f.j69) + uint32(3))
+						if f.jj376 < f.kvLen1 {
+							f.phys377 = ((pages[(f.jj376/d.Block)] * d.Block) + (f.jj376 % d.Block))
+							f.o368 = float32(f.o368 + float32(scores[tr.ReadAt(0, int((f.j69+uint32(3))))]*v[((((f.phys377*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
 						}
 					}
 				}
+				f.o8 = float32(f.o8 + float32(float32(f.o065+f.o166)+float32(f.o267+f.o368)))
 			}
-			f.pc = 30
-			continue
-		case 30:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 31
 			continue
 		case 31:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 32
+			continue
+		case 32:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 32
+			f.pc = 33
 			continue
-		case 32:
+		case 33:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -9242,7 +10634,7 @@ var AttentionDecodePagedF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "ad4bf6021b5a195988631a9291b4b6c0",
+	Digest:    "49b5db07324dd5170c82bbefd3cd083f",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -9251,6 +10643,11 @@ using namespace metal;
 static float _accel_fmax(float a, float b) {
     if (a != a || b != b) { return as_type<float>(0x7FC00000u); }
     return fmax(a, b);
+}
+
+static float _accel_simd_fmax(float x) {
+    if (simd_any(x != x)) { return as_type<float>(0x7FC00000u); }
+    return simd_max(x);
 }
 
 static uint _accel_div_u32(uint a, uint b, device atomic_uint *fault) {
@@ -9309,61 +10706,181 @@ kernel void AttentionDecodePagedF16(
         uint sgw = _sgsize;
         uint sgl = _sglane;
         uint nsg = _accel_div_u32(uint(128), sgw, _fault);
-        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
-            uint jpos = (base + j);
-            float part = float(0);
-            if ((jpos < kvLen)) {
-                uint phys = ((pages[_accel_div_u32(jpos, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos, d.Block, _fault));
-                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
-                    part = (part + (q[((h * d.HeadDim) + i)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+        for (uint j = _sgid; (j < uint(128)); j = (j + (uint(4) * nsg))) {
+            uint jpos0 = ((base + j) + (uint(0) * nsg));
+            float part0 = float(0);
+            if ((jpos0 < kvLen)) {
+                uint phys0 = ((pages[_accel_div_u32(jpos0, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos0, d.Block, _fault));
+                float pa0 = float(0);
+                float pb0 = float(0);
+                float pc0 = float(0);
+                float pd0 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * float(k[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    pb0 = (pb0 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)])));
+                    pc0 = (pc0 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))])));
+                    pd0 = (pd0 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[(((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
                 }
+                for (; (i < d.HeadDim); ) {
+                    pa0 = (pa0 + (q[((h * d.HeadDim) + i)] * float(k[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    i = (i + sgw);
+                }
+                part0 = ((pa0 + pb0) + (pc0 + pd0));
             }
-            float dot_ = simd_sum(part);
-            if ((sgl == uint(0))) {
-                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-                if ((jpos < kvLen)) {
-                    sj = (dot_ * d.Scale);
+            uint jpos1 = ((base + j) + (uint(1) * nsg));
+            float part1 = float(0);
+            if ((jpos1 < kvLen)) {
+                uint phys1 = ((pages[_accel_div_u32(jpos1, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos1, d.Block, _fault));
+                float pa1 = float(0);
+                float pb1 = float(0);
+                float pc1 = float(0);
+                float pd1 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * float(k[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    pb1 = (pb1 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)])));
+                    pc1 = (pc1 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))])));
+                    pd1 = (pd1 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[(((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
                 }
-                scores[j] = sj;
+                for (; (i < d.HeadDim); ) {
+                    pa1 = (pa1 + (q[((h * d.HeadDim) + i)] * float(k[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    i = (i + sgw);
+                }
+                part1 = ((pa1 + pb1) + (pc1 + pd1));
+            }
+            uint jpos2 = ((base + j) + (uint(2) * nsg));
+            float part2 = float(0);
+            if ((jpos2 < kvLen)) {
+                uint phys2 = ((pages[_accel_div_u32(jpos2, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos2, d.Block, _fault));
+                float pa2 = float(0);
+                float pb2 = float(0);
+                float pc2 = float(0);
+                float pd2 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * float(k[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    pb2 = (pb2 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)])));
+                    pc2 = (pc2 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))])));
+                    pd2 = (pd2 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[(((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa2 = (pa2 + (q[((h * d.HeadDim) + i)] * float(k[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    i = (i + sgw);
+                }
+                part2 = ((pa2 + pb2) + (pc2 + pd2));
+            }
+            uint jpos3 = ((base + j) + (uint(3) * nsg));
+            float part3 = float(0);
+            if ((jpos3 < kvLen)) {
+                uint phys3 = ((pages[_accel_div_u32(jpos3, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos3, d.Block, _fault));
+                float pa3 = float(0);
+                float pb3 = float(0);
+                float pc3 = float(0);
+                float pd3 = float(0);
+                uint i = sgl;
+                for (; ((i + (uint(3) * sgw)) < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * float(k[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    pb3 = (pb3 + (q[(((h * d.HeadDim) + i) + sgw)] * float(k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + sgw)])));
+                    pc3 = (pc3 + (q[(((h * d.HeadDim) + i) + (uint(2) * sgw))] * float(k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(2) * sgw))])));
+                    pd3 = (pd3 + (q[(((h * d.HeadDim) + i) + (uint(3) * sgw))] * float(k[(((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i) + (uint(3) * sgw))])));
+                    i = (i + (uint(4) * sgw));
+                }
+                for (; (i < d.HeadDim); ) {
+                    pa3 = (pa3 + (q[((h * d.HeadDim) + i)] * float(k[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                    i = (i + sgw);
+                }
+                part3 = ((pa3 + pb3) + (pc3 + pd3));
+            }
+            float dot0 = simd_sum(part0);
+            float dot1 = simd_sum(part1);
+            float dot2 = simd_sum(part2);
+            float dot3 = simd_sum(part3);
+            if ((sgl == uint(0))) {
+                float sj0 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos0 < kvLen)) {
+                    sj0 = (dot0 * d.Scale);
+                }
+                scores[(j + (uint(0) * nsg))] = sj0;
+                float sj1 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos1 < kvLen)) {
+                    sj1 = (dot1 * d.Scale);
+                }
+                scores[(j + (uint(1) * nsg))] = sj1;
+                float sj2 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos2 < kvLen)) {
+                    sj2 = (dot2 * d.Scale);
+                }
+                scores[(j + (uint(2) * nsg))] = sj2;
+                float sj3 = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos3 < kvLen)) {
+                    sj3 = (dot3 * d.Scale);
+                }
+                scores[(j + (uint(3) * nsg))] = sj3;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float s = scores[lane];
-        red[lane] = s;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = _accel_fmax(red[lane], red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float sgMax = _accel_simd_fmax(s);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgMax;
         }
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         float blockMax = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockMax = _accel_fmax(blockMax, red[g]);
+        }
         float next = _accel_fmax(m, blockMax);
         float alpha = precise::exp((m - next));
         float e = float(0);
         if ((pos < kvLen)) {
             e = precise::exp((s - next));
         }
+        float sgSum = simd_sum(e);
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         scores[lane] = e;
-        red[lane] = e;
-        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
-            if ((lane < stride)) {
-                red[lane] = (red[lane] + red[(lane + stride)]);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        if ((sgl == uint(0))) {
+            red[_sgid] = sgSum;
         }
-        l = ((alpha * l) + red[int(0)]);
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        float blockSum = red[int(0)];
+        for (uint g = uint(1); (g < nsg); g = (g + uint(1))) {
+            blockSum = (blockSum + red[g]);
+        }
+        l = ((alpha * l) + blockSum);
         m = next;
         if ((lane < d.HeadDim)) {
             o = (alpha * o);
-            for (uint j = uint(0); (j < uint(128)); j = (j + uint(1))) {
-                if (((base + j) < kvLen)) {
-                    uint phys = ((pages[_accel_div_u32((base + j), d.Block, _fault)] * d.Block) + _accel_rem_u32((base + j), d.Block, _fault));
-                    o = (o + (scores[j] * float(v[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+            float o0 = float(0);
+            float o1 = float(0);
+            float o2 = float(0);
+            float o3 = float(0);
+            for (uint j = uint(0); (j < uint(128)); j = (j + uint(4))) {
+                uint jj0 = ((base + j) + uint(0));
+                if ((jj0 < kvLen)) {
+                    uint phys0 = ((pages[_accel_div_u32(jj0, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj0, d.Block, _fault));
+                    o0 = (o0 + (scores[(j + uint(0))] * float(v[((((phys0 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+                uint jj1 = ((base + j) + uint(1));
+                if ((jj1 < kvLen)) {
+                    uint phys1 = ((pages[_accel_div_u32(jj1, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj1, d.Block, _fault));
+                    o1 = (o1 + (scores[(j + uint(1))] * float(v[((((phys1 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+                uint jj2 = ((base + j) + uint(2));
+                if ((jj2 < kvLen)) {
+                    uint phys2 = ((pages[_accel_div_u32(jj2, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj2, d.Block, _fault));
+                    o2 = (o2 + (scores[(j + uint(2))] * float(v[((((phys2 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
+                }
+                uint jj3 = ((base + j) + uint(3));
+                if ((jj3 < kvLen)) {
+                    uint phys3 = ((pages[_accel_div_u32(jj3, d.Block, _fault)] * d.Block) + _accel_rem_u32(jj3, d.Block, _fault));
+                    o3 = (o3 + (scores[(j + uint(3))] * float(v[((((phys3 * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + lane)])));
                 }
             }
+            o = (o + ((o0 + o1) + (o2 + o3)));
         }
     }
     if ((lane < d.HeadDim)) {
@@ -9373,7 +10890,7 @@ kernel void AttentionDecodePagedF16(
 `,
 	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      8,
+	Suspensions:      11,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
