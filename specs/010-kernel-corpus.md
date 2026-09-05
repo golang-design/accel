@@ -627,3 +627,45 @@ authored-form comparison of the quantized matrix-vector kernels now uses
 activations with few significant bits, because with several products per lane
 Go on arm64 may fuse the authored multiply-add where the generated lowering
 never does, and the ULP that costs is fusion's, not the lowering's.
+
+## Outcome — 2026-09-05: the decode attention kernels
+
+The five decode attention variants ran one workgroup per query head and gave
+each lane a position, so their K reads were rows `KVHeads*HeadDim` floats apart
+across the lanes, and the kernel sat near 10 GB/s. Measured on an M2 with 32
+heads, 128-dimensional heads and an f32 cache:
+
+| positions | before | after |
+| --- | ---: | ---: |
+| 256 | 198 µs per layer | 73 µs |
+| 1024 | 743 µs | 413 µs |
+| 4096 | — | 1.66 ms, 81 GB/s of K and V |
+
+Three changes, each measured on its own before the next was made:
+
+1. **K is read along the head dimension.** Each subgroup takes the positions
+   congruent to its index; lane *l* holds the products at *l*, *l+w*, ... of
+   the row and the subgroup sum is the dot, written to the block's scores by
+   the subgroup's first lane. The loop is written against `SubgroupSize`, so
+   the CPU oracle's width of four runs the code Metal's thirty-two does. This
+   needed two things below the corpus: the cooperative lowering split a loop
+   into states only when its body reached a *barrier*, and it splits on a
+   subgroup rendezvous too now; and an authored subgroup operation combined
+   nothing, so `RunAuthored` gives the f32 add, min and max a real rendezvous
+   that folds the active lanes in the scheduler's order.
+2. **The time was then flat from 8 to 64 workgroups**, so the cost was latency
+   per block. Stripping the kernel to each phase showed the score phase and
+   the value phase costing the same, and neither the subgroup sum, the
+   barrier's device scope, nor a staged q moved either: each phase was one
+   dependent chain of adds through a load each. Both run four independent
+   partial accumulators now.
+3. The block's maximum and mass are subgroup reductions with one barrier each
+   in place of two seven-step shared-memory trees; this alone was worth five
+   percent, which is what said the barriers were not the cost.
+
+On tgo's Qwen3-0.6B decode the step is unchanged at a 64-token prompt (27.8
+tokens/s; one block of attention) and 24.2 tokens/s at a 512-token prompt. The
+one-block exactness test bounds by the reassociation of a 128-term sum, since
+the mass and each output element fold as partials now. What the measurement
+also showed and this does not touch: the *prefill* attention over 512 tokens
+takes 2.1 s at 99.9% device time, which is the next kernel to attribute.

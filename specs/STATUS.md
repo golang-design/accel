@@ -1151,3 +1151,14 @@ decodes at 20.6 tokens/s before those two changes.
 Housekeeping: the big-endian refusal is at `OpenDevice` and `OpenCPU`; the two
 stale agent worktrees are removed, the dirty one having held a superseded
 attempt at the corpus rename.
+
+### 2026-09-05: the decode attention kernel
+
+Closed, [010](010-kernel-corpus.md)'s outcome of that date: K read along the
+head dimension with a subgroup sum per position, four independent accumulator
+chains in each phase, subgroup reductions for the block's maximum and mass.
+256 positions 198 to 73 µs per layer; 4096 positions at 81 GB/s. Two things
+below the corpus moved with it: the cooperative lowering splits a loop at a
+subgroup rendezvous, and `RunAuthored` gives the f32 subgroup reductions a real
+rendezvous. Open, found by the same measurement: the prefill attention over 512
+tokens takes 2.1 s of device time on the consumer.
