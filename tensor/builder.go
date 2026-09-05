@@ -69,13 +69,16 @@ func (r *Runtime) pipeline(k *accel.Kernel, label string) (*accel.ComputePipelin
 	return p, nil
 }
 
-// planOpened counts a plan that Compile built, and planClosed one that Close
-// released. The count is what lets [Runtime.Close] refuse while a plan still
-// holds its pipelines.
-func (r *Runtime) planOpened() {
+// planOpened reserves a plan before lowering starts. Close must not release
+// pipelines while Compile is still assembling the graph that will hold them.
+func (r *Runtime) planOpened() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.pipes == nil {
+		return errors.New("accel/tensor: runtime is closed")
+	}
 	r.plans++
+	return nil
 }
 
 func (r *Runtime) planClosed() {

@@ -158,8 +158,12 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		scalars: b.scalars, scalarPos: b.scalarPos,
 	}
 
+	if err := rt.planOpened(); err != nil {
+		return nil, err
+	}
 	g, err := b.lowerInto(rt, p, label)
 	if err != nil {
+		rt.planClosed()
 		return nil, err
 	}
 	p.graph = g
@@ -191,7 +195,6 @@ func (b *Builder) Compile(rt *Runtime, opts CompileOptions) (*Plan, error) {
 		}
 		return g, nil
 	}
-	rt.planOpened()
 	return p, nil
 }
 

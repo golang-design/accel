@@ -5,6 +5,7 @@
 package tensor_test
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -49,5 +50,48 @@ func TestARuntimeCompilesFromSeveralGoroutines(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Fatalf("compile: %v", err)
+	}
+}
+
+func TestCompileAfterRuntimeCloseReturnsError(t *testing.T) {
+	rt := newRuntime(t)
+	b := rt.NewBuilder("closed")
+	model{}.record(b)
+	if err := rt.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p, err := b.Compile(rt, tensor.CompileOptions{})
+	if err == nil {
+		p.Close()
+		t.Fatal("Compile accepted a closed runtime")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Compile: %v", err)
+	}
+}
+
+func TestRuntimeCloseRacingCompile(t *testing.T) {
+	for range 32 {
+		rt := newRuntime(t)
+		b := rt.NewBuilder("closing")
+		model{}.record(b)
+		start := make(chan struct{})
+		closed := make(chan error, 1)
+		go func() { <-start; closed <- rt.Close() }()
+		close(start)
+		p, compileErr := b.Compile(rt, tensor.CompileOptions{})
+		closeErr := <-closed
+		if compileErr != nil {
+			if closeErr != nil || !strings.Contains(compileErr.Error(), "closed") {
+				t.Fatalf("Compile: %v; Close: %v", compileErr, closeErr)
+			}
+		} else {
+			if closeErr == nil {
+				t.Error("runtime closed while the compiled plan was open")
+			}
+			if err := p.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }
