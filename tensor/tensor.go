@@ -153,8 +153,8 @@ type Tensor struct {
 // DType reports the storage element type.
 func (t *Tensor) DType() DType { return t.dtype }
 
-// Shape reports the extent.
-func (t *Tensor) Shape() Shape { return t.shape }
+// Shape reports a copy of the extent.
+func (t *Tensor) Shape() Shape { return append(Shape(nil), t.shape...) }
 
 // contiguousLayout reports whether this tensor's strides are the densely packed ones,
 // which is what the corpus kernels index.

@@ -23,7 +23,7 @@ package tensor
 // view returns a tensor over the same storage with a different layout.
 func (t *Tensor) view(shape Shape, strides []int, offset int) *Tensor {
 	return &Tensor{
-		b: t.b, dtype: t.dtype, shape: shape, strides: strides, offset: offset,
+		b: t.b, dtype: t.dtype, shape: append(Shape(nil), shape...), strides: strides, offset: offset,
 		node: t.node, port: t.port, win: t.win,
 	}
 }

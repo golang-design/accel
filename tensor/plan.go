@@ -20,6 +20,9 @@ import (
 func (p *Plan) Ports() []PortDesc {
 	out := make([]PortDesc, len(p.ports))
 	copy(out, p.ports)
+	for i := range out {
+		out[i].Shape = append(Shape(nil), out[i].Shape...)
+	}
 	return out
 }
 

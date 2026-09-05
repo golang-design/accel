@@ -318,6 +318,7 @@ func (b *Builder) declare(skip int, op string, d ValueDesc, kind PortKind) *Tens
 			"builder because they are how a caller binds", d.Name)
 	}
 	b.byName[d.Name] = len(b.ports)
+	d.Shape = append(Shape(nil), d.Shape...)
 	b.ports = append(b.ports, PortDesc{Name: d.Name, DType: d.DType, Shape: d.Shape, Kind: kind})
 	return &Tensor{
 		b: b, dtype: d.DType, shape: d.Shape,

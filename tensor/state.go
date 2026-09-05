@@ -72,6 +72,7 @@ func NewState(b *Builder, d StateDesc) *State {
 	if t.poison {
 		return &State{b: b, poison: true, producer: -1}
 	}
+	d.Shape = t.shape
 	return &State{
 		b: b, desc: d, producer: -1, shape: d.Shape,
 	}
