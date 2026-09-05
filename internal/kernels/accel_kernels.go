@@ -1054,17 +1054,24 @@ type attentionDecodeFrame struct {
 	o8         float32
 	base9      uint32
 	pos10      uint32
-	s11        float32
-	phys12     uint32
-	dot13      float32
-	i14        uint32
-	stride15   uint32
-	blockMax16 float32
-	next17     float32
-	alpha18    float32
-	e19        float32
-	stride20   uint32
-	j21        uint32
+	sgw11      uint32
+	sgl12      uint32
+	nsg13      uint32
+	j14        uint32
+	jpos15     uint32
+	part16     float32
+	phys17     uint32
+	i18        uint32
+	dot19      float32
+	sj20       float32
+	s21        float32
+	stride22   uint32
+	blockMax23 float32
+	next24     float32
+	alpha25    float32
+	e26        float32
+	stride27   uint32
+	j28        uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -1097,144 +1104,191 @@ func attentionDecodeCoop(t accel.Thread, d AttnDims, q []float32, k []float32, v
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 22
+			f.pc = 31
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
-			f.s11 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			if f.pos10 < f.kvLen1 {
-				f.phys12 = (((f.pos10 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
-				f.dot13 = float32(0)
-				{
-					f.i14 = uint32(0)
-					for ; f.i14 < d.HeadDim; f.i14 = (f.i14 + uint32(1)) {
-						f.dot13 = float32(f.dot13 + float32(q[((f.h0*d.HeadDim)+f.i14)]*k[(f.phys12+f.i14)]))
-					}
-				}
-				f.s11 = float32(f.dot13 * d.Scale)
-			}
 			f.pc = 3
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:169:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:160:3"}
 			return true
 		case 4:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.s11
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s11
+			f.sgw11 = t.SubgroupSize()
+			f.sgl12 = t.SubgroupLane()
+			f.nsg13 = (uint32(128) / f.sgw11)
 			f.pc = 5
 			continue
 		case 5:
-			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "attention.go:172:3"}
-			return true
+			f.j14 = t.SubgroupIndex()
+			f.pc = 11
+			continue
 		case 6:
-			f.stride15 = uint32(64)
-			f.pc = 10
+			f.jpos15 = (f.base9 + f.j14)
+			f.part16 = float32(0)
+			if f.jpos15 < f.kvLen1 {
+				f.phys17 = (((f.jpos15 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				{
+					f.i18 = f.sgl12
+					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
+						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[(f.phys17+f.i18)]))
+					}
+				}
+			}
+			f.pc = 7
 			continue
 		case 7:
-			if f.lane2 < f.stride15 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride15)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part16
 			f.pc = 8
-			continue
-		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "attention.go:178:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "attention.go:185:4"}
 			return true
+		case 8:
+			f.dot19 = frame.SubF32
+			f.pc = 9
+			continue
 		case 9:
-			f.stride15 = (f.stride15 / uint32(2))
+			if f.sgl12 == uint32(0) {
+				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos15 < f.kvLen1 {
+					f.sj20 = float32(f.dot19 * d.Scale)
+				}
+				tr.Write(0, int(f.j14))
+				scores[f.j14] = f.sj20
+			}
 			f.pc = 10
 			continue
 		case 10:
-			if f.stride15 > uint32(0) {
-				f.pc = 7
-				continue
-			}
+			f.j14 = (f.j14 + f.nsg13)
 			f.pc = 11
 			continue
 		case 11:
-			f.blockMax16 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next17 = kmath.Max(f.m6, f.blockMax16)
-			f.alpha18 = kmath.Exp(float32(f.m6 - f.next17))
-			f.e19 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e19 = kmath.Exp(float32(f.s11 - f.next17))
+			if f.j14 < uint32(128) {
+				f.pc = 6
+				continue
 			}
 			f.pc = 12
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:195:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:194:3"}
 			return true
 		case 13:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e19
+			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
 			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e19
+			red[f.lane2] = f.s21
 			f.pc = 14
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:198:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:197:3"}
 			return true
 		case 15:
-			f.stride20 = uint32(64)
+			f.stride22 = uint32(64)
 			f.pc = 19
 			continue
 		case 16:
-			if f.lane2 < f.stride20 {
+			if f.lane2 < f.stride22 {
 				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride20)))])
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
 			}
 			f.pc = 17
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:204:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:203:4"}
 			return true
 		case 18:
-			f.stride20 = (f.stride20 / uint32(2))
+			f.stride22 = (f.stride22 / uint32(2))
 			f.pc = 19
 			continue
 		case 19:
-			if f.stride20 > uint32(0) {
+			if f.stride22 > uint32(0) {
 				f.pc = 16
 				continue
 			}
 			f.pc = 20
 			continue
 		case 20:
-			f.l7 = float32(float32(f.alpha18*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next17
-			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha18 * f.o8)
-				{
-					f.j21 = uint32(0)
-					for ; f.j21 < uint32(128); f.j21 = (f.j21 + uint32(1)) {
-						if (f.base9 + f.j21) < f.kvLen1 {
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[(((((f.base9+f.j21)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
-						}
-					}
-				}
+			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next24 = kmath.Max(f.m6, f.blockMax23)
+			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
+			f.e26 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
 			}
 			f.pc = 21
 			continue
 		case 21:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 22
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "attention.go:220:3"}
+			return true
 		case 22:
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e26
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e26
+			f.pc = 23
+			continue
+		case 23:
+			f.pc = 24
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "attention.go:223:3"}
+			return true
+		case 24:
+			f.stride27 = uint32(64)
+			f.pc = 28
+			continue
+		case 25:
+			if f.lane2 < f.stride27 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
+			}
+			f.pc = 26
+			continue
+		case 26:
+			f.pc = 27
+			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "attention.go:229:4"}
+			return true
+		case 27:
+			f.stride27 = (f.stride27 / uint32(2))
+			f.pc = 28
+			continue
+		case 28:
+			if f.stride27 > uint32(0) {
+				f.pc = 25
+				continue
+			}
+			f.pc = 29
+			continue
+		case 29:
+			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m6 = f.next24
+			if f.lane2 < d.HeadDim {
+				f.o8 = float32(f.alpha25 * f.o8)
+				{
+					f.j28 = uint32(0)
+					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
+						if (f.base9 + f.j28) < f.kvLen1 {
+							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[(((((f.base9+f.j28)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+					}
+				}
+			}
+			f.pc = 30
+			continue
+		case 30:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 31
+			continue
+		case 31:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 23
+			f.pc = 32
 			continue
-		case 23:
+		case 32:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -1255,7 +1309,7 @@ var AttentionDecodeKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "fec3d8114e8ff704a77f8de3dd5c4c82",
+	Digest:    "b97381812e7cb83413bb633bd722ddc5",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1310,17 +1364,30 @@ kernel void AttentionDecode(
     float o = float(0);
     for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
-        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-        if ((pos < kvLen)) {
-            uint phys = (((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
-            float dot_ = float(0);
-            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * k[(phys + i)]));
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        uint sgw = _sgsize;
+        uint sgl = _sglane;
+        uint nsg = _accel_div_u32(uint(128), sgw, _fault);
+        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
+            uint jpos = (base + j);
+            float part = float(0);
+            if ((jpos < kvLen)) {
+                uint phys = (((jpos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
+                    part = (part + (q[((h * d.HeadDim) + i)] * k[(phys + i)]));
+                }
             }
-            s = (dot_ * d.Scale);
+            float dot_ = simd_sum(part);
+            if ((sgl == uint(0))) {
+                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos < kvLen)) {
+                    sj = (dot_ * d.Scale);
+                }
+                scores[j] = sj;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        scores[lane] = s;
+        float s = scores[lane];
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
@@ -1362,8 +1429,9 @@ kernel void AttentionDecode(
     }
 }
 `,
+	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      6,
+	Suspensions:      8,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -1406,17 +1474,24 @@ type attentionDecodeF16Frame struct {
 	o8         float32
 	base9      uint32
 	pos10      uint32
-	s11        float32
-	phys12     uint32
-	dot13      float32
-	i14        uint32
-	stride15   uint32
-	blockMax16 float32
-	next17     float32
-	alpha18    float32
-	e19        float32
-	stride20   uint32
-	j21        uint32
+	sgw11      uint32
+	sgl12      uint32
+	nsg13      uint32
+	j14        uint32
+	jpos15     uint32
+	part16     float32
+	phys17     uint32
+	i18        uint32
+	dot19      float32
+	sj20       float32
+	s21        float32
+	stride22   uint32
+	blockMax23 float32
+	next24     float32
+	alpha25    float32
+	e26        float32
+	stride27   uint32
+	j28        uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -1449,144 +1524,191 @@ func attentionDecodeF16Coop(t accel.Thread, d AttnDims, q []float32, k []accel.F
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 22
+			f.pc = 31
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
-			f.s11 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			if f.pos10 < f.kvLen1 {
-				f.phys12 = (((f.pos10 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
-				f.dot13 = float32(0)
-				{
-					f.i14 = uint32(0)
-					for ; f.i14 < d.HeadDim; f.i14 = (f.i14 + uint32(1)) {
-						f.dot13 = float32(f.dot13 + float32(q[((f.h0*d.HeadDim)+f.i14)]*k[(f.phys12+f.i14)].F32()))
-					}
-				}
-				f.s11 = float32(f.dot13 * d.Scale)
-			}
 			f.pc = 3
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:319:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "attention.go:335:3"}
 			return true
 		case 4:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.s11
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s11
+			f.sgw11 = t.SubgroupSize()
+			f.sgl12 = t.SubgroupLane()
+			f.nsg13 = (uint32(128) / f.sgw11)
 			f.pc = 5
 			continue
 		case 5:
-			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "attention.go:322:3"}
-			return true
+			f.j14 = t.SubgroupIndex()
+			f.pc = 11
+			continue
 		case 6:
-			f.stride15 = uint32(64)
-			f.pc = 10
+			f.jpos15 = (f.base9 + f.j14)
+			f.part16 = float32(0)
+			if f.jpos15 < f.kvLen1 {
+				f.phys17 = (((f.jpos15 * d.KVHeads) * d.HeadDim) + (f.kvHead4 * d.HeadDim))
+				{
+					f.i18 = f.sgl12
+					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
+						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[(f.phys17+f.i18)].F32()))
+					}
+				}
+			}
+			f.pc = 7
 			continue
 		case 7:
-			if f.lane2 < f.stride15 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride15)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part16
 			f.pc = 8
-			continue
-		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "attention.go:328:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "attention.go:360:4"}
 			return true
+		case 8:
+			f.dot19 = frame.SubF32
+			f.pc = 9
+			continue
 		case 9:
-			f.stride15 = (f.stride15 / uint32(2))
+			if f.sgl12 == uint32(0) {
+				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos15 < f.kvLen1 {
+					f.sj20 = float32(f.dot19 * d.Scale)
+				}
+				tr.Write(0, int(f.j14))
+				scores[f.j14] = f.sj20
+			}
 			f.pc = 10
 			continue
 		case 10:
-			if f.stride15 > uint32(0) {
-				f.pc = 7
-				continue
-			}
+			f.j14 = (f.j14 + f.nsg13)
 			f.pc = 11
 			continue
 		case 11:
-			f.blockMax16 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next17 = kmath.Max(f.m6, f.blockMax16)
-			f.alpha18 = kmath.Exp(float32(f.m6 - f.next17))
-			f.e19 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e19 = kmath.Exp(float32(f.s11 - f.next17))
+			if f.j14 < uint32(128) {
+				f.pc = 6
+				continue
 			}
 			f.pc = 12
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:345:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "attention.go:369:3"}
 			return true
 		case 13:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e19
+			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
 			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e19
+			red[f.lane2] = f.s21
 			f.pc = 14
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:348:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "attention.go:372:3"}
 			return true
 		case 15:
-			f.stride20 = uint32(64)
+			f.stride22 = uint32(64)
 			f.pc = 19
 			continue
 		case 16:
-			if f.lane2 < f.stride20 {
+			if f.lane2 < f.stride22 {
 				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride20)))])
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
 			}
 			f.pc = 17
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:354:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "attention.go:378:4"}
 			return true
 		case 18:
-			f.stride20 = (f.stride20 / uint32(2))
+			f.stride22 = (f.stride22 / uint32(2))
 			f.pc = 19
 			continue
 		case 19:
-			if f.stride20 > uint32(0) {
+			if f.stride22 > uint32(0) {
 				f.pc = 16
 				continue
 			}
 			f.pc = 20
 			continue
 		case 20:
-			f.l7 = float32(float32(f.alpha18*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next17
-			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha18 * f.o8)
-				{
-					f.j21 = uint32(0)
-					for ; f.j21 < uint32(128); f.j21 = (f.j21 + uint32(1)) {
-						if (f.base9 + f.j21) < f.kvLen1 {
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[(((((f.base9+f.j21)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
-						}
-					}
-				}
+			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next24 = kmath.Max(f.m6, f.blockMax23)
+			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
+			f.e26 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
 			}
 			f.pc = 21
 			continue
 		case 21:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 22
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "attention.go:395:3"}
+			return true
 		case 22:
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e26
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e26
+			f.pc = 23
+			continue
+		case 23:
+			f.pc = 24
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "attention.go:398:3"}
+			return true
+		case 24:
+			f.stride27 = uint32(64)
+			f.pc = 28
+			continue
+		case 25:
+			if f.lane2 < f.stride27 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
+			}
+			f.pc = 26
+			continue
+		case 26:
+			f.pc = 27
+			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "attention.go:404:4"}
+			return true
+		case 27:
+			f.stride27 = (f.stride27 / uint32(2))
+			f.pc = 28
+			continue
+		case 28:
+			if f.stride27 > uint32(0) {
+				f.pc = 25
+				continue
+			}
+			f.pc = 29
+			continue
+		case 29:
+			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m6 = f.next24
+			if f.lane2 < d.HeadDim {
+				f.o8 = float32(f.alpha25 * f.o8)
+				{
+					f.j28 = uint32(0)
+					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
+						if (f.base9 + f.j28) < f.kvLen1 {
+							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[(((((f.base9+f.j28)*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+					}
+				}
+			}
+			f.pc = 30
+			continue
+		case 30:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 31
+			continue
+		case 31:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 23
+			f.pc = 32
 			continue
-		case 23:
+		case 32:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -1607,7 +1729,7 @@ var AttentionDecodeF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "caa40b9f6f797a156a2dcff5b285a7d0",
+	Digest:    "f7911ef6c8e417727679da4123b1c1ed",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -1662,17 +1784,30 @@ kernel void AttentionDecodeF16(
     float o = float(0);
     for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
-        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-        if ((pos < kvLen)) {
-            uint phys = (((pos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
-            float dot_ = float(0);
-            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * float(k[(phys + i)])));
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        uint sgw = _sgsize;
+        uint sgl = _sglane;
+        uint nsg = _accel_div_u32(uint(128), sgw, _fault);
+        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
+            uint jpos = (base + j);
+            float part = float(0);
+            if ((jpos < kvLen)) {
+                uint phys = (((jpos * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim));
+                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
+                    part = (part + (q[((h * d.HeadDim) + i)] * float(k[(phys + i)])));
+                }
             }
-            s = (dot_ * d.Scale);
+            float dot_ = simd_sum(part);
+            if ((sgl == uint(0))) {
+                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos < kvLen)) {
+                    sj = (dot_ * d.Scale);
+                }
+                scores[j] = sj;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        scores[lane] = s;
+        float s = scores[lane];
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
@@ -1714,8 +1849,9 @@ kernel void AttentionDecodeF16(
     }
 }
 `,
+	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      6,
+	Suspensions:      8,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -2253,18 +2389,25 @@ type attentionDecodeBatchedFrame struct {
 	o11        float32
 	base12     uint32
 	pos13      uint32
-	s14        float32
-	phys15     uint32
-	dot16      float32
-	i17        uint32
-	stride18   uint32
-	blockMax19 float32
-	next20     float32
-	alpha21    float32
-	e22        float32
-	stride23   uint32
-	j24        uint32
-	phys25     uint32
+	sgw14      uint32
+	sgl15      uint32
+	nsg16      uint32
+	j17        uint32
+	jpos18     uint32
+	part19     float32
+	phys20     uint32
+	i21        uint32
+	dot22      float32
+	sj23       float32
+	s24        float32
+	stride25   uint32
+	blockMax26 float32
+	next27     float32
+	alpha28    float32
+	e29        float32
+	stride30   uint32
+	j31        uint32
+	phys32     uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -2300,145 +2443,192 @@ func attentionDecodeBatchedCoop(t accel.Thread, d BatchedDims, q []float32, k []
 			continue
 		case 1:
 			f.base12 = uint32(0)
-			f.pc = 22
+			f.pc = 31
 			continue
 		case 2:
 			f.pos13 = (f.base12 + f.lane1)
-			f.s14 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			if f.pos13 < f.kvLen5 {
-				f.phys15 = ((pages[(f.pageBase6+(f.pos13/d.Block))] * d.Block) + (f.pos13 % d.Block))
-				f.dot16 = float32(0)
-				{
-					f.i17 = uint32(0)
-					for ; f.i17 < d.HeadDim; f.i17 = (f.i17 + uint32(1)) {
-						f.dot16 = float32(f.dot16 + float32(q[(f.qBase7+f.i17)]*k[((((f.phys15*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i17)]))
-					}
-				}
-				f.s14 = float32(f.dot16 * d.Scale)
-			}
 			f.pc = 3
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "batched.go:120:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "batched.go:111:3"}
 			return true
 		case 4:
-			tr.Write(0, int(f.lane1))
-			scores[f.lane1] = f.s14
-			tr.Write(1, int(f.lane1))
-			red[f.lane1] = f.s14
+			f.sgw14 = t.SubgroupSize()
+			f.sgl15 = t.SubgroupLane()
+			f.nsg16 = (uint32(128) / f.sgw14)
 			f.pc = 5
 			continue
 		case 5:
-			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "batched.go:123:3"}
-			return true
+			f.j17 = t.SubgroupIndex()
+			f.pc = 11
+			continue
 		case 6:
-			f.stride18 = uint32(64)
-			f.pc = 10
+			f.jpos18 = (f.base12 + f.j17)
+			f.part19 = float32(0)
+			if f.jpos18 < f.kvLen5 {
+				f.phys20 = ((pages[(f.pageBase6+(f.jpos18/d.Block))] * d.Block) + (f.jpos18 % d.Block))
+				{
+					f.i21 = f.sgl15
+					for ; f.i21 < d.HeadDim; f.i21 = (f.i21 + f.sgw14) {
+						f.part19 = float32(f.part19 + float32(q[(f.qBase7+f.i21)]*k[((((f.phys20*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i21)]))
+					}
+				}
+			}
+			f.pc = 7
 			continue
 		case 7:
-			if f.lane1 < f.stride18 {
-				tr.Write(1, int(f.lane1))
-				red[f.lane1] = kmath.Max(red[tr.ReadAt(1, int(f.lane1))], red[tr.ReadAt(1, int((f.lane1+f.stride18)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part19
 			f.pc = 8
-			continue
-		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "batched.go:129:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "batched.go:136:4"}
 			return true
+		case 8:
+			f.dot22 = frame.SubF32
+			f.pc = 9
+			continue
 		case 9:
-			f.stride18 = (f.stride18 / uint32(2))
+			if f.sgl15 == uint32(0) {
+				f.sj23 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos18 < f.kvLen5 {
+					f.sj23 = float32(f.dot22 * d.Scale)
+				}
+				tr.Write(0, int(f.j17))
+				scores[f.j17] = f.sj23
+			}
 			f.pc = 10
 			continue
 		case 10:
-			if f.stride18 > uint32(0) {
-				f.pc = 7
-				continue
-			}
+			f.j17 = (f.j17 + f.nsg16)
 			f.pc = 11
 			continue
 		case 11:
-			f.blockMax19 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next20 = kmath.Max(f.m9, f.blockMax19)
-			f.alpha21 = kmath.Exp(float32(f.m9 - f.next20))
-			f.e22 = float32(0)
-			if f.pos13 < f.kvLen5 {
-				f.e22 = kmath.Exp(float32(f.s14 - f.next20))
+			if f.j17 < uint32(128) {
+				f.pc = 6
+				continue
 			}
 			f.pc = 12
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "batched.go:140:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "batched.go:145:3"}
 			return true
 		case 13:
-			tr.Write(0, int(f.lane1))
-			scores[f.lane1] = f.e22
+			f.s24 = scores[tr.ReadAt(0, int(f.lane1))]
 			tr.Write(1, int(f.lane1))
-			red[f.lane1] = f.e22
+			red[f.lane1] = f.s24
 			f.pc = 14
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "batched.go:143:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "batched.go:148:3"}
 			return true
 		case 15:
-			f.stride23 = uint32(64)
+			f.stride25 = uint32(64)
 			f.pc = 19
 			continue
 		case 16:
-			if f.lane1 < f.stride23 {
+			if f.lane1 < f.stride25 {
 				tr.Write(1, int(f.lane1))
-				red[f.lane1] = float32(red[tr.ReadAt(1, int(f.lane1))] + red[tr.ReadAt(1, int((f.lane1+f.stride23)))])
+				red[f.lane1] = kmath.Max(red[tr.ReadAt(1, int(f.lane1))], red[tr.ReadAt(1, int((f.lane1+f.stride25)))])
 			}
 			f.pc = 17
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "batched.go:149:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "batched.go:154:4"}
 			return true
 		case 18:
-			f.stride23 = (f.stride23 / uint32(2))
+			f.stride25 = (f.stride25 / uint32(2))
 			f.pc = 19
 			continue
 		case 19:
-			if f.stride23 > uint32(0) {
+			if f.stride25 > uint32(0) {
 				f.pc = 16
 				continue
 			}
 			f.pc = 20
 			continue
 		case 20:
-			f.l10 = float32(float32(f.alpha21*f.l10) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m9 = f.next20
-			if f.lane1 < d.HeadDim {
-				f.o11 = float32(f.alpha21 * f.o11)
-				{
-					f.j24 = uint32(0)
-					for ; f.j24 < uint32(128); f.j24 = (f.j24 + uint32(1)) {
-						if (f.base12 + f.j24) < f.kvLen5 {
-							f.phys25 = ((pages[(f.pageBase6+((f.base12+f.j24)/d.Block))] * d.Block) + ((f.base12 + f.j24) % d.Block))
-							f.o11 = float32(f.o11 + float32(scores[tr.ReadAt(0, int(f.j24))]*v[((((f.phys25*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
-						}
-					}
-				}
+			f.blockMax26 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next27 = kmath.Max(f.m9, f.blockMax26)
+			f.alpha28 = kmath.Exp(float32(f.m9 - f.next27))
+			f.e29 = float32(0)
+			if f.pos13 < f.kvLen5 {
+				f.e29 = kmath.Exp(float32(f.s24 - f.next27))
 			}
 			f.pc = 21
 			continue
 		case 21:
-			f.base12 = (f.base12 + uint32(128))
 			f.pc = 22
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "batched.go:165:3"}
+			return true
 		case 22:
+			tr.Write(0, int(f.lane1))
+			scores[f.lane1] = f.e29
+			tr.Write(1, int(f.lane1))
+			red[f.lane1] = f.e29
+			f.pc = 23
+			continue
+		case 23:
+			f.pc = 24
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "batched.go:168:3"}
+			return true
+		case 24:
+			f.stride30 = uint32(64)
+			f.pc = 28
+			continue
+		case 25:
+			if f.lane1 < f.stride30 {
+				tr.Write(1, int(f.lane1))
+				red[f.lane1] = float32(red[tr.ReadAt(1, int(f.lane1))] + red[tr.ReadAt(1, int((f.lane1+f.stride30)))])
+			}
+			f.pc = 26
+			continue
+		case 26:
+			f.pc = 27
+			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "batched.go:174:4"}
+			return true
+		case 27:
+			f.stride30 = (f.stride30 / uint32(2))
+			f.pc = 28
+			continue
+		case 28:
+			if f.stride30 > uint32(0) {
+				f.pc = 25
+				continue
+			}
+			f.pc = 29
+			continue
+		case 29:
+			f.l10 = float32(float32(f.alpha28*f.l10) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m9 = f.next27
+			if f.lane1 < d.HeadDim {
+				f.o11 = float32(f.alpha28 * f.o11)
+				{
+					f.j31 = uint32(0)
+					for ; f.j31 < uint32(128); f.j31 = (f.j31 + uint32(1)) {
+						if (f.base12 + f.j31) < f.kvLen5 {
+							f.phys32 = ((pages[(f.pageBase6+((f.base12+f.j31)/d.Block))] * d.Block) + ((f.base12 + f.j31) % d.Block))
+							f.o11 = float32(f.o11 + float32(scores[tr.ReadAt(0, int(f.j31))]*v[((((f.phys32*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane1)]))
+						}
+					}
+				}
+			}
+			f.pc = 30
+			continue
+		case 30:
+			f.base12 = (f.base12 + uint32(128))
+			f.pc = 31
+			continue
+		case 31:
 			if f.base12 < f.kvLen5 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 23
+			f.pc = 32
 			continue
-		case 23:
+		case 32:
 			if f.lane1 < d.HeadDim {
 				out[(f.qBase7 + f.lane1)] = float32(f.o11 / f.l10)
 			}
@@ -2460,7 +2650,7 @@ var AttentionDecodeBatchedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "b0dcc7f824703113b9696fd988e5ccc9",
+	Digest:    "7653b8922753276c54df364cce4bab03",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -2528,17 +2718,30 @@ kernel void AttentionDecodeBatched(
     float o = float(0);
     for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
-        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-        if ((pos < kvLen)) {
-            uint phys = ((pages[(pageBase + _accel_div_u32(pos, d.Block, _fault))] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
-            float dot_ = float(0);
-            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot_ = (dot_ + (q[(qBase + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        uint sgw = _sgsize;
+        uint sgl = _sglane;
+        uint nsg = _accel_div_u32(uint(128), sgw, _fault);
+        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
+            uint jpos = (base + j);
+            float part = float(0);
+            if ((jpos < kvLen)) {
+                uint phys = ((pages[(pageBase + _accel_div_u32(jpos, d.Block, _fault))] * d.Block) + _accel_rem_u32(jpos, d.Block, _fault));
+                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
+                    part = (part + (q[(qBase + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                }
             }
-            s = (dot_ * d.Scale);
+            float dot_ = simd_sum(part);
+            if ((sgl == uint(0))) {
+                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos < kvLen)) {
+                    sj = (dot_ * d.Scale);
+                }
+                scores[j] = sj;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        scores[lane] = s;
+        float s = scores[lane];
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
@@ -2581,8 +2784,9 @@ kernel void AttentionDecodeBatched(
     }
 }
 `,
+	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      6,
+	Suspensions:      8,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -8348,18 +8552,25 @@ type attentionDecodePagedFrame struct {
 	o8         float32
 	base9      uint32
 	pos10      uint32
-	s11        float32
-	phys12     uint32
-	dot13      float32
-	i14        uint32
-	stride15   uint32
-	blockMax16 float32
-	next17     float32
-	alpha18    float32
-	e19        float32
-	stride20   uint32
-	j21        uint32
-	phys22     uint32
+	sgw11      uint32
+	sgl12      uint32
+	nsg13      uint32
+	j14        uint32
+	jpos15     uint32
+	part16     float32
+	phys17     uint32
+	i18        uint32
+	dot19      float32
+	sj20       float32
+	s21        float32
+	stride22   uint32
+	blockMax23 float32
+	next24     float32
+	alpha25    float32
+	e26        float32
+	stride27   uint32
+	j28        uint32
+	phys29     uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -8392,145 +8603,192 @@ func attentionDecodePagedCoop(t accel.Thread, d PagedDims, q []float32, k []floa
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 22
+			f.pc = 31
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
-			f.s11 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			if f.pos10 < f.kvLen1 {
-				f.phys12 = ((pages[(f.pos10/d.Block)] * d.Block) + (f.pos10 % d.Block))
-				f.dot13 = float32(0)
-				{
-					f.i14 = uint32(0)
-					for ; f.i14 < d.HeadDim; f.i14 = (f.i14 + uint32(1)) {
-						f.dot13 = float32(f.dot13 + float32(q[((f.h0*d.HeadDim)+f.i14)]*k[((((f.phys12*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i14)]))
-					}
-				}
-				f.s11 = float32(f.dot13 * d.Scale)
-			}
 			f.pc = 3
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:109:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:100:3"}
 			return true
 		case 4:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.s11
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s11
+			f.sgw11 = t.SubgroupSize()
+			f.sgl12 = t.SubgroupLane()
+			f.nsg13 = (uint32(128) / f.sgw11)
 			f.pc = 5
 			continue
 		case 5:
-			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "paged.go:112:3"}
-			return true
+			f.j14 = t.SubgroupIndex()
+			f.pc = 11
+			continue
 		case 6:
-			f.stride15 = uint32(64)
-			f.pc = 10
+			f.jpos15 = (f.base9 + f.j14)
+			f.part16 = float32(0)
+			if f.jpos15 < f.kvLen1 {
+				f.phys17 = ((pages[(f.jpos15/d.Block)] * d.Block) + (f.jpos15 % d.Block))
+				{
+					f.i18 = f.sgl12
+					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
+						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[((((f.phys17*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i18)]))
+					}
+				}
+			}
+			f.pc = 7
 			continue
 		case 7:
-			if f.lane2 < f.stride15 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride15)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part16
 			f.pc = 8
-			continue
-		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "paged.go:118:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "paged.go:125:4"}
 			return true
+		case 8:
+			f.dot19 = frame.SubF32
+			f.pc = 9
+			continue
 		case 9:
-			f.stride15 = (f.stride15 / uint32(2))
+			if f.sgl12 == uint32(0) {
+				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos15 < f.kvLen1 {
+					f.sj20 = float32(f.dot19 * d.Scale)
+				}
+				tr.Write(0, int(f.j14))
+				scores[f.j14] = f.sj20
+			}
 			f.pc = 10
 			continue
 		case 10:
-			if f.stride15 > uint32(0) {
-				f.pc = 7
-				continue
-			}
+			f.j14 = (f.j14 + f.nsg13)
 			f.pc = 11
 			continue
 		case 11:
-			f.blockMax16 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next17 = kmath.Max(f.m6, f.blockMax16)
-			f.alpha18 = kmath.Exp(float32(f.m6 - f.next17))
-			f.e19 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e19 = kmath.Exp(float32(f.s11 - f.next17))
+			if f.j14 < uint32(128) {
+				f.pc = 6
+				continue
 			}
 			f.pc = 12
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:129:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:134:3"}
 			return true
 		case 13:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e19
+			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
 			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e19
+			red[f.lane2] = f.s21
 			f.pc = 14
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:132:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:137:3"}
 			return true
 		case 15:
-			f.stride20 = uint32(64)
+			f.stride22 = uint32(64)
 			f.pc = 19
 			continue
 		case 16:
-			if f.lane2 < f.stride20 {
+			if f.lane2 < f.stride22 {
 				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride20)))])
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
 			}
 			f.pc = 17
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:138:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:143:4"}
 			return true
 		case 18:
-			f.stride20 = (f.stride20 / uint32(2))
+			f.stride22 = (f.stride22 / uint32(2))
 			f.pc = 19
 			continue
 		case 19:
-			if f.stride20 > uint32(0) {
+			if f.stride22 > uint32(0) {
 				f.pc = 16
 				continue
 			}
 			f.pc = 20
 			continue
 		case 20:
-			f.l7 = float32(float32(f.alpha18*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next17
-			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha18 * f.o8)
-				{
-					f.j21 = uint32(0)
-					for ; f.j21 < uint32(128); f.j21 = (f.j21 + uint32(1)) {
-						if (f.base9 + f.j21) < f.kvLen1 {
-							f.phys22 = ((pages[((f.base9+f.j21)/d.Block)] * d.Block) + ((f.base9 + f.j21) % d.Block))
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[((((f.phys22*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
-						}
-					}
-				}
+			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next24 = kmath.Max(f.m6, f.blockMax23)
+			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
+			f.e26 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
 			}
 			f.pc = 21
 			continue
 		case 21:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 22
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "paged.go:154:3"}
+			return true
 		case 22:
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e26
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e26
+			f.pc = 23
+			continue
+		case 23:
+			f.pc = 24
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "paged.go:157:3"}
+			return true
+		case 24:
+			f.stride27 = uint32(64)
+			f.pc = 28
+			continue
+		case 25:
+			if f.lane2 < f.stride27 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
+			}
+			f.pc = 26
+			continue
+		case 26:
+			f.pc = 27
+			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "paged.go:163:4"}
+			return true
+		case 27:
+			f.stride27 = (f.stride27 / uint32(2))
+			f.pc = 28
+			continue
+		case 28:
+			if f.stride27 > uint32(0) {
+				f.pc = 25
+				continue
+			}
+			f.pc = 29
+			continue
+		case 29:
+			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m6 = f.next24
+			if f.lane2 < d.HeadDim {
+				f.o8 = float32(f.alpha25 * f.o8)
+				{
+					f.j28 = uint32(0)
+					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
+						if (f.base9 + f.j28) < f.kvLen1 {
+							f.phys29 = ((pages[((f.base9+f.j28)/d.Block)] * d.Block) + ((f.base9 + f.j28) % d.Block))
+							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[((((f.phys29*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)]))
+						}
+					}
+				}
+			}
+			f.pc = 30
+			continue
+		case 30:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 31
+			continue
+		case 31:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 23
+			f.pc = 32
 			continue
-		case 23:
+		case 32:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -8552,7 +8810,7 @@ var AttentionDecodePagedKernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "87da262a432973165978eb4facd3fe26",
+	Digest:    "77a1c6be336657767ab2d9d75611f59a",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8615,17 +8873,30 @@ kernel void AttentionDecodePaged(
     float o = float(0);
     for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
-        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-        if ((pos < kvLen)) {
-            uint phys = ((pages[_accel_div_u32(pos, d.Block, _fault)] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
-            float dot_ = float(0);
-            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        uint sgw = _sgsize;
+        uint sgl = _sglane;
+        uint nsg = _accel_div_u32(uint(128), sgw, _fault);
+        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
+            uint jpos = (base + j);
+            float part = float(0);
+            if ((jpos < kvLen)) {
+                uint phys = ((pages[_accel_div_u32(jpos, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos, d.Block, _fault));
+                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
+                    part = (part + (q[((h * d.HeadDim) + i)] * k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)]));
+                }
             }
-            s = (dot_ * d.Scale);
+            float dot_ = simd_sum(part);
+            if ((sgl == uint(0))) {
+                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos < kvLen)) {
+                    sj = (dot_ * d.Scale);
+                }
+                scores[j] = sj;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        scores[lane] = s;
+        float s = scores[lane];
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
@@ -8668,8 +8939,9 @@ kernel void AttentionDecodePaged(
     }
 }
 `,
+	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      6,
+	Suspensions:      8,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {
@@ -8712,18 +8984,25 @@ type attentionDecodePagedF16Frame struct {
 	o8         float32
 	base9      uint32
 	pos10      uint32
-	s11        float32
-	phys12     uint32
-	dot13      float32
-	i14        uint32
-	stride15   uint32
-	blockMax16 float32
-	next17     float32
-	alpha18    float32
-	e19        float32
-	stride20   uint32
-	j21        uint32
-	phys22     uint32
+	sgw11      uint32
+	sgl12      uint32
+	nsg13      uint32
+	j14        uint32
+	jpos15     uint32
+	part16     float32
+	phys17     uint32
+	i18        uint32
+	dot19      float32
+	sj20       float32
+	s21        float32
+	stride22   uint32
+	blockMax23 float32
+	next24     float32
+	alpha25    float32
+	e26        float32
+	stride27   uint32
+	j28        uint32
+	phys29     uint32
 }
 
 // Reset returns the frame to its initial state, so the scheduler can hand it
@@ -8756,145 +9035,192 @@ func attentionDecodePagedF16Coop(t accel.Thread, d PagedDims, q []float32, k []a
 			continue
 		case 1:
 			f.base9 = uint32(0)
-			f.pc = 22
+			f.pc = 31
 			continue
 		case 2:
 			f.pos10 = (f.base9 + f.lane2)
-			f.s11 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
-			if f.pos10 < f.kvLen1 {
-				f.phys12 = ((pages[(f.pos10/d.Block)] * d.Block) + (f.pos10 % d.Block))
-				f.dot13 = float32(0)
-				{
-					f.i14 = uint32(0)
-					for ; f.i14 < d.HeadDim; f.i14 = (f.i14 + uint32(1)) {
-						f.dot13 = float32(f.dot13 + float32(q[((f.h0*d.HeadDim)+f.i14)]*k[((((f.phys12*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i14)].F32()))
-					}
-				}
-				f.s11 = float32(f.dot13 * d.Scale)
-			}
 			f.pc = 3
 			continue
 		case 3:
 			f.pc = 4
-			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:250:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 3, Pos: "paged.go:266:3"}
 			return true
 		case 4:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.s11
-			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.s11
+			f.sgw11 = t.SubgroupSize()
+			f.sgl12 = t.SubgroupLane()
+			f.nsg13 = (uint32(128) / f.sgw11)
 			f.pc = 5
 			continue
 		case 5:
-			f.pc = 6
-			frame.Barrier = kernelabi.BarrierID{Index: 5, Pos: "paged.go:253:3"}
-			return true
+			f.j14 = t.SubgroupIndex()
+			f.pc = 11
+			continue
 		case 6:
-			f.stride15 = uint32(64)
-			f.pc = 10
+			f.jpos15 = (f.base9 + f.j14)
+			f.part16 = float32(0)
+			if f.jpos15 < f.kvLen1 {
+				f.phys17 = ((pages[(f.jpos15/d.Block)] * d.Block) + (f.jpos15 % d.Block))
+				{
+					f.i18 = f.sgl12
+					for ; f.i18 < d.HeadDim; f.i18 = (f.i18 + f.sgw11) {
+						f.part16 = float32(f.part16 + float32(q[((f.h0*d.HeadDim)+f.i18)]*k[((((f.phys17*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.i18)].F32()))
+					}
+				}
+			}
+			f.pc = 7
 			continue
 		case 7:
-			if f.lane2 < f.stride15 {
-				tr.Write(1, int(f.lane2))
-				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride15)))])
-			}
+			frame.Sub = kernelabi.SubAddF32
+			frame.SubF32 = f.part16
 			f.pc = 8
-			continue
-		case 8:
-			f.pc = 9
-			frame.Barrier = kernelabi.BarrierID{Index: 8, Pos: "paged.go:259:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 7, Pos: "paged.go:291:4"}
 			return true
+		case 8:
+			f.dot19 = frame.SubF32
+			f.pc = 9
+			continue
 		case 9:
-			f.stride15 = (f.stride15 / uint32(2))
+			if f.sgl12 == uint32(0) {
+				f.sj20 = math.Float32frombits(0xFF7FC99E /* -3.4e+38 */)
+				if f.jpos15 < f.kvLen1 {
+					f.sj20 = float32(f.dot19 * d.Scale)
+				}
+				tr.Write(0, int(f.j14))
+				scores[f.j14] = f.sj20
+			}
 			f.pc = 10
 			continue
 		case 10:
-			if f.stride15 > uint32(0) {
-				f.pc = 7
-				continue
-			}
+			f.j14 = (f.j14 + f.nsg13)
 			f.pc = 11
 			continue
 		case 11:
-			f.blockMax16 = red[tr.ReadAt(1, int(int32(0)))]
-			f.next17 = kmath.Max(f.m6, f.blockMax16)
-			f.alpha18 = kmath.Exp(float32(f.m6 - f.next17))
-			f.e19 = float32(0)
-			if f.pos10 < f.kvLen1 {
-				f.e19 = kmath.Exp(float32(f.s11 - f.next17))
+			if f.j14 < uint32(128) {
+				f.pc = 6
+				continue
 			}
 			f.pc = 12
 			continue
 		case 12:
 			f.pc = 13
-			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:270:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 12, Pos: "paged.go:300:3"}
 			return true
 		case 13:
-			tr.Write(0, int(f.lane2))
-			scores[f.lane2] = f.e19
+			f.s21 = scores[tr.ReadAt(0, int(f.lane2))]
 			tr.Write(1, int(f.lane2))
-			red[f.lane2] = f.e19
+			red[f.lane2] = f.s21
 			f.pc = 14
 			continue
 		case 14:
 			f.pc = 15
-			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:273:3"}
+			frame.Barrier = kernelabi.BarrierID{Index: 14, Pos: "paged.go:303:3"}
 			return true
 		case 15:
-			f.stride20 = uint32(64)
+			f.stride22 = uint32(64)
 			f.pc = 19
 			continue
 		case 16:
-			if f.lane2 < f.stride20 {
+			if f.lane2 < f.stride22 {
 				tr.Write(1, int(f.lane2))
-				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride20)))])
+				red[f.lane2] = kmath.Max(red[tr.ReadAt(1, int(f.lane2))], red[tr.ReadAt(1, int((f.lane2+f.stride22)))])
 			}
 			f.pc = 17
 			continue
 		case 17:
 			f.pc = 18
-			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:279:4"}
+			frame.Barrier = kernelabi.BarrierID{Index: 17, Pos: "paged.go:309:4"}
 			return true
 		case 18:
-			f.stride20 = (f.stride20 / uint32(2))
+			f.stride22 = (f.stride22 / uint32(2))
 			f.pc = 19
 			continue
 		case 19:
-			if f.stride20 > uint32(0) {
+			if f.stride22 > uint32(0) {
 				f.pc = 16
 				continue
 			}
 			f.pc = 20
 			continue
 		case 20:
-			f.l7 = float32(float32(f.alpha18*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
-			f.m6 = f.next17
-			if f.lane2 < d.HeadDim {
-				f.o8 = float32(f.alpha18 * f.o8)
-				{
-					f.j21 = uint32(0)
-					for ; f.j21 < uint32(128); f.j21 = (f.j21 + uint32(1)) {
-						if (f.base9 + f.j21) < f.kvLen1 {
-							f.phys22 = ((pages[((f.base9+f.j21)/d.Block)] * d.Block) + ((f.base9 + f.j21) % d.Block))
-							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j21))]*v[((((f.phys22*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
-						}
-					}
-				}
+			f.blockMax23 = red[tr.ReadAt(1, int(int32(0)))]
+			f.next24 = kmath.Max(f.m6, f.blockMax23)
+			f.alpha25 = kmath.Exp(float32(f.m6 - f.next24))
+			f.e26 = float32(0)
+			if f.pos10 < f.kvLen1 {
+				f.e26 = kmath.Exp(float32(f.s21 - f.next24))
 			}
 			f.pc = 21
 			continue
 		case 21:
-			f.base9 = (f.base9 + uint32(128))
 			f.pc = 22
-			continue
+			frame.Barrier = kernelabi.BarrierID{Index: 21, Pos: "paged.go:320:3"}
+			return true
 		case 22:
+			tr.Write(0, int(f.lane2))
+			scores[f.lane2] = f.e26
+			tr.Write(1, int(f.lane2))
+			red[f.lane2] = f.e26
+			f.pc = 23
+			continue
+		case 23:
+			f.pc = 24
+			frame.Barrier = kernelabi.BarrierID{Index: 23, Pos: "paged.go:323:3"}
+			return true
+		case 24:
+			f.stride27 = uint32(64)
+			f.pc = 28
+			continue
+		case 25:
+			if f.lane2 < f.stride27 {
+				tr.Write(1, int(f.lane2))
+				red[f.lane2] = float32(red[tr.ReadAt(1, int(f.lane2))] + red[tr.ReadAt(1, int((f.lane2+f.stride27)))])
+			}
+			f.pc = 26
+			continue
+		case 26:
+			f.pc = 27
+			frame.Barrier = kernelabi.BarrierID{Index: 26, Pos: "paged.go:329:4"}
+			return true
+		case 27:
+			f.stride27 = (f.stride27 / uint32(2))
+			f.pc = 28
+			continue
+		case 28:
+			if f.stride27 > uint32(0) {
+				f.pc = 25
+				continue
+			}
+			f.pc = 29
+			continue
+		case 29:
+			f.l7 = float32(float32(f.alpha25*f.l7) + red[tr.ReadAt(1, int(int32(0)))])
+			f.m6 = f.next24
+			if f.lane2 < d.HeadDim {
+				f.o8 = float32(f.alpha25 * f.o8)
+				{
+					f.j28 = uint32(0)
+					for ; f.j28 < uint32(128); f.j28 = (f.j28 + uint32(1)) {
+						if (f.base9 + f.j28) < f.kvLen1 {
+							f.phys29 = ((pages[((f.base9+f.j28)/d.Block)] * d.Block) + ((f.base9 + f.j28) % d.Block))
+							f.o8 = float32(f.o8 + float32(scores[tr.ReadAt(0, int(f.j28))]*v[((((f.phys29*d.KVHeads)*d.HeadDim)+(f.kvHead4*d.HeadDim))+f.lane2)].F32()))
+						}
+					}
+				}
+			}
+			f.pc = 30
+			continue
+		case 30:
+			f.base9 = (f.base9 + uint32(128))
+			f.pc = 31
+			continue
+		case 31:
 			if f.base9 < f.kvLen1 {
 				f.pc = 2
 				continue
 			}
-			f.pc = 23
+			f.pc = 32
 			continue
-		case 23:
+		case 32:
 			if f.lane2 < d.HeadDim {
 				out[((f.h0 * d.HeadDim) + f.lane2)] = float32(f.o8 / f.l7)
 			}
@@ -8916,7 +9242,7 @@ var AttentionDecodePagedF16Kernel = kernelabi.Kernel{
 		{Name: "lengths", DType: kernelabi.U32, Access: kernelabi.Read | kernelabi.UniformLoad},
 		{Name: "out", DType: kernelabi.F32, Access: kernelabi.Write},
 	},
-	Digest:    "8d54003fcacb55ece1bb451f9c13cf69",
+	Digest:    "ad4bf6021b5a195988631a9291b4b6c0",
 	Generator: kernelabi.Version,
 	MSL: `#include <metal_stdlib>
 using namespace metal;
@@ -8979,17 +9305,30 @@ kernel void AttentionDecodePagedF16(
     float o = float(0);
     for (uint base = uint(0); (base < kvLen); base = (base + uint(128))) {
         uint pos = (base + lane);
-        float s = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
-        if ((pos < kvLen)) {
-            uint phys = ((pages[_accel_div_u32(pos, d.Block, _fault)] * d.Block) + _accel_rem_u32(pos, d.Block, _fault));
-            float dot_ = float(0);
-            for (uint i = uint(0); (i < d.HeadDim); i = (i + uint(1))) {
-                dot_ = (dot_ + (q[((h * d.HeadDim) + i)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+        threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+        uint sgw = _sgsize;
+        uint sgl = _sglane;
+        uint nsg = _accel_div_u32(uint(128), sgw, _fault);
+        for (uint j = _sgid; (j < uint(128)); j = (j + nsg)) {
+            uint jpos = (base + j);
+            float part = float(0);
+            if ((jpos < kvLen)) {
+                uint phys = ((pages[_accel_div_u32(jpos, d.Block, _fault)] * d.Block) + _accel_rem_u32(jpos, d.Block, _fault));
+                for (uint i = sgl; (i < d.HeadDim); i = (i + sgw)) {
+                    part = (part + (q[((h * d.HeadDim) + i)] * float(k[((((phys * d.KVHeads) * d.HeadDim) + (kvHead * d.HeadDim)) + i)])));
+                }
             }
-            s = (dot_ * d.Scale);
+            float dot_ = simd_sum(part);
+            if ((sgl == uint(0))) {
+                float sj = as_type<float>(0xFF7FC99Eu) /* -3.4e+38 */;
+                if ((jpos < kvLen)) {
+                    sj = (dot_ * d.Scale);
+                }
+                scores[j] = sj;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-        scores[lane] = s;
+        float s = scores[lane];
         red[lane] = s;
         threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
         for (uint stride = uint(64); (stride > uint(0)); stride = _accel_div_u32(stride, uint(2), _fault)) {
@@ -9032,8 +9371,9 @@ kernel void AttentionDecodePagedF16(
     }
 }
 `,
+	Caps:             17,
 	OrderIndependent: true,
-	Suspensions:      6,
+	Suspensions:      8,
 	SharedSizes:      []int{128, 128},
 	SharedBytes:      1024,
 	NewShared: func() []any {

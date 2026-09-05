@@ -79,12 +79,16 @@ func RunAuthored(k *Kernel, group, count ID3, subgroup uint32, body func(t Threa
 		lanes = uint32(n)
 	}
 	subs := make([]*cyclicBarrier, (uint32(n)+lanes-1)/lanes)
+	reduces := make([]*authoredSubgroup, len(subs))
 	for i := range subs {
 		size := int(lanes)
 		if rest := n - i*int(lanes); rest < size {
 			size = rest
 		}
 		subs[i] = newCyclicBarrier(size)
+		reduces[i] = &authoredSubgroup{
+			vals: make([]float32, size), active: make([]bool, size), wait: subs[i].wait,
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -104,6 +108,7 @@ func RunAuthored(k *Kernel, group, count ID3, subgroup uint32, body func(t Threa
 				t.rendezvous = b.wait
 				sub := subs[uint32(i)/lanes]
 				t.subRendezvous = sub.wait
+				t.subReduce = reduces[uint32(i)/lanes]
 				go func(t Thread) {
 					defer wg.Done()
 					// An invocation that returns without reaching a barrier its
@@ -173,4 +178,42 @@ func (b *cyclicBarrier) leave() {
 		b.round++
 	}
 	b.cond.Broadcast()
+}
+
+// authoredSubgroup combines one subgroup's lanes for the f32 reductions when
+// an authored kernel runs under [RunAuthored].
+//
+// An authored subgroup operation called outside the runner combines nothing
+// (see subgroup.go). Under the runner it has a real rendezvous: each lane
+// writes its value, the subgroup's lanes wait, every lane folds the values in
+// lane order -- the scheduler's order, seeded from the first active lane, so
+// the authored form and the lowering agree bit for bit -- and the lanes wait
+// again so the slots can be reused. A lane that returned early never marks
+// itself active and so is not part of the fold, which is the scheduler's
+// active set.
+type authoredSubgroup struct {
+	vals   []float32
+	active []bool
+	wait   func()
+}
+
+func (a *authoredSubgroup) reduce(lane uint32, v float32, fold func(acc, x float32) float32) float32 {
+	a.vals[lane] = v
+	a.active[lane] = true
+	a.wait()
+	seeded := false
+	var acc float32
+	for i, on := range a.active {
+		if !on {
+			continue
+		}
+		if !seeded {
+			acc, seeded = a.vals[i], true
+			continue
+		}
+		acc = fold(acc, a.vals[i])
+	}
+	a.wait()
+	a.active[lane] = false
+	return acc
 }

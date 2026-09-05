@@ -48,6 +48,7 @@ type BatchedDims struct {
 // specs/030-paged-kv.md's pool is what makes the page tables independent.
 //
 //accel:uniform lengths
+//accel:requires subgroup_arithmetic, subgroup_basic
 //accel:kernel workgroup=128
 func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []float32,
 	v []float32, pages []uint32, lengths []uint32, out []float32,
@@ -104,21 +105,45 @@ func AttentionDecodeBatched(t accel.Thread, d BatchedDims, q []float32, k []floa
 		pos := base + lane
 
 		// Each lane scores one cached position, reached through its page.
-		s := float32(-3.4e38)
-		if pos < kvLen {
-			phys := pages[pageBase+pos/d.Block]*d.Block + pos%d.Block
-			dot := float32(0)
-			for i := uint32(0); i < d.HeadDim; i++ {
-				dot = dot + q[qBase+i]*k[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
-			}
-			s = dot * d.Scale
-		}
-
 		// The shared arrays are loop-carried, so this pass's writes have to be
 		// ordered against the previous pass's reads of them. See
 		// [AttentionDecode].
 		t.Barrier()
-		scores[lane] = s
+
+		// The block's scores, with the lanes along the head dimension rather
+		// than along the positions. Each subgroup takes the positions
+		// congruent to its index; within it, lane l holds the products at
+		// l, l+w, l+2w, ... of the row and the subgroup sum is the dot. For
+		// one position the subgroup's lanes read one contiguous row segment,
+		// where a lane per position read rows KVHeads*HeadDim floats apart:
+		// the decode step's K reads were the least coalesced access the
+		// kernel made, and this is what moved the kernel off 10 GB/s. The
+		// lane count is the device's, so the loop is written against
+		// SubgroupSize rather than a literal and the CPU oracle's width of
+		// four runs the same code as Metal's thirty-two.
+		sgw := t.SubgroupSize()
+		sgl := t.SubgroupLane()
+		nsg := AttnBlock / sgw
+		for j := t.SubgroupIndex(); j < AttnBlock; j += nsg {
+			jpos := base + j
+			part := float32(0)
+			if jpos < kvLen {
+				phys := pages[pageBase+jpos/d.Block]*d.Block + jpos%d.Block
+				for i := sgl; i < d.HeadDim; i += sgw {
+					part = part + q[qBase+i]*k[phys*d.KVHeads*d.HeadDim+kvHead*d.HeadDim+i]
+				}
+			}
+			dot := t.SubgroupAddF32(part)
+			if sgl == 0 {
+				sj := float32(-3.4e38)
+				if jpos < kvLen {
+					sj = dot * d.Scale
+				}
+				scores[j] = sj
+			}
+		}
+		t.Barrier()
+		s := scores[lane]
 		red[lane] = s
 		t.Barrier()
 

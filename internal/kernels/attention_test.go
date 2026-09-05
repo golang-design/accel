@@ -303,14 +303,14 @@ func TestTheAttentionKernelDeclaresItsShape(t *testing.T) {
 	// Two trees and the barriers around them, counted in the source: a barrier
 	// inside a loop counts once however many rounds it runs.
 	//
-	// Six, and one of them is the block loop's: a barrier at the top of the
-	// body, separating a pass's writes to the shared arrays from the previous
-	// pass's reads of them. That is the hazard a single-pass kernel did not
-	// have and the one nothing else would report, since the CPU backend's
-	// rendezvous check finds an invocation that fails to arrive and this would
-	// be a race between arrivals.
-	if got := k.Suspensions; got != 6 {
-		t.Errorf("it has %d suspension points, want 6", got)
+	// Eight since 2026-09-05: the six barriers, one of them the block loop's
+	// (a barrier at the top of the body, separating a pass's writes to the
+	// shared arrays from the previous pass's reads of them), plus the two
+	// states a subgroup rendezvous costs -- the per-position dot product is
+	// a subgroup sum, and the lowering suspends once to contribute a lane's
+	// value and once to read the combined one back.
+	if got := k.Suspensions; got != 8 {
+		t.Errorf("it has %d suspension points, want 8", got)
 	}
 }
 

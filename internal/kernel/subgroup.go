@@ -6,6 +6,7 @@ package kernel
 
 import (
 	"fmt"
+	"golang.design/x/accel/kmath"
 	"math/bits"
 )
 
@@ -288,11 +289,26 @@ func (t Thread) SubgroupLane() uint32 {
 
 // SubgroupAddF32 sums v across the subgroup's active lanes and gives every lane
 // the total.
-func (t Thread) SubgroupAddF32(v float32) float32 { return v }
+func (t Thread) SubgroupAddF32(v float32) float32 {
+	if t.subReduce == nil {
+		return v
+	}
+	return t.subReduce.reduce(t.SubgroupLane(), v, func(acc, x float32) float32 { return acc + x })
+}
 
 // SubgroupMinF32 and SubgroupMaxF32 are the same over the minimum and maximum.
-func (t Thread) SubgroupMinF32(v float32) float32 { return v }
-func (t Thread) SubgroupMaxF32(v float32) float32 { return v }
+func (t Thread) SubgroupMinF32(v float32) float32 {
+	if t.subReduce == nil {
+		return v
+	}
+	return t.subReduce.reduce(t.SubgroupLane(), v, kmath.Min)
+}
+func (t Thread) SubgroupMaxF32(v float32) float32 {
+	if t.subReduce == nil {
+		return v
+	}
+	return t.subReduce.reduce(t.SubgroupLane(), v, kmath.Max)
+}
 
 // The integer minima and maxima, specs/059-subgroup-reductions.md §6's first
 // slice. Exact for every type, because they select an input rather than

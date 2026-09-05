@@ -92,6 +92,7 @@ const AttnBlock = 128
 // One workgroup per query head.
 //
 //accel:uniform lengths
+//accel:requires subgroup_arithmetic, subgroup_basic
 //accel:kernel workgroup=128
 func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []float32,
 	lengths []uint32, out []float32, scores *[AttnBlock]float32, red *[AttnBlock]float32) {
@@ -149,16 +150,6 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 		// infinity to the maximum rather than zero: a zero would win over a row
 		// of genuinely negative scores and shift every exponent, which changes
 		// the answer rather than only the intermediate.
-		s := float32(-3.4e38)
-		if pos < kvLen {
-			phys := pos*d.KVHeads*d.HeadDim + kvHead*d.HeadDim
-			dot := float32(0)
-			for i := uint32(0); i < d.HeadDim; i++ {
-				dot = dot + q[h*d.HeadDim+i]*k[phys+i]
-			}
-			s = dot * d.Scale
-		}
-
 		// The shared arrays are loop-carried: the previous pass reads scores in
 		// its weighted sum and reads red[0] for its total, and both are about to
 		// be overwritten. Nothing else orders those reads against these writes
@@ -167,7 +158,41 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 		// missing one, so it would not be caught there or by a differential
 		// that happens to schedule the passes apart.
 		t.Barrier()
-		scores[lane] = s
+
+		// The block's scores, with the lanes along the head dimension rather
+		// than along the positions. Each subgroup takes the positions
+		// congruent to its index; within it, lane l holds the products at
+		// l, l+w, l+2w, ... of the row and the subgroup sum is the dot. For
+		// one position the subgroup's lanes read one contiguous row segment,
+		// where a lane per position read rows KVHeads*HeadDim floats apart:
+		// the decode step's K reads were the least coalesced access the
+		// kernel made, and this is what moved the kernel off 10 GB/s. The
+		// lane count is the device's, so the loop is written against
+		// SubgroupSize rather than a literal and the CPU oracle's width of
+		// four runs the same code as Metal's thirty-two.
+		sgw := t.SubgroupSize()
+		sgl := t.SubgroupLane()
+		nsg := AttnBlock / sgw
+		for j := t.SubgroupIndex(); j < AttnBlock; j += nsg {
+			jpos := base + j
+			part := float32(0)
+			if jpos < kvLen {
+				phys := jpos*d.KVHeads*d.HeadDim + kvHead*d.HeadDim
+				for i := sgl; i < d.HeadDim; i += sgw {
+					part = part + q[h*d.HeadDim+i]*k[phys+i]
+				}
+			}
+			dot := t.SubgroupAddF32(part)
+			if sgl == 0 {
+				sj := float32(-3.4e38)
+				if jpos < kvLen {
+					sj = dot * d.Scale
+				}
+				scores[j] = sj
+			}
+		}
+		t.Barrier()
+		s := scores[lane]
 		red[lane] = s
 		t.Barrier()
 
@@ -252,6 +277,7 @@ func AttentionDecode(t accel.Thread, d AttnDims, q []float32, k []float32, v []f
 // specs/010-kernel-corpus.md registers.
 //
 //accel:uniform lengths
+//accel:requires subgroup_arithmetic, subgroup_basic
 //accel:kernel workgroup=128
 func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float16,
 	v []accel.Float16, lengths []uint32,
@@ -299,16 +325,6 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 		// infinity to the maximum rather than zero: a zero would win over a row
 		// of genuinely negative scores and shift every exponent, which changes
 		// the answer rather than only the intermediate.
-		s := float32(-3.4e38)
-		if pos < kvLen {
-			phys := pos*d.KVHeads*d.HeadDim + kvHead*d.HeadDim
-			dot := float32(0)
-			for i := uint32(0); i < d.HeadDim; i++ {
-				dot = dot + q[h*d.HeadDim+i]*k[phys+i].F32()
-			}
-			s = dot * d.Scale
-		}
-
 		// The shared arrays are loop-carried: the previous pass reads scores in
 		// its weighted sum and reads red[0] for its total, and both are about to
 		// be overwritten. Nothing else orders those reads against these writes
@@ -317,7 +333,41 @@ func AttentionDecodeF16(t accel.Thread, d AttnDims, q []float32, k []accel.Float
 		// missing one, so it would not be caught there or by a differential
 		// that happens to schedule the passes apart.
 		t.Barrier()
-		scores[lane] = s
+
+		// The block's scores, with the lanes along the head dimension rather
+		// than along the positions. Each subgroup takes the positions
+		// congruent to its index; within it, lane l holds the products at
+		// l, l+w, l+2w, ... of the row and the subgroup sum is the dot. For
+		// one position the subgroup's lanes read one contiguous row segment,
+		// where a lane per position read rows KVHeads*HeadDim floats apart:
+		// the decode step's K reads were the least coalesced access the
+		// kernel made, and this is what moved the kernel off 10 GB/s. The
+		// lane count is the device's, so the loop is written against
+		// SubgroupSize rather than a literal and the CPU oracle's width of
+		// four runs the same code as Metal's thirty-two.
+		sgw := t.SubgroupSize()
+		sgl := t.SubgroupLane()
+		nsg := AttnBlock / sgw
+		for j := t.SubgroupIndex(); j < AttnBlock; j += nsg {
+			jpos := base + j
+			part := float32(0)
+			if jpos < kvLen {
+				phys := jpos*d.KVHeads*d.HeadDim + kvHead*d.HeadDim
+				for i := sgl; i < d.HeadDim; i += sgw {
+					part = part + q[h*d.HeadDim+i]*k[phys+i].F32()
+				}
+			}
+			dot := t.SubgroupAddF32(part)
+			if sgl == 0 {
+				sj := float32(-3.4e38)
+				if jpos < kvLen {
+					sj = dot * d.Scale
+				}
+				scores[j] = sj
+			}
+		}
+		t.Barrier()
+		s := scores[lane]
 		red[lane] = s
 		t.Barrier()
 

@@ -76,6 +76,11 @@ type Thread struct {
 	// not change: with retirement on exit it does not deadlock, and no test
 	// distinguishes the two — which is recorded there rather than assumed away.
 	subRendezvous func()
+
+	// subReduce is the authored runner's cross-lane combiner for the f32
+	// subgroup reductions, or nil when a call combines nothing. See
+	// [RunAuthored] and [authoredSubgroup].
+	subReduce *authoredSubgroup
 }
 
 // NewThread builds one invocation's [Thread]. It is for the backend and the

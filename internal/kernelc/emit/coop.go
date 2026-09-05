@@ -331,7 +331,11 @@ func isSubgroupStmt(s ir.Stmt) bool {
 	return ok
 }
 
-// hasLoopBarrier reports a loop whose body reaches a barrier.
+// hasLoopBarrier reports a loop whose body reaches a rendezvous: a barrier, or
+// a subgroup operation, which suspends the same way and needs the loop split
+// into states the same way. A loop with a subgroup operation and no barrier
+// used to fall through to the plain emitter, which has no lowering for the
+// intrinsic; the attention kernels' per-position dot products are that loop.
 func hasLoopBarrier(s ir.Stmt) bool {
 	loop, ok := s.(*ir.For)
 	return ok && blockHasBarrier(loop.Body)
@@ -413,7 +417,7 @@ func blockHasBarrier(b *ir.Block) bool {
 		return false
 	}
 	for _, s := range b.List {
-		if isBarrier(s) {
+		if isBarrier(s) || isSubgroupStmt(s) {
 			return true
 		}
 		switch n := s.(type) {
