@@ -230,6 +230,9 @@ func Sample(b *Builder, logits, draws *Tensor, history, counts *State,
 	if err := o.Validate(); err != nil {
 		return b.fail(1, "Sample", "%s", err)
 	}
+	if why := checkLogits(logits); why != "" {
+		return b.fail(1, "Sample", "%s", why)
+	}
 	_, vocab, _ := sampleShape(logits)
 
 	x := logits
